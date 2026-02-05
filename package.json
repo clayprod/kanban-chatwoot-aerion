@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.0"
+  },
+  "engines": {
+    "node": "18.x || 20.x"
   }
 }

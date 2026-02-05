@@ -330,7 +330,7 @@ const CardPreview = ({ contact }) => {
   );
 };
 
-const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, isDarkMode }) => {
+const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMoveToColumn, availableColumns, isDarkMode }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const sortableId = String(contact.id);
   const {
@@ -511,6 +511,30 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, isDa
                 >
                   {menuLabel}
                 </button>
+                <div className="my-2 border-t border-border" />
+                <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">
+                  Enviar para...
+                </p>
+                <div className="max-h-56 overflow-y-auto pr-1 scrollbar-theme">
+                  {(availableColumns || [])
+                    .filter(column => column !== columnId)
+                    .map(column => (
+                      <button
+                        key={column}
+                        type="button"
+                        className="w-full rounded-lg px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-cardAlt"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onMoveToColumn?.(contact.id, column);
+                        }}
+                      >
+                        {column}
+                      </button>
+                    ))}
+                  {availableColumns?.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-muted">Sem colunas disponiveis.</p>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -592,7 +616,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, isDa
   );
 };
 
-const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAction, showHeaderMenu, newContactUrl, isDarkMode }) => {
+const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAction, onMoveToColumn, availableColumns, showHeaderMenu, newContactUrl, isDarkMode }) => {
   const { setNodeRef, isOver } = useDroppable({ id: `column:${title}` });
   const totalOpportunity = contacts.reduce((sum, contact) => {
     const value = parseCurrency(contact.custom_attributes?.Valor_Oportunidade);
@@ -666,6 +690,8 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
               showMenu={showMenu}
               menuLabel={menuLabel}
               onMenuAction={onMenuAction}
+              onMoveToColumn={onMoveToColumn}
+              availableColumns={availableColumns}
               isDarkMode={isDarkMode}
             />
           ))}
@@ -1057,8 +1083,7 @@ function App() {
   );
   const toolsList = useMemo(() => extractListItems(toolsSection?.content || []), [toolsSection]);
 
-  const sendToCustomersStage = (contactId) => {
-    const targetStage = '18. Novos Clientes';
+  const moveContactToStage = (contactId, targetStage) => {
     const previousContacts = contacts;
     setContacts(prev => prev.map(contact => {
       if (String(contact.id) !== String(contactId)) {
@@ -1072,7 +1097,6 @@ function App() {
         },
       };
     }));
-    setActiveTab('customers');
     axios.put(`/api/contacts/${contactId}`, { Funil_Vendas: targetStage })
       .catch(error => {
         console.error('Error updating contact:', error);
@@ -1080,27 +1104,16 @@ function App() {
       });
   };
 
+  const sendToCustomersStage = (contactId) => {
+    const targetStage = '18. Novos Clientes';
+    setActiveTab('customers');
+    moveContactToStage(contactId, targetStage);
+  };
+
   const sendToLeadsInbox = (contactId) => {
     const targetStage = '1. Inbox (Novos)';
-    const previousContacts = contacts;
-    setContacts(prev => prev.map(contact => {
-      if (String(contact.id) !== String(contactId)) {
-        return contact;
-      }
-      return {
-        ...contact,
-        custom_attributes: {
-          ...contact.custom_attributes,
-          Funil_Vendas: targetStage,
-        },
-      };
-    }));
     setActiveTab('leads');
-    axios.put(`/api/contacts/${contactId}`, { Funil_Vendas: targetStage })
-      .catch(error => {
-        console.error('Error updating contact:', error);
-        setContacts(previousContacts);
-      });
+    moveContactToStage(contactId, targetStage);
   };
 
   const historyTicks = useMemo(() => {
@@ -1178,26 +1191,7 @@ function App() {
           || contacts.find(c => String(c.id) === overId)?.custom_attributes.Funil_Vendas;
 
       if (activeContact && overContainer && activeContact.custom_attributes?.Funil_Vendas !== overContainer) {
-        const updatedContacts = contacts.map(c => {
-          if (String(c.id) === String(active.id)) {
-            return {
-              ...c,
-              custom_attributes: {
-                ...c.custom_attributes,
-                Funil_Vendas: overContainer,
-              },
-            };
-          }
-          return c;
-        });
-        setContacts(updatedContacts);
-
-        axios.put(`/api/contacts/${active.id}`, { Funil_Vendas: overContainer })
-          .catch(error => {
-            console.error('Error updating contact:', error);
-            // Revert the change in case of an error
-            setContacts(contacts);
-          });
+        moveContactToStage(active.id, overContainer);
       }
     }
   };
@@ -1205,6 +1199,28 @@ function App() {
   const handleDragStart = (event) => {
     setActiveDragId(event.active?.id || null);
   };
+
+  const handleDragMove = useCallback((event) => {
+    if (!boardScrollRef.current) {
+      return;
+    }
+    const activeRect = event.active?.rect?.current?.translated || event.active?.rect?.current?.initial;
+    if (!activeRect) {
+      return;
+    }
+    const pointerX = activeRect.left + activeRect.width / 2;
+    const containerRect = boardScrollRef.current.getBoundingClientRect();
+    const threshold = 80;
+    const speed = 24;
+    if (pointerX < containerRect.left + threshold) {
+      const next = Math.max(0, boardScrollRef.current.scrollLeft - speed);
+      boardScrollRef.current.scrollLeft = next;
+    } else if (pointerX > containerRect.right - threshold) {
+      const maxScroll = boardScrollRef.current.scrollWidth - boardScrollRef.current.clientWidth;
+      const next = Math.min(maxScroll, boardScrollRef.current.scrollLeft + speed);
+      boardScrollRef.current.scrollLeft = next;
+    }
+  }, []);
 
   const handleTopScroll = () => {
     if (!boardScrollRef.current || !boardScrollbarRef.current || isSyncingRef.current) {
@@ -1240,6 +1256,7 @@ function App() {
     <DndContext
       collisionDetection={collisionDetectionStrategy}
       onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
     >
       <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
@@ -1401,6 +1418,8 @@ function App() {
                 showMenu={showMenu}
                 menuLabel={menuLabel}
                 onMenuAction={activeTab === 'leads' ? sendToCustomersStage : sendToLeadsInbox}
+                onMoveToColumn={(contactId, targetStage) => moveContactToStage(contactId, targetStage)}
+                availableColumns={activeColumns}
                 showHeaderMenu={showHeaderMenu}
                 newContactUrl={newContactUrl}
                 isDarkMode={isDarkMode}
