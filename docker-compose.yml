@@ -1,16 +1,10 @@
 version: '3.8'
 
 services:
-  frontend:
-    image: kanban-dashboard-frontend
+  app:
+    image: kanban-dashboard
     ports:
-      - "8080:80" # Expose frontend on host port 8080
-    networks:
-      - default
-      - chatwoot_network
-
-  backend:
-    image: kanban-dashboard-backend
+      - "8080:80" # Expose app on host port 8080
     networks:
       - default
       - chatwoot_network
