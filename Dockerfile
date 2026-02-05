@@ -2,6 +2,7 @@
 FROM node:18-alpine as frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
+COPY frontend/.npmrc ./
 RUN npm install
 COPY frontend/ ./
 RUN npm run build
@@ -10,6 +11,7 @@ RUN npm run build
 FROM node:18-alpine as backend-builder
 WORKDIR /app/backend
 COPY backend/package*.json ./
+COPY backend/.npmrc ./
 RUN npm install
 COPY backend/ ./
 
