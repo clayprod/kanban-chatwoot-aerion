@@ -1123,27 +1123,32 @@ function App() {
     return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(date);
   };
 
-  const chartTheme = useMemo(() => ({
-    textColor: '#1f2937',
-    fontSize: 11,
-    axis: {
-      ticks: {
-        text: {
-          fill: '#6b7280',
+  const chartTheme = useMemo(() => {
+    const textColor = isDarkMode ? '#e2e8f0' : '#1f2937';
+    const mutedText = isDarkMode ? '#cbd5f5' : '#6b7280';
+    const gridStroke = isDarkMode ? '#1f2937' : '#e5e7eb';
+    return {
+      textColor,
+      fontSize: 11,
+      axis: {
+        ticks: {
+          text: {
+            fill: mutedText,
+          },
+        },
+        legend: {
+          text: {
+            fill: mutedText,
+          },
         },
       },
-      legend: {
-        text: {
-          fill: '#6b7280',
+      grid: {
+        line: {
+          stroke: gridStroke,
         },
       },
-    },
-    grid: {
-      line: {
-        stroke: '#e5e7eb',
-      },
-    },
-  }), []);
+    };
+  }, [isDarkMode]);
 
   const handleDragEnd = (event) => {
     const { active, over } = event;
