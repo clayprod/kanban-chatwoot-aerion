@@ -1130,6 +1130,16 @@ function App() {
     return {
       textColor,
       fontSize: 11,
+      tooltip: {
+        container: {
+          background: isDarkMode ? '#0b1220' : '#ffffff',
+          color: textColor,
+          border: isDarkMode ? '1px solid #1f2937' : '1px solid #e5e7eb',
+          boxShadow: isDarkMode
+            ? '0 12px 24px rgba(2, 6, 23, 0.45)'
+            : '0 12px 24px rgba(15, 23, 42, 0.12)',
+        },
+      },
       axis: {
         ticks: {
           text: {
