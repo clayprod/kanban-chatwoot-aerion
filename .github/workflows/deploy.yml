@@ -1,0 +1,213 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend lint (if present)
+        working-directory: frontend
+        run: npm run lint --if-present
+        continue-on-error: true
+
+      - name: Run frontend tests (if present)
+        working-directory: frontend
+        run: npm run test --if-present -- --watchAll=false
+        env:
+          CI: true
+        continue-on-error: true
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend lint (if present)
+        working-directory: backend
+        run: npm run lint --if-present
+        continue-on-error: true
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  build-and-push-image:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  trigger-deploy:
+    name: Trigger EasyPanel Deploy
+    runs-on: ubuntu-latest
+    needs: build-and-push-image
+    steps:
+      - name: Extract image tag
+        id: image-tag
+        run: |
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${{ github.sha }}"
+          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "latest_tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+
+      - name: Trigger EasyPanel webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.EASYPANEL_WEBHOOK_URL }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+          IMAGE_LATEST: ${{ steps.image-tag.outputs.latest_tag }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "⚠️ EASYPANEL_WEBHOOK_URL not set, skipping deploy trigger"
+            exit 0
+          fi
+
+          echo "🚀 Triggering EasyPanel deploy..."
+          echo "📦 Image: $IMAGE_LATEST"
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "ref": "${{ github.ref }}",
+            "sha": "${{ github.sha }}",
+            "repository": "${{ github.repository }}",
+            "image_tag": "$IMAGE_TAG",
+            "image_latest": "$IMAGE_LATEST",
+            "branch": "${{ github.ref_name }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}"
+          }
+          EOF
+          )
+
+          response=$(curl -s -w "\n%{http_code}" -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "✅ Deploy triggered successfully (HTTP $http_code)"
+            echo "Response: $body"
+          else
+            echo "❌ Failed to trigger deploy (HTTP $http_code)"
+            echo "Response: $body"
+            exit 1
+          fi
+
+      - name: Trigger EasyPanel worker webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.EASYPANEL_WORKER_WEBHOOK_URL }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+          IMAGE_LATEST: ${{ steps.image-tag.outputs.latest_tag }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "⚠️ EASYPANEL_WORKER_WEBHOOK_URL not set, skipping worker deploy trigger"
+            exit 0
+          fi
+
+          echo "🚀 Triggering EasyPanel worker deploy..."
+          echo "📦 Image: $IMAGE_LATEST"
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "ref": "${{ github.ref }}",
+            "sha": "${{ github.sha }}",
+            "repository": "${{ github.repository }}",
+            "image_tag": "$IMAGE_TAG",
+            "image_latest": "$IMAGE_LATEST",
+            "branch": "${{ github.ref_name }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}"
+          }
+          EOF
+          )
+
+          response=$(curl -s -w "\n%{http_code}" -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            echo "✅ Worker deploy triggered successfully (HTTP $http_code)"
+            echo "Response: $body"
+          else
+            echo "❌ Failed to trigger worker deploy (HTTP $http_code)"
+            echo "Response: $body"
+            exit 1
+          fi
