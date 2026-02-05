@@ -116,6 +116,180 @@ const setCookieValue = (name, value, days) => {
   document.cookie = `${name}=${encoded}; max-age=${maxAge}; path=/; samesite=lax`;
 };
 
+const slugify = (value) => {
+  const normalized = normalizeText(value);
+  return normalized
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+};
+
+const extractHeadings = (markdown) => {
+  if (!markdown) {
+    return [];
+  }
+  return markdown
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('#'))
+    .map(line => {
+      const match = line.match(/^(#{1,4})\s+(.+)$/);
+      if (!match) {
+        return null;
+      }
+      const level = match[1].length;
+      const text = match[2].replace(/\s+#*$/, '').trim();
+      if (!text) {
+        return null;
+      }
+      return {
+        level,
+        text,
+        id: slugify(text),
+      };
+    })
+    .filter(Boolean);
+};
+
+const parseMarkdownSections = (markdown) => {
+  if (!markdown) {
+    return [];
+  }
+  const lines = markdown.split('\n');
+  const sections = [];
+  let currentSection = null;
+  let currentSubsection = null;
+  let inCodeBlock = false;
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      if (currentSubsection) {
+        currentSubsection.content.push(line);
+      } else if (currentSection) {
+        currentSection.content.push(line);
+      }
+      return;
+    }
+
+    if (!inCodeBlock) {
+      const sectionMatch = line.match(/^##\s+(.+)/);
+      if (sectionMatch) {
+        currentSection = {
+          title: sectionMatch[1].trim(),
+          content: [],
+          subsections: [],
+        };
+        sections.push(currentSection);
+        currentSubsection = null;
+        return;
+      }
+
+      const subsectionMatch = line.match(/^###\s+(.+)/);
+      if (subsectionMatch && currentSection) {
+        currentSubsection = {
+          title: subsectionMatch[1].trim(),
+          content: [],
+        };
+        currentSection.subsections.push(currentSubsection);
+        return;
+      }
+    }
+
+    if (currentSubsection) {
+      currentSubsection.content.push(line);
+    } else if (currentSection) {
+      currentSection.content.push(line);
+    }
+  });
+
+  return sections;
+};
+
+const stripMarkdown = (text) => {
+  if (!text) {
+    return '';
+  }
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[(.*?)\]\(.*?\)/g, '$1');
+};
+
+const extractListItems = (lines) => {
+  if (!Array.isArray(lines)) {
+    return [];
+  }
+  return lines
+    .map(line => line.trim())
+    .filter(line => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line) || /^□\s+/.test(line))
+    .map(line => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/^□\s+/, ''))
+    .map(item => stripMarkdown(item))
+    .filter(Boolean);
+};
+
+const extractParagraphs = (lines) => {
+  if (!Array.isArray(lines)) {
+    return [];
+  }
+  const paragraphs = [];
+  let buffer = [];
+  let inCodeBlock = false;
+
+  const flush = () => {
+    if (buffer.length > 0) {
+      paragraphs.push(stripMarkdown(buffer.join(' ')));
+      buffer = [];
+    }
+  };
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      flush();
+      return;
+    }
+    if (inCodeBlock) {
+      return;
+    }
+    if (!trimmed) {
+      flush();
+      return;
+    }
+    if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed) || /^\|/.test(trimmed) || /^>/.test(trimmed)) {
+      flush();
+      return;
+    }
+    buffer.push(trimmed);
+  });
+  flush();
+  return paragraphs.filter(Boolean);
+};
+
+const extractOrderedSteps = (lines) => {
+  if (!Array.isArray(lines)) {
+    return [];
+  }
+  return lines
+    .map(line => line.trim())
+    .filter(line => /^\d+\.\s+/.test(line))
+    .map(line => {
+      const match = line.match(/^(\d+)\.\s+(.*)$/);
+      if (!match) {
+        return null;
+      }
+      return {
+        number: match[1],
+        text: stripMarkdown(match[2]).trim(),
+      };
+    })
+    .filter(Boolean);
+};
+
 const CardPreview = ({ contact }) => {
   if (!contact) {
     return null;
@@ -505,6 +679,9 @@ function App() {
   const [contacts, setContacts] = useState([]);
   const [activeTab, setActiveTab] = useState('leads');
   const [activeView, setActiveView] = useState('Board');
+  const [processContent, setProcessContent] = useState('');
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processError, setProcessError] = useState(null);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const stored = getCookieValue('theme');
     return stored === 'dark';
@@ -521,6 +698,9 @@ function App() {
     byLabel: [],
     byState: [],
     byAgent: [],
+    byChannel: [],
+    byCustomerType: [],
+    byProbability: [],
     history: [],
   });
   const [boardScrollMetrics, setBoardScrollMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
@@ -575,7 +755,6 @@ function App() {
     setCookieValue('theme', isDarkMode ? 'dark' : 'light', 365);
   }, [isDarkMode]);
 
-
   useEffect(() => {
     const updateMetrics = () => {
       if (!boardScrollRef.current) {
@@ -611,15 +790,21 @@ function App() {
       axios.get('/api/overview/by-label'),
       axios.get('/api/overview/by-state'),
       axios.get('/api/overview/by-agent'),
+      axios.get('/api/overview/by-channel'),
+      axios.get('/api/overview/by-customer-type'),
+      axios.get('/api/overview/by-probability'),
       axios.get('/api/overview/history', { params: { granularity: historyGranularity, range } }),
     ])
-      .then(([summary, byStage, byLabel, byState, byAgent, history]) => {
+      .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history]) => {
         setOverviewData({
           summary: summary.data,
           byStage: byStage.data,
           byLabel: byLabel.data,
           byState: byState.data,
           byAgent: byAgent.data,
+          byChannel: byChannel.data,
+          byCustomerType: byCustomerType.data,
+          byProbability: byProbability.data,
           history: history.data,
         });
       })
@@ -630,6 +815,29 @@ function App() {
         setOverviewLoading(false);
       });
   }, [activeView, historyGranularity]);
+
+  useEffect(() => {
+    if (activeView !== 'Processo') {
+      return;
+    }
+    if (processContent) {
+      return;
+    }
+    setProcessLoading(true);
+    setProcessError(null);
+    axios.get('/api/processo')
+      .then(response => {
+        setProcessContent(response.data?.content || '');
+      })
+      .catch(error => {
+        console.error('Error fetching process content:', error);
+        setProcessError('Nao foi possivel carregar o processo agora.');
+      })
+      .finally(() => {
+        setProcessLoading(false);
+      });
+  }, [activeView, processContent]);
+
 
   const filteredContacts = contacts.filter(contact => {
     const search = searchQuery.trim().toLowerCase();
@@ -766,7 +974,88 @@ function App() {
     }))
   ), [overviewData.byAgent]);
 
+  const channelCountData = useMemo(() => sortByValueAsc(
+    overviewData.byChannel.map(item => ({
+      channel: item.channel,
+      value: Number(item.count) || 0,
+    }))
+  ), [overviewData.byChannel]);
+
+  const customerTypeCountData = useMemo(() => sortByValueAsc(
+    overviewData.byCustomerType.map(item => ({
+      customerType: item.customer_type,
+      value: Number(item.count) || 0,
+    }))
+  ), [overviewData.byCustomerType]);
+
+  const probabilityValueData = useMemo(() => sortByValueAsc(
+    overviewData.byProbability.map(item => ({
+      probability: item.probability,
+      value: Number(item.total_value) || 0,
+    }))
+  ), [overviewData.byProbability]);
+
   const historySeries = useMemo(() => buildHistorySeries(overviewData.history), [overviewData.history]);
+  const processHeadings = useMemo(() => extractHeadings(processContent), [processContent]);
+  const processSections = useMemo(
+    () => processHeadings.filter(item => item.level === 2),
+    [processHeadings]
+  );
+  const processSubsections = useMemo(
+    () => processHeadings.filter(item => item.level === 3),
+    [processHeadings]
+  );
+  const processStats = useMemo(() => {
+    const words = processContent ? processContent.split(/\s+/).filter(Boolean).length : 0;
+    return {
+      sections: processSections.length,
+      subsections: processSubsections.length,
+      words,
+    };
+  }, [processContent, processSections, processSubsections]);
+  const processParsed = useMemo(() => parseMarkdownSections(processContent), [processContent]);
+  const mainProcessSection = useMemo(() => {
+    const primary = processParsed.find(section => normalizeText(section.title).startsWith('1.4 processo'));
+    if (primary) {
+      return primary;
+    }
+    return processParsed.find(section => normalizeText(section.title).includes('processo')) || null;
+  }, [processParsed]);
+  const passoSubsection = useMemo(() => {
+    if (!mainProcessSection) {
+      return null;
+    }
+    return mainProcessSection.subsections.find(sub => normalizeText(sub.title).includes('passo a passo')) || null;
+  }, [mainProcessSection]);
+  const checklistSubsection = useMemo(() => {
+    if (!mainProcessSection) {
+      return null;
+    }
+    return mainProcessSection.subsections.find(sub => normalizeText(sub.title).includes('checklist')) || null;
+  }, [mainProcessSection]);
+  const processSteps = useMemo(
+    () => extractOrderedSteps(passoSubsection?.content || []),
+    [passoSubsection]
+  );
+  const processChecklist = useMemo(
+    () => extractListItems(checklistSubsection?.content || []),
+    [checklistSubsection]
+  );
+  const mainProcessIntro = useMemo(() => {
+    if (!mainProcessSection) {
+      return [];
+    }
+    return extractParagraphs(mainProcessSection.content);
+  }, [mainProcessSection]);
+  const processFlows = useMemo(() => {
+    const flowSections = processParsed.filter(section => /^\d+\./.test(section.title.trim()));
+    return flowSections.filter(section => !normalizeText(section.title).startsWith('1.4 processo'));
+  }, [processParsed]);
+  const toolsSection = useMemo(
+    () => processParsed.find(section => normalizeText(section.title).includes('ferramentas e sistemas')) || null,
+    [processParsed]
+  );
+  const toolsList = useMemo(() => extractListItems(toolsSection?.content || []), [toolsSection]);
 
   const sendToCustomersStage = (contactId) => {
     const targetStage = '18. Novos Clientes';
@@ -835,26 +1124,26 @@ function App() {
   };
 
   const chartTheme = useMemo(() => ({
-    textColor: isDarkMode ? '#cbd5f5' : '#1f2937',
+    textColor: '#1f2937',
     fontSize: 11,
     axis: {
       ticks: {
         text: {
-          fill: isDarkMode ? '#94a3b8' : '#6b7280',
+          fill: '#6b7280',
         },
       },
       legend: {
         text: {
-          fill: isDarkMode ? '#94a3b8' : '#6b7280',
+          fill: '#6b7280',
         },
       },
     },
     grid: {
       line: {
-        stroke: isDarkMode ? 'rgba(148, 163, 184, 0.18)' : '#e5e7eb',
+        stroke: '#e5e7eb',
       },
     },
-  }), [isDarkMode]);
+  }), []);
 
   const handleDragEnd = (event) => {
     const { active, over } = event;
@@ -1316,6 +1605,64 @@ function App() {
                     </div>
                   </div>
 
+                  <div className="grid gap-8 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-border bg-card p-5">
+                      <h3 className="text-sm font-semibold">Leads por canal</h3>
+                      <div className="h-96">
+                        <ResponsiveBar
+                          data={channelCountData}
+                          keys={['value']}
+                          indexBy="channel"
+                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
+                          padding={0.3}
+                          layout="horizontal"
+                          colors="#60a5fa"
+                          enableLabel={false}
+                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
+                          theme={chartTheme}
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-card p-5">
+                      <h3 className="text-sm font-semibold">Leads por tipo de cliente</h3>
+                      <div className="h-96">
+                        <ResponsiveBar
+                          data={customerTypeCountData}
+                          keys={['value']}
+                          indexBy="customerType"
+                          margin={{ top: 20, right: 20, bottom: 40, left: 160 }}
+                          padding={0.3}
+                          layout="horizontal"
+                          colors="#3b82f6"
+                          enableLabel={false}
+                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
+                          theme={chartTheme}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-border bg-card p-5">
+                    <h3 className="text-sm font-semibold">Oportunidade por probabilidade de fechamento</h3>
+                    <div className="h-96">
+                      <ResponsiveBar
+                        data={probabilityValueData}
+                        keys={['value']}
+                        indexBy="probability"
+                        margin={{ top: 20, right: 20, bottom: 40, left: 220 }}
+                        padding={0.3}
+                        layout="horizontal"
+                        colors="#2563eb"
+                        enableLabel={false}
+                        axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                        axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
+                        theme={chartTheme}
+                      />
+                    </div>
+                  </div>
+
                   <div className="rounded-2xl border border-border bg-card p-5">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">Evolucao por quantidade (por etapa)</h3>
@@ -1347,6 +1694,236 @@ function App() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeView === 'Processo' && (
+            <div className="mt-6 space-y-6">
+              <div className="rounded-3xl border border-border bg-card p-6 lg:p-8 shadow-card">
+                <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="max-w-2xl">
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Playbook comercial</p>
+                    <h2 className="mt-2 text-2xl md:text-3xl font-semibold">Processo completo de vendas</h2>
+                    <p className="mt-3 text-sm text-muted">
+                      Estrutura oficial para prospeccao, qualificacao, fechamento e handoff.
+                      Use esta pagina como referencia durante o dia a dia.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
+                      <p className="text-xs text-muted">Secoes</p>
+                      <p className="text-lg font-semibold text-ink">{processStats.sections}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
+                      <p className="text-xs text-muted">Subsecoes</p>
+                      <p className="text-lg font-semibold text-ink">{processStats.subsections}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
+                      <p className="text-xs text-muted">Palavras</p>
+                      <p className="text-lg font-semibold text-ink">{formatCompactNumber(processStats.words)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
+                <aside className="rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-24 h-fit">
+                  <p className="text-xs font-semibold text-muted">Mapa do processo</p>
+                  <nav className="mt-4 flex flex-col gap-2">
+                    {processSections.map(section => (
+                      <a
+                        key={section.id}
+                        href={`#${section.id}`}
+                        className="rounded-xl px-3 py-2 text-sm font-semibold text-ink hover:bg-cardAlt"
+                      >
+                        {section.text}
+                      </a>
+                    ))}
+                    {processSections.length === 0 && (
+                      <p className="text-sm text-muted">Sem secoes detectadas.</p>
+                    )}
+                  </nav>
+                  <div className="mt-6 rounded-2xl border border-border bg-cardAlt p-4">
+                    <p className="text-xs font-semibold text-muted">Links rapidos</p>
+                    <div className="mt-3 flex flex-col gap-2 text-sm">
+                      <a
+                        href="https://chatwoot.tenryu.com.br/app/accounts/2"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold text-primary hover:underline"
+                      >
+                        Acessar Chatwoot
+                      </a>
+                      <a
+                        href="/api/processo"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-muted hover:text-ink"
+                      >
+                        Abrir markdown original
+                      </a>
+                    </div>
+                  </div>
+                </aside>
+
+                <main className="rounded-2xl border border-border bg-card p-6 lg:p-8 space-y-8">
+                  {processLoading && (
+                    <p className="text-sm text-muted">Carregando processo...</p>
+                  )}
+                  {processError && (
+                    <p className="text-sm text-status-danger">{processError}</p>
+                  )}
+                  {!processLoading && !processError && processContent && (
+                    <>
+                      <section className="rounded-2xl border border-border bg-cardAlt p-5">
+                        <div className="flex flex-col gap-2">
+                          <p className="text-xs font-semibold text-muted">Fluxo principal</p>
+                          <h3 className="text-lg font-semibold text-ink">Passo a passo do vendedor</h3>
+                          {mainProcessIntro.slice(0, 2).map((paragraph, index) => (
+                            <p key={`process-intro-${index}`} className="text-sm text-muted">
+                              {paragraph}
+                            </p>
+                          ))}
+                        </div>
+                        <div className="mt-5 grid gap-3">
+                          {processSteps.map(step => (
+                            <div key={step.number} className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-semibold">
+                                {step.number}
+                              </span>
+                              <p className="text-sm text-ink leading-relaxed">{step.text}</p>
+                            </div>
+                          ))}
+                          {processSteps.length === 0 && (
+                            <p className="text-sm text-muted">Etapas do processo nao identificadas.</p>
+                          )}
+                        </div>
+                      </section>
+
+                      <section className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-border bg-cardAlt p-5">
+                          <p className="text-xs font-semibold text-muted">Checklist</p>
+                          <h3 className="mt-2 text-base font-semibold text-ink">Minimo por oportunidade</h3>
+                          <div className="mt-4 space-y-2">
+                            {processChecklist.map(item => (
+                              <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                                <span className="mt-1 h-2 w-2 rounded-full bg-primary" />
+                                <span>{item}</span>
+                              </div>
+                            ))}
+                            {processChecklist.length === 0 && (
+                              <p className="text-sm text-muted">Checklist nao identificado.</p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-border bg-cardAlt p-5">
+                          <p className="text-xs font-semibold text-muted">Ferramentas centrais</p>
+                          <h3 className="mt-2 text-base font-semibold text-ink">Base do processo</h3>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {toolsList.slice(0, 8).map(tool => (
+                              <span key={tool} className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink">
+                                {tool}
+                              </span>
+                            ))}
+                            {toolsList.length === 0 && (
+                              <p className="text-sm text-muted">Ferramentas nao identificadas.</p>
+                            )}
+                          </div>
+                        </div>
+                      </section>
+
+                      <section>
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-lg font-semibold">Processos principais</h3>
+                          <span className="text-xs text-muted">Baseado no playbook completo</span>
+                        </div>
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          {processFlows.map(section => {
+                            const paragraphs = extractParagraphs(section.content);
+                            const bullets = extractListItems(section.content);
+                            return (
+                              <div key={section.title} className="rounded-2xl border border-border bg-cardAlt p-5">
+                                <h4 className="text-base font-semibold text-ink">{section.title}</h4>
+                                {paragraphs[0] && (
+                                  <p className="mt-2 text-sm text-muted">{paragraphs[0]}</p>
+                                )}
+                                <div className="mt-3 space-y-2">
+                                  {bullets.slice(0, 4).map(item => (
+                                    <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                                      <span className="mt-1 h-2 w-2 rounded-full bg-secondary" />
+                                      <span>{item}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {processFlows.length === 0 && (
+                            <p className="text-sm text-muted">Nao foi possivel identificar processos principais.</p>
+                          )}
+                        </div>
+                      </section>
+
+                      <section>
+                        <h3 className="text-lg font-semibold">Detalhamento por area</h3>
+                        <div className="mt-4 space-y-6">
+                          {processParsed.map(section => (
+                            <div key={section.title} className="rounded-2xl border border-border bg-cardAlt p-5" id={slugify(section.title)}>
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <h4 className="text-base font-semibold text-ink">{section.title}</h4>
+                                  {extractParagraphs(section.content).slice(0, 2).map((paragraph, index) => (
+                                    <p key={`${section.title}-p-${index}`} className="mt-2 text-sm text-muted">
+                                      {paragraph}
+                                    </p>
+                                  ))}
+                                </div>
+                                {section.subsections.length > 0 && (
+                                  <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
+                                    {section.subsections.length} subsecoes
+                                  </span>
+                                )}
+                              </div>
+                              {section.subsections.length > 0 && (
+                                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                  {section.subsections.map(sub => {
+                                    const subParagraphs = extractParagraphs(sub.content);
+                                    const subBullets = extractListItems(sub.content);
+                                    return (
+                                      <div key={`${section.title}-${sub.title}`} className="rounded-xl border border-border bg-card px-4 py-3">
+                                        <h5 className="text-sm font-semibold text-ink">{sub.title}</h5>
+                                        {subParagraphs[0] && (
+                                          <p className="mt-2 text-xs text-muted">{subParagraphs[0]}</p>
+                                        )}
+                                        {subBullets.slice(0, 3).length > 0 && (
+                                          <div className="mt-3 space-y-1">
+                                            {subBullets.slice(0, 3).map(item => (
+                                              <div key={item} className="flex items-start gap-2 text-xs text-ink">
+                                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                                <span>{item}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          {processParsed.length === 0 && (
+                            <p className="text-sm text-muted">Nenhum conteudo identificado.</p>
+                          )}
+                        </div>
+                      </section>
+                    </>
+                  )}
+                  {!processLoading && !processError && !processContent && (
+                    <p className="text-sm text-muted">Nenhum conteudo encontrado.</p>
+                  )}
+                </main>
+              </div>
             </div>
           )}
         </div>

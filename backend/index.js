@@ -2,6 +2,8 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const cron = require('node-cron');
+const fs = require('fs/promises');
+const path = require('path');
 
 require('dotenv').config();
 
@@ -122,6 +124,17 @@ app.get('/api/contacts', async (req, res) => {
   }
 });
 
+app.get('/api/processo', async (req, res) => {
+  try {
+    const filePath = path.resolve(__dirname, '..', 'Processos-Comerciais-Vendas.md');
+    const content = await fs.readFile(filePath, 'utf8');
+    res.json({ content });
+  } catch (err) {
+    console.error('Error reading process file:', err);
+    res.status(500).json({ error: 'Erro ao carregar processo.' });
+  }
+});
+
 const valueExpr = (alias = '') => `NULLIF(regexp_replace(COALESCE(${alias}custom_attributes->>'Valor_Oportunidade',''), '[^0-9,.-]', '', 'g'), '')`;
 const valueNumExpr = (alias = '') => `CASE WHEN ${valueExpr(alias)} IS NULL THEN NULL ELSE REPLACE(REPLACE(${valueExpr(alias)}, '.', ''), ',', '.')::numeric END`;
 
@@ -232,6 +245,60 @@ app.get('/api/overview/by-state', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('Error fetching overview by state:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/overview/by-channel', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        custom_attributes->>'Canal' AS channel,
+        COUNT(*)::int AS count
+      FROM contacts
+      WHERE custom_attributes->>'Canal' IS NOT NULL
+      GROUP BY channel
+      ORDER BY count DESC;
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching overview by channel:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/overview/by-customer-type', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        custom_attributes->>'Tipo_Cliente' AS customer_type,
+        COUNT(*)::int AS count
+      FROM contacts
+      WHERE custom_attributes->>'Tipo_Cliente' IS NOT NULL
+      GROUP BY customer_type
+      ORDER BY count DESC;
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching overview by customer type:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/overview/by-probability', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        custom_attributes->>'probabilidade_de_fechamento' AS probability,
+        COALESCE(SUM(${valueNumExpr()}), 0) AS total_value
+      FROM contacts
+      WHERE custom_attributes->>'probabilidade_de_fechamento' IS NOT NULL
+      GROUP BY probability
+      ORDER BY total_value DESC;
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching overview by probability:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

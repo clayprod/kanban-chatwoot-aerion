@@ -8,6 +8,7 @@
 ## ÍNDICE
 
 1. [Visão Geral do Departamento Comercial](#1-visão-geral)
+   - [Processo](#14-processo)
 2. [Processo de Prospecção (SDR)](#2-processo-de-prospecção-sdr)
 3. [Processo de Qualificação de Leads](#3-processo-de-qualificação-de-leads)
 4. [Processo de Vendas Diretas (AE)](#4-processo-de-vendas-diretas-ae)
@@ -33,7 +34,6 @@
                     ┌──────────────────────┐
                     │  HEAD COMERCIAL      │
                     │                      │
-                    │  Meta: R$ 3.6M/ano   │
                     └──────────┬───────────┘
                                │
               ┌────────────────┼────────────────┐
@@ -44,9 +44,8 @@
     │ PROSPECÇÃO      │ │ FECHAMENTO   │ │ CANAIS       │
     │                 │ │              │ │              │
     │ • 3 SDRs        │ │ • 5 AEs      │ │ • 3 Channel  │
-    │ • Meta: 180     │ │ • Meta: R$   │ │   Managers   │
-    │   SQLs/mês      │ │   750k/mês   │ │ • Meta: R$   │
-    │                 │ │              │ │   1.2M/mês   │
+    │ • Meta: 180     │ │              │ │   Managers   │
+    │   SQLs/mês      │ │              │ │              │
     └─────────────────┘ └──────────────┘ └──────────────┘
                                │
                                ▼
@@ -60,9 +59,9 @@
 ```
 
 **Estrutura Real 2026 (Multi-chapéu):**
-- **Head Comercial e Produtos:** Estratégia/Liderança (40%) + Gestão Canais (25%) + Vendas Enterprise (20%) + Produtos (10%) + Marketing (5%) - Meta: R$ 1.8M/ano
-- **Vendedor 1 - Vendas Consultivas:** Prospecção (33%) + Vendas e Fechamento (33%) + Customer Success (34%) - Meta: R$ 900k/ano
-- **Vendedor 2 - Vendas Consultivas:** Prospecção (33%) + Vendas e Fechamento (33%) + Customer Success (34%) - Meta: R$ 900k/ano
+- **Head Comercial e Produtos:** Estratégia/Liderança (40%) + Gestão Canais (25%) + Vendas Enterprise (20%) + Produtos (10%) + Marketing (5%)
+- **Vendedor 1 - Vendas Consultivas:** Prospecção (33%) + Vendas e Fechamento (33%) + Customer Success (34%)
+- **Vendedor 2 - Vendas Consultivas:** Prospecção (33%) + Vendas e Fechamento (33%) + Customer Success (34%)
 - **Estagiária Marketing:** Geração Leads (40%) + Criação Conteúdo (30%) + Redes Sociais (20%) + Eventos (10%) - Meta: 300 leads/ano
 
 **Nota:** Modelo Aaron Ross adaptado para time limitado - todos os vendedores fazem prospecção, closing e customer success.
@@ -93,14 +92,56 @@ A Aerion adota o modelo de **especialização de funções** proposto no livro "
 
 | Métrica | Meta Mensal | Meta Anual |
 |---------|-------------|------------|
-| **Receita Total** | R$ 2.617.000 | R$ 31.405.000 |
 | **Número de Vendas** | 25 deals | 300 deals |
-| **Ticket Médio** | R$ 104.700 | R$ 104.700 |
 | **SQLs Gerados** | 180 | 2.160 |
 | **Taxa Conversão SQL→Venda** | 13,9% | 13,9% |
 | **Ciclo de Venda Médio** | 62 dias | 62 dias |
-| **CAC** | R$ 8.200 | R$ 8.200 |
 | **LTV/CAC Ratio** | 6,3 | 6,3 |
+
+## 1.4 PROCESSO
+
+### 1.4.1 Objetivo
+
+Padronizar o fluxo de venda ponta a ponta para que todo vendedor siga o mesmo procedimento, registre corretamente as informações no CRM e mantenha o histórico completo do lead.
+
+### 1.4.2 Passo a passo (obrigatório)
+
+1. **Recebimento e registro do lead**
+   - Entrada: inbound, outbound ou evento.
+   - Ação: criar/atualizar o contato no **Chatwoot** e consolidar dados.
+   - Preencher: dados básicos, **etiquetas**, origem, responsável e **atributos customizados** (formulários do DB).
+   - Garantir que o lead esteja no Trello/Sheets via n8n.
+
+2. **Primeiro contato e cadência inicial**
+   - Executar a sequência de contato conforme canal (email, ligação, WhatsApp, LinkedIn).
+   - Registrar no Chatwoot e no card do Trello: data, resultado e próximo passo.
+
+3. **Qualificação BANT+U**
+   - Conduzir a ligação de qualificação e registrar respostas no CRM.
+   - Decisão: qualifica (SQL) ou vai para nurture/descartado.
+
+4. **Agendamento com AE**
+   - Agendar reunião/demonstração e confirmar por email.
+   - Transferir o card para o pipeline de AE com histórico completo.
+
+5. **Discovery e demo**
+   - AE prepara a reunião, aprofunda diagnóstico e demonstra a solução.
+   - Atualizar status, dores, use case e próximos passos no CRM.
+
+6. **Proposta e negociação**
+   - Elaborar proposta, registrar condições e aprovações necessárias.
+   - Manter histórico de objeções e ajustes no CRM.
+
+7. **Fechamento e handoff**
+   - Registrar oportunidade como ganha e iniciar fluxo do Sankhya.
+   - Fazer handoff completo para CS com histórico, expectativas e contatos.
+
+### 1.4.3 Checklist mínimo por oportunidade
+
+- Contato consolidado no Chatwoot com etiquetas e atributos customizados completos.
+- Card do Trello atualizado com etapa correta, último contato e próximo passo.
+- Registro de BANT+U e notes da conversa.
+- Próximos passos agendados e confirmados.
 
 ## VERSÃO 2026: ADAPTAÇÃO PARA EQUIPE PEQUENA
 
@@ -490,6 +531,7 @@ flowchart TD
 
 **Ferramentas Utilizadas:**
 - CRM (Trello + Google Sheets)
+- Chatwoot (consolidação de contatos e etiquetas)
 - Google Voice ou CallTrackingMetrics
 - **Sejda PDF Editor** (conferência e correção de documentos)
 - LinkedIn Sales Navigator
@@ -889,7 +931,6 @@ Agricultura não é mais uma vertical ativa. Pode ser atendida como cliente fina
 **Input:** SQLs agendados pelos SDRs  
 **Output:** Contratos fechados e assinados  
 **Responsável:** Account Executives (AEs)  
-**Meta:** R$ 30k por AE/mês (R$ 150k total com 5 AEs - estrutura futura)
 
 ### 4.2 Funil de Vendas e Etapas
 
@@ -922,7 +963,6 @@ PIPELINE DE VENDAS
 └────────────────────────┴──────┴────────────────────┘
 
 TAXA DE CONVERSÃO GERAL: 7% (SQL → Venda)
-RECEITA MENSAL: R$ 1,36M (13 vendas × R$ 105k)
 ```
 
 ### 4.3 Fluxograma Detalhado de Vendas
@@ -1282,15 +1322,12 @@ flowchart TD
 | Métrica | Meta Individual | Meta Time (5 AEs) |
 |---------|-----------------|-------------------|
 | **Pipeline** | | |
-| Valor total em pipeline | R$ 1,2M | R$ 6M |
 | Número de oportunidades ativas | 15-20 | 75-100 |
 | **Atividades** | | |
 | Reuniões/demos por semana | 8-10 | 40-50 |
 | Propostas enviadas/mês | 6 | 30 |
 | **Resultados** | | |
 | Vendas fechadas/mês | 2-3 | 12-15 |
-| Receita fechada/mês | R$ 210k | R$ 1,05M |
-| Ticket médio | R$ 105k | R$ 105k |
 | **Conversão** | | |
 | Taxa SQL → Oportunidade | 50% | 50% |
 | Taxa Oportunidade → Proposta | 40% | 40% |
@@ -1307,7 +1344,6 @@ flowchart TD
 ### 5.1 Objetivo do Processo
 
 **Responsável:** Channel Managers  
-**Meta:** R$ 80k por CM/mês em sell-in (R$ 240k total com 3 CMs - estrutura futura)  
 **Objetivo:** Construir, ativar e gerenciar rede de revendas autorizadas
 
 ### 5.2 Fluxograma de Gestão de Canais
@@ -1686,14 +1722,11 @@ Os tiers (Silver e Gold) podem ser utilizados como **argumento comercial** para 
 | Revendas Silver | 12-14 | 12-14 |
 | Novas ativações/trimestre | 2-3 | 2-3 |
 | **Vendas** | | |
-| Sell-in mensal | R$ 123k | R$ 123k |
-| Sell-out mensal | R$ 104k | R$ 104k |
 | Ratio sell-out/sell-in | >85% | >85% |
 | **Qualidade** | | |
 | Taxa de churn de parceiros | <10%/ano | <10%/ano |
 | % parceiros atingindo meta | >60% | >60% |
 | **VPC - Verba Publicidade Cooperada** | | |
-| VPC acumulado total (todos Gold) | R$ 50k/trimestre | R$ 50k/trimestre |
 | VPC utilizado vs disponível | >40% | >40% |
 | Taxa de utilização VPC | >60% | >60% |
 | ROI campanhas VPC | >200% | >200% |
@@ -1705,7 +1738,6 @@ Os tiers (Silver e Gold) podem ser utilizados como **argumento comercial** para 
 ### 6.1 Objetivo do Processo
 
 **Responsável:** AE Governo + apoio Jurídico  
-**Meta:** R$ 15k/mês (5% da receita total)  
 **Foco:** Segurança pública (PMs, Bombeiros, Defesa Civil)  
 **Estratégia:** Lobby proativo + participação reativa em editais
 
@@ -2297,12 +2329,13 @@ Cada pessoa responde rapidamente:
 
 ### 9.1 Sistema de Gestão de Leads e CRM
 
-**Sistema Integrado:** Google Sheets + Trello + n8n (Automação)
+**Sistema Integrado:** Google Sheets + Trello + n8n (Automação) + Chatwoot
 
 **Arquitetura do Sistema:**
 - **Google Sheets**: Base de dados central (5 planilhas especializadas)
 - **Trello**: CRM visual com 3 boards especializados
 - **n8n**: Automação local para integração e workflows
+- **Chatwoot**: Consolidação de contatos, etiquetas e formulários (atributos customizados no DB)
 
 **📋 Documentação Completa:**
 - **Sistema-Gestao-Leads-CRM.md**: Arquitetura completa e fluxos
@@ -2861,4 +2894,3 @@ Este documento principal é complementado por uma série de documentos especiali
 *"Vendas não são sobre vender. São sobre construir confiança e educar." - Sybil F. Stershic*
 
 *"O processo de vendas é tão importante quanto as pessoas que o executam." - Aaron Ross, Receita Previsível*
-
