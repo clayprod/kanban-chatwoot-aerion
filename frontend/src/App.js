@@ -14,7 +14,211 @@ import { ResponsiveBar } from '@nivo/bar';
 import { ResponsiveLine } from '@nivo/line';
 import './App.css';
 
-const viewTabs = ['Overview', 'Board'];
+const viewTabs = ['Overview', 'Board', 'Processo'];
+
+const processBlueprint = {
+  stats: [
+    { label: 'Fases chave', value: '7' },
+    { label: 'Frentes', value: '6' },
+    { label: 'Rituais', value: '5' },
+  ],
+  map: [
+    { title: 'Visao geral', id: 'visao-geral' },
+    { title: 'Pipeline ponta a ponta', id: 'pipeline' },
+    { title: 'Checklist minimo', id: 'checklist' },
+    { title: 'Prospecao (SDR)', id: 'prospeccao' },
+    { title: 'Qualificacao', id: 'qualificacao' },
+    { title: 'Vendas diretas (AE)', id: 'vendas-diretas' },
+    { title: 'Gestao de canais', id: 'canais' },
+    { title: 'Licitacoes publicas', id: 'licitacoes' },
+    { title: 'Customer Success', id: 'customer-success' },
+    { title: 'Rituais comerciais', id: 'rituais' },
+    { title: 'Ferramentas e registros', id: 'ferramentas' },
+    { title: 'ERP Sankhya', id: 'erp-sankhya' },
+    { title: 'Documentacao complementar', id: 'documentacao' },
+  ],
+  pillars: [
+    {
+      title: 'Especializacao com clareza',
+      text: 'Separar prospeccao, fechamento e pos-venda mesmo em time enxuto, mantendo a responsabilidade de cada etapa.'
+    },
+    {
+      title: 'Processo previsivel e replicavel',
+      text: 'Etapas, criterios e registros padronizados para facilitar onboarding e manter a consistencia.'
+    },
+    {
+      title: 'Volume com qualidade',
+      text: 'Cadencia estruturada e qualificacao rigorosa para concentrar esforco em oportunidades aderentes.'
+    },
+  ],
+  overview: [
+    'Todo lead precisa ter historico completo no CRM antes de avançar.',
+    'BANT+U e ICP direcionam quem avanca e quem entra em nurturing.',
+    'Handoff para CS acontece somente com contexto, riscos e proximos passos claros.'
+  ],
+  pipelineSteps: [
+    {
+      title: 'Recebimento e registro do lead',
+      text: 'Consolidar dados, origem, etiquetas e responsavel no Chatwoot e registrar no pipeline.'
+    },
+    {
+      title: 'Primeiro contato e cadencia inicial',
+      text: 'Executar sequencia multicanal e registrar resultado, data e proximo passo.'
+    },
+    {
+      title: 'Qualificacao BANT+U',
+      text: 'Confirmar dor, decisor, orcamento e urgencia; decidir SQL ou nurture.'
+    },
+    {
+      title: 'Agendamento com AE',
+      text: 'Agendar demo, confirmar e transferir contexto completo para o AE.'
+    },
+    {
+      title: 'Discovery e demo',
+      text: 'Aprofundar diagnostico, mapear use case e definir criterios de sucesso.'
+    },
+    {
+      title: 'Proposta e negociacao',
+      text: 'Formalizar escopo, registrar condicoes e acompanhar objeções.'
+    },
+    {
+      title: 'Fechamento e handoff',
+      text: 'Registrar ganho/perda, iniciar fluxo no ERP e repassar contexto ao CS.'
+    },
+  ],
+  checklist: [
+    'Contato consolidado no Chatwoot com etiquetas e atributos atualizados.',
+    'Etapa correta no funil, ultimo contato e proximo passo definidos.',
+    'Registro de BANT+U e notas da conversa.',
+    'Atividades e follow-ups agendados e confirmados.'
+  ],
+  streams: [
+    {
+      id: 'prospeccao',
+      title: 'Prospeccao (SDR)',
+      owner: 'SDR',
+      objective: 'Transformar leads frios em SQLs prontos para AE.',
+      inputs: 'Inbound, outbound e eventos.',
+      outputs: 'Reunioes qualificadas e contexto registrado.',
+      actions: [
+        'Cadencia multicanal com registro de tentativas.',
+        'Classificacao por ICP e sinais de interesse.',
+        'Descartar ou nutrir quando nao houver fit.'
+      ]
+    },
+    {
+      id: 'qualificacao',
+      title: 'Qualificacao de leads',
+      owner: 'SDR/AE',
+      objective: 'Garantir aderencia antes da demo.',
+      inputs: 'Lead com historico e interacoes recentes.',
+      outputs: 'Diagnostico documentado e decisao de avancar.',
+      actions: [
+        'Aplicar BANT+U e validar decisor.',
+        'Documentar dores, urgencia e concorrentes.',
+        'Definir proximos passos e risco principal.'
+      ]
+    },
+    {
+      id: 'vendas-diretas',
+      title: 'Vendas diretas (AE)',
+      owner: 'AE',
+      objective: 'Converter SQL em cliente ativo.',
+      inputs: 'SQL com contexto completo e agenda confirmada.',
+      outputs: 'Proposta validada e handoff aprovado.',
+      actions: [
+        'Discovery estruturado e demo orientada a valor.',
+        'Proposta com escopo, criterios e dependencias.',
+        'Negociacao com registro de objeções.'
+      ]
+    },
+    {
+      id: 'canais',
+      title: 'Gestao de canais',
+      owner: 'Channel Manager',
+      objective: 'Ativar parceiros e manter pipeline recorrente.',
+      inputs: 'Parceiros com ICP e capacidade validada.',
+      outputs: 'Parceiros ativos com planos de acao.',
+      actions: [
+        'Pre-qualificacao e onboarding rapido.',
+        'Playbooks e check-ins regulares.',
+        'Registro de performance e oportunidades.'
+      ]
+    },
+    {
+      id: 'licitacoes',
+      title: 'Licitacoes publicas',
+      owner: 'AE/Backoffice',
+      objective: 'Competir de forma organizada e dentro do compliance.',
+      inputs: 'Editais e requisitos mapeados.',
+      outputs: 'Propostas formais e rastreabilidade completa.',
+      actions: [
+        'Checklist de documentos e prazos.',
+        'Revisao tecnica e juridica quando aplicavel.',
+        'Atualizacao do status no CRM.'
+      ]
+    },
+    {
+      id: 'customer-success',
+      title: 'Customer Success',
+      owner: 'CS',
+      objective: 'Ativar, reter e expandir clientes.',
+      inputs: 'Handoff completo do AE.',
+      outputs: 'Plano de sucesso e rotina de acompanhamento.',
+      actions: [
+        'Onboarding com metas e indicadores de sucesso.',
+        'Check-ins periodicos e registro de riscos.',
+        'Plano de upsell e recompra quando houver fit.'
+      ]
+    },
+  ],
+  rituals: [
+    {
+      title: 'Daily comercial',
+      cadence: 'Diario',
+      focus: 'Prioridades, bloqueios e follow-ups criticos.'
+    },
+    {
+      title: 'Revisao de pipeline',
+      cadence: 'Semanal',
+      focus: 'Qualidade das oportunidades e proximos passos.'
+    },
+    {
+      title: 'Comite de propostas',
+      cadence: 'Semanal',
+      focus: 'Escopo, riscos e aprovacoes internas.'
+    },
+    {
+      title: 'Revisao de canais',
+      cadence: 'Mensal',
+      focus: 'Performance de parceiros e planos de acao.'
+    },
+    {
+      title: 'Handoff CS',
+      cadence: 'Por fechamento',
+      focus: 'Contexto completo, expectativas e riscos.'
+    },
+  ],
+  tools: [
+    { name: 'Chatwoot', purpose: 'Registro principal do contato e historico.' },
+    { name: 'Trello', purpose: 'Pipeline e etapas visuais para time enxuto.' },
+    { name: 'Google Sheets', purpose: 'Consolidacao e visao operacional.' },
+    { name: 'n8n', purpose: 'Automacao de sincronizacoes e alertas.' },
+    { name: 'Email/WhatsApp/LinkedIn', purpose: 'Canais de cadencia e follow-up.' },
+    { name: 'ERP Sankhya', purpose: 'Fluxo administrativo apos fechamento.' },
+  ],
+  erp: [
+    'Abrir cadastro do cliente com dados completos e validados.',
+    'Registrar oportunidade ganha e documentos necessarios.',
+    'Garantir que o CS tenha acesso a contratos e escopo.'
+  ],
+  documentation: [
+    'Scripts de prospeccao e discovery por segmento.',
+    'Modelos de email e proposta.',
+    'Checklist de onboarding e health check.',
+    'Playbooks de canais e licitacoes.'
+  ],
+};
 
 const parseCurrency = (value) => {
   if (value === null || value === undefined || value === '') {
@@ -125,170 +329,6 @@ const slugify = (value) => {
     .replace(/-+/g, '-');
 };
 
-const extractHeadings = (markdown) => {
-  if (!markdown) {
-    return [];
-  }
-  return markdown
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.startsWith('#'))
-    .map(line => {
-      const match = line.match(/^(#{1,4})\s+(.+)$/);
-      if (!match) {
-        return null;
-      }
-      const level = match[1].length;
-      const text = match[2].replace(/\s+#*$/, '').trim();
-      if (!text) {
-        return null;
-      }
-      return {
-        level,
-        text,
-        id: slugify(text),
-      };
-    })
-    .filter(Boolean);
-};
-
-const parseMarkdownSections = (markdown) => {
-  if (!markdown) {
-    return [];
-  }
-  const lines = markdown.split('\n');
-  const sections = [];
-  let currentSection = null;
-  let currentSubsection = null;
-  let inCodeBlock = false;
-
-  lines.forEach(line => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('```')) {
-      inCodeBlock = !inCodeBlock;
-      if (currentSubsection) {
-        currentSubsection.content.push(line);
-      } else if (currentSection) {
-        currentSection.content.push(line);
-      }
-      return;
-    }
-
-    if (!inCodeBlock) {
-      const sectionMatch = line.match(/^##\s+(.+)/);
-      if (sectionMatch) {
-        currentSection = {
-          title: sectionMatch[1].trim(),
-          content: [],
-          subsections: [],
-        };
-        sections.push(currentSection);
-        currentSubsection = null;
-        return;
-      }
-
-      const subsectionMatch = line.match(/^###\s+(.+)/);
-      if (subsectionMatch && currentSection) {
-        currentSubsection = {
-          title: subsectionMatch[1].trim(),
-          content: [],
-        };
-        currentSection.subsections.push(currentSubsection);
-        return;
-      }
-    }
-
-    if (currentSubsection) {
-      currentSubsection.content.push(line);
-    } else if (currentSection) {
-      currentSection.content.push(line);
-    }
-  });
-
-  return sections;
-};
-
-const stripMarkdown = (text) => {
-  if (!text) {
-    return '';
-  }
-  return text
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/__(.*?)__/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\[(.*?)\]\(.*?\)/g, '$1');
-};
-
-const extractListItems = (lines) => {
-  if (!Array.isArray(lines)) {
-    return [];
-  }
-  return lines
-    .map(line => line.trim())
-    .filter(line => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line) || /^□\s+/.test(line))
-    .map(line => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').replace(/^□\s+/, ''))
-    .map(item => stripMarkdown(item))
-    .filter(Boolean);
-};
-
-const extractParagraphs = (lines) => {
-  if (!Array.isArray(lines)) {
-    return [];
-  }
-  const paragraphs = [];
-  let buffer = [];
-  let inCodeBlock = false;
-
-  const flush = () => {
-    if (buffer.length > 0) {
-      paragraphs.push(stripMarkdown(buffer.join(' ')));
-      buffer = [];
-    }
-  };
-
-  lines.forEach(line => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('```')) {
-      inCodeBlock = !inCodeBlock;
-      flush();
-      return;
-    }
-    if (inCodeBlock) {
-      return;
-    }
-    if (!trimmed) {
-      flush();
-      return;
-    }
-    if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed) || /^\|/.test(trimmed) || /^>/.test(trimmed)) {
-      flush();
-      return;
-    }
-    buffer.push(trimmed);
-  });
-  flush();
-  return paragraphs.filter(Boolean);
-};
-
-const extractOrderedSteps = (lines) => {
-  if (!Array.isArray(lines)) {
-    return [];
-  }
-  return lines
-    .map(line => line.trim())
-    .filter(line => /^\d+\.\s+/.test(line))
-    .map(line => {
-      const match = line.match(/^(\d+)\.\s+(.*)$/);
-      if (!match) {
-        return null;
-      }
-      return {
-        number: match[1],
-        text: stripMarkdown(match[2]).trim(),
-      };
-    })
-    .filter(Boolean);
-};
 
 const CardPreview = ({ contact }) => {
   if (!contact) {
@@ -705,9 +745,6 @@ function App() {
   const [contacts, setContacts] = useState([]);
   const [activeTab, setActiveTab] = useState('leads');
   const [activeView, setActiveView] = useState('Board');
-  const [processContent, setProcessContent] = useState('');
-  const [processLoading, setProcessLoading] = useState(false);
-  const [processError, setProcessError] = useState(null);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const stored = getCookieValue('theme');
     return stored === 'dark';
@@ -733,6 +770,9 @@ function App() {
   const boardScrollRef = useRef(null);
   const boardScrollbarRef = useRef(null);
   const isSyncingRef = useRef(false);
+  const dragScrollRafRef = useRef(null);
+  const dragPointerXRef = useRef(null);
+  const isDraggingRef = useRef(false);
   const [activeDragId, setActiveDragId] = useState(null);
 
   const leadColumns = [
@@ -841,29 +881,6 @@ function App() {
         setOverviewLoading(false);
       });
   }, [activeView, historyGranularity]);
-
-  useEffect(() => {
-    if (activeView !== 'Processo') {
-      return;
-    }
-    if (processContent) {
-      return;
-    }
-    setProcessLoading(true);
-    setProcessError(null);
-    axios.get('/api/processo')
-      .then(response => {
-        setProcessContent(response.data?.content || '');
-      })
-      .catch(error => {
-        console.error('Error fetching process content:', error);
-        setProcessError('Nao foi possivel carregar o processo agora.');
-      })
-      .finally(() => {
-        setProcessLoading(false);
-      });
-  }, [activeView, processContent]);
-
 
   const filteredContacts = contacts.filter(contact => {
     const search = searchQuery.trim().toLowerCase();
@@ -1022,66 +1039,6 @@ function App() {
   ), [overviewData.byProbability]);
 
   const historySeries = useMemo(() => buildHistorySeries(overviewData.history), [overviewData.history]);
-  const processHeadings = useMemo(() => extractHeadings(processContent), [processContent]);
-  const processSections = useMemo(
-    () => processHeadings.filter(item => item.level === 2),
-    [processHeadings]
-  );
-  const processSubsections = useMemo(
-    () => processHeadings.filter(item => item.level === 3),
-    [processHeadings]
-  );
-  const processStats = useMemo(() => {
-    const words = processContent ? processContent.split(/\s+/).filter(Boolean).length : 0;
-    return {
-      sections: processSections.length,
-      subsections: processSubsections.length,
-      words,
-    };
-  }, [processContent, processSections, processSubsections]);
-  const processParsed = useMemo(() => parseMarkdownSections(processContent), [processContent]);
-  const mainProcessSection = useMemo(() => {
-    const primary = processParsed.find(section => normalizeText(section.title).startsWith('1.4 processo'));
-    if (primary) {
-      return primary;
-    }
-    return processParsed.find(section => normalizeText(section.title).includes('processo')) || null;
-  }, [processParsed]);
-  const passoSubsection = useMemo(() => {
-    if (!mainProcessSection) {
-      return null;
-    }
-    return mainProcessSection.subsections.find(sub => normalizeText(sub.title).includes('passo a passo')) || null;
-  }, [mainProcessSection]);
-  const checklistSubsection = useMemo(() => {
-    if (!mainProcessSection) {
-      return null;
-    }
-    return mainProcessSection.subsections.find(sub => normalizeText(sub.title).includes('checklist')) || null;
-  }, [mainProcessSection]);
-  const processSteps = useMemo(
-    () => extractOrderedSteps(passoSubsection?.content || []),
-    [passoSubsection]
-  );
-  const processChecklist = useMemo(
-    () => extractListItems(checklistSubsection?.content || []),
-    [checklistSubsection]
-  );
-  const mainProcessIntro = useMemo(() => {
-    if (!mainProcessSection) {
-      return [];
-    }
-    return extractParagraphs(mainProcessSection.content);
-  }, [mainProcessSection]);
-  const processFlows = useMemo(() => {
-    const flowSections = processParsed.filter(section => /^\d+\./.test(section.title.trim()));
-    return flowSections.filter(section => !normalizeText(section.title).startsWith('1.4 processo'));
-  }, [processParsed]);
-  const toolsSection = useMemo(
-    () => processParsed.find(section => normalizeText(section.title).includes('ferramentas e sistemas')) || null,
-    [processParsed]
-  );
-  const toolsList = useMemo(() => extractListItems(toolsSection?.content || []), [toolsSection]);
 
   const moveContactToStage = (contactId, targetStage) => {
     const previousContacts = contacts;
@@ -1173,10 +1130,46 @@ function App() {
     };
   }, [isDarkMode]);
 
+  const stopDragAutoScroll = useCallback(() => {
+    isDraggingRef.current = false;
+    dragPointerXRef.current = null;
+    if (dragScrollRafRef.current) {
+      window.cancelAnimationFrame(dragScrollRafRef.current);
+      dragScrollRafRef.current = null;
+    }
+  }, []);
+
+  const startDragAutoScroll = useCallback(() => {
+    if (dragScrollRafRef.current) {
+      return;
+    }
+    const step = () => {
+      if (!isDraggingRef.current || !boardScrollRef.current || dragPointerXRef.current == null) {
+        dragScrollRafRef.current = null;
+        return;
+      }
+      const containerRect = boardScrollRef.current.getBoundingClientRect();
+      const threshold = 80;
+      const speed = 24;
+      const pointerX = dragPointerXRef.current;
+      if (pointerX < containerRect.left + threshold) {
+        const next = Math.max(0, boardScrollRef.current.scrollLeft - speed);
+        boardScrollRef.current.scrollLeft = next;
+      } else if (pointerX > containerRect.right - threshold) {
+        const maxScroll = boardScrollRef.current.scrollWidth - boardScrollRef.current.clientWidth;
+        const next = Math.min(maxScroll, boardScrollRef.current.scrollLeft + speed);
+        boardScrollRef.current.scrollLeft = next;
+      }
+      dragScrollRafRef.current = window.requestAnimationFrame(step);
+    };
+    dragScrollRafRef.current = window.requestAnimationFrame(step);
+  }, []);
+
   const handleDragEnd = (event) => {
     const { active, over } = event;
 
     setActiveDragId(null);
+    stopDragAutoScroll();
 
     if (!over || active.id === over.id) {
       return;
@@ -1198,29 +1191,24 @@ function App() {
 
   const handleDragStart = (event) => {
     setActiveDragId(event.active?.id || null);
+    isDraggingRef.current = true;
+    startDragAutoScroll();
   };
 
   const handleDragMove = useCallback((event) => {
-    if (!boardScrollRef.current) {
-      return;
-    }
     const activeRect = event.active?.rect?.current?.translated || event.active?.rect?.current?.initial;
     if (!activeRect) {
+      dragPointerXRef.current = null;
       return;
     }
-    const pointerX = activeRect.left + activeRect.width / 2;
-    const containerRect = boardScrollRef.current.getBoundingClientRect();
-    const threshold = 80;
-    const speed = 24;
-    if (pointerX < containerRect.left + threshold) {
-      const next = Math.max(0, boardScrollRef.current.scrollLeft - speed);
-      boardScrollRef.current.scrollLeft = next;
-    } else if (pointerX > containerRect.right - threshold) {
-      const maxScroll = boardScrollRef.current.scrollWidth - boardScrollRef.current.clientWidth;
-      const next = Math.min(maxScroll, boardScrollRef.current.scrollLeft + speed);
-      boardScrollRef.current.scrollLeft = next;
-    }
-  }, []);
+    dragPointerXRef.current = activeRect.left + activeRect.width / 2;
+    startDragAutoScroll();
+  }, [startDragAutoScroll]);
+
+  const handleDragCancel = () => {
+    setActiveDragId(null);
+    stopDragAutoScroll();
+  };
 
   const handleTopScroll = () => {
     if (!boardScrollRef.current || !boardScrollbarRef.current || isSyncingRef.current) {
@@ -1253,12 +1241,13 @@ function App() {
   }, []);
 
   return (
-    <DndContext
-      collisionDetection={collisionDetectionStrategy}
-      onDragStart={handleDragStart}
-      onDragMove={handleDragMove}
-      onDragEnd={handleDragEnd}
-    >
+      <DndContext
+        collisionDetection={collisionDetectionStrategy}
+        onDragStart={handleDragStart}
+        onDragMove={handleDragMove}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
       <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
         <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
         <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
