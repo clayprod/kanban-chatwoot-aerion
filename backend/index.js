@@ -289,10 +289,10 @@ app.get('/api/overview/by-probability', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT
-        custom_attributes->>'probabilidade_de_fechamento' AS probability,
+        custom_attributes->>'Probabilidade_Fechamento' AS probability,
         COALESCE(SUM(${valueNumExpr()}), 0) AS total_value
       FROM contacts
-      WHERE custom_attributes->>'probabilidade_de_fechamento' IS NOT NULL
+      WHERE custom_attributes->>'Probabilidade_Fechamento' IS NOT NULL
       GROUP BY probability
       ORDER BY total_value DESC;
     `);

@@ -689,7 +689,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
-  const [sortOption, setSortOption] = useState('name-asc');
+  const [sortOption, setSortOption] = useState('opportunity-desc');
   const [historyGranularity, setHistoryGranularity] = useState('day');
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewData, setOverviewData] = useState({
