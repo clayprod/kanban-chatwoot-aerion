@@ -205,10 +205,10 @@ body.theme-dark {
 }
 
 .theme-dark .nivo-tooltip {
-  background: #0b1220;
-  color: #e2e8f0;
-  border: 1px solid #1f2937;
-  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+  background: #0b1220 !important;
+  color: #e2e8f0 !important;
+  border: 1px solid #1f2937 !important;
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45) !important;
 }
 
 .theme-dark .nivo-tooltip table {
