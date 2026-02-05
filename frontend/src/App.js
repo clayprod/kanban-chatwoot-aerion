@@ -101,6 +101,21 @@ const normalizeText = (value) => {
     .replace(/\p{Diacritic}/gu, '');
 };
 
+const getCookieValue = (name) => {
+  const parts = String(document.cookie || '').split('; ').filter(Boolean);
+  const match = parts.find(item => item.startsWith(`${name}=`));
+  if (!match) {
+    return null;
+  }
+  return decodeURIComponent(match.split('=').slice(1).join('='));
+};
+
+const setCookieValue = (name, value, days) => {
+  const maxAge = Number.isFinite(days) ? days * 86400 : 31536000;
+  const encoded = encodeURIComponent(value);
+  document.cookie = `${name}=${encoded}; max-age=${maxAge}; path=/; samesite=lax`;
+};
+
 const CardPreview = ({ contact }) => {
   if (!contact) {
     return null;
@@ -490,9 +505,13 @@ function App() {
   const [contacts, setContacts] = useState([]);
   const [activeTab, setActiveTab] = useState('leads');
   const [activeView, setActiveView] = useState('Board');
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const stored = getCookieValue('theme');
+    return stored === 'dark';
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [agentFilter, setAgentFilter] = useState('all');
   const [sortOption, setSortOption] = useState('name-asc');
   const [historyGranularity, setHistoryGranularity] = useState('day');
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -553,6 +572,7 @@ function App() {
 
   useEffect(() => {
     document.body.classList.toggle('theme-dark', isDarkMode);
+    setCookieValue('theme', isDarkMode ? 'dark' : 'light', 365);
   }, [isDarkMode]);
 
 
@@ -632,8 +652,21 @@ function App() {
       || (priorityFilter === 'baixa' && (priority.includes('baixa') || priority.includes('fria') || priority.includes('low')))
       || (priorityFilter === 'nenhuma' && (priority.includes('nenhuma') || priority.includes('nula') || priority.length === 0));
 
-    return matchesSearch && matchesPriority;
+    const agentName = String(contact.agent_name || '').trim();
+    const matchesAgent = agentFilter === 'all'
+      || normalizeText(agentName) === normalizeText(agentFilter);
+
+    return matchesSearch && matchesPriority && matchesAgent;
   });
+
+  const agentOptions = useMemo(() => {
+    const names = contacts
+      .map(contact => String(contact.agent_name || '').trim())
+      .filter(Boolean);
+    const unique = Array.from(new Set(names));
+    unique.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    return unique;
+  }, [contacts]);
 
   const sortContacts = (list) => {
     const sorted = [...list];
@@ -999,6 +1032,16 @@ function App() {
                     <option value="nenhuma">Nenhuma</option>
                   </select>
                   <select
+                    value={agentFilter}
+                    onChange={(event) => setAgentFilter(event.target.value)}
+                    className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                  >
+                    <option value="all">Todos agentes</option>
+                    {agentOptions.map(agent => (
+                      <option key={agent} value={agent}>{agent}</option>
+                    ))}
+                  </select>
+                  <select
                     value={sortOption}
                     onChange={(event) => setSortOption(event.target.value)}
                     className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
@@ -1144,6 +1187,7 @@ function App() {
                           layout="horizontal"
                           colors="#1d4ed8"
                           enableLabel={false}
+                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6 }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 2, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
@@ -1183,6 +1227,7 @@ function App() {
                           layout="horizontal"
                           colors={({ data }) => data.color || '#3b82f6'}
                           enableLabel={false}
+                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6 }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
@@ -1222,6 +1267,7 @@ function App() {
                           layout="horizontal"
                           colors="#3b82f6"
                           enableLabel={false}
+                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6 }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
@@ -1261,8 +1307,9 @@ function App() {
                           layout="horizontal"
                           colors="#3b82f6"
                           enableLabel={false}
+                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6 }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, format: value => formatCompactCurrency(value) || value }}
+                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
                       </div>

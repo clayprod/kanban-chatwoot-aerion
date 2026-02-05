@@ -171,6 +171,22 @@ body.theme-dark {
   box-shadow: 0 12px 22px rgba(2, 6, 23, 0.45);
 }
 
+.theme-dark .hover\:bg-card:hover {
+  background-color: #111827;
+}
+
+.theme-dark .hover\:bg-cardAlt:hover {
+  background-color: #0f172a;
+}
+
+.theme-dark .hover\:text-ink:hover {
+  color: #e5e7eb;
+}
+
+.theme-dark .hover\:text-secondary:hover {
+  color: #a5b4fc;
+}
+
 .theme-dark .scrollbar-theme {
   scrollbar-color: #475569 #0f172a;
 }
