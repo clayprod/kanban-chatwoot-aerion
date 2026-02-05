@@ -172,11 +172,11 @@ body.theme-dark {
 }
 
 .theme-dark .hover\:bg-card:hover {
-  background-color: #111827;
+  background-color: #0b1220;
 }
 
 .theme-dark .hover\:bg-cardAlt:hover {
-  background-color: #0f172a;
+  background-color: #0a111f;
 }
 
 .theme-dark .hover\:text-ink:hover {
