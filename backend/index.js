@@ -158,8 +158,8 @@ app.get('/api/overview/summary', async (req, res) => {
       SELECT
         COUNT(*) FILTER (WHERE stage_num BETWEEN 1 AND 17) AS leads_count,
         COUNT(*) FILTER (WHERE stage_num BETWEEN 18 AND 26) AS customers_count,
-        COALESCE(SUM(value_num), 0) AS total_value,
-        COALESCE(AVG(value_num), 0) AS avg_value
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value,
+        COALESCE(AVG(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS avg_value
       FROM parsed;
     `);
     res.json(rows[0]);
@@ -189,7 +189,7 @@ app.get('/api/overview/by-stage', async (req, res) => {
         stage,
         stage_num,
         COUNT(*)::int AS count,
-        COALESCE(SUM(value_num), 0) AS total_value
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value
       FROM parsed
       GROUP BY stage, stage_num
       ORDER BY stage_num;
@@ -208,15 +208,23 @@ app.get('/api/overview/by-label', async (req, res) => {
         SELECT
           id,
           account_id,
+          custom_attributes->>'Funil_Vendas' AS stage,
           ${valueNumExpr()} AS value_num
         FROM contacts
+      ), parsed AS (
+        SELECT
+          id,
+          account_id,
+          value_num,
+          NULLIF(TRIM(SPLIT_PART(stage, '.', 1)), '')::int AS stage_num
+        FROM base
       )
       SELECT
         t.name AS label,
         l.color AS color,
         COUNT(DISTINCT b.id)::int AS count,
-        COALESCE(SUM(b.value_num), 0) AS total_value
-      FROM base b
+        COALESCE(SUM(b.value_num) FILTER (WHERE b.stage_num IS DISTINCT FROM 14), 0) AS total_value
+      FROM parsed b
       JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = b.id
       JOIN tags t ON t.id = tg.tag_id
       LEFT JOIN labels l ON l.title = t.name AND l.account_id = b.account_id
@@ -233,12 +241,25 @@ app.get('/api/overview/by-label', async (req, res) => {
 app.get('/api/overview/by-state', async (req, res) => {
   try {
     const { rows } = await pool.query(`
+      WITH base AS (
+        SELECT
+          custom_attributes->>'Estado' AS state,
+          custom_attributes->>'Funil_Vendas' AS stage,
+          ${valueNumExpr()} AS value_num
+        FROM contacts
+      ), parsed AS (
+        SELECT
+          state,
+          value_num,
+          NULLIF(TRIM(SPLIT_PART(stage, '.', 1)), '')::int AS stage_num
+        FROM base
+        WHERE state IS NOT NULL
+      )
       SELECT
-        custom_attributes->>'Estado' AS state,
+        state,
         COUNT(*)::int AS count,
-        COALESCE(SUM(${valueNumExpr()}), 0) AS total_value
-      FROM contacts
-      WHERE custom_attributes->>'Estado' IS NOT NULL
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value
+      FROM parsed
       GROUP BY state
       ORDER BY count DESC;
     `);
@@ -288,11 +309,24 @@ app.get('/api/overview/by-customer-type', async (req, res) => {
 app.get('/api/overview/by-probability', async (req, res) => {
   try {
     const { rows } = await pool.query(`
+      WITH base AS (
+        SELECT
+          custom_attributes->>'Probabilidade_Fechamento' AS probability,
+          custom_attributes->>'Funil_Vendas' AS stage,
+          ${valueNumExpr()} AS value_num
+        FROM contacts
+      ), parsed AS (
+        SELECT
+          probability,
+          value_num,
+          NULLIF(TRIM(SPLIT_PART(stage, '.', 1)), '')::int AS stage_num
+        FROM base
+        WHERE probability IS NOT NULL
+      )
       SELECT
-        custom_attributes->>'Probabilidade_Fechamento' AS probability,
-        COALESCE(SUM(${valueNumExpr()}), 0) AS total_value
-      FROM contacts
-      WHERE custom_attributes->>'Probabilidade_Fechamento' IS NOT NULL
+        probability,
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value
+      FROM parsed
       GROUP BY probability
       ORDER BY total_value DESC;
     `);
@@ -310,6 +344,7 @@ app.get('/api/overview/by-agent', async (req, res) => {
         SELECT
           c.id,
           ${valueNumExpr('c.')} AS value_num,
+          NULLIF(TRIM(SPLIT_PART(c.custom_attributes->>'Funil_Vendas', '.', 1)), '')::int AS stage_num,
           conv.assignee_id,
           COALESCE(u.display_name, u.name, u.email) AS agent_name
         FROM contacts c
@@ -326,7 +361,7 @@ app.get('/api/overview/by-agent', async (req, res) => {
         COALESCE(agent_name, 'Sem agente') AS agent,
         assignee_id AS agent_id,
         COUNT(*)::int AS count,
-        COALESCE(SUM(value_num), 0) AS total_value
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value
       FROM agent_contacts
       GROUP BY agent, agent_id
       ORDER BY count DESC;

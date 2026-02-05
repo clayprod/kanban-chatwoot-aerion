@@ -211,6 +211,15 @@ body.theme-dark {
   box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45) !important;
 }
 
+.theme-dark .nivo-tooltip > div {
+  background: #0b1220 !important;
+  color: #e2e8f0 !important;
+}
+
+.theme-dark .nivo-tooltip * {
+  color: #e2e8f0 !important;
+}
+
 .theme-dark .nivo-tooltip table {
   color: inherit;
 }
