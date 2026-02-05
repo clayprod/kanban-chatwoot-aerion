@@ -320,15 +320,6 @@ const setCookieValue = (name, value, days) => {
   document.cookie = `${name}=${encoded}; max-age=${maxAge}; path=/; samesite=lax`;
 };
 
-const slugify = (value) => {
-  const normalized = normalizeText(value);
-  return normalized
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-');
-};
-
 
 const CardPreview = ({ contact }) => {
   if (!contact) {
@@ -1192,6 +1183,10 @@ function App() {
   const handleDragStart = (event) => {
     setActiveDragId(event.active?.id || null);
     isDraggingRef.current = true;
+    const activatorEvent = event.activatorEvent;
+    if (activatorEvent && typeof activatorEvent.clientX === 'number') {
+      dragPointerXRef.current = activatorEvent.clientX;
+    }
     startDragAutoScroll();
   };
 
@@ -1209,6 +1204,32 @@ function App() {
     setActiveDragId(null);
     stopDragAutoScroll();
   };
+
+  useEffect(() => {
+    if (!activeDragId) {
+      return undefined;
+    }
+    const handlePointerMove = (event) => {
+      dragPointerXRef.current = event.clientX;
+    };
+    const handleMouseMove = (event) => {
+      dragPointerXRef.current = event.clientX;
+    };
+    const handleTouchMove = (event) => {
+      const touch = event.touches?.[0];
+      if (touch) {
+        dragPointerXRef.current = touch.clientX;
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, [activeDragId]);
 
   const handleTopScroll = () => {
     if (!boardScrollRef.current || !boardScrollbarRef.current || isSyncingRef.current) {
@@ -1728,23 +1749,17 @@ function App() {
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Playbook comercial</p>
                     <h2 className="mt-2 text-2xl md:text-3xl font-semibold">Processo completo de vendas</h2>
                     <p className="mt-3 text-sm text-muted">
-                      Estrutura oficial para prospeccao, qualificacao, fechamento e handoff.
-                      Use esta pagina como referencia durante o dia a dia.
+                      Estrutura consolidada para prospeccao, qualificacao, fechamento e pos-venda.
+                      Conteudo organizado para apoiar a execucao diaria do time.
                     </p>
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-center">
-                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
-                      <p className="text-xs text-muted">Secoes</p>
-                      <p className="text-lg font-semibold text-ink">{processStats.sections}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
-                      <p className="text-xs text-muted">Subsecoes</p>
-                      <p className="text-lg font-semibold text-ink">{processStats.subsections}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
-                      <p className="text-xs text-muted">Palavras</p>
-                      <p className="text-lg font-semibold text-ink">{formatCompactNumber(processStats.words)}</p>
-                    </div>
+                    {processBlueprint.stats.map(stat => (
+                      <div key={stat.label} className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
+                        <p className="text-xs text-muted">{stat.label}</p>
+                        <p className="text-lg font-semibold text-ink">{stat.value}</p>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -1753,18 +1768,15 @@ function App() {
                 <aside className="rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-24 h-fit">
                   <p className="text-xs font-semibold text-muted">Mapa do processo</p>
                   <nav className="mt-4 flex flex-col gap-2">
-                    {processSections.map(section => (
+                    {processBlueprint.map.map(item => (
                       <a
-                        key={section.id}
-                        href={`#${section.id}`}
+                        key={item.id}
+                        href={`#${item.id}`}
                         className="rounded-xl px-3 py-2 text-sm font-semibold text-ink hover:bg-cardAlt"
                       >
-                        {section.text}
+                        {item.title}
                       </a>
                     ))}
-                    {processSections.length === 0 && (
-                      <p className="text-sm text-muted">Sem secoes detectadas.</p>
-                    )}
                   </nav>
                   <div className="mt-6 rounded-2xl border border-border bg-cardAlt p-4">
                     <p className="text-xs font-semibold text-muted">Links rapidos</p>
@@ -1777,174 +1789,141 @@ function App() {
                       >
                         Acessar Chatwoot
                       </a>
-                      <a
-                        href="/api/processo"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-muted hover:text-ink"
-                      >
-                        Abrir markdown original
-                      </a>
                     </div>
                   </div>
                 </aside>
 
                 <main className="rounded-2xl border border-border bg-card p-6 lg:p-8 space-y-8">
-                  {processLoading && (
-                    <p className="text-sm text-muted">Carregando processo...</p>
-                  )}
-                  {processError && (
-                    <p className="text-sm text-status-danger">{processError}</p>
-                  )}
-                  {!processLoading && !processError && processContent && (
-                    <>
-                      <section className="rounded-2xl border border-border bg-cardAlt p-5">
-                        <div className="flex flex-col gap-2">
-                          <p className="text-xs font-semibold text-muted">Fluxo principal</p>
-                          <h3 className="text-lg font-semibold text-ink">Passo a passo do vendedor</h3>
-                          {mainProcessIntro.slice(0, 2).map((paragraph, index) => (
-                            <p key={`process-intro-${index}`} className="text-sm text-muted">
-                              {paragraph}
-                            </p>
-                          ))}
+                  <section id="visao-geral" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <p className="text-xs font-semibold text-muted">Visao geral</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Principios que guiam o processo</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      {processBlueprint.pillars.map(pillar => (
+                        <div key={pillar.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <h4 className="text-sm font-semibold text-ink">{pillar.title}</h4>
+                          <p className="mt-2 text-xs text-muted">{pillar.text}</p>
                         </div>
-                        <div className="mt-5 grid gap-3">
-                          {processSteps.map(step => (
-                            <div key={step.number} className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3">
-                              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-semibold">
-                                {step.number}
-                              </span>
-                              <p className="text-sm text-ink leading-relaxed">{step.text}</p>
-                            </div>
-                          ))}
-                          {processSteps.length === 0 && (
-                            <p className="text-sm text-muted">Etapas do processo nao identificadas.</p>
-                          )}
+                      ))}
+                    </div>
+                    <div className="mt-5 space-y-2">
+                      {processBlueprint.overview.map(item => (
+                        <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-primary" />
+                          <span>{item}</span>
                         </div>
-                      </section>
+                      ))}
+                    </div>
+                  </section>
 
-                      <section className="grid gap-4 lg:grid-cols-2">
-                        <div className="rounded-2xl border border-border bg-cardAlt p-5">
-                          <p className="text-xs font-semibold text-muted">Checklist</p>
-                          <h3 className="mt-2 text-base font-semibold text-ink">Minimo por oportunidade</h3>
-                          <div className="mt-4 space-y-2">
-                            {processChecklist.map(item => (
-                              <div key={item} className="flex items-start gap-2 text-sm text-ink">
-                                <span className="mt-1 h-2 w-2 rounded-full bg-primary" />
-                                <span>{item}</span>
-                              </div>
-                            ))}
-                            {processChecklist.length === 0 && (
-                              <p className="text-sm text-muted">Checklist nao identificado.</p>
-                            )}
+                  <section id="pipeline" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-semibold text-muted">Pipeline</p>
+                        <h3 className="mt-2 text-lg font-semibold text-ink">Passo a passo do funil</h3>
+                      </div>
+                      <span className="text-xs text-muted">Do lead ao handoff</span>
+                    </div>
+                    <div className="mt-5 grid gap-3">
+                      {processBlueprint.pipelineSteps.map((step, index) => (
+                        <div key={step.title} className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-semibold">
+                            {index + 1}
+                          </span>
+                          <div>
+                            <p className="text-sm font-semibold text-ink">{step.title}</p>
+                            <p className="mt-1 text-xs text-muted">{step.text}</p>
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-border bg-cardAlt p-5">
-                          <p className="text-xs font-semibold text-muted">Ferramentas centrais</p>
-                          <h3 className="mt-2 text-base font-semibold text-ink">Base do processo</h3>
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            {toolsList.slice(0, 8).map(tool => (
-                              <span key={tool} className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink">
-                                {tool}
-                              </span>
-                            ))}
-                            {toolsList.length === 0 && (
-                              <p className="text-sm text-muted">Ferramentas nao identificadas.</p>
-                            )}
+                      ))}
+                    </div>
+                  </section>
+
+                  <section id="checklist" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <p className="text-xs font-semibold text-muted">Checklist minimo</p>
+                    <h3 className="mt-2 text-base font-semibold text-ink">Obrigatorio antes de avancar</h3>
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      {processBlueprint.checklist.map(item => (
+                        <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-secondary" />
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  {processBlueprint.streams.map(stream => (
+                    <section key={stream.id} id={stream.id} className="rounded-2xl border border-border bg-cardAlt p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="max-w-2xl">
+                          <p className="text-xs font-semibold text-muted">{stream.owner}</p>
+                          <h3 className="mt-2 text-lg font-semibold text-ink">{stream.title}</h3>
+                          <p className="mt-2 text-sm text-muted">{stream.objective}</p>
+                        </div>
+                        <div className="grid gap-2 text-xs text-muted">
+                          <span className="rounded-full border border-border bg-card px-3 py-1">Entrada: {stream.inputs}</span>
+                          <span className="rounded-full border border-border bg-card px-3 py-1">Saida: {stream.outputs}</span>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-2 md:grid-cols-3">
+                        {stream.actions.map(action => (
+                          <div key={action} className="rounded-xl border border-border bg-card px-4 py-3 text-sm text-ink">
+                            {action}
                           </div>
-                        </div>
-                      </section>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
 
-                      <section>
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-lg font-semibold">Processos principais</h3>
-                          <span className="text-xs text-muted">Baseado no playbook completo</span>
+                  <section id="rituais" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <h3 className="text-lg font-semibold">Rituais comerciais</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.rituals.map(ritual => (
+                        <div key={ritual.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold text-ink">{ritual.title}</p>
+                            <span className="text-xs text-muted">{ritual.cadence}</span>
+                          </div>
+                          <p className="mt-2 text-xs text-muted">{ritual.focus}</p>
                         </div>
-                        <div className="mt-4 grid gap-4 md:grid-cols-2">
-                          {processFlows.map(section => {
-                            const paragraphs = extractParagraphs(section.content);
-                            const bullets = extractListItems(section.content);
-                            return (
-                              <div key={section.title} className="rounded-2xl border border-border bg-cardAlt p-5">
-                                <h4 className="text-base font-semibold text-ink">{section.title}</h4>
-                                {paragraphs[0] && (
-                                  <p className="mt-2 text-sm text-muted">{paragraphs[0]}</p>
-                                )}
-                                <div className="mt-3 space-y-2">
-                                  {bullets.slice(0, 4).map(item => (
-                                    <div key={item} className="flex items-start gap-2 text-sm text-ink">
-                                      <span className="mt-1 h-2 w-2 rounded-full bg-secondary" />
-                                      <span>{item}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          })}
-                          {processFlows.length === 0 && (
-                            <p className="text-sm text-muted">Nao foi possivel identificar processos principais.</p>
-                          )}
-                        </div>
-                      </section>
+                      ))}
+                    </div>
+                  </section>
 
-                      <section>
-                        <h3 className="text-lg font-semibold">Detalhamento por area</h3>
-                        <div className="mt-4 space-y-6">
-                          {processParsed.map(section => (
-                            <div key={section.title} className="rounded-2xl border border-border bg-cardAlt p-5" id={slugify(section.title)}>
-                              <div className="flex items-start justify-between gap-4">
-                                <div>
-                                  <h4 className="text-base font-semibold text-ink">{section.title}</h4>
-                                  {extractParagraphs(section.content).slice(0, 2).map((paragraph, index) => (
-                                    <p key={`${section.title}-p-${index}`} className="mt-2 text-sm text-muted">
-                                      {paragraph}
-                                    </p>
-                                  ))}
-                                </div>
-                                {section.subsections.length > 0 && (
-                                  <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
-                                    {section.subsections.length} subsecoes
-                                  </span>
-                                )}
-                              </div>
-                              {section.subsections.length > 0 && (
-                                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                  {section.subsections.map(sub => {
-                                    const subParagraphs = extractParagraphs(sub.content);
-                                    const subBullets = extractListItems(sub.content);
-                                    return (
-                                      <div key={`${section.title}-${sub.title}`} className="rounded-xl border border-border bg-card px-4 py-3">
-                                        <h5 className="text-sm font-semibold text-ink">{sub.title}</h5>
-                                        {subParagraphs[0] && (
-                                          <p className="mt-2 text-xs text-muted">{subParagraphs[0]}</p>
-                                        )}
-                                        {subBullets.slice(0, 3).length > 0 && (
-                                          <div className="mt-3 space-y-1">
-                                            {subBullets.slice(0, 3).map(item => (
-                                              <div key={item} className="flex items-start gap-2 text-xs text-ink">
-                                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
-                                                <span>{item}</span>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                          {processParsed.length === 0 && (
-                            <p className="text-sm text-muted">Nenhum conteudo identificado.</p>
-                          )}
+                  <section id="ferramentas" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <h3 className="text-lg font-semibold">Ferramentas e registros</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.tools.map(tool => (
+                        <div key={tool.name} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{tool.name}</p>
+                          <p className="mt-2 text-xs text-muted">{tool.purpose}</p>
                         </div>
-                      </section>
-                    </>
-                  )}
-                  {!processLoading && !processError && !processContent && (
-                    <p className="text-sm text-muted">Nenhum conteudo encontrado.</p>
-                  )}
+                      ))}
+                    </div>
+                  </section>
+
+                  <section id="erp-sankhya" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <h3 className="text-lg font-semibold">ERP Sankhya</h3>
+                    <div className="mt-4 space-y-2">
+                      {processBlueprint.erp.map(item => (
+                        <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-primary" />
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section id="documentacao" className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <h3 className="text-lg font-semibold">Documentacao complementar</h3>
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      {processBlueprint.documentation.map(item => (
+                        <div key={item} className="flex items-start gap-2 text-sm text-ink">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-secondary" />
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 </main>
               </div>
             </div>
