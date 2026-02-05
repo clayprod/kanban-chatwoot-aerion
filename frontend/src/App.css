@@ -1,0 +1,26 @@
+.App {
+  text-align: center;
+}
+
+.kanban-board {
+  display: flex;
+  justify-content: space-around;
+  padding: 20px;
+}
+
+.kanban-column {
+  width: 250px;
+  background-color: #f4f5f7;
+  border-radius: 3px;
+  padding: 10px;
+  margin: 0 10px;
+}
+
+.kanban-card {
+  background-color: #fff;
+  border-radius: 3px;
+  padding: 10px;
+  margin-bottom: 10px;
+  box-shadow: 0 1px 0 rgba(9,30,66,.25);
+  cursor: grab;
+}
