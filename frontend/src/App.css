@@ -204,6 +204,22 @@ body.theme-dark {
   background: #475569;
 }
 
+.theme-dark .nivo-tooltip {
+  background: #0b1220;
+  color: #e2e8f0;
+  border: 1px solid #1f2937;
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+}
+
+.theme-dark .nivo-tooltip table {
+  color: inherit;
+}
+
+.theme-dark .nivo-tooltip td,
+.theme-dark .nivo-tooltip th {
+  color: inherit;
+}
+
 .theme-dark html,
 .theme-dark body {
   scrollbar-color: #475569 #0f172a;
