@@ -531,13 +531,39 @@ app.get('/api/overview/history', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `
+        WITH periods AS (
+          SELECT generate_series(
+            DATE_TRUNC($1, NOW()) - (($2::int - 1)::text || ' ' || $1)::interval,
+            DATE_TRUNC($1, NOW()),
+            ('1 ' || $1)::interval
+          ) AS period_start
+        ),
+        period_contacts AS (
+          SELECT c.id AS contact_id,
+                 p.period_start,
+                 p.period_start + ('1 ' || $1)::interval AS period_end
+          FROM contacts c
+          CROSS JOIN periods p
+        ),
+        latest_stage AS (
+          SELECT pc.period_start,
+                 h.to_stage AS stage
+          FROM period_contacts pc
+          JOIN LATERAL (
+            SELECT to_stage
+            FROM ${HISTORY_TABLE} h
+            WHERE h.contact_id = pc.contact_id
+              AND h.changed_at < pc.period_end
+            ORDER BY h.changed_at DESC
+            LIMIT 1
+          ) h ON true
+        )
         SELECT
-          DATE_TRUNC($1, changed_at)::date AS period_start,
-          to_stage AS stage,
+          period_start::date AS period_start,
+          stage,
           COUNT(*)::int AS count
-        FROM ${HISTORY_TABLE}
-        WHERE changed_at >= NOW() - (($2::text || ' ' || $1)::interval)
-          AND to_stage IS NOT NULL
+        FROM latest_stage
+        WHERE stage IS NOT NULL
         GROUP BY period_start, stage
         ORDER BY period_start, stage;
       `,
