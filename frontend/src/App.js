@@ -754,6 +754,7 @@ const FunnelChart = ({ data, maxValue, valueFormatter, barClassName }) => {
     <div className="funnel-chart">
       {data.map((item) => {
         const percent = Math.max(0.06, Math.min(1, item.value / safeMax));
+        const showValueInside = percent >= 0.72;
         return (
           <div key={item.stage} className="funnel-row">
             <div className="funnel-label">
@@ -762,10 +763,16 @@ const FunnelChart = ({ data, maxValue, valueFormatter, barClassName }) => {
             </div>
             <div className="funnel-bar-wrap">
               <div
-                className={`funnel-bar ${barClassName}`}
+                className={`funnel-bar ${barClassName} ${showValueInside ? 'funnel-bar-with-value' : ''}`}
                 style={{ width: `${percent * 100}%` }}
-              />
-              <span className="funnel-value">{valueFormatter(item.value)}</span>
+              >
+                {showValueInside && (
+                  <span className="funnel-value funnel-value-inside">{valueFormatter(item.value)}</span>
+                )}
+              </div>
+              {!showValueInside && (
+                <span className="funnel-value">{valueFormatter(item.value)}</span>
+              )}
             </div>
           </div>
         );
@@ -902,6 +909,9 @@ function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
+    if (activeView !== 'Board') {
+      return undefined;
+    }
     const updateMetrics = () => {
       if (!boardScrollRef.current) {
         return;
@@ -922,7 +932,7 @@ function App() {
     const observer = new ResizeObserver(updateMetrics);
     observer.observe(boardScrollRef.current);
     return () => observer.disconnect();
-  }, [activeTab]);
+  }, [activeTab, activeView, contacts.length]);
 
   useEffect(() => {
     if (activeView !== 'Overview' || !authStatus.authenticated) {

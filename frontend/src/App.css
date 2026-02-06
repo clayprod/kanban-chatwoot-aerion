@@ -325,6 +325,15 @@ body.theme-dark {
   border-radius: 6px;
   clip-path: polygon(6% 0, 94% 0, 100% 100%, 0 100%);
   flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.funnel-bar-with-value {
+  padding-right: 20px;
+  padding-left: 12px;
 }
 
 .funnel-bar-count {
@@ -344,6 +353,11 @@ body.theme-dark {
   white-space: nowrap;
 }
 
+.funnel-value-inside {
+  color: #000000;
+  text-shadow: none;
+}
+
 .theme-dark .funnel-step {
   background: rgba(148, 163, 184, 0.18);
   color: #e2e8f0;
@@ -360,6 +374,10 @@ body.theme-dark {
 
 .theme-dark .funnel-value {
   color: #e2e8f0;
+}
+
+.theme-dark .funnel-value-inside {
+  color: #000000;
 }
 
 @media (max-width: 1024px) {
