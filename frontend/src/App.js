@@ -270,6 +270,19 @@ const formatCompactCurrency = (value) => {
   }).format(Number(value));
 };
 
+const truncateAxisLabel = (value, maxLength = 24) => {
+  const text = String(value ?? '');
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(1, maxLength - 3))}...`;
+};
+
+const getStageLabel = (stage) => {
+  const text = String(stage || '');
+  return text.replace(/^\d+\.\s*/, '').trim() || text;
+};
+
 const getStageNumber = (stage) => {
   const raw = String(stage || '').split('.')[0];
   const num = Number(raw.trim());
@@ -732,6 +745,35 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
   );
 };
 
+const FunnelChart = ({ data, maxValue, valueFormatter, barClassName }) => {
+  if (!Array.isArray(data) || data.length === 0) {
+    return <div className="text-xs text-muted">Sem dados para exibir.</div>;
+  }
+  const safeMax = Math.max(1, maxValue || 1);
+  return (
+    <div className="funnel-chart">
+      {data.map((item) => {
+        const percent = Math.max(0.06, Math.min(1, item.value / safeMax));
+        return (
+          <div key={item.stage} className="funnel-row">
+            <div className="funnel-label">
+              <span className="funnel-step">{item.stageNumber}</span>
+              <span className="funnel-text">{item.stageLabel}</span>
+            </div>
+            <div className="funnel-bar-wrap">
+              <div
+                className={`funnel-bar ${barClassName}`}
+                style={{ width: `${percent * 100}%` }}
+              />
+              <span className="funnel-value">{valueFormatter(item.value)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 function App() {
   const [contacts, setContacts] = useState([]);
   const [activeTab, setActiveTab] = useState('leads');
@@ -740,6 +782,10 @@ function App() {
     const stored = getCookieValue('theme');
     return stored === 'dark';
   });
+  const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
@@ -764,6 +810,7 @@ function App() {
   const dragScrollRafRef = useRef(null);
   const dragPointerXRef = useRef(null);
   const isDraggingRef = useRef(false);
+  const lastPointerXRef = useRef(null);
   const [activeDragId, setActiveDragId] = useState(null);
 
   const leadColumns = [
@@ -798,6 +845,48 @@ function App() {
   ];
 
   useEffect(() => {
+    let isMounted = true;
+    axios.get('/api/auth/status')
+      .then(response => {
+        if (!isMounted) {
+          return;
+        }
+        setAuthStatus({
+          checked: true,
+          authenticated: Boolean(response.data?.authenticated),
+          email: response.data?.email || '',
+        });
+      })
+      .catch(() => {
+        if (!isMounted) {
+          return;
+        }
+        setAuthStatus({ checked: true, authenticated: false, email: '' });
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      response => response,
+      error => {
+        if (error?.response?.status === 401) {
+          setAuthStatus({ checked: true, authenticated: false, email: '' });
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus.authenticated) {
+      return;
+    }
     axios.get('/api/contacts')
       .then(response => {
         setContacts(response.data);
@@ -805,7 +894,7 @@ function App() {
       .catch(error => {
         console.error('Error fetching contacts:', error);
       });
-  }, []);
+  }, [authStatus.authenticated]);
 
   useEffect(() => {
     document.body.classList.toggle('theme-dark', isDarkMode);
@@ -836,7 +925,7 @@ function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeView !== 'Overview') {
+    if (activeView !== 'Overview' || !authStatus.authenticated) {
       return;
     }
     setOverviewLoading(true);
@@ -871,7 +960,7 @@ function App() {
       .finally(() => {
         setOverviewLoading(false);
       });
-  }, [activeView, historyGranularity]);
+  }, [activeView, historyGranularity, authStatus.authenticated]);
 
   const filteredContacts = contacts.filter(contact => {
     const search = searchQuery.trim().toLowerCase();
@@ -950,19 +1039,33 @@ function App() {
 
   const sortByValueAsc = (list) => [...list].sort((a, b) => (a.value || 0) - (b.value || 0));
 
-  const stageCountData = useMemo(() => sortByValueAsc(
-    overviewData.byStage.map(item => ({
-      stage: item.stage,
-      value: Number(item.count) || 0,
-    }))
-  ), [overviewData.byStage]);
+  const stageFunnelData = useMemo(() => {
+    const stages = [...leadColumns, ...customerColumns];
+    const stageMap = new Map(
+      overviewData.byStage.map(item => [item.stage, item])
+    );
+    return stages
+      .map(stage => {
+        const row = stageMap.get(stage);
+        return {
+          stage,
+          stageNumber: getStageNumber(stage),
+          stageLabel: getStageLabel(stage),
+          count: Number(row?.count) || 0,
+          totalValue: Number(row?.total_value) || 0,
+        };
+      })
+      .sort((a, b) => a.stageNumber - b.stageNumber);
+  }, [overviewData.byStage, leadColumns, customerColumns]);
 
-  const stageValueData = useMemo(() => sortByValueAsc(
-    overviewData.byStage.map(item => ({
-      stage: item.stage,
-      value: Number(item.total_value) || 0,
-    }))
-  ), [overviewData.byStage]);
+  const maxStageCount = useMemo(
+    () => Math.max(1, ...stageFunnelData.map(item => item.count)),
+    [stageFunnelData]
+  );
+  const maxStageValue = useMemo(
+    () => Math.max(1, ...stageFunnelData.map(item => item.totalValue)),
+    [stageFunnelData]
+  );
 
   const labelCountData = useMemo(() => sortByValueAsc(
     overviewData.byLabel.map(item => ({
@@ -1064,6 +1167,41 @@ function App() {
     moveContactToStage(contactId, targetStage);
   };
 
+  const handleLoginSubmit = async (event) => {
+    event.preventDefault();
+    if (loginLoading) {
+      return;
+    }
+    setLoginLoading(true);
+    setLoginError('');
+    const email = loginForm.email.trim();
+    const password = loginForm.password;
+    try {
+      const response = await axios.post('/api/auth/login', { email, password });
+      setAuthStatus({
+        checked: true,
+        authenticated: true,
+        email: response.data?.email || email,
+      });
+      setLoginForm({ email: '', password: '' });
+    } catch (error) {
+      const message = error?.response?.data?.error || 'Nao foi possivel entrar.';
+      setLoginError(message);
+      setAuthStatus({ checked: true, authenticated: false, email: '' });
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await axios.post('/api/auth/logout');
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+    setAuthStatus({ checked: true, authenticated: false, email: '' });
+  };
+
   const historyTicks = useMemo(() => {
     const periods = Array.from(new Set(overviewData.history.map(row => row.period_start))).sort();
     if (periods.length === 0) {
@@ -1082,6 +1220,19 @@ function App() {
       return new Intl.DateTimeFormat('pt-BR', { month: 'short', year: '2-digit' }).format(date);
     }
     return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(date);
+  };
+
+  const formatHistoryTooltipDate = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    const formatted = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+    }).format(date);
+    return formatted.replace(/\//g, '-');
   };
 
   const chartTheme = useMemo(() => {
@@ -1124,10 +1275,29 @@ function App() {
   const stopDragAutoScroll = useCallback(() => {
     isDraggingRef.current = false;
     dragPointerXRef.current = null;
+    lastPointerXRef.current = null;
     if (dragScrollRafRef.current) {
       window.cancelAnimationFrame(dragScrollRafRef.current);
       dragScrollRafRef.current = null;
     }
+  }, []);
+
+  const getPointerXFromDragEvent = useCallback((event) => {
+    if (event?.activatorEvent && typeof event.activatorEvent.clientX === 'number') {
+      return event.activatorEvent.clientX;
+    }
+    const translatedRect = event?.active?.rect?.current?.translated;
+    if (translatedRect) {
+      return translatedRect.left + translatedRect.width / 2;
+    }
+    const initialRect = event?.active?.rect?.current?.initial;
+    if (initialRect && event?.delta && typeof event.delta.x === 'number') {
+      return initialRect.left + event.delta.x + initialRect.width / 2;
+    }
+    if (initialRect) {
+      return initialRect.left + initialRect.width / 2;
+    }
+    return null;
   }, []);
 
   const startDragAutoScroll = useCallback(() => {
@@ -1136,13 +1306,22 @@ function App() {
     }
     const step = () => {
       if (!isDraggingRef.current || !boardScrollRef.current || dragPointerXRef.current == null) {
-        dragScrollRafRef.current = null;
+        if (!isDraggingRef.current || !boardScrollRef.current) {
+          dragScrollRafRef.current = null;
+          return;
+        }
+        dragScrollRafRef.current = window.requestAnimationFrame(step);
         return;
       }
       const containerRect = boardScrollRef.current.getBoundingClientRect();
-      const threshold = 80;
-      const speed = 24;
-      const pointerX = dragPointerXRef.current;
+      const threshold = 72;
+      const speed = 28;
+      const pointerX = dragPointerXRef.current ?? lastPointerXRef.current;
+      if (typeof pointerX !== 'number') {
+        dragScrollRafRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+      lastPointerXRef.current = pointerX;
       if (pointerX < containerRect.left + threshold) {
         const next = Math.max(0, boardScrollRef.current.scrollLeft - speed);
         boardScrollRef.current.scrollLeft = next;
@@ -1183,22 +1362,22 @@ function App() {
   const handleDragStart = (event) => {
     setActiveDragId(event.active?.id || null);
     isDraggingRef.current = true;
-    const activatorEvent = event.activatorEvent;
-    if (activatorEvent && typeof activatorEvent.clientX === 'number') {
-      dragPointerXRef.current = activatorEvent.clientX;
+    const pointerX = getPointerXFromDragEvent(event);
+    if (typeof pointerX === 'number') {
+      dragPointerXRef.current = pointerX;
+      lastPointerXRef.current = pointerX;
     }
     startDragAutoScroll();
   };
 
   const handleDragMove = useCallback((event) => {
-    const activeRect = event.active?.rect?.current?.translated || event.active?.rect?.current?.initial;
-    if (!activeRect) {
-      dragPointerXRef.current = null;
-      return;
+    const pointerX = getPointerXFromDragEvent(event);
+    if (typeof pointerX === 'number') {
+      dragPointerXRef.current = pointerX;
+      lastPointerXRef.current = pointerX;
     }
-    dragPointerXRef.current = activeRect.left + activeRect.width / 2;
     startDragAutoScroll();
-  }, [startDragAutoScroll]);
+  }, [getPointerXFromDragEvent, startDragAutoScroll]);
 
   const handleDragCancel = () => {
     setActiveDragId(null);
@@ -1211,23 +1390,26 @@ function App() {
     }
     const handlePointerMove = (event) => {
       dragPointerXRef.current = event.clientX;
+      lastPointerXRef.current = event.clientX;
     };
     const handleMouseMove = (event) => {
       dragPointerXRef.current = event.clientX;
+      lastPointerXRef.current = event.clientX;
     };
     const handleTouchMove = (event) => {
       const touch = event.touches?.[0];
       if (touch) {
         dragPointerXRef.current = touch.clientX;
+        lastPointerXRef.current = touch.clientX;
       }
     };
-    window.addEventListener('pointermove', handlePointerMove, { passive: true });
-    window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('pointermove', handlePointerMove, { passive: true, capture: true });
+    window.addEventListener('mousemove', handleMouseMove, { passive: true, capture: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true, capture: true });
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('pointermove', handlePointerMove, { capture: true });
+      window.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      window.removeEventListener('touchmove', handleTouchMove, { capture: true });
     };
   }, [activeDragId]);
 
@@ -1261,6 +1443,9 @@ function App() {
     return closestCenter(args);
   }, []);
 
+  const isAuthLoading = !authStatus.checked;
+  const showLogin = authStatus.checked && !authStatus.authenticated;
+
   return (
       <DndContext
         collisionDetection={collisionDetectionStrategy}
@@ -1269,28 +1454,41 @@ function App() {
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragCancel}
       >
-      <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
-        <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
-        <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
-        <div className="max-w-7xl mx-auto px-4 md:px-5 lg:px-6 pb-12">
-          <header className="pt-8">
-            <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() => setIsDarkMode(prev => !prev)}
-                className="inline-flex items-center gap-3 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
-                aria-label="Alternar tema"
-              >
-                <span>{isDarkMode ? 'Modo escuro' : 'Modo claro'}</span>
-                <span className="relative h-4 w-8 rounded-full bg-cardAlt border border-border">
-                  <span
-                    className={`absolute top-0.5 h-3 w-3 rounded-full bg-primary transition ${isDarkMode ? 'left-4' : 'left-0.5'}`}
-                  />
-                </span>
-              </button>
+      {isAuthLoading && (
+        <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
+          <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
+          <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
+          <div className="max-w-4xl mx-auto px-4 md:px-6 py-12 min-h-screen flex items-center justify-center">
+            <div className="rounded-3xl border border-border bg-card p-8 shadow-lift text-center">
+              <p className="text-sm text-muted">Verificando acesso...</p>
+              <p className="text-2xl font-semibold mt-3">Aguarde</p>
             </div>
-            <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-              <div>
+          </div>
+        </div>
+      )}
+
+      {showLogin && (
+        <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
+          <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
+          <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
+          <div className="absolute top-6 right-6">
+            <button
+              type="button"
+              onClick={() => setIsDarkMode(prev => !prev)}
+              className="inline-flex items-center gap-3 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
+              aria-label="Alternar tema"
+            >
+              <span>{isDarkMode ? 'Modo escuro' : 'Modo claro'}</span>
+              <span className="relative h-4 w-8 rounded-full bg-cardAlt border border-border">
+                <span
+                  className={`absolute top-0.5 h-3 w-3 rounded-full bg-primary transition ${isDarkMode ? 'left-4' : 'left-0.5'}`}
+                />
+              </span>
+            </button>
+          </div>
+          <div className="max-w-6xl mx-auto px-4 md:px-6 py-12 min-h-screen flex items-center">
+            <div className="w-full grid gap-10 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-6">
                 <div className="flex items-center gap-4">
                   <div className="logo-wrap h-14 w-16 rounded-2xl border border-border bg-card flex items-center justify-center overflow-hidden p-2">
                     <img
@@ -1300,92 +1498,216 @@ function App() {
                     />
                   </div>
                   <div>
-                    <h1 className="text-3xl md:text-4xl font-semibold">Funil de Vendas - Aerion</h1>
+                    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">Aerion</p>
+                    <h1 className="text-3xl md:text-4xl font-semibold">Painel comercial</h1>
                     <p className="text-sm text-muted mt-2">
-                      Etapas de leads e clientes no funil de vendas da Aerion Technologies Ltda.
-                      {' '}
-                      Alimentado pelo{' '}
-                      <a
-                        href="https://chatwoot.tenryu.com.br/app/accounts/2"
-                        className="text-primary font-semibold hover:underline"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        chatwoot
-                      </a>
-                      .
+                      Acompanhe funil, processos e indicadores em um unico lugar.
                     </p>
                   </div>
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-border bg-card p-4 shadow-card">
+                    <p className="text-xs text-muted">Visao integrada</p>
+                    <p className="mt-2 text-sm font-semibold text-ink">Leads, clientes e handoff</p>
+                    <p className="mt-2 text-xs text-muted">Tudo sincronizado com o Chatwoot.</p>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card p-4 shadow-card">
+                    <p className="text-xs text-muted">Ritmo comercial</p>
+                    <p className="mt-2 text-sm font-semibold text-ink">Resumo de processos e rituais</p>
+                    <p className="mt-2 text-xs text-muted">Guia pratico para o time.</p>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card p-4 shadow-card">
+                    <p className="text-xs text-muted">Analise rapida</p>
+                    <p className="mt-2 text-sm font-semibold text-ink">Distribuicao e valor por etapa</p>
+                    <p className="mt-2 text-xs text-muted">Decisoes baseadas em dados.</p>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card p-4 shadow-card">
+                    <p className="text-xs text-muted">Seguranca</p>
+                    <p className="mt-2 text-sm font-semibold text-ink">Acesso restrito</p>
+                    <p className="mt-2 text-xs text-muted">Credenciais internas apenas.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-3xl border border-border bg-card p-6 md:p-8 shadow-lift">
+                <h2 className="text-xl font-semibold">Entrar no dashboard</h2>
+                <p className="mt-2 text-sm text-muted">Use seu email comercial.</p>
+                <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-muted" htmlFor="login-email">Email</label>
+                    <input
+                      id="login-email"
+                      type="email"
+                      autoComplete="username"
+                      required
+                      value={loginForm.email}
+                      onChange={(event) => setLoginForm(prev => ({ ...prev, email: event.target.value }))}
+                      className="h-10 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      placeholder="seu@email.com"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-muted" htmlFor="login-password">Senha</label>
+                    <input
+                      id="login-password"
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                      value={loginForm.password}
+                      onChange={(event) => setLoginForm(prev => ({ ...prev, password: event.target.value }))}
+                      className="h-10 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      placeholder="Digite sua senha"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loginLoading}
+                    className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold shadow-card transition hover:shadow-lift disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {loginLoading ? 'Entrando...' : 'Entrar'}
+                  </button>
+                </form>
+                {loginError && (
+                  <div className="mt-4 rounded-xl border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger">
+                    {loginError}
+                  </div>
+                )}
+                <div className="mt-6 rounded-2xl border border-border bg-cardAlt px-4 py-3 text-xs text-muted">
+                  Acesso exclusivo para equipe Aerion. Caso nao consiga entrar, confirme suas credenciais.
+                </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
 
-            <div className="mt-8 border-b border-border flex items-center gap-6 text-sm">
-              {viewTabs.map(tab => (
+      {authStatus.authenticated && (
+        <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
+          <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
+          <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
+          <div className="max-w-7xl mx-auto px-4 md:px-5 lg:px-6 pb-12">
+            <header className="pt-8">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {authStatus.email && (
+                  <span className="text-xs text-muted">{authStatus.email}</span>
+                )}
                 <button
-                  key={tab}
                   type="button"
-                  onClick={() => setActiveView(tab)}
-                  className={`pb-3 transition ${tab === activeView ? 'text-primary border-b-2 border-primary font-semibold' : 'text-muted hover:text-secondary'}`}
+                  onClick={handleLogout}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
                 >
-                  {tab}
+                  Sair
                 </button>
-              ))}
-            </div>
-
-            {activeView === 'Board' && (
-              <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div className="relative w-full md:max-w-sm">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-                      <circle cx="11" cy="11" r="7" />
-                      <path d="M20 20l-3.5-3.5" />
-                    </svg>
+                <button
+                  type="button"
+                  onClick={() => setIsDarkMode(prev => !prev)}
+                  className="inline-flex items-center gap-3 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
+                  aria-label="Alternar tema"
+                >
+                  <span>{isDarkMode ? 'Modo escuro' : 'Modo claro'}</span>
+                  <span className="relative h-4 w-8 rounded-full bg-cardAlt border border-border">
+                    <span
+                      className={`absolute top-0.5 h-3 w-3 rounded-full bg-primary transition ${isDarkMode ? 'left-4' : 'left-0.5'}`}
+                    />
                   </span>
-                  <input
-                    type="text"
-                    placeholder="Buscar empresas, contatos, tags..."
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    className="h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <select
-                    value={priorityFilter}
-                    onChange={(event) => setPriorityFilter(event.target.value)}
-                    className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
-                  >
-                    <option value="all">Todas prioridades</option>
-                    <option value="alta">Alta</option>
-                    <option value="media">Média</option>
-                    <option value="baixa">Baixa</option>
-                    <option value="nenhuma">Nenhuma</option>
-                  </select>
-                  <select
-                    value={agentFilter}
-                    onChange={(event) => setAgentFilter(event.target.value)}
-                    className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
-                  >
-                    <option value="all">Todos agentes</option>
-                    {agentOptions.map(agent => (
-                      <option key={agent} value={agent}>{agent}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={sortOption}
-                    onChange={(event) => setSortOption(event.target.value)}
-                    className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
-                  >
-                    <option value="name-asc">Nome (A-Z)</option>
-                    <option value="name-desc">Nome (Z-A)</option>
-                    <option value="opportunity-desc">Maior oportunidade</option>
-                    <option value="opportunity-asc">Menor oportunidade</option>
-                  </select>
+                </button>
+              </div>
+              <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                <div>
+                  <div className="flex items-center gap-4">
+                    <div className="logo-wrap h-14 w-16 rounded-2xl border border-border bg-card flex items-center justify-center overflow-hidden p-2">
+                      <img
+                        src="/logo_aerion.png"
+                        alt="Aerion"
+                        className="logo-image h-full w-full object-contain"
+                      />
+                    </div>
+                    <div>
+                      <h1 className="text-3xl md:text-4xl font-semibold">Funil de Vendas - Aerion</h1>
+                      <p className="text-sm text-muted mt-2">
+                        Etapas de leads e clientes no funil de vendas da Aerion Technologies Ltda.
+                        {' '}
+                        Alimentado pelo{' '}
+                        <a
+                          href="https://chatwoot.tenryu.com.br/app/accounts/2"
+                          className="text-primary font-semibold hover:underline"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          chatwoot
+                        </a>
+                        .
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
-            )}
-          </header>
+
+              <div className="mt-8 border-b border-border flex items-center gap-6 text-sm">
+                {viewTabs.map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveView(tab)}
+                    className={`pb-3 transition ${tab === activeView ? 'text-primary border-b-2 border-primary font-semibold' : 'text-muted hover:text-secondary'}`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {activeView === 'Board' && (
+                <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div className="relative w-full md:max-w-sm">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+                        <circle cx="11" cy="11" r="7" />
+                        <path d="M20 20l-3.5-3.5" />
+                      </svg>
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Buscar empresas, contatos, tags..."
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      className="h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <select
+                      value={priorityFilter}
+                      onChange={(event) => setPriorityFilter(event.target.value)}
+                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                    >
+                      <option value="all">Todas prioridades</option>
+                      <option value="alta">Alta</option>
+                      <option value="media">Média</option>
+                      <option value="baixa">Baixa</option>
+                      <option value="nenhuma">Nenhuma</option>
+                    </select>
+                    <select
+                      value={agentFilter}
+                      onChange={(event) => setAgentFilter(event.target.value)}
+                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                    >
+                      <option value="all">Todos agentes</option>
+                      {agentOptions.map(agent => (
+                        <option key={agent} value={agent}>{agent}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={sortOption}
+                      onChange={(event) => setSortOption(event.target.value)}
+                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                    >
+                      <option value="name-asc">Nome (A-Z)</option>
+                      <option value="name-desc">Nome (Z-A)</option>
+                      <option value="opportunity-desc">Maior oportunidade</option>
+                      <option value="opportunity-asc">Menor oportunidade</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </header>
 
           {activeView === 'Board' && (
             <>
@@ -1415,7 +1737,7 @@ function App() {
             </div>
           )}
           <div
-            className="kanban-board-scroll mt-2 flex gap-4 overflow-x-hidden pb-4 snap-x snap-mandatory"
+            className={`kanban-board-scroll mt-2 flex gap-4 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
             ref={boardScrollRef}
             onScroll={handleBoardScroll}
           >
@@ -1492,38 +1814,33 @@ function App() {
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-semibold">Quantidade por etapa</h3>
                       </div>
-                      <div className="h-72">
-                        <ResponsiveBar
-                          data={stageCountData}
-                          keys={['value']}
-                          indexBy="stage"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 160 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#2563eb"
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
-                          theme={chartTheme}
+                      <div className="funnel-container">
+                        <FunnelChart
+                          data={stageFunnelData.map(item => ({
+                            stage: item.stage,
+                            stageNumber: item.stageNumber,
+                            stageLabel: item.stageLabel,
+                            value: item.count,
+                          }))}
+                          maxValue={maxStageCount}
+                          valueFormatter={value => formatCompactNumber(value)}
+                          barClassName="funnel-bar-count"
                         />
                       </div>
                     </div>
                     <div className="rounded-2xl border border-border bg-card p-5">
                       <h3 className="text-sm font-semibold">Oportunidade por etapa</h3>
-                      <div className="h-72">
-                        <ResponsiveBar
-                          data={stageValueData}
-                          keys={['value']}
-                          indexBy="stage"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 160 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#1d4ed8"
-                          enableLabel={false}
-                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 2, format: value => formatCompactCurrency(value) || value }}
-                          theme={chartTheme}
+                      <div className="funnel-container">
+                        <FunnelChart
+                          data={stageFunnelData.map(item => ({
+                            stage: item.stage,
+                            stageNumber: item.stageNumber,
+                            stageLabel: item.stageLabel,
+                            value: item.totalValue,
+                          }))}
+                          maxValue={maxStageValue}
+                          valueFormatter={value => formatCompactCurrency(value) || 'R$ 0,00'}
+                          barClassName="funnel-bar-value"
                         />
                       </div>
                     </div>
@@ -1542,7 +1859,7 @@ function App() {
                           layout="horizontal"
                           colors={({ data }) => data.color || '#60a5fa'}
                           enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6 }}
                           theme={chartTheme}
                         />
@@ -1561,7 +1878,7 @@ function App() {
                           colors={({ data }) => data.color || '#3b82f6'}
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
@@ -1582,7 +1899,7 @@ function App() {
                           layout="horizontal"
                           colors="#60a5fa"
                           enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
@@ -1601,7 +1918,7 @@ function App() {
                           colors="#3b82f6"
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
@@ -1622,7 +1939,7 @@ function App() {
                           layout="horizontal"
                           colors="#60a5fa"
                           enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
@@ -1641,7 +1958,7 @@ function App() {
                           colors="#3b82f6"
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
@@ -1662,7 +1979,7 @@ function App() {
                           layout="horizontal"
                           colors="#60a5fa"
                           enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
@@ -1680,7 +1997,7 @@ function App() {
                           layout="horizontal"
                           colors="#3b82f6"
                           enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
@@ -1700,9 +2017,16 @@ function App() {
                         layout="horizontal"
                         colors="#2563eb"
                         enableLabel={false}
-                        axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                         axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
-                        theme={chartTheme}
+                        theme={{
+                          ...chartTheme,
+                          legends: {
+                            text: {
+                              fill: isDarkMode ? '#ffffff' : chartTheme.textColor,
+                            },
+                          },
+                        }}
                       />
                     </div>
                   </div>
@@ -1723,15 +2047,48 @@ function App() {
                     <div className="h-80">
                       <ResponsiveLine
                         data={historySeries}
-                        margin={{ top: 20, right: 40, bottom: 50, left: 40 }}
+                        margin={{ top: 20, right: 40, bottom: 70, left: 40 }}
                         xScale={{ type: 'point' }}
                         yScale={{ type: 'linear', min: 0, max: 'auto' }}
                         axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
-                        axisLeft={{ tickSize: 0, tickPadding: 6 }}
+                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                         colors={{ scheme: 'category10' }}
                         pointSize={4}
                         pointBorderWidth={1}
                         useMesh
+                        tooltip={({ point }) => (
+                          <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card">
+                            <div className="font-semibold">{point.serieId}</div>
+                            <div className="mt-1 text-muted">Data: {formatHistoryTooltipDate(point.data.x)}</div>
+                            <div className="text-muted">Quantidade: {formatCompactNumber(point.data.y)}</div>
+                          </div>
+                        )}
+                        legends={[
+                          {
+                            anchor: 'bottom',
+                            direction: 'row',
+                            justify: true,
+                            translateX: 0,
+                            translateY: 58,
+                            itemsSpacing: 12,
+                            itemDirection: 'left-to-right',
+                            itemWidth: 120,
+                            itemHeight: 18,
+                            itemOpacity: 0.8,
+                            itemTextColor: isDarkMode ? '#ffffff' : '#1f2937',
+                            symbolSize: 10,
+                            symbolShape: 'circle',
+                            textColor: isDarkMode ? '#f8fafc' : '#1f2937',
+                            effects: [
+                              {
+                                on: 'hover',
+                                style: {
+                                  itemOpacity: 1,
+                                },
+                              },
+                            ],
+                          },
+                        ]}
                         theme={chartTheme}
                       />
                     </div>
@@ -1930,6 +2287,7 @@ function App() {
           )}
         </div>
       </div>
+      )}
     </DndContext>
   );
 }

@@ -4,6 +4,7 @@ const cors = require('cors');
 const cron = require('node-cron');
 const fs = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 
 require('dotenv').config();
 
@@ -12,6 +13,153 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3001;
 
 app.use(cors());
 app.use(express.json());
+
+const AUTH_EMAIL = process.env.AUTH_EMAIL;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
+const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET;
+const parsedAuthTtl = Number.parseInt(process.env.AUTH_TOKEN_TTL || '86400', 10);
+const AUTH_TOKEN_TTL = Number.isFinite(parsedAuthTtl) ? parsedAuthTtl : 86400;
+const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'aerion_auth';
+const AUTH_PUBLIC_PATHS = new Set(['/auth/login', '/auth/logout', '/auth/status']);
+
+const isAuthConfigured = () => Boolean(AUTH_EMAIL && AUTH_PASSWORD && AUTH_TOKEN_SECRET);
+
+const base64UrlEncode = (value) => {
+  return Buffer.from(value)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+};
+
+const base64UrlDecode = (value) => {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+  return Buffer.from(`${normalized}${padding}`, 'base64').toString('utf8');
+};
+
+const safeCompare = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    return false;
+  }
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(aBuf, bBuf);
+};
+
+const signAuthToken = (payload) => {
+  const payloadPart = base64UrlEncode(JSON.stringify(payload));
+  const signature = crypto.createHmac('sha256', AUTH_TOKEN_SECRET).update(payloadPart).digest('base64');
+  const signaturePart = signature.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${payloadPart}.${signaturePart}`;
+};
+
+const verifyAuthToken = (token) => {
+  if (!token || !AUTH_TOKEN_SECRET) {
+    return null;
+  }
+  const [payloadPart, signaturePart] = token.split('.');
+  if (!payloadPart || !signaturePart) {
+    return null;
+  }
+  const expectedSignature = crypto.createHmac('sha256', AUTH_TOKEN_SECRET).update(payloadPart).digest('base64');
+  const expectedPart = expectedSignature.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  if (!safeCompare(signaturePart, expectedPart)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(base64UrlDecode(payloadPart));
+    const now = Math.floor(Date.now() / 1000);
+    if (!payload || typeof payload.exp !== 'number' || payload.exp <= now) {
+      return null;
+    }
+    return payload;
+  } catch (error) {
+    return null;
+  }
+};
+
+const getCookieValue = (req, name) => {
+  const cookieHeader = req.headers?.cookie;
+  if (!cookieHeader) {
+    return null;
+  }
+  const parts = cookieHeader.split(';').map(part => part.trim()).filter(Boolean);
+  const match = parts.find(part => part.startsWith(`${name}=`));
+  if (!match) {
+    return null;
+  }
+  return decodeURIComponent(match.slice(name.length + 1));
+};
+
+const authCookieOptions = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  maxAge: Math.max(1, AUTH_TOKEN_TTL) * 1000,
+  path: '/',
+};
+
+const clearAuthCookie = (res) => {
+  res.cookie(AUTH_COOKIE_NAME, '', { ...authCookieOptions, maxAge: 0 });
+};
+
+const issueAuthCookie = (res, email) => {
+  const exp = Math.floor(Date.now() / 1000) + Math.max(1, AUTH_TOKEN_TTL);
+  const token = signAuthToken({ sub: email, exp });
+  res.cookie(AUTH_COOKIE_NAME, token, authCookieOptions);
+};
+
+app.use('/api', (req, res, next) => {
+  if (AUTH_PUBLIC_PATHS.has(req.path)) {
+    return next();
+  }
+  if (!isAuthConfigured()) {
+    return res.status(500).json({ error: 'Auth not configured' });
+  }
+  const token = getCookieValue(req, AUTH_COOKIE_NAME);
+  const payload = token ? verifyAuthToken(token) : null;
+  if (!payload) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  req.auth = payload;
+  return next();
+});
+
+app.post('/api/auth/login', (req, res) => {
+  if (!isAuthConfigured()) {
+    return res.status(500).json({ error: 'Auth not configured' });
+  }
+  const email = String(req.body?.email || '').trim();
+  const password = String(req.body?.password || '');
+  const emailMatches = safeCompare(email.toLowerCase(), AUTH_EMAIL.toLowerCase());
+  const passwordMatches = safeCompare(password, AUTH_PASSWORD);
+  if (!emailMatches || !passwordMatches) {
+    return res.status(401).json({ error: 'Credenciais invalidas.' });
+  }
+  issueAuthCookie(res, AUTH_EMAIL);
+  return res.json({ authenticated: true, email: AUTH_EMAIL });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.json({ authenticated: false });
+});
+
+app.get('/api/auth/status', (req, res) => {
+  if (!isAuthConfigured()) {
+    return res.status(500).json({ authenticated: false, error: 'Auth not configured' });
+  }
+  const token = getCookieValue(req, AUTH_COOKIE_NAME);
+  const payload = token ? verifyAuthToken(token) : null;
+  if (!payload) {
+    return res.json({ authenticated: false });
+  }
+  return res.json({ authenticated: true, email: payload.sub });
+});
 
 const pool = new Pool(
   process.env.DATABASE_URL
