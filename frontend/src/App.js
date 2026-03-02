@@ -796,6 +796,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
+  const [labelFilter, setLabelFilter] = useState('all');
   const [sortOption, setSortOption] = useState('opportunity-desc');
   const [historyGranularity, setHistoryGranularity] = useState('day');
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -997,7 +998,11 @@ function App() {
     const matchesAgent = agentFilter === 'all'
       || normalizeText(agentName) === normalizeText(agentFilter);
 
-    return matchesSearch && matchesPriority && matchesAgent;
+    const contactLabels = Array.isArray(contact.labels) ? contact.labels.map(l => l?.name).filter(Boolean) : [];
+    const matchesLabel = labelFilter === 'all'
+      || contactLabels.some(name => normalizeText(name) === normalizeText(labelFilter));
+
+    return matchesSearch && matchesPriority && matchesAgent && matchesLabel;
   });
 
   const agentOptions = useMemo(() => {
@@ -1005,6 +1010,15 @@ function App() {
       .map(contact => String(contact.agent_name || '').trim())
       .filter(Boolean);
     const unique = Array.from(new Set(names));
+    unique.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    return unique;
+  }, [contacts]);
+
+  const labelOptions = useMemo(() => {
+    const allLabels = contacts
+      .flatMap(contact => Array.isArray(contact.labels) ? contact.labels.map(l => l?.name) : [])
+      .filter(Boolean);
+    const unique = Array.from(new Set(allLabels));
     unique.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
     return unique;
   }, [contacts]);
@@ -1702,6 +1716,16 @@ function App() {
                       <option value="all">Todos agentes</option>
                       {agentOptions.map(agent => (
                         <option key={agent} value={agent}>{agent}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={labelFilter}
+                      onChange={(event) => setLabelFilter(event.target.value)}
+                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                    >
+                      <option value="all">Todas etiquetas</option>
+                      {labelOptions.map(label => (
+                        <option key={label} value={label}>{label}</option>
                       ))}
                     </select>
                     <select
