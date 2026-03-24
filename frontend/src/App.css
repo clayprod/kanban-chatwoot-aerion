@@ -261,8 +261,9 @@ body.theme-dark {
 }
 
 .kanban-board-scroll {
-  max-height: 500vh;
+  max-height: calc(100vh - 180px);
   overflow-y: hidden;
+  overflow-x: auto;
 }
 
 .funnel-container {
@@ -382,7 +383,7 @@ body.theme-dark {
 
 @media (max-width: 1024px) {
   .kanban-board-scroll {
-    max-height: 500vh;
+    max-height: calc(100vh - 160px);
   }
 }
 
@@ -397,6 +398,6 @@ body.theme-dark {
 
 @media (max-width: 640px) {
   .kanban-board-scroll {
-    max-height: 500vh;
+    max-height: calc(100vh - 140px);
   }
 }
