@@ -670,7 +670,7 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
   return (
     <div
       ref={setNodeRef}
-      className={`kanban-column w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 rounded-2xl border border-border bg-cardAlt p-3 snap-start flex flex-col min-h-0 max-h-[calc(100vh-180px)] transition ${isOver ? 'is-over' : ''}`}
+      className={`kanban-column w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 rounded-2xl border border-border bg-cardAlt p-3 snap-start flex flex-col min-h-0 max-h-[300vh] transition ${isOver ? 'is-over' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
         <div className="flex flex-col gap-2">
@@ -1771,7 +1771,7 @@ function App() {
             </div>
           )}
           <div
-            className={`kanban-board-scroll mt-2 flex gap-4 overflow-x-auto pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
+            className={`kanban-board-scroll mt-2 flex gap-4 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
             ref={boardScrollRef}
             onScroll={handleBoardScroll}
           >
