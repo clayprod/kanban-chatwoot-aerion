@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:pncp.gov.br)",
+      "WebSearch",
+      "WebFetch(domain:www.gov.br)",
+      "WebFetch(domain:www.postman.com)",
+      "Bash(curl:*)",
+      "Bash(npm install)",
+      "Bash(timeout 15 node:*)",
+      "Bash(timeout 10 node:*)",
+      "Bash(node -e:*)",
+      "Bash(findstr:*)"
     ]
   }
 }
