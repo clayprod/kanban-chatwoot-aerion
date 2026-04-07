@@ -3021,6 +3021,12 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
 
 // Endpoint principal de busca de editais/contratações no PNCP
 app.get('/api/licitacoes/pncp/search', async (req, res) => {
+  console.log('[PNCP Search] Request params:', {
+    q: req.query.q,
+    status: req.query.status,
+    unidade_codigo: req.query.unidade_codigo,
+    orgao_cnpj: req.query.orgao_cnpj,
+  });
   try {
     const {
       q = '',
@@ -3085,7 +3091,21 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       termosNegativos = termosResult.negativos || [];
 
       // Usar até 8 termos correlatos (além do original) para ampliar cobertura
-      const termosParaBuscar = [qText, ...(termosResult.positivos || termosResult.correlatos || []).slice(0, 8)];
+      let termosParaBuscar = [qText, ...(termosResult.positivos || termosResult.correlatos || []).slice(0, 8)];
+
+      // Se há filtro de UASG/órgão, adicionar buscas combinadas para melhorar cobertura
+      const hasEntityFilterAI = Boolean(orgaoFilterRaw || unidadeFilterRaw);
+      if (hasEntityFilterAI && entityQuerySeed) {
+        console.log('[PNCP Search AI] Adding entity-combined searches for:', entityQuerySeed);
+        // Adicionar buscas combinadas com o código da entidade
+        termosParaBuscar.push(entityQuerySeed);
+        termosParaBuscar.push(`${qText} ${entityQuerySeed}`);
+        if (/^\d{5,6}$/.test(entityQuerySeed)) {
+          termosParaBuscar.push(`UASG ${entityQuerySeed}`);
+          termosParaBuscar.push(`${qText} UASG ${entityQuerySeed}`);
+        }
+      }
+
       termosUsados = termosParaBuscar;
 
       const requiredItemsWithBuffer = Math.min(400, Math.max(40, paginaNum * tamNum * 2));
@@ -3177,30 +3197,54 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         // Isso garante que encontramos resultados mesmo que não estejam nas primeiras páginas do termo principal
         const searchPromises = [];
         const maxPagesPerSearch = 20;
-        console.log('[PNCP Search] Entity filter active:', { orgaoFilterRaw, unidadeFilterRaw, entityQuerySeed, qText });
+        console.log('[PNCP Search] Entity filter active:', { orgaoFilterRaw, unidadeFilterRaw, entityQuerySeed, qText, status: mappedStatus });
+
+        const searchTerms = [];
 
         // Busca pelo termo principal
         if (qText) {
-          searchPromises.push(fetchMultiplePages(qText, maxPagesPerSearch));
+          searchTerms.push(qText);
         }
 
         // Busca pelo código da entidade (UASG tem prioridade)
         if (entityQuerySeed && entityQuerySeed !== qText) {
-          searchPromises.push(fetchMultiplePages(entityQuerySeed, maxPagesPerSearch));
+          searchTerms.push(entityQuerySeed);
         }
 
         // Busca combinando termo + código da entidade (melhora cobertura)
         if (qText && entityQuerySeed && entityQuerySeed !== qText) {
-          const combinedSearch = `${qText} ${entityQuerySeed}`;
-          searchPromises.push(fetchMultiplePages(combinedSearch, 10));
+          searchTerms.push(`${qText} ${entityQuerySeed}`);
+        }
+
+        // Se é um código de UASG (6 dígitos), busca também com prefixo UASG
+        if (entityQuerySeed && /^\d{5,6}$/.test(entityQuerySeed)) {
+          searchTerms.push(`UASG ${entityQuerySeed}`);
+          if (qText) {
+            searchTerms.push(`${qText} UASG ${entityQuerySeed}`);
+          }
         }
 
         // Se não há nenhum termo, busca só pela entidade
-        if (searchPromises.length === 0 && entityQuerySeed) {
-          searchPromises.push(fetchMultiplePages(entityQuerySeed, maxPagesPerSearch));
+        if (searchTerms.length === 0 && entityQuerySeed) {
+          searchTerms.push(entityQuerySeed);
         }
 
+        console.log('[PNCP Search] Search terms to execute:', searchTerms);
+
+        // Executar buscas em paralelo
+        const searchPromises = searchTerms.map(term => {
+          console.log(`[PNCP Search] Executing search for: "${term}"`);
+          return fetchMultiplePages(term, maxPagesPerSearch);
+        });
         const results = await Promise.all(searchPromises);
+
+        // Log detalhado dos resultados
+        results.forEach((result, index) => {
+          const itemsWithTargetUasg = result.items.filter(item =>
+            String(item.unidade_codigo || item.codigoUnidade || '').includes(entityQuerySeed)
+          );
+          console.log(`[PNCP Search] Term "${searchTerms[index]}": ${result.items.length} items, ${itemsWithTargetUasg.length} match UASG ${entityQuerySeed}`);
+        });
 
         // Combinar resultados removendo duplicatas
         const seenIds = new Set();
@@ -3334,9 +3378,12 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const normalizedOrgaoDigitsFilter = rawOrgaoFilter.replace(/\D/g, '');
     const normalizedOrgaoTextFilter = normalizeSearchText(rawOrgaoFilter).trim();
     const normalizedUnidadeTextFilter = normalizeSearchText(rawUnidadeFilter).trim();
+    // Extrai apenas os dígitos do filtro de unidade para comparação numérica
+    const unidadeDigitsFilter = rawUnidadeFilter.replace(/\D/g, '');
+
     if (normalizedOrgaoTextFilter || normalizedUnidadeTextFilter) {
       console.log(`[PNCP Filter] Before client-side filter: ${allItems.length} items`);
-      console.log(`[PNCP Filter] Filtering by orgao: "${normalizedOrgaoTextFilter}", unidade: "${normalizedUnidadeTextFilter}"`);
+      console.log(`[PNCP Filter] Filtering by orgao: "${normalizedOrgaoTextFilter}", unidade: "${normalizedUnidadeTextFilter}", unidadeDigits: "${unidadeDigitsFilter}"`);
       if (allItems.length > 0) {
         console.log('[PNCP Filter] Sample normalized item:', {
           orgao: allItems[0]?.orgao,
@@ -3347,7 +3394,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       allItems = allItems.filter(item => {
         const orgaoCnpjItem = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
         const orgaoNomeItem = normalizeSearchText(item?.orgao?.nome || '').trim();
-        const unidadeCodigoItem = normalizeSearchText(item?.unidade?.codigo || '').trim();
+        const unidadeCodigoItem = String(item?.unidade?.codigo || '').trim();
+        const unidadeCodigoDigits = unidadeCodigoItem.replace(/\D/g, '');
         const unidadeNomeItem = normalizeSearchText(item?.unidade?.nome || '').trim();
 
         const matchesOrgao = !normalizedOrgaoTextFilter || (
@@ -3356,10 +3404,16 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           || (normalizedOrgaoDigitsFilter.length >= 3 && orgaoCnpjItem.includes(normalizedOrgaoDigitsFilter))
         );
 
+        // Comparação mais flexível para código de unidade
         const matchesUnidade = !normalizedUnidadeTextFilter || (
-          unidadeCodigoItem === normalizedUnidadeTextFilter
-          || unidadeCodigoItem.includes(normalizedUnidadeTextFilter)
+          // Comparação exata de dígitos (ex: 200331 === 200331)
+          (unidadeDigitsFilter.length >= 4 && unidadeCodigoDigits === unidadeDigitsFilter)
+          // Código contém os dígitos do filtro
+          || (unidadeDigitsFilter.length >= 4 && unidadeCodigoDigits.includes(unidadeDigitsFilter))
+          // Nome da unidade contém o texto do filtro
           || unidadeNomeItem.includes(normalizedUnidadeTextFilter)
+          // Código normalizado contém o filtro
+          || normalizeSearchText(unidadeCodigoItem).includes(normalizedUnidadeTextFilter)
         );
 
         // Debug: log primeiro item que passa ou não passa o filtro
