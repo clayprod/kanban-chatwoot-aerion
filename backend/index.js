@@ -205,6 +205,7 @@ const LICITACAO_FASES = [
   '9. Gestão de Contrato/Ata',
   '10. Perdido',
   '11. Não Atendido',
+  '12. Descartado',
 ];
 const LICITACAO_FASES_LEGACY_MAP = {
   '2. Mapeamento de Areas': '2. Mapeamento de Áreas',
@@ -1909,7 +1910,23 @@ app.get('/api/licitacoes/opportunities', async (req, res) => {
             FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ir
             JOIN ${LICITACAO_ITEMS_TABLE} it ON it.id = ir.item_id
             WHERE it.opportunity_id = o.id AND ir.status <> 'ok'
-          ) AS technical_pending_count
+          ) AS technical_pending_count,
+          (
+            SELECT COUNT(*)::int
+            FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ir
+            JOIN ${LICITACAO_ITEMS_TABLE} it ON it.id = ir.item_id
+            WHERE it.opportunity_id = o.id AND ir.status = 'nao_ok'
+          ) AS technical_non_compliant_count,
+          (
+            SELECT COUNT(*)::int
+            FROM ${LICITACAO_ITEMS_TABLE} it
+            WHERE it.opportunity_id = o.id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ir
+                WHERE ir.item_id = it.id
+              )
+          ) AS technical_items_without_checklist_count
         FROM ${LICITACAO_TABLE} o
         LEFT JOIN ${LICITACAO_INTERMEDIARIOS_TABLE} i ON i.id = o.intermediario_id
         LEFT JOIN ${LICITACAO_REQUIREMENTS_TABLE} r ON r.opportunity_id = o.id
@@ -3010,11 +3027,23 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       uf,
       esfera_id,
       orgao_cnpj,
+      unidade_codigo,
       pagina = 1,
       tam = 20,
       ordenacao = 'valor_desc_data_desc',
       usar_ia = 'false', // Ativa busca inteligente com termos correlatos
     } = req.query;
+
+    const qText = String(q || '').trim();
+    const orgaoFilterRaw = String(orgao_cnpj || '').trim();
+    const unidadeFilterRaw = String(unidade_codigo || '').trim();
+    const orgaoDigits = orgaoFilterRaw.replace(/\D/g, '');
+    const unidadeDigitsMatch = unidadeFilterRaw.match(/\d{4,}/);
+    const entityQuerySeed = unidadeDigitsMatch?.[0]
+      || (orgaoDigits.length >= 8 ? orgaoDigits : '')
+      || unidadeFilterRaw
+      || orgaoFilterRaw
+      || '';
 
     const baseParams = {
       tipos_documento,
@@ -3027,26 +3056,27 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     if (uf) baseParams.uf = uf;
     if (esfera_id) baseParams.esfera_id = esfera_id;
     if (orgao_cnpj) baseParams.orgao_cnpj = orgao_cnpj;
+    if (unidade_codigo) baseParams.unidade_codigo = unidade_codigo;
 
     let allItems = [];
     const tamNum = Math.max(1, Math.min(100, Number(tam) || 20));
     const paginaNum = Math.max(1, Number(pagina) || 1);
     let totalItems = 0;
-    let termosUsados = [q];
+    let termosUsados = [qText || entityQuerySeed || ''];
     let termosNegativos = [];
     let fonteIA = null;
     const iaForcada = usar_ia === 'true';
-    const shouldUseAi = iaForcada && q && q.length >= 3 && !isSpecificNoticeIdentifierQuery(q);
+    const shouldUseAi = iaForcada && qText && qText.length >= 3 && !isSpecificNoticeIdentifierQuery(qText);
 
     // Se usar_ia está ativado e há um termo de busca
     if (shouldUseAi) {
       // Buscar termos correlatos com IA
-      const termosResult = await getTermosCorrelatos(q);
+      const termosResult = await getTermosCorrelatos(qText);
       fonteIA = termosResult.fonte;
       termosNegativos = termosResult.negativos || [];
 
       // Usar até 8 termos correlatos (além do original) para ampliar cobertura
-      const termosParaBuscar = [q, ...(termosResult.positivos || termosResult.correlatos || []).slice(0, 8)];
+      const termosParaBuscar = [qText, ...(termosResult.positivos || termosResult.correlatos || []).slice(0, 8)];
       termosUsados = termosParaBuscar;
 
       const requiredItemsWithBuffer = Math.min(400, Math.max(40, paginaNum * tamNum * 2));
@@ -3106,44 +3136,60 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       }
     } else {
       // Busca tradicional sem IA
-      const startOffset = (paginaNum - 1) * tamNum;
-      let apiPage = 1;
-      let offsetInFirstPage = 0;
-      let fetched = [];
-      let totalFromApi = 0;
-      let apiPageSize = 10;
-
-      const firstData = await fetchPncpSearch({ ...baseParams, q, pagina: apiPage, tam: tamNum });
+      const hasEntityFilter = Boolean(orgaoFilterRaw || unidadeFilterRaw);
+      const effectiveSearchTerm = qText || (hasEntityFilter ? entityQuerySeed : '');
+      const firstData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
       const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
-      totalFromApi = Number(firstData?.total) || 0;
-      if (firstItems.length > 0) {
-        apiPageSize = firstItems.length;
-      }
+      const totalFromApi = Number(firstData?.total) || 0;
+      const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
 
-      apiPage = Math.floor(startOffset / apiPageSize) + 1;
-      offsetInFirstPage = startOffset % apiPageSize;
+      if (hasEntityFilter) {
+        const maxPages = 12;
+        const collected = [...firstItems.map(item => ({ ...item, __matched_termo: effectiveSearchTerm }))];
+        let page = 2;
 
-      const pageData = apiPage === 1
-        ? firstData
-        : await fetchPncpSearch({ ...baseParams, q, pagina: apiPage, tam: tamNum });
-      const pageItems = Array.isArray(pageData?.items) ? pageData.items : [];
-      fetched.push(...pageItems.slice(offsetInFirstPage));
-
-      while (fetched.length < tamNum && (startOffset + fetched.length) < totalFromApi) {
-        apiPage += 1;
-        const nextData = await fetchPncpSearch({ ...baseParams, q, pagina: apiPage, tam: tamNum });
-        const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
-        if (nextItems.length === 0) {
-          break;
+        while (page <= maxPages && ((page - 1) * apiPageSize) < totalFromApi) {
+          const nextData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: page, tam: tamNum });
+          const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
+          if (nextItems.length === 0) {
+            break;
+          }
+          collected.push(...nextItems.map(item => ({ ...item, __matched_termo: effectiveSearchTerm })));
+          if (nextItems.length < apiPageSize) {
+            break;
+          }
+          page += 1;
         }
-        fetched.push(...nextItems);
-        if (nextItems.length < apiPageSize) {
-          break;
-        }
-      }
 
-      allItems = fetched.slice(0, tamNum).map(item => ({ ...item, __matched_termo: q }));
-      totalItems = totalFromApi;
+        allItems = collected;
+      } else {
+        const startOffset = (paginaNum - 1) * tamNum;
+        let apiPage = Math.floor(startOffset / apiPageSize) + 1;
+        const offsetInFirstPage = startOffset % apiPageSize;
+        const fetched = [];
+
+        const pageData = apiPage === 1
+          ? firstData
+          : await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+        const pageItems = Array.isArray(pageData?.items) ? pageData.items : [];
+        fetched.push(...pageItems.slice(offsetInFirstPage));
+
+        while (fetched.length < tamNum && (startOffset + fetched.length) < totalFromApi) {
+          apiPage += 1;
+          const nextData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+          const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
+          if (nextItems.length === 0) {
+            break;
+          }
+          fetched.push(...nextItems);
+          if (nextItems.length < apiPageSize) {
+            break;
+          }
+        }
+
+        allItems = fetched.slice(0, tamNum).map(item => ({ ...item, __matched_termo: effectiveSearchTerm }));
+        totalItems = totalFromApi;
+      }
     }
 
     if (modo_disputa_id) {
@@ -3169,7 +3215,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     if (precisaEnriquecer && allItems.length > 0) {
       allItems = await mapWithConcurrency(allItems, 6, async (item) => {
-        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, q);
+        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, qText || entityQuerySeed);
         if (!enrichment) {
           return item;
         }
@@ -3195,14 +3241,41 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         if (!matchedTermo || matchedTermo === q) {
           return true;
         }
-        const contextOk = isPncpItemRelevantToQuery(item, q);
+        const contextOk = isPncpItemRelevantToQuery(item, qText);
         if (!contextOk) {
           return false;
         }
 
-        return !shouldExcludeByNegativeTerms(item, q, termosUsados.slice(1), termosNegativos);
+        return !shouldExcludeByNegativeTerms(item, qText, termosUsados.slice(1), termosNegativos);
       })
-      .map(item => normalizePncpItem(item, item.__matched_termo || q));
+      .map(item => normalizePncpItem(item, item.__matched_termo || qText || entityQuerySeed));
+
+    const rawOrgaoFilter = String(orgao_cnpj || '').trim();
+    const rawUnidadeFilter = String(unidade_codigo || '').trim();
+    const normalizedOrgaoDigitsFilter = rawOrgaoFilter.replace(/\D/g, '');
+    const normalizedOrgaoTextFilter = normalizeSearchText(rawOrgaoFilter).trim();
+    const normalizedUnidadeTextFilter = normalizeSearchText(rawUnidadeFilter).trim();
+    if (normalizedOrgaoTextFilter || normalizedUnidadeTextFilter) {
+      allItems = allItems.filter(item => {
+        const orgaoCnpjItem = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
+        const orgaoNomeItem = normalizeSearchText(item?.orgao?.nome || '').trim();
+        const unidadeCodigoItem = normalizeSearchText(item?.unidade?.codigo || '').trim();
+        const unidadeNomeItem = normalizeSearchText(item?.unidade?.nome || '').trim();
+
+        const matchesOrgao = !normalizedOrgaoTextFilter || (
+          (normalizedOrgaoDigitsFilter.length >= 8 && orgaoCnpjItem === normalizedOrgaoDigitsFilter)
+          || orgaoNomeItem.includes(normalizedOrgaoTextFilter)
+          || (normalizedOrgaoDigitsFilter.length >= 3 && orgaoCnpjItem.includes(normalizedOrgaoDigitsFilter))
+        );
+
+        const matchesUnidade = !normalizedUnidadeTextFilter || (
+          unidadeCodigoItem === normalizedUnidadeTextFilter
+          || unidadeCodigoItem.includes(normalizedUnidadeTextFilter)
+          || unidadeNomeItem.includes(normalizedUnidadeTextFilter)
+        );
+        return matchesOrgao && matchesUnidade;
+      });
+    }
 
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;
     const getValueSortValue = (item) => {
@@ -3239,12 +3312,15 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       allItems.sort((a, b) => getDateSortValue(b) - getDateSortValue(a));
     }
 
-    // Paginar resultados combinados (quando usa IA E query tem pelo menos 3 caracteres, a paginação é feita localmente)
-    if (iaRealmenteUsada) {
+    // Paginar resultados combinados (busca IA ou filtros locais por órgão/UASG)
+    const hasLocalEntityFilter = Boolean(normalizedOrgaoTextFilter || normalizedUnidadeTextFilter);
+    if (iaRealmenteUsada || hasLocalEntityFilter) {
       totalItems = allItems.length;
     }
     const startIndex = (paginaNum - 1) * tamNum;
-    const paginatedItems = iaRealmenteUsada ? allItems.slice(startIndex, startIndex + tamNum) : allItems;
+    const paginatedItems = (iaRealmenteUsada || hasLocalEntityFilter)
+      ? allItems.slice(startIndex, startIndex + tamNum)
+      : allItems;
 
     res.json({
       items: paginatedItems,
@@ -3252,10 +3328,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       pagina: paginaNum,
       tamanhoPagina: tamNum,
       totalPaginas: Math.ceil(totalItems / tamNum) || 1,
-      termosUsados: iaRealmenteUsada ? termosUsados : [q],
+      termosUsados: iaRealmenteUsada ? termosUsados : [qText || entityQuerySeed || ''],
       termosNegativos: iaRealmenteUsada ? termosNegativos : [],
       fonteIA: iaRealmenteUsada ? fonteIA : null,
-      iaDesativadaPorConsultaEspecifica: iaForcada && !iaRealmenteUsada && isSpecificNoticeIdentifierQuery(q),
+      iaDesativadaPorConsultaEspecifica: iaForcada && !iaRealmenteUsada && isSpecificNoticeIdentifierQuery(qText),
     });
   } catch (error) {
     console.error('Error searching PNCP:', error);
@@ -3590,7 +3666,14 @@ app.get('/api/licitacoes/overview/summary', async (req, res) => {
       `
         SELECT
           COUNT(*)::int AS opportunities_count,
-          COALESCE(SUM(valor_oportunidade) FILTER (WHERE LOWER(COALESCE(status, '')) <> 'perdido' AND LOWER(COALESCE(fase, '')) NOT LIKE '%perdido%'), 0) AS total_value,
+          COALESCE(
+            SUM(valor_oportunidade) FILTER (
+              WHERE LOWER(COALESCE(status, '')) <> 'perdido'
+                AND LOWER(COALESCE(fase, '')) NOT LIKE '%perdido%'
+                AND LOWER(COALESCE(fase, '')) NOT LIKE '%descartado%'
+            ),
+            0
+          ) AS total_value,
           COUNT(*) FILTER (WHERE status = 'ganho')::int AS won_count,
           COUNT(*) FILTER (WHERE status = 'perdido' OR status = 'nao_atendido')::int AS lost_count,
           COUNT(*) FILTER (WHERE ${getPrazoStatusSql()} = 'vence_48h')::int AS due_48h,

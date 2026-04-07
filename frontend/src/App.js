@@ -61,6 +61,7 @@ const licitacaoColumns = [
   '9. Gestão de Contrato/Ata',
   '10. Perdido',
   '11. Não Atendido',
+  '12. Descartado',
 ];
 
 const processBlueprint = {
@@ -342,6 +343,16 @@ const toPtBrDecimalInput = (value) => {
   return text;
 };
 
+const toPtBrInputSafe = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value.replace(/\./g, ',');
+  }
+  return toPtBrDecimalInput(value);
+};
+
 const formatCurrency = (value) => {
   const numeric = parseCurrency(value);
   if (numeric === null) {
@@ -515,6 +526,27 @@ const extractPncpPathKey = (value) => {
   } catch {
     return '';
   }
+};
+
+const extractUasgOptionsFromPncpItems = (items = []) => {
+  const map = new Map();
+  (Array.isArray(items) ? items : []).forEach(item => {
+    const codigo = String(item?.unidade?.codigo || item?.unidade_codigo || '').trim();
+    if (!codigo) {
+      return;
+    }
+    if (map.has(codigo)) {
+      return;
+    }
+    const nome = String(item?.unidade?.nome || item?.unidade_nome || '').trim();
+    const orgaoNome = String(item?.orgao?.nome || item?.orgao_nome || '').trim();
+    map.set(codigo, {
+      codigo,
+      nome: nome || codigo,
+      orgao_nome: orgaoNome || null,
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
 };
 
 const contactRoleOptions = [
@@ -1007,13 +1039,23 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
 
   const formattedValue = formatCurrency(opportunity.valor_oportunidade);
   const pncpOpportunityUrl = opportunity.links_pncp || opportunity?.links?.pncp || null;
+  const itemCount = Number(opportunity.items_count || 0);
+  const technicalRequirementsCount = Number(opportunity.technical_requirements_count || 0);
+  const technicalPendingCount = Number(opportunity.technical_pending_count || 0);
+  const technicalNonCompliantCount = Number(opportunity.technical_non_compliant_count || 0);
+  const technicalItemsWithoutChecklistCount = Number(opportunity.technical_items_without_checklist_count || 0);
+  const technicalBadge = technicalNonCompliantCount > 0
+    ? { label: 'Não atende', className: 'border border-status-danger/30 bg-status-danger/10 text-status-danger' }
+    : (itemCount === 0 || technicalRequirementsCount === 0 || technicalPendingCount > 0 || technicalItemsWithoutChecklistCount > 0)
+      ? { label: 'Pendência Téc.', className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning' }
+      : { label: 'Atende', className: 'border border-status-success/30 bg-status-success/10 text-status-success' };
   const prazoClass = opportunity.prazo_status === 'atrasado'
-    ? 'bg-status-danger/10 text-status-danger'
+    ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
     : opportunity.prazo_status === 'vence_48h'
-      ? 'bg-status-warning/10 text-status-warning'
+      ? 'border border-status-warning/35 bg-status-warning/10 text-status-warning'
       : opportunity.prazo_status === 'sem_data'
-        ? 'bg-muted/20 text-muted'
-        : 'bg-primary/10 text-primary';
+        ? 'border border-border bg-muted/20 text-muted'
+        : 'border border-primary/30 bg-primary/10 text-primary';
   const prazoLabel = opportunity.prazo_status === 'atrasado'
     ? 'Prazo atrasado'
     : opportunity.prazo_status === 'vence_48h'
@@ -1021,6 +1063,11 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       : opportunity.prazo_status === 'sem_data'
         ? 'Sem prazo definido'
         : 'No prazo';
+  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'nao_atendido'
+    ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
+    : opportunity.status === 'ganho'
+      ? 'border border-status-success/30 bg-status-success/10 text-status-success'
+      : 'border border-border bg-cardAlt text-muted';
 
   const formatDateShort = (dateStr) => {
     if (!dateStr) return null;
@@ -1072,11 +1119,11 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${prazoClass}`}>
-          {prazoLabel}
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted uppercase">{opportunity.status || 'ativo'}</span>
+          <span className={`text-xs font-semibold px-2 py-1 rounded-full leading-tight ${prazoClass}`}>
+            {prazoLabel}
+          </span>
+          <div className="flex items-center gap-2">
+          <span className={`text-[11px] uppercase px-2 py-1 rounded-full leading-tight ${statusBadgeClass}`}>{opportunity.status || 'ativo'}</span>
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
@@ -1124,12 +1171,11 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
         <span className="text-muted truncate">Edital: {opportunity.numero_edital || 'n/d'}</span>
         <span className="font-semibold text-ink">{formattedValue || 'R$ 0,00'}</span>
       </div>
-      <div className="mt-1 text-[10px] text-muted truncate">
-        {Number(opportunity.technical_requirements_count || 0) === 0
-          ? 'Checklist: não criado'
-          : Number(opportunity.technical_pending_count || 0) > 0
-            ? `Checklist: ${opportunity.technical_pending_count} pendências`
-            : 'Checklist: completo'}
+      <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
+        <span className={`px-2 py-0.5 rounded-full font-semibold leading-tight ${technicalBadge.className}`}>{technicalBadge.label}</span>
+        <span className="text-muted truncate">
+          {technicalRequirementsCount > 0 ? `${technicalRequirementsCount} requisitos` : 'Checklist não criado'}
+        </span>
       </div>
     </div>
   );
@@ -1261,15 +1307,25 @@ function App() {
     modo_disputa_id: '',
     uf: '',
     esfera_id: '',
+    orgao_cnpj: '',
+    unidade_codigo: '',
     ordenacao: 'valor_desc_data_desc',
     usar_ia: true, // Busca inteligente com termos correlatos
   });
   const [pncpSearchResults, setPncpSearchResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
   const [pncpSearchLoading, setPncpSearchLoading] = useState(false);
+  const [pncpOrgaoLookupQuery, setPncpOrgaoLookupQuery] = useState('');
+  const [pncpUasgLookupQuery, setPncpUasgLookupQuery] = useState('');
+  const [pncpOrgaoOptions, setPncpOrgaoOptions] = useState([]);
+  const [pncpUasgOptions, setPncpUasgOptions] = useState([]);
+  const [pncpOrgaoLookupLoading, setPncpOrgaoLookupLoading] = useState(false);
+  const [pncpUasgLookupLoading, setPncpUasgLookupLoading] = useState(false);
   const [pncpModalidadeQuery, setPncpModalidadeQuery] = useState('');
   const [pncpTipoQuery, setPncpTipoQuery] = useState('');
   const [pncpModoQuery, setPncpModoQuery] = useState('');
   const [pncpSearchExpanded, setPncpSearchExpanded] = useState(true);
+  const [pncpImportingId, setPncpImportingId] = useState(null);
+  const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
   const [pncpHiddenIds, setPncpHiddenIds] = useState(() => {
     try {
       const stored = localStorage.getItem('pncp_hidden_ids');
@@ -1542,8 +1598,29 @@ function App() {
             }
           }
         } else {
-          setUasgOptions([]);
-          setUasgSource('');
+          const uasgQuery = String(uasgLookupQuery || '').trim();
+          if (uasgQuery.length >= 2) {
+            try {
+              const searchResponse = await axios.get('/api/licitacoes/pncp/search', {
+                params: {
+                  q: uasgQuery,
+                  pagina: 1,
+                  tam: 100,
+                  usar_ia: true,
+                },
+              });
+              const extracted = extractUasgOptionsFromPncpItems(searchResponse.data?.items || []);
+              setUasgOptions(extracted);
+              setUasgSource(extracted.length > 0 ? 'pncp' : '');
+            } catch (uasgError) {
+              console.error('Error searching UASG directly:', uasgError);
+              setUasgOptions([]);
+              setUasgSource('');
+            }
+          } else {
+            setUasgOptions([]);
+            setUasgSource('');
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -1569,6 +1646,7 @@ function App() {
     newOpportunityForm.orgao_cnpj,
     newOpportunityForm.item_tipo,
     newOpportunityForm.uasg_codigo,
+    uasgLookupQuery,
     newOpportunityForm.codigo_item_catalogo,
   ]);
 
@@ -1625,6 +1703,120 @@ function App() {
       setPncpModoQuery(getLookupOptionLabel(selected));
     }
   }, [pncpSearchFilters.modo_disputa_id, modoDisputaOptions]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Licitações') {
+      return;
+    }
+    const query = String(pncpOrgaoLookupQuery || '').trim();
+    if (query.length < 2) {
+      setPncpOrgaoOptions([]);
+      setPncpOrgaoLookupLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setPncpOrgaoLookupLoading(true);
+      try {
+        const response = await axios.get('/api/licitacoes/pncp/orgaos', {
+          params: {
+            q: query,
+            tamanhoPagina: 100,
+          },
+        });
+        if (!cancelled) {
+          setPncpOrgaoOptions(Array.isArray(response.data) ? response.data : []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Error loading PNCP orgaos lookup:', error);
+          setPncpOrgaoOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPncpOrgaoLookupLoading(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [authStatus.authenticated, activeView, pncpOrgaoLookupQuery]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Licitações') {
+      return;
+    }
+    const cnpj = String(pncpSearchFilters.orgao_cnpj || '').replace(/\D/g, '');
+    const uasgQuery = String(pncpUasgLookupQuery || '').trim();
+
+    let cancelled = false;
+    const loadUnits = async () => {
+      setPncpUasgLookupLoading(true);
+      try {
+        if (cnpj) {
+          const response = await axios.get(`/api/licitacoes/pncp/orgaos/${cnpj}/unidades`, {
+            params: { tamanhoPagina: 200 },
+          });
+          if (!cancelled) {
+            setPncpUasgOptions(Array.isArray(response.data) ? response.data : []);
+          }
+          return;
+        }
+
+        if (uasgQuery.length < 2) {
+          if (!cancelled) {
+            setPncpUasgOptions([]);
+          }
+          return;
+        }
+
+        const response = await axios.get('/api/licitacoes/pncp/search', {
+          params: {
+            q: uasgQuery,
+            pagina: 1,
+            tam: 100,
+            usar_ia: true,
+          },
+        });
+        if (!cancelled) {
+          const extracted = extractUasgOptionsFromPncpItems(response.data?.items || []);
+          setPncpUasgOptions(extracted);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Error loading PNCP UASG lookup:', error);
+          setPncpUasgOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPncpUasgLookupLoading(false);
+        }
+      }
+    };
+
+    loadUnits();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus.authenticated, activeView, pncpSearchFilters.orgao_cnpj, pncpUasgLookupQuery]);
+
+  useEffect(() => {
+    const selected = pncpOrgaoOptions.find(item => String(item.cnpj || '') === String(pncpSearchFilters.orgao_cnpj || ''));
+    if (selected && !pncpOrgaoLookupQuery) {
+      setPncpOrgaoLookupQuery(selected.nome || selected.cnpj || '');
+    }
+  }, [pncpSearchFilters.orgao_cnpj, pncpOrgaoOptions, pncpOrgaoLookupQuery]);
+
+  useEffect(() => {
+    const selected = pncpUasgOptions.find(item => String(item.codigo || '') === String(pncpSearchFilters.unidade_codigo || ''));
+    if (selected && !pncpUasgLookupQuery) {
+      setPncpUasgLookupQuery(`${selected.codigo} - ${selected.nome || selected.codigo}`);
+    }
+  }, [pncpSearchFilters.unidade_codigo, pncpUasgOptions, pncpUasgLookupQuery]);
 
   useEffect(() => {
     document.body.classList.toggle('theme-dark', isDarkMode);
@@ -1775,6 +1967,40 @@ function App() {
     if (!query) return catalogOptions.slice(0, 200);
     return catalogOptions.filter(option => normalizeText(`${option.codigo || ''} ${option.descricao || ''}`).includes(query)).slice(0, 200);
   }, [catalogOptions, catalogoLookupQuery]);
+
+  const filteredPncpOrgaoOptions = useMemo(() => {
+    const query = normalizeText(pncpOrgaoLookupQuery || '').trim();
+    if (!query) {
+      return pncpOrgaoOptions.slice(0, 150);
+    }
+    return pncpOrgaoOptions
+      .filter(option => normalizeText(`${option.nome || ''} ${option.cnpj || ''}`).includes(query))
+      .slice(0, 150);
+  }, [pncpOrgaoOptions, pncpOrgaoLookupQuery]);
+
+  const filteredPncpUasgOptions = useMemo(() => {
+    const query = normalizeText(pncpUasgLookupQuery || '').trim();
+    if (!query) {
+      return pncpUasgOptions.slice(0, 200);
+    }
+    return pncpUasgOptions
+      .filter(option => normalizeText(`${option.codigo || ''} ${option.nome || ''}`).includes(query))
+      .slice(0, 200);
+  }, [pncpUasgOptions, pncpUasgLookupQuery]);
+
+  const selectedPncpOrgao = useMemo(() => {
+    if (!pncpSearchFilters.orgao_cnpj) {
+      return null;
+    }
+    return pncpOrgaoOptions.find(item => String(item.cnpj || '') === String(pncpSearchFilters.orgao_cnpj)) || null;
+  }, [pncpOrgaoOptions, pncpSearchFilters.orgao_cnpj]);
+
+  const selectedPncpUasg = useMemo(() => {
+    if (!pncpSearchFilters.unidade_codigo) {
+      return null;
+    }
+    return pncpUasgOptions.find(item => String(item.codigo || '') === String(pncpSearchFilters.unidade_codigo)) || null;
+  }, [pncpUasgOptions, pncpSearchFilters.unidade_codigo]);
 
   const pncpInPipelineIndex = useMemo(() => {
     const controls = new Set();
@@ -2006,24 +2232,42 @@ function App() {
       const created = response.data;
 
       for (const item of newOpportunityItemsDraft) {
-        const createdItemResponse = await axios.post(`/api/licitacoes/opportunities/${created.id}/items`, {
-          numero_item: item.numero_item,
-          descricao: item.descricao,
-          modelo_produto: item.modelo_produto,
-          quantidade: item.quantidade,
-          valor_referencia: item.valor_referencia,
-          custo_total_item: item.custo_total_item,
-        });
+        if (!String(item?.descricao || '').trim()) {
+          continue;
+        }
 
-        const createdItem = createdItemResponse.data;
+        let createdItem;
+        try {
+          const createdItemResponse = await axios.post(`/api/licitacoes/opportunities/${created.id}/items`, {
+            numero_item: item.numero_item,
+            descricao: item.descricao,
+            modelo_produto: item.modelo_produto,
+            quantidade: parseCurrency(item.quantidade),
+            unidade: item.unidade,
+            valor_referencia: parseCurrency(item.valor_referencia),
+            custo_total_item: parseCurrency(item.custo_total_item),
+          });
+          createdItem = createdItemResponse.data;
+        } catch (itemError) {
+          console.error('Error creating imported item:', itemError, item);
+          continue;
+        }
+
         const requirements = Array.isArray(item.requirements) ? item.requirements : [];
         for (const req of requirements) {
-          await axios.post(`/api/licitacoes/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
-            requisito: req.requisito,
-            status: req.status,
-            observacao: req.observacao,
-            valor_ofertado: req.custo_subitem,
-          });
+          if (!String(req?.requisito || '').trim()) {
+            continue;
+          }
+          try {
+            await axios.post(`/api/licitacoes/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
+              requisito: req.requisito,
+              status: req.status,
+              observacao: req.observacao,
+              valor_ofertado: req.custo_subitem,
+            });
+          } catch (reqError) {
+            console.error('Error creating imported item requirement:', reqError, req);
+          }
         }
       }
 
@@ -2035,6 +2279,7 @@ function App() {
 
       setLicitacaoOpportunities(prev => [response.data, ...prev]);
       setShowNewOpportunityForm(false);
+      setIsPncpImportDraft(false);
       setNewOpportunityForm(createEmptyOpportunityForm());
       setNewOpportunityContact({ contact_id: '', papel: '', observacao: '' });
       setNewOpportunityItemForm({ numero_item: '', descricao: '', modelo_produto: '', quantidade: '', custo_total_item: '' });
@@ -2059,9 +2304,9 @@ function App() {
         numero_item: newOpportunityItemForm.numero_item || null,
         descricao: newOpportunityItemForm.descricao,
         modelo_produto: newOpportunityItemForm.modelo_produto || null,
-        quantidade: newOpportunityItemForm.quantidade ? Number(String(newOpportunityItemForm.quantidade).replace(',', '.')) : null,
+        quantidade: parseCurrency(newOpportunityItemForm.quantidade),
         valor_referencia: null,
-        custo_total_item: newOpportunityItemForm.custo_total_item ? Number(String(newOpportunityItemForm.custo_total_item).replace(',', '.')) : null,
+        custo_total_item: parseCurrency(newOpportunityItemForm.custo_total_item),
         requirements: [],
       },
     ]));
@@ -2075,6 +2320,10 @@ function App() {
       delete next[draftId];
       return next;
     });
+  };
+
+  const updateDraftItem = (draftId, changes) => {
+    setNewOpportunityItemsDraft(prev => prev.map(item => (item.id === draftId ? { ...item, ...changes } : item)));
   };
 
   const addDraftItemRequirement = (draftId) => {
@@ -2183,6 +2432,8 @@ function App() {
           modo_disputa_id: pncpSearchFilters.modo_disputa_id || undefined,
           uf: pncpSearchFilters.uf || undefined,
           esfera_id: pncpSearchFilters.esfera_id || undefined,
+          orgao_cnpj: pncpSearchFilters.orgao_cnpj || (String(pncpOrgaoLookupQuery || '').trim().length >= 2 ? pncpOrgaoLookupQuery : undefined),
+          unidade_codigo: pncpSearchFilters.unidade_codigo || (String(pncpUasgLookupQuery || '').trim().length >= 2 ? pncpUasgLookupQuery : undefined),
           ordenacao: pncpSearchFilters.ordenacao,
           usar_ia: pncpSearchFilters.usar_ia ? 'true' : 'false',
           pagina: page,
@@ -2218,63 +2469,133 @@ function App() {
     localStorage.removeItem('pncp_hidden_ids');
   };
 
+  const mapPncpImportItemsToDraft = (items = []) => {
+    return (Array.isArray(items) ? items : [])
+      .map(entry => {
+        const descricao = String(
+          entry?.descricao
+          || entry?.descricaoItem
+          || entry?.objetoCompra
+          || entry?.nomeItem
+          || ''
+        ).trim();
+        return { ...entry, __descricao_resolvida: descricao };
+      })
+      .filter(entry => String(entry.__descricao_resolvida || '').trim())
+      .map((entry, index) => ({
+        id: `pncp-item-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
+        numero_item: String(entry?.numero_item || entry?.numeroItem || '').trim() || null,
+        descricao: String(entry.__descricao_resolvida || '').trim(),
+        modelo_produto: null,
+        quantidade: Number.isFinite(Number(entry?.quantidade)) ? Number(entry.quantidade) : null,
+        unidade: String(entry?.unidade || entry?.unidadeMedida || '').trim() || null,
+        valor_referencia: Number.isFinite(Number(entry?.valor_referencia ?? entry?.valor_unitario_estimado ?? entry?.valorUnitarioEstimado))
+          ? Number(entry.valor_referencia ?? entry.valor_unitario_estimado ?? entry.valorUnitarioEstimado)
+          : null,
+        custo_total_item: Number.isFinite(Number(entry?.custo_total_item ?? entry?.valor_total ?? entry?.valorTotal))
+          ? Number(entry.custo_total_item ?? entry.valor_total ?? entry.valorTotal)
+          : null,
+        requirements: [],
+      }));
+  };
+
+  const fetchAllPncpItemsForImport = async (item) => {
+    const cnpj = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
+    const ano = String(item?.ano || '').trim();
+    const sequencial = String(item?.numero_sequencial || '').trim();
+    if (!cnpj || !ano || !sequencial) {
+      return [];
+    }
+
+    const pageSize = 100;
+    const maxPages = 20;
+    const allItems = [];
+
+    for (let page = 1; page <= maxPages; page += 1) {
+      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
+        params: {
+          pagina: page,
+          tamanhoPagina: pageSize,
+        },
+      });
+      const pageItems = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data)
+          ? response.data
+          : [];
+
+      if (pageItems.length === 0) {
+        break;
+      }
+      allItems.push(...pageItems);
+      if (pageItems.length < pageSize) {
+        break;
+      }
+    }
+
+    return allItems;
+  };
+
   // Importar licitação do PNCP para criar uma oportunidade
-  const importPncpLicitacao = (item) => {
-    const dataSessao = item.data_sessao || item.data_inicio_vigencia || item.data_fim_vigencia;
-    const prazoProposta = item.data_envio_proposta_limite || item.data_fim_vigencia;
-    const relevantItems = Array.isArray(item.itens_pertinentes)
-      ? item.itens_pertinentes
-          .filter(entry => String(entry?.descricao || '').trim())
-          .map((entry, index) => ({
-            id: `pncp-item-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
-            numero_item: entry.numero_item ? String(entry.numero_item) : null,
-            descricao: String(entry.descricao || '').trim(),
-            modelo_produto: null,
-            quantidade: Number.isFinite(Number(entry.quantidade)) ? Number(entry.quantidade) : null,
-            valor_referencia: Number.isFinite(Number(entry.valor_unitario_estimado)) ? Number(entry.valor_unitario_estimado) : null,
-            custo_total_item: Number.isFinite(Number(entry.valor_total)) ? Number(entry.valor_total) : null,
-            requirements: [],
-          }))
-      : [];
+  const importPncpLicitacao = async (item) => {
+    setPncpImportingId(item.id);
+    try {
+      const dataSessao = item.data_sessao || item.data_inicio_vigencia || item.data_fim_vigencia;
+      const prazoProposta = item.data_envio_proposta_limite || item.data_fim_vigencia;
+      const queryText = normalizeText(pncpSearchFilters.q || '').trim();
+      const shouldImportAllItems = queryText.length < 3;
 
-    const estimatedValue = Number(item.valor_itens_pertinentes) > 0
-      ? Number(item.valor_itens_pertinentes)
-      : (item.valor_total_estimado ?? item.valor_global ?? '');
+      let importedItemsDraft = [];
+      if (!shouldImportAllItems && Array.isArray(item.itens_pertinentes) && item.itens_pertinentes.length > 0) {
+        importedItemsDraft = mapPncpImportItemsToDraft(item.itens_pertinentes);
+      } else {
+        const allPncpItems = await fetchAllPncpItemsForImport(item);
+        importedItemsDraft = mapPncpImportItemsToDraft(allPncpItems);
+      }
+      const estimatedValue = Number(item.valor_itens_pertinentes) > 0
+        ? Number(item.valor_itens_pertinentes)
+        : (item.valor_total_estimado ?? item.valor_global ?? '');
 
-    setNewOpportunityForm(prev => ({
-      ...prev,
-      titulo: item.titulo || `${item.tipo?.nome || 'Edital'} - ${item.orgao?.nome || 'Órgão'}`,
-      orgao_nome: item.orgao?.nome || '',
-      orgao_cnpj: item.orgao?.cnpj || '',
-      orgao_codigo: item.orgao?.id || item.orgao?.cnpj || '',
-      uasg_codigo: item.unidade?.codigo || '',
-      uasg_nome: item.unidade?.nome || '',
-      modalidade: item.modalidade?.nome || '',
-      numero_edital: item.numero_sequencial || '',
-      numero_compra: item.numero_controle_pncp || '',
-      data_publicacao: toDateInputValue(item.data_publicacao),
-      data_sessao: toDateTimeLocalValue(dataSessao),
-      data_envio_proposta_limite: toDateTimeLocalValue(prazoProposta),
-      data_assinatura_ata_limite: toDateTimeLocalValue(item.data_assinatura_ata_limite),
-      data_entrega_limite: toDateTimeLocalValue(item.data_entrega_limite || item.data_fim_vigencia),
-      valor_oportunidade: toPtBrDecimalInput(estimatedValue),
-      links_pncp: item.url || '',
-      metadados: {
-        pncp_id: item.id,
-        pncp_numero_controle: item.numero_controle_pncp,
-        pncp_situacao: item.situacao?.nome,
-        pncp_tipo: item.tipo?.nome,
-        pncp_esfera: item.esfera?.nome,
-        pncp_municipio: item.municipio?.nome,
-        pncp_uf: item.uf,
-      },
-    }));
-    setNewOpportunityItemsDraft(relevantItems);
-    setNewOpportunityItemRequirementForm({});
-    setExpandedDraftChecklist({});
-    setChecklistModalItemId(null);
-    setShowNewOpportunityForm(true);
-    setPncpSearchExpanded(false);
+      setNewOpportunityForm(prev => ({
+        ...prev,
+        titulo: item.titulo || `${item.tipo?.nome || 'Edital'} - ${item.orgao?.nome || 'Órgão'}`,
+        orgao_nome: item.orgao?.nome || '',
+        orgao_cnpj: item.orgao?.cnpj || '',
+        orgao_codigo: item.orgao?.id || item.orgao?.cnpj || '',
+        uasg_codigo: item.unidade?.codigo || '',
+        uasg_nome: item.unidade?.nome || '',
+        modalidade: item.modalidade?.nome || '',
+        numero_edital: item.numero_sequencial || '',
+        numero_compra: item.numero_controle_pncp || '',
+        data_publicacao: toDateInputValue(item.data_publicacao),
+        data_sessao: toDateTimeLocalValue(dataSessao),
+        data_envio_proposta_limite: toDateTimeLocalValue(prazoProposta),
+        data_assinatura_ata_limite: toDateTimeLocalValue(item.data_assinatura_ata_limite),
+        data_entrega_limite: toDateTimeLocalValue(item.data_entrega_limite || item.data_fim_vigencia),
+        valor_oportunidade: toPtBrDecimalInput(estimatedValue),
+        links_pncp: item.url || '',
+        metadados: {
+          pncp_id: item.id,
+          pncp_numero_controle: item.numero_controle_pncp,
+          pncp_situacao: item.situacao?.nome,
+          pncp_tipo: item.tipo?.nome,
+          pncp_esfera: item.esfera?.nome,
+          pncp_municipio: item.municipio?.nome,
+          pncp_uf: item.uf,
+        },
+      }));
+      setNewOpportunityItemsDraft(importedItemsDraft);
+      setNewOpportunityItemRequirementForm({});
+      setExpandedDraftChecklist({});
+      setChecklistModalItemId(null);
+      setIsPncpImportDraft(true);
+      setShowNewOpportunityForm(true);
+      setPncpSearchExpanded(false);
+    } catch (error) {
+      console.error('Error importing PNCP items:', error);
+    } finally {
+      setPncpImportingId(null);
+    }
   };
 
   const openOpportunity = async (opportunity) => {
@@ -3365,7 +3686,10 @@ function App() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowNewOpportunityForm(true)}
+                      onClick={() => {
+                        setIsPncpImportDraft(false);
+                        setShowNewOpportunityForm(true);
+                      }}
                       className="h-9 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-ink"
                     >
                       Nova licitação
@@ -3504,29 +3828,16 @@ function App() {
                         <option value="suspensa">Suspensa</option>
                         <option value="todos">Todos os Status</option>
                       </select>
-                      <div className="space-y-1">
-                        <input
-                          type="text"
-                          value={pncpModalidadeQuery}
-                          onChange={(event) => setPncpModalidadeQuery(event.target.value)}
-                          placeholder="Buscar modalidade"
-                          className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs text-ink"
-                        />
-                        <select
-                          value={pncpSearchFilters.modalidade_licitacao_id}
-                          onChange={(event) => {
-                            const selected = modalidadeOptions.find(item => String(item.id) === String(event.target.value));
-                            setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }));
-                            setPncpModalidadeQuery(selected ? selected.nome : pncpModalidadeQuery);
-                          }}
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
-                        >
-                          <option value="">Todas Modalidades</option>
-                          {filteredPncpModalidades.map(item => (
-                            <option key={item.id} value={item.id}>{item.nome}</option>
-                          ))}
-                        </select>
-                      </div>
+                      <select
+                        value={pncpSearchFilters.modalidade_licitacao_id}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))}
+                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                      >
+                        <option value="">Todas Modalidades</option>
+                        {modalidadeOptions.map(item => (
+                          <option key={item.id} value={item.id}>{item.nome}</option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         onClick={() => runPncpSearch(1)}
@@ -3582,49 +3893,92 @@ function App() {
                         <option value="E">Estadual</option>
                         <option value="M">Municipal</option>
                       </select>
+                      <select
+                        value={pncpSearchFilters.tipo_id}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipo_id: event.target.value }))}
+                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                      >
+                        <option value="">Todos os Tipos</option>
+                        {tipoInstrumentoOptions.map(item => (
+                          <option key={item.id} value={item.id}>{item.nome}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={pncpSearchFilters.modo_disputa_id}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modo_disputa_id: event.target.value }))}
+                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                      >
+                        <option value="">Todos os Modos</option>
+                        {modoDisputaOptions.map(item => (
+                          <option key={item.id} value={item.id}>{item.nome}</option>
+                        ))}
+                      </select>
                       <div className="space-y-1">
                         <input
-                          type="text"
-                          value={pncpTipoQuery}
-                          onChange={(event) => setPncpTipoQuery(event.target.value)}
-                          placeholder="Buscar tipo"
-                          className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs text-ink"
+                          className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs"
+                          placeholder="Buscar órgão (nome ou CNPJ)"
+                          value={pncpOrgaoLookupQuery}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setPncpOrgaoLookupQuery(value);
+                            setPncpSearchFilters(prev => ({ ...prev, orgao_cnpj: '', unidade_codigo: '' }));
+                            setPncpUasgLookupQuery('');
+                          }}
                         />
                         <select
-                          value={pncpSearchFilters.tipo_id}
+                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          value={pncpSearchFilters.orgao_cnpj}
                           onChange={(event) => {
-                            const selected = tipoInstrumentoOptions.find(item => String(item.id) === String(event.target.value));
-                            setPncpSearchFilters(prev => ({ ...prev, tipo_id: event.target.value }));
-                            setPncpTipoQuery(selected ? selected.nome : pncpTipoQuery);
+                            const selected = pncpOrgaoOptions.find(item => String(item.cnpj || '') === String(event.target.value));
+                            setPncpSearchFilters(prev => ({ ...prev, orgao_cnpj: event.target.value, unidade_codigo: '' }));
+                            setPncpUasgLookupQuery('');
+                            if (selected) {
+                              setPncpOrgaoLookupQuery(selected.nome || selected.cnpj || '');
+                            }
                           }}
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                         >
-                          <option value="">Todos os Tipos</option>
-                          {filteredPncpTipos.map(item => (
-                            <option key={item.id} value={item.id}>{item.nome}</option>
+                          <option value="">
+                            {pncpOrgaoLookupLoading
+                              ? 'Carregando órgãos...'
+                              : filteredPncpOrgaoOptions.length > 0
+                                ? 'Selecione o órgão'
+                                : 'Digite pelo menos 2 caracteres'}
+                          </option>
+                          {filteredPncpOrgaoOptions.map(item => (
+                            <option key={item.cnpj || item.codigo} value={item.cnpj || ''}>{item.nome} {item.cnpj ? `- ${item.cnpj}` : ''}</option>
                           ))}
                         </select>
                       </div>
                       <div className="space-y-1">
                         <input
-                          type="text"
-                          value={pncpModoQuery}
-                          onChange={(event) => setPncpModoQuery(event.target.value)}
-                          placeholder="Buscar modo"
-                          className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs text-ink"
+                          className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs"
+                          placeholder="Buscar UASG por código/nome"
+                          value={pncpUasgLookupQuery}
+                          onChange={(event) => {
+                            setPncpUasgLookupQuery(event.target.value);
+                            setPncpSearchFilters(prev => ({ ...prev, unidade_codigo: '' }));
+                          }}
                         />
                         <select
-                          value={pncpSearchFilters.modo_disputa_id}
+                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          value={pncpSearchFilters.unidade_codigo}
                           onChange={(event) => {
-                            const selected = modoDisputaOptions.find(item => String(item.id) === String(event.target.value));
-                            setPncpSearchFilters(prev => ({ ...prev, modo_disputa_id: event.target.value }));
-                            setPncpModoQuery(selected ? selected.nome : pncpModoQuery);
+                            const selected = pncpUasgOptions.find(item => String(item.codigo || '') === String(event.target.value));
+                            setPncpSearchFilters(prev => ({ ...prev, unidade_codigo: event.target.value }));
+                            if (selected) {
+                              setPncpUasgLookupQuery(`${selected.codigo} - ${selected.nome || selected.codigo}`);
+                            }
                           }}
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                         >
-                          <option value="">Todos os Modos</option>
-                          {filteredPncpModos.map(item => (
-                            <option key={item.id} value={item.id}>{item.nome}</option>
+                          <option value="">
+                            {pncpUasgLookupLoading
+                                ? 'Carregando UASGs...'
+                                : filteredPncpUasgOptions.length > 0
+                                  ? 'Selecione a UASG'
+                                  : 'Digite para buscar UASG'}
+                          </option>
+                          {filteredPncpUasgOptions.map(item => (
+                            <option key={item.codigo} value={item.codigo}>{item.codigo} - {item.nome || item.codigo}{item.orgao_nome ? ` (${item.orgao_nome})` : ''}</option>
                           ))}
                         </select>
                       </div>
@@ -3659,6 +4013,46 @@ function App() {
                         )}
                       </div>
                     </div>
+
+                    {(pncpSearchFilters.orgao_cnpj || pncpSearchFilters.unidade_codigo || String(pncpOrgaoLookupQuery || '').trim().length >= 2 || String(pncpUasgLookupQuery || '').trim().length >= 2) && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(pncpSearchFilters.orgao_cnpj || String(pncpOrgaoLookupQuery || '').trim().length >= 2) && (
+                          <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">
+                            <strong>Órgão:</strong> {selectedPncpOrgao?.nome || pncpOrgaoLookupQuery || pncpSearchFilters.orgao_cnpj}
+                            <button
+                              type="button"
+                              className="rounded-full px-1 text-primary hover:bg-primary/20"
+                              onClick={() => {
+                                setPncpSearchFilters(prev => ({ ...prev, orgao_cnpj: '', unidade_codigo: '' }));
+                                setPncpOrgaoLookupQuery('');
+                                setPncpUasgLookupQuery('');
+                                setPncpUasgOptions([]);
+                              }}
+                              aria-label="Remover filtro de órgão"
+                            >
+                              x
+                            </button>
+                          </span>
+                        )}
+
+                        {(pncpSearchFilters.unidade_codigo || String(pncpUasgLookupQuery || '').trim().length >= 2) && (
+                          <span className="inline-flex items-center gap-2 rounded-full bg-card px-3 py-1 text-xs text-ink border border-border">
+                            <strong>UASG:</strong> {selectedPncpUasg ? `${selectedPncpUasg.codigo} - ${selectedPncpUasg.nome}` : (pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery)}
+                            <button
+                              type="button"
+                              className="rounded-full px-1 text-muted hover:bg-cardAlt"
+                              onClick={() => {
+                                setPncpSearchFilters(prev => ({ ...prev, unidade_codigo: '' }));
+                                setPncpUasgLookupQuery('');
+                              }}
+                              aria-label="Remover filtro de UASG"
+                            >
+                              x
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Busca inteligente com IA */}
                     <div className="mt-3 flex items-center flex-wrap gap-3">
@@ -3737,7 +4131,7 @@ function App() {
                     {visiblePncpResults.length > 0 && !showPncpHidden && (
                       <div className="mt-4 space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-theme">
                         {visiblePncpResults.map((item) => (
-                          <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 transition-colors">
+                          <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 hover:bg-muted/10 transition-colors">
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 min-w-0">
                                 <h4 className="font-semibold text-sm text-ink truncate">
@@ -3781,9 +4175,10 @@ function App() {
                                 <button
                                   type="button"
                                   onClick={() => importPncpLicitacao(item)}
-                                  className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary/90"
+                                  disabled={pncpImportingId === item.id}
+                                  className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary/90 disabled:opacity-60"
                                 >
-                                  Importar
+                                  {pncpImportingId === item.id ? 'Importando...' : 'Importar'}
                                 </button>
                                 {item.url && (
                                   <a
@@ -3858,6 +4253,7 @@ function App() {
                         type="button"
                         onClick={() => {
                           setShowNewOpportunityForm(false);
+                          setIsPncpImportDraft(false);
                           setNewOpportunityForm(createEmptyOpportunityForm());
                           setNewOpportunityContact({ contact_id: '', papel: '', observacao: '' });
                           setNewOpportunityContactQuery('');
@@ -3958,10 +4354,10 @@ function App() {
                             {lookupLoading
                               ? 'Carregando UASGs...'
                               : uasgOptions.length > 0
-                                ? `Selecione a UASG (${uasgSource === 'compras.gov' ? 'via Compras.gov' : 'via PNCP'})`
-                                : newOpportunityForm.orgao_cnpj
-                                  ? 'Nenhuma UASG encontrada'
-                                  : 'Selecione um órgão primeiro'}
+                              ? `Selecione a UASG (${uasgSource === 'compras.gov' ? 'via Compras.gov' : 'via PNCP'})`
+                              : newOpportunityForm.orgao_cnpj
+                                ? 'Nenhuma UASG encontrada'
+                                  : 'Digite para buscar UASG ou selecione um órgão'}
                           </option>
                           {filteredUasgOptions.map(item => {
                             const code = String(item.codigo || '');
@@ -4079,12 +4475,26 @@ function App() {
 
                     <div className="mt-6 rounded-2xl border border-border bg-cardAlt p-4">
                       <h4 className="text-sm font-semibold">Itens da licitação (opcional na criação)</h4>
+                      {isPncpImportDraft && (
+                        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+                          <span>Itens importados do PNCP. Revise e remova o que não for pertinente antes de salvar.</span>
+                          {newOpportunityItemsDraft.length > 0 && (
+                            <button
+                              type="button"
+                              className="font-semibold hover:underline"
+                              onClick={() => setNewOpportunityItemsDraft([])}
+                            >
+                              Remover todos
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <div className="mt-3 grid gap-2 md:grid-cols-7">
                         <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Nº do item" value={newOpportunityItemForm.numero_item} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, numero_item: event.target.value }))} />
                         <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs md:col-span-2" placeholder="Descrição do item" value={newOpportunityItemForm.descricao} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, descricao: event.target.value }))} />
                         <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Modelo compatível" value={newOpportunityItemForm.modelo_produto} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, modelo_produto: event.target.value }))} />
-                        <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Quantidade" value={newOpportunityItemForm.quantidade} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, quantidade: event.target.value }))} />
-                        <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Custo total do item" value={newOpportunityItemForm.custo_total_item} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, custo_total_item: event.target.value }))} />
+                        <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" placeholder="Quantidade" value={newOpportunityItemForm.quantidade} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, quantidade: event.target.value.replace(/\./g, ',') }))} />
+                        <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" placeholder="Custo total do item" value={newOpportunityItemForm.custo_total_item} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, custo_total_item: event.target.value.replace(/\./g, ',') }))} />
                         <button type="button" className="h-8 rounded-lg border border-border px-3 text-xs font-semibold md:col-span-7 justify-self-end" onClick={addDraftItem}>Adicionar item</button>
                       </div>
 
@@ -4106,6 +4516,14 @@ function App() {
                                   <span className="text-[11px] text-muted">{statusLabel} ({okCount}/{totalCount})</span>
                                   <button type="button" className="text-xs text-status-danger font-semibold" onClick={() => removeDraftItem(item.id)}>Remover</button>
                                 </div>
+                              </div>
+                              <div className="mt-2 grid gap-2 md:grid-cols-7">
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" placeholder="Nº item" value={item.numero_item || ''} onChange={(event) => updateDraftItem(item.id, { numero_item: event.target.value })} />
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs md:col-span-2" placeholder="Descrição" value={item.descricao || ''} onChange={(event) => updateDraftItem(item.id, { descricao: event.target.value })} />
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" placeholder="Modelo" value={item.modelo_produto || ''} onChange={(event) => updateDraftItem(item.id, { modelo_produto: event.target.value })} />
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" inputMode="decimal" placeholder="Quantidade" value={toPtBrInputSafe(item.quantidade)} onChange={(event) => updateDraftItem(item.id, { quantidade: event.target.value.replace(/\./g, ',') })} />
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" inputMode="decimal" placeholder="Valor ref." value={toPtBrInputSafe(item.valor_referencia)} onChange={(event) => updateDraftItem(item.id, { valor_referencia: event.target.value.replace(/\./g, ',') })} />
+                                <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" inputMode="decimal" placeholder="Total item" value={toPtBrInputSafe(item.custo_total_item)} onChange={(event) => updateDraftItem(item.id, { custo_total_item: event.target.value.replace(/\./g, ',') })} />
                               </div>
                               <div className="mt-2 grid gap-2 md:grid-cols-5">
                                 <button type="button" className="h-7 w-7 rounded-lg border border-border text-muted hover:text-ink hover:bg-card" onClick={() => setExpandedDraftChecklist(prev => ({ ...prev, [item.id]: !prev[item.id] }))} title="Abrir checklist técnico do item">
@@ -4519,7 +4937,7 @@ function App() {
                           return (
                             <div key={item.id} className={`rounded-xl border overflow-hidden ${isExpanded ? 'border-primary/50 bg-card' : 'border-border bg-card'}`}>
                               <div
-                                className={`p-3 cursor-pointer hover:bg-cardAlt/50 ${isExpanded ? 'bg-primary/5' : ''}`}
+                                className={`p-3 cursor-pointer hover:bg-muted/10 ${isExpanded ? 'bg-primary/5' : ''}`}
                                 onClick={() => setChecklistModalItemId(isExpanded ? null : item.id)}
                               >
                                 <div className="flex items-center justify-between gap-2">
@@ -4549,8 +4967,8 @@ function App() {
                                     </div>
                                     <div>
                                       <label className="block text-[10px] text-muted mb-1">Quantidade</label>
-                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={item.quantidade || ''} onChange={(event) => {
-                                        const quantidade = parseCurrency(event.target.value);
+                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={toPtBrInputSafe(item.quantidade)} onChange={(event) => {
+                                        const quantidade = parseCurrency(event.target.value.replace(/\./g, ','));
                                         const valorReferencia = parseCurrency(item.valor_referencia);
                                         const custoTotalItem = quantidade !== null && valorReferencia !== null ? Number((quantidade * valorReferencia).toFixed(2)) : null;
                                         updateItem(item.id, { quantidade, custo_total_item: custoTotalItem });
@@ -4558,8 +4976,8 @@ function App() {
                                     </div>
                                     <div>
                                       <label className="block text-[10px] text-muted mb-1">Preço de Referência</label>
-                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={item.valor_referencia || ''} onChange={(event) => {
-                                        const valorReferencia = parseCurrency(event.target.value);
+                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={toPtBrInputSafe(item.valor_referencia)} onChange={(event) => {
+                                        const valorReferencia = parseCurrency(event.target.value.replace(/\./g, ','));
                                         const quantidade = parseCurrency(item.quantidade);
                                         const custoTotalItem = quantidade !== null && valorReferencia !== null ? Number((quantidade * valorReferencia).toFixed(2)) : null;
                                         updateItem(item.id, { valor_referencia: valorReferencia, custo_total_item: custoTotalItem });
