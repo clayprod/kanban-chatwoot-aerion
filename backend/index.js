@@ -1048,12 +1048,80 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
   }
 };
 
-const getPncpCompraEnrichment = async (cnpj, ano, sequencial) => {
+const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
+  const pageSize = Math.max(1, Math.min(200, Number(options.pageSize) || 100));
+  const maxPages = Math.max(1, Math.min(20, Number(options.maxPages) || 10));
+
+  const allItems = [];
+  let page = 1;
+
+  while (page <= maxPages) {
+    const itensData = await fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
+      pagina: page,
+      tamanhoPagina: pageSize,
+    });
+
+    const pageItems = Array.isArray(itensData?.data)
+      ? itensData.data
+      : Array.isArray(itensData)
+        ? itensData
+        : [];
+
+    if (pageItems.length === 0) {
+      break;
+    }
+
+    allItems.push(...pageItems);
+
+    if (pageItems.length < pageSize) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return allItems;
+};
+
+const isPncpCompraItemRelevantToQuery = (item, query) => {
+  const tokens = tokenizeSearchTerms(query);
+  if (!tokens.length) {
+    return false;
+  }
+
+  const text = normalizeSearchText([
+    item?.descricao,
+    item?.informacaoComplementar,
+    item?.itemCategoriaNome,
+    item?.catalogoCodigoItem,
+    item?.ncmNbsDescricao,
+    item?.materialOuServicoNome,
+  ].filter(Boolean).join(' '));
+
+  if (!text) {
+    return false;
+  }
+
+  const normalizedQuery = normalizeSearchText(query).trim();
+  if (normalizedQuery && containsTermStrict(text, normalizedQuery)) {
+    return true;
+  }
+
+  const matchedCount = tokens.filter(token => containsTermStrict(text, token)).length;
+  if (tokens.length === 1) {
+    return matchedCount === 1;
+  }
+
+  return matchedCount >= 2;
+};
+
+const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
   if (!cnpj || !ano || !sequencial) {
     return null;
   }
 
-  const cacheKey = `${cnpj}/${ano}/${sequencial}`;
+  const normalizedQuery = normalizeSearchText(query).trim();
+  const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}`;
   const cached = pncpCompraEnrichmentCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < PNCP_ENRICHMENT_CACHE_TTL) {
     return cached.value;
@@ -1064,19 +1132,39 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial) => {
 
     let itensResumoTexto = '';
     let totalItens = 0;
+    let valorItensPertinentes = null;
+    let itensPertinentes = [];
     try {
-      const itensData = await fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
-        pagina: 1,
-        tamanhoPagina: 50,
+      const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, {
+        pageSize: normalizedQuery ? 100 : 50,
+        maxPages: normalizedQuery ? 15 : 1,
       });
-
-      const itens = Array.isArray(itensData?.data) ? itensData.data : Array.isArray(itensData) ? itensData : [];
       totalItens = itens.length;
       itensResumoTexto = itens
         .map(item => `${item?.descricao || ''} ${item?.itemCategoriaNome || ''} ${item?.catalogoCodigoItem || ''} ${item?.numeroItem || ''}`.trim())
         .filter(Boolean)
         .slice(0, 20)
         .join(' | ');
+
+      if (normalizedQuery) {
+        const pertinentes = itens.filter(item => isPncpCompraItemRelevantToQuery(item, normalizedQuery));
+        const totalPertinente = pertinentes.reduce((sum, item) => {
+          const value = Number(item?.valorTotal);
+          return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+        }, 0);
+
+        if (pertinentes.length > 0 && totalPertinente > 0) {
+          valorItensPertinentes = Number(totalPertinente.toFixed(2));
+          itensPertinentes = pertinentes.slice(0, 30).map(item => ({
+            numero_item: item?.numeroItem ?? null,
+            descricao: item?.descricao || null,
+            quantidade: Number.isFinite(Number(item?.quantidade)) ? Number(item.quantidade) : null,
+            unidade: item?.unidadeMedida || null,
+            valor_unitario_estimado: Number.isFinite(Number(item?.valorUnitarioEstimado)) ? Number(item.valorUnitarioEstimado) : null,
+            valor_total: Number.isFinite(Number(item?.valorTotal)) ? Number(item.valorTotal) : null,
+          }));
+        }
+      }
     } catch (error) {
       console.error(`Erro ao consultar itens PNCP (${cacheKey}):`, error.message);
     }
@@ -1084,6 +1172,9 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial) => {
     const value = {
       valor_total_estimado: detalhe?.valor_total_estimado ?? null,
       valor_total_homologado: detalhe?.valor_total_homologado ?? null,
+      valor_itens_pertinentes: valorItensPertinentes,
+      itens_pertinentes: itensPertinentes,
+      itens_pertinentes_count: itensPertinentes.length,
       itens_resumo_texto: itensResumoTexto,
       total_itens: totalItens,
     };
@@ -2767,7 +2858,7 @@ app.get('/api/licitacoes/pncp/orgaos', async (req, res) => {
     return res.json([]);
   }
   try {
-    const data = await fetchPncp('/v1/orgaos/', {
+    const data = await fetchPncp('/v1/orgaos', {
       razaoSocial: query,
       pagina: req.query.pagina || 1,
     });
@@ -2890,6 +2981,9 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
   data_inicio_vigencia: item.data_inicio_vigencia,
   data_fim_vigencia: item.data_fim_vigencia,
   valor_global: item.valor_global,
+  valor_itens_pertinentes: item.valor_itens_pertinentes ?? null,
+  itens_pertinentes_count: item.itens_pertinentes_count ?? null,
+  itens_pertinentes: Array.isArray(item.itens_pertinentes) ? item.itens_pertinentes : [],
   valor_total_estimado: item.valor_total_estimado ?? null,
   valor_total_homologado: item.valor_total_homologado ?? null,
   total_itens: item.total_itens ?? null,
@@ -3075,12 +3169,15 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     if (precisaEnriquecer && allItems.length > 0) {
       allItems = await mapWithConcurrency(allItems, 6, async (item) => {
-        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial);
+        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, q);
         if (!enrichment) {
           return item;
         }
         return {
           ...item,
+          valor_itens_pertinentes: enrichment.valor_itens_pertinentes ?? item?.valor_itens_pertinentes ?? null,
+          itens_pertinentes: enrichment.itens_pertinentes ?? item?.itens_pertinentes ?? [],
+          itens_pertinentes_count: enrichment.itens_pertinentes_count ?? item?.itens_pertinentes_count ?? null,
           valor_total_estimado: enrichment.valor_total_estimado ?? item?.valor_total_estimado ?? null,
           valor_total_homologado: enrichment.valor_total_homologado ?? item?.valor_total_homologado ?? null,
           total_itens: enrichment.total_itens ?? item?.total_itens ?? null,

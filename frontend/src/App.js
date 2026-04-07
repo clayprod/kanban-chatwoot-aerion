@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import axios from 'axios';
 
-// Configurar axios para enviar cookies em todas as requisições
-axios.defaults.withCredentials = true;
-
 import {
   DndContext,
   DragOverlay,
@@ -17,6 +14,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { ResponsiveBar } from '@nivo/bar';
 import { ResponsiveLine } from '@nivo/line';
 import './App.css';
+
+// Configurar axios para enviar cookies em todas as requisições
+axios.defaults.withCredentials = true;
 
 const viewTabs = ['Overview', 'Board', 'Licitações', 'Processo'];
 
@@ -312,7 +312,7 @@ const formatCurrency = (value) => {
 };
 
 const getBestEstimatedValue = (item) => {
-  const values = [item?.valor_total_estimado, item?.valor_global, item?.valor_total_homologado]
+  const values = [item?.valor_itens_pertinentes, item?.valor_total_estimado, item?.valor_global, item?.valor_total_homologado]
     .map(value => Number(value))
     .filter(value => Number.isFinite(value) && value > 0);
   return values.length ? values[0] : null;
@@ -1496,9 +1496,9 @@ function App() {
     const fetchLookupOptions = async () => {
       setLookupLoading(true);
       try {
-        const orgaoQuery = String(newOpportunityForm.orgao_nome || '').trim();
+        const orgaoQuery = String(orgaoLookupQuery || newOpportunityForm.orgao_nome || '').trim();
         const [orgaoResult, catalogResult, modalidadeResult] = await Promise.allSettled([
-          orgaoQuery.length >= 3
+          orgaoQuery.length >= 2
             ? axios.get('/api/licitacoes/pncp/orgaos', {
                 params: {
                   q: orgaoQuery,
@@ -1523,9 +1523,10 @@ function App() {
           setModalidadeOptions(Array.isArray(modalidadeResult.value.data) ? modalidadeResult.value.data.filter(item => item && (item.id || item.nome)) : []);
         }
 
-        if (newOpportunityForm.orgao_cnpj) {
+        const orgaoCnpjDigits = String(newOpportunityForm.orgao_cnpj || '').replace(/\D/g, '');
+        if (orgaoCnpjDigits) {
           // Tentar PNCP primeiro
-          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${newOpportunityForm.orgao_cnpj}/unidades`, {
+          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           const pncpUnits = Array.isArray(unitsResponse.data) ? unitsResponse.data : [];
@@ -1538,7 +1539,7 @@ function App() {
               // Fallback para Compras.gov se PNCP não retornar unidades
               try {
                 const comprasResponse = await axios.get('/api/licitacoes/compras/uasgs', {
-                  params: { cnpj: newOpportunityForm.orgao_cnpj },
+                  params: { cnpj: orgaoCnpjDigits },
                 });
                 const comprasUnits = Array.isArray(comprasResponse.data) ? comprasResponse.data.map(u => ({
                   codigo: u.codigoUasg || u.codigo,
@@ -1576,6 +1577,7 @@ function App() {
   }, [
     authStatus.authenticated,
     showNewOpportunityForm,
+    orgaoLookupQuery,
     newOpportunityForm.orgao_nome,
     newOpportunityForm.orgao_cnpj,
     newOpportunityForm.item_tipo,
@@ -1964,6 +1966,7 @@ function App() {
           descricao: item.descricao,
           modelo_produto: item.modelo_produto,
           quantidade: item.quantidade,
+          valor_referencia: item.valor_referencia,
           custo_total_item: item.custo_total_item,
         });
 
@@ -2012,6 +2015,7 @@ function App() {
         descricao: newOpportunityItemForm.descricao,
         modelo_produto: newOpportunityItemForm.modelo_produto || null,
         quantidade: newOpportunityItemForm.quantidade ? Number(String(newOpportunityItemForm.quantidade).replace(',', '.')) : null,
+        valor_referencia: null,
         custo_total_item: newOpportunityItemForm.custo_total_item ? Number(String(newOpportunityItemForm.custo_total_item).replace(',', '.')) : null,
         requirements: [],
       },
@@ -2196,6 +2200,25 @@ function App() {
   const importPncpLicitacao = (item) => {
     const dataSessao = item.data_sessao || item.data_inicio_vigencia || item.data_fim_vigencia;
     const prazoProposta = item.data_envio_proposta_limite || item.data_fim_vigencia;
+    const relevantItems = Array.isArray(item.itens_pertinentes)
+      ? item.itens_pertinentes
+          .filter(entry => String(entry?.descricao || '').trim())
+          .map((entry, index) => ({
+            id: `pncp-item-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
+            numero_item: entry.numero_item ? String(entry.numero_item) : null,
+            descricao: String(entry.descricao || '').trim(),
+            modelo_produto: null,
+            quantidade: Number.isFinite(Number(entry.quantidade)) ? Number(entry.quantidade) : null,
+            valor_referencia: Number.isFinite(Number(entry.valor_unitario_estimado)) ? Number(entry.valor_unitario_estimado) : null,
+            custo_total_item: Number.isFinite(Number(entry.valor_total)) ? Number(entry.valor_total) : null,
+            requirements: [],
+          }))
+      : [];
+
+    const estimatedValue = Number(item.valor_itens_pertinentes) > 0
+      ? Number(item.valor_itens_pertinentes)
+      : (item.valor_total_estimado ?? item.valor_global ?? '');
+
     setNewOpportunityForm(prev => ({
       ...prev,
       titulo: item.titulo || `${item.tipo?.nome || 'Edital'} - ${item.orgao?.nome || 'Órgão'}`,
@@ -2212,7 +2235,7 @@ function App() {
       data_envio_proposta_limite: toDateTimeLocalValue(prazoProposta),
       data_assinatura_ata_limite: toDateTimeLocalValue(item.data_assinatura_ata_limite),
       data_entrega_limite: toDateTimeLocalValue(item.data_entrega_limite || item.data_fim_vigencia),
-      valor_oportunidade: toPtBrDecimalInput(item.valor_total_estimado ?? item.valor_global ?? ''),
+      valor_oportunidade: toPtBrDecimalInput(estimatedValue),
       links_pncp: item.url || '',
       metadados: {
         pncp_id: item.id,
@@ -2224,6 +2247,10 @@ function App() {
         pncp_uf: item.uf,
       },
     }));
+    setNewOpportunityItemsDraft(relevantItems);
+    setNewOpportunityItemRequirementForm({});
+    setExpandedDraftChecklist({});
+    setChecklistModalItemId(null);
     setShowNewOpportunityForm(true);
     setPncpSearchExpanded(false);
   };
@@ -3715,6 +3742,7 @@ function App() {
                                 </p>
                                 <p className="text-xs text-muted mt-1">
                                   <strong>Valor estimado:</strong> {getBestEstimatedValue(item) ? formatCurrency(getBestEstimatedValue(item)) : 'n/d'}
+                                  {Number(item.itens_pertinentes_count) > 0 ? ` | ${item.itens_pertinentes_count} item(ns) pertinente(s)` : ''}
                                   {item.total_itens ? ` | ${item.total_itens} item(ns)` : ''}
                                 </p>
                               </div>
