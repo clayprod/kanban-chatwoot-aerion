@@ -408,8 +408,46 @@ const getChatwootContactUrl = (contact) => {
   return `${CHATWOOT_BASE_URL}/app/accounts/${accountId}/contacts/${contact.id}`;
 };
 
+const getFirstName = (value) => {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  return text.split(/\s+/)[0] || '';
+};
+
+const getCompanyContactDisplay = (companyName, personName, fallback = '') => {
+  const company = String(companyName || '').trim();
+  const firstName = getFirstName(personName);
+
+  if (company) {
+    if (firstName && normalizeText(firstName) !== normalizeText(company)) {
+      return `${company} (${firstName})`;
+    }
+    return company;
+  }
+
+  if (String(personName || '').trim()) {
+    return String(personName).trim();
+  }
+
+  return fallback;
+};
+
+const getContactSearchText = (contact) => {
+  return normalizeText([
+    contact?.company_name,
+    contact?.name,
+    getContactLabel(contact),
+  ].filter(Boolean).join(' '));
+};
+
 const getContactLabel = (contact) => {
-  const name = contact?.company_name || contact?.name || `Contato ${contact?.id || ''}`;
+  const name = getCompanyContactDisplay(
+    contact?.company_name,
+    contact?.name,
+    `Contato ${contact?.id || ''}`
+  );
   return `${name} (#${contact?.id || ''})`;
 };
 
@@ -1061,7 +1099,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
     : opportunity.prazo_status === 'vence_48h'
       ? 'Vence em 48h'
       : opportunity.prazo_status === 'sem_data'
-        ? 'Sem prazo definido'
+        ? 'Sem prazo'
         : 'No prazo';
   const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'nao_atendido'
     ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
@@ -1119,11 +1157,11 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
-          <span className={`text-xs font-semibold px-2 py-1 rounded-full leading-tight ${prazoClass}`}>
+          <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full leading-tight whitespace-nowrap ${prazoClass}`}>
             {prazoLabel}
           </span>
           <div className="flex items-center gap-2">
-          <span className={`text-[11px] uppercase px-2 py-1 rounded-full leading-tight ${statusBadgeClass}`}>{opportunity.status || 'ativo'}</span>
+          <span className={`inline-flex items-center text-[10px] uppercase px-2 py-0.5 rounded-full leading-tight whitespace-nowrap ${statusBadgeClass}`}>{opportunity.status || 'ativo'}</span>
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
@@ -1292,6 +1330,8 @@ function App() {
   const [checklistModalItemId, setChecklistModalItemId] = useState(null);
   const [newItemRequirementForm, setNewItemRequirementForm] = useState({});
   const [itemRequirementCostInputMap, setItemRequirementCostInputMap] = useState({});
+  const [itemQuantityInputMap, setItemQuantityInputMap] = useState({});
+  const [itemReferenceInputMap, setItemReferenceInputMap] = useState({});
   const [contactLinkForm, setContactLinkForm] = useState({ contact_id: '', papel: '', observacao: '' });
   const [contactLinkQuery, setContactLinkQuery] = useState('');
   const [selectedComments, setSelectedComments] = useState([]);
@@ -1927,8 +1967,8 @@ function App() {
     const list = !query
       ? contacts
       : contacts.filter(contact => {
-          const label = normalizeText(contact.company_name || contact.name || '');
-          return label.includes(query);
+          const searchText = getContactSearchText(contact);
+          return searchText.includes(query);
         });
     return list.slice(0, 150);
   }, [contacts, newOpportunityContactQuery]);
@@ -1938,8 +1978,8 @@ function App() {
     const list = !query
       ? contacts
       : contacts.filter(contact => {
-          const label = normalizeText(contact.company_name || contact.name || '');
-          return label.includes(query);
+          const searchText = getContactSearchText(contact);
+          return searchText.includes(query);
         });
     return list.slice(0, 150);
   }, [contacts, contactLinkQuery]);
@@ -2612,6 +2652,8 @@ function App() {
       setSelectedLinkedContacts(contactsResponse.data || []);
       setSelectedComments(Array.isArray(commentsResponse.data) ? commentsResponse.data : []);
       setItemRequirementCostInputMap({});
+      setItemQuantityInputMap({});
+      setItemReferenceInputMap({});
 
       const items = Array.isArray(itemsResponse.data) ? itemsResponse.data : [];
       setSelectedItems(items);
@@ -2630,6 +2672,8 @@ function App() {
       setSelectedLinkedContacts([]);
       setSelectedComments([]);
       setItemRequirementCostInputMap({});
+      setItemQuantityInputMap({});
+      setItemReferenceInputMap({});
     }
   };
 
@@ -2810,6 +2854,64 @@ function App() {
     }
   };
 
+  const setItemNumericInput = (type, itemId, value) => {
+    const normalized = String(value || '').replace(/\./g, ',');
+    if (type === 'quantidade') {
+      setItemQuantityInputMap(prev => ({ ...prev, [itemId]: normalized }));
+      return;
+    }
+    setItemReferenceInputMap(prev => ({ ...prev, [itemId]: normalized }));
+  };
+
+  const commitItemNumericInput = (type, item) => {
+    if (!item || !item.id) {
+      return;
+    }
+    const itemId = item.id;
+    const quantityInput = itemQuantityInputMap[itemId];
+    const referenceInput = itemReferenceInputMap[itemId];
+
+    if (type === 'quantidade' && quantityInput === undefined) {
+      return;
+    }
+    if (type === 'valor_referencia' && referenceInput === undefined) {
+      return;
+    }
+
+    const nextQuantidade = parseCurrency(type === 'quantidade' ? quantityInput : (quantityInput ?? item.quantidade));
+    const nextReferencia = parseCurrency(type === 'valor_referencia' ? referenceInput : (referenceInput ?? item.valor_referencia));
+    const currentQuantidade = parseCurrency(item.quantidade);
+    const currentReferencia = parseCurrency(item.valor_referencia);
+
+    const nextCustoTotal = nextQuantidade !== null && nextReferencia !== null
+      ? Number((nextQuantidade * nextReferencia).toFixed(2))
+      : null;
+
+    const shouldUpdate = nextQuantidade !== currentQuantidade || nextReferencia !== currentReferencia;
+    if (shouldUpdate) {
+      updateItem(itemId, {
+        quantidade: nextQuantidade,
+        valor_referencia: nextReferencia,
+        custo_total_item: nextCustoTotal,
+      });
+    }
+
+    if (type === 'quantidade') {
+      setItemQuantityInputMap(prev => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      return;
+    }
+
+    setItemReferenceInputMap(prev => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+  };
+
   const deleteItem = async (itemId) => {
     if (!selectedOpportunity) {
       return;
@@ -2818,6 +2920,16 @@ function App() {
       await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`);
       setSelectedItems(prev => prev.filter(item => item.id !== itemId));
       setItemRequirementsMap(prev => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      setItemQuantityInputMap(prev => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      setItemReferenceInputMap(prev => {
         const next = { ...prev };
         delete next[itemId];
         return next;
@@ -4596,15 +4708,20 @@ function App() {
                         {newOpportunityForm.linked_contacts.map(item => {
                           const contact = contacts.find(c => String(c.id) === String(item.contact_id));
                           const contactUrl = getChatwootContactUrl(contact);
+                          const contactDisplayName = getCompanyContactDisplay(
+                            contact?.company_name,
+                            contact?.name,
+                            `Contato ${item.contact_id}`
+                          );
                           return (
                             <div key={item.contact_id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
                               <div className="min-w-0 break-words text-ink">
                                 {contactUrl ? (
                                   <a href={contactUrl} target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">
-                                    {contact?.company_name || contact?.name || `Contato ${item.contact_id}`}
+                                    {contactDisplayName}
                                   </a>
                                 ) : (
-                                  <span>{contact?.company_name || contact?.name || `Contato ${item.contact_id}`}</span>
+                                  <span>{contactDisplayName}</span>
                                 )}
                                 <span>{item.papel ? ` - ${item.papel}` : ''}{item.observacao ? ` (${item.observacao})` : ''}</span>
                               </div>
@@ -4884,15 +5001,20 @@ function App() {
                             {selectedLinkedContacts.map(link => {
                               const contact = contacts.find(c => String(c.id) === String(link.contact_id || link.id));
                               const contactUrl = getChatwootContactUrl(contact || { id: link.contact_id || link.id, account_id: link.account_id });
+                              const contactDisplayName = getCompanyContactDisplay(
+                                link.company_name,
+                                link.contact_name,
+                                `Contato ${link.contact_id || link.id}`
+                              );
                               return (
                                 <div key={link.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
                                   <div className="min-w-0 break-words text-ink">
                                     {contactUrl ? (
                                       <a href={contactUrl} target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">
-                                        {link.company_name || link.contact_name}
+                                        {contactDisplayName}
                                       </a>
                                     ) : (
-                                      <span>{link.company_name || link.contact_name}</span>
+                                      <span>{contactDisplayName}</span>
                                     )}
                                     <span>{link.papel ? ` - ${link.papel}` : ''}{link.observacao ? ` (${link.observacao})` : ''}</span>
                                   </div>
@@ -4967,21 +5089,33 @@ function App() {
                                     </div>
                                     <div>
                                       <label className="block text-[10px] text-muted mb-1">Quantidade</label>
-                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={toPtBrInputSafe(item.quantidade)} onChange={(event) => {
-                                        const quantidade = parseCurrency(event.target.value.replace(/\./g, ','));
-                                        const valorReferencia = parseCurrency(item.valor_referencia);
-                                        const custoTotalItem = quantidade !== null && valorReferencia !== null ? Number((quantidade * valorReferencia).toFixed(2)) : null;
-                                        updateItem(item.id, { quantidade, custo_total_item: custoTotalItem });
-                                      }} />
+                                      <input
+                                        className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs"
+                                        inputMode="decimal"
+                                        value={itemQuantityInputMap[item.id] ?? toPtBrInputSafe(item.quantidade)}
+                                        onChange={(event) => setItemNumericInput('quantidade', item.id, event.target.value)}
+                                        onBlur={() => commitItemNumericInput('quantidade', item)}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.currentTarget.blur();
+                                          }
+                                        }}
+                                      />
                                     </div>
                                     <div>
                                       <label className="block text-[10px] text-muted mb-1">Preço de Referência</label>
-                                      <input className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs" inputMode="decimal" value={toPtBrInputSafe(item.valor_referencia)} onChange={(event) => {
-                                        const valorReferencia = parseCurrency(event.target.value.replace(/\./g, ','));
-                                        const quantidade = parseCurrency(item.quantidade);
-                                        const custoTotalItem = quantidade !== null && valorReferencia !== null ? Number((quantidade * valorReferencia).toFixed(2)) : null;
-                                        updateItem(item.id, { valor_referencia: valorReferencia, custo_total_item: custoTotalItem });
-                                      }} />
+                                      <input
+                                        className="h-7 w-full rounded-lg border border-border bg-card px-2 text-xs"
+                                        inputMode="decimal"
+                                        value={itemReferenceInputMap[item.id] ?? toPtBrInputSafe(item.valor_referencia)}
+                                        onChange={(event) => setItemNumericInput('valor_referencia', item.id, event.target.value)}
+                                        onBlur={() => commitItemNumericInput('valor_referencia', item)}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.currentTarget.blur();
+                                          }
+                                        }}
+                                      />
                                     </div>
                                     <div>
                                       <label className="block text-[10px] text-muted mb-1">Total do Item</label>

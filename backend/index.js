@@ -1044,7 +1044,9 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
     pncpCompraDetalheCache.set(cacheKey, { value, timestamp: Date.now() });
     return value;
   } catch (error) {
-    console.error(`Erro ao consultar detalhe PNCP (${cacheKey}):`, error.message);
+    if (error?.name !== 'AbortError') {
+      console.error(`Erro ao consultar detalhe PNCP (${cacheKey}):`, error.message);
+    }
     return null;
   }
 };
@@ -1167,7 +1169,9 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
         }
       }
     } catch (error) {
-      console.error(`Erro ao consultar itens PNCP (${cacheKey}):`, error.message);
+      if (error?.name !== 'AbortError') {
+        console.error(`Erro ao consultar itens PNCP (${cacheKey}):`, error.message);
+      }
     }
 
     const value = {
@@ -3137,14 +3141,16 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     } else {
       // Busca tradicional sem IA
       const hasEntityFilter = Boolean(orgaoFilterRaw || unidadeFilterRaw);
-      const effectiveSearchTerm = qText || (hasEntityFilter ? entityQuerySeed : '');
+      const effectiveSearchTerm = hasEntityFilter
+        ? (entityQuerySeed || qText)
+        : qText;
       const firstData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
       const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
       const totalFromApi = Number(firstData?.total) || 0;
       const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
 
       if (hasEntityFilter) {
-        const maxPages = 12;
+        const maxPages = 20;
         const collected = [...firstItems.map(item => ({ ...item, __matched_termo: effectiveSearchTerm }))];
         let page = 2;
 
@@ -3211,11 +3217,18 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     }
 
     const iaRealmenteUsada = shouldUseAi;
-    const precisaEnriquecer = iaRealmenteUsada || String(ordenacao || '').startsWith('valor_');
+    const hasLocalEntityFilter = Boolean(orgaoFilterRaw || unidadeFilterRaw);
+    const isValueSort = String(ordenacao || '').startsWith('valor_');
+    const precisaEnriquecer = iaRealmenteUsada
+      || (isValueSort && allItems.length <= 120 && (!hasLocalEntityFilter || qText.length >= 3));
 
     if (precisaEnriquecer && allItems.length > 0) {
-      allItems = await mapWithConcurrency(allItems, 6, async (item) => {
-        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, qText || entityQuerySeed);
+      const maxEnrichmentItems = hasLocalEntityFilter ? Math.min(20, allItems.length) : Math.min(Math.max(tamNum, 20), allItems.length);
+      allItems = await mapWithConcurrency(allItems, hasLocalEntityFilter ? 3 : 5, async (item, index) => {
+        if (index >= maxEnrichmentItems) {
+          return item;
+        }
+        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, qText);
         if (!enrichment) {
           return item;
         }
@@ -3238,7 +3251,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           return true;
         }
         const matchedTermo = item?.__matched_termo;
-        if (!matchedTermo || matchedTermo === q) {
+        if (!matchedTermo || matchedTermo === qText) {
           return true;
         }
         const contextOk = isPncpItemRelevantToQuery(item, qText);
@@ -3274,6 +3287,18 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           || unidadeNomeItem.includes(normalizedUnidadeTextFilter)
         );
         return matchesOrgao && matchesUnidade;
+      });
+    }
+
+    const normalizedQText = normalizeSearchText(qText).trim();
+    if (hasLocalEntityFilter && normalizedQText) {
+      const queryTokenCount = tokenizeSearchTerms(qText).length;
+      allItems = allItems.filter(item => {
+        const text = normalizeSearchText(`${item?.titulo || ''} ${item?.descricao || ''} ${item?.itens_resumo_texto || ''}`);
+        if (queryTokenCount < 2) {
+          return containsTermStrict(text, normalizedQText);
+        }
+        return containsTermStrict(text, normalizedQText) || isPncpItemRelevantToQuery(item, qText);
       });
     }
 
@@ -3313,12 +3338,12 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     }
 
     // Paginar resultados combinados (busca IA ou filtros locais por órgão/UASG)
-    const hasLocalEntityFilter = Boolean(normalizedOrgaoTextFilter || normalizedUnidadeTextFilter);
-    if (iaRealmenteUsada || hasLocalEntityFilter) {
+    const hasLocalFilterForPagination = Boolean(normalizedOrgaoTextFilter || normalizedUnidadeTextFilter);
+    if (iaRealmenteUsada || hasLocalFilterForPagination) {
       totalItems = allItems.length;
     }
     const startIndex = (paginaNum - 1) * tamNum;
-    const paginatedItems = (iaRealmenteUsada || hasLocalEntityFilter)
+    const paginatedItems = (iaRealmenteUsada || hasLocalFilterForPagination)
       ? allItems.slice(startIndex, startIndex + tamNum)
       : allItems;
 
