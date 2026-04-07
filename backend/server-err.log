@@ -1,0 +1,1 @@
+Erro ao consultar detalhe PNCP (88150495000186/2026/81): PNCP Consulta error 500: {"timestamp":"2026-04-07T22:30:11.923+00:00","status":500,"error":"Internal Server Error","message":"Failed to obtain JDBC Connection","path":"/pncp-consulta/v1/orgaos/88150495000186/compras/2026/81"}

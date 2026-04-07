@@ -12,7 +12,8 @@
       "Bash(timeout 10 node:*)",
       "Bash(node -e:*)",
       "Bash(findstr:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }
