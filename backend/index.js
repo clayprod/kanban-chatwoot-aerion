@@ -3590,7 +3590,7 @@ app.get('/api/licitacoes/overview/summary', async (req, res) => {
       `
         SELECT
           COUNT(*)::int AS opportunities_count,
-          COALESCE(SUM(valor_oportunidade), 0) AS total_value,
+          COALESCE(SUM(valor_oportunidade) FILTER (WHERE LOWER(COALESCE(status, '')) <> 'perdido' AND LOWER(COALESCE(fase, '')) NOT LIKE '%perdido%'), 0) AS total_value,
           COUNT(*) FILTER (WHERE status = 'ganho')::int AS won_count,
           COUNT(*) FILTER (WHERE status = 'perdido' OR status = 'nao_atendido')::int AS lost_count,
           COUNT(*) FILTER (WHERE ${getPrazoStatusSql()} = 'vence_48h')::int AS due_48h,

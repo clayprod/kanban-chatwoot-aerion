@@ -19,6 +19,49 @@ import './App.css';
 axios.defaults.withCredentials = true;
 
 const viewTabs = ['Overview', 'Board', 'Licitações', 'Processo'];
+const leadColumns = [
+  '1. Inbox (Novos)',
+  '2. Em Contato',
+  '3. Follow-up 1',
+  '4. Follow-up 2',
+  '5. Follow-up 3',
+  '6. Qualificado (SQL)',
+  '7. Agendamento Demo',
+  '8. Demo Realizada',
+  '9. Elaborando Proposta',
+  '10. Proposta Enviada',
+  '11. Em Negociação',
+  '12. Aprovação Interna',
+  '13. Fechado-Ganho',
+  '14. Fechado-Perdido',
+  '15. Pausado',
+  '16. Descartado',
+  '17. Nurturing',
+];
+const customerColumns = [
+  '18. Novos Clientes',
+  '19. Onboarding',
+  '20. Ativo - Novo',
+  '21. Ativo - Maduro (90d+)',
+  '22. Oportunidade Upsell',
+  '23. Oportunidade Recompra',
+  '24. Em Risco',
+  '25. Em Recompra',
+  '26. Inativo',
+];
+const licitacaoColumns = [
+  '1. Monitoramento de PCA',
+  '2. Mapeamento de Áreas',
+  '3. Apoio ao ETP / TR',
+  '4. Cotação de Preços',
+  '5. Gestão de ARPs',
+  '6. Monitoramento de Edital',
+  '7. Análise Técnica do Edital',
+  '8. Cadastro e Disputa',
+  '9. Gestão de Contrato/Ata',
+  '10. Perdido',
+  '11. Não Atendido',
+];
 
 const processBlueprint = {
   stats: [
@@ -366,30 +409,6 @@ const getLookupOptionLabel = (option) => {
   if (option.codigo && option.nome) return `${option.codigo} - ${option.nome}`;
   if (option.codigo && option.descricao) return `${option.codigo} - ${option.descricao}`;
   return String(option.nome || option.descricao || option.codigo || option.id || '');
-};
-
-const resolveLookupOption = (inputValue, options = [], candidates = []) => {
-  const text = String(inputValue || '').trim();
-  if (!text) return null;
-
-  const byTag = text.match(/#(\d+)/);
-  if (byTag?.[1]) {
-    return options.find(option => String(option.id) === byTag[1]) || null;
-  }
-
-  const normalizedInput = normalizeText(text);
-  const exact = options.find(option => {
-    const labels = [
-      getLookupOptionLabel(option),
-      ...candidates.map(field => option?.[field]).filter(Boolean),
-    ];
-    return labels.some(label => normalizeText(String(label)) === normalizedInput);
-  });
-
-  if (exact) return exact;
-
-  const prefix = options.find(option => normalizeText(getLookupOptionLabel(option)).startsWith(normalizedInput));
-  return prefix || null;
 };
 
 const resolveContactIdFromInput = (inputValue, contactList = []) => {
@@ -1161,7 +1180,6 @@ const FunnelChart = ({ data, maxValue, valueFormatter, barClassName }) => {
 function App() {
   const [contacts, setContacts] = useState([]);
   const [licitacaoOpportunities, setLicitacaoOpportunities] = useState([]);
-  const [licitacaoIntermediarios, setLicitacaoIntermediarios] = useState([]);
   const [licitacaoLoading, setLicitacaoLoading] = useState(false);
   const [licitacaoSearch, setLicitacaoSearch] = useState('');
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
@@ -1199,10 +1217,6 @@ function App() {
   const [selectedComments, setSelectedComments] = useState([]);
   const [newCommentText, setNewCommentText] = useState('');
   const [selectedOpportunityValueInput, setSelectedOpportunityValueInput] = useState('');
-  const [newIntermediarioForm, setNewIntermediarioForm] = useState({ razao_social: '', cnpj: '' });
-  const [comprasFilters, setComprasFilters] = useState({ tipo: 'material', codigoItemCatalogo: '', codigoUasg: '', estado: '' });
-  const [comprasResults, setComprasResults] = useState([]);
-  const [comprasLoading, setComprasLoading] = useState(false);
   // PNCP Search state
   const [pncpSearchFilters, setPncpSearchFilters] = useState({
     q: '',
@@ -1290,63 +1304,6 @@ function App() {
   useEffect(() => {
     setSelectedOpportunityValueInput(toPtBrDecimalInput(selectedOpportunity?.valor_oportunidade));
   }, [selectedOpportunity?.id, selectedOpportunity?.valor_oportunidade]);
-
-  useEffect(() => {
-    if (!selectedOpportunity || !hasItemsDrivingOpportunityValue) {
-      return;
-    }
-    const currentValue = parseCurrency(selectedOpportunity.valor_oportunidade);
-    const nextValue = Number(itemsParticipationTotal.toFixed(2));
-    setSelectedOpportunityValueInput(toPtBrDecimalInput(nextValue));
-    if (currentValue === nextValue) {
-      return;
-    }
-    updateSelectedOpportunity({ valor_oportunidade: nextValue });
-  }, [selectedOpportunity?.id, selectedOpportunity?.valor_oportunidade, hasItemsDrivingOpportunityValue, itemsParticipationTotal]);
-
-  const leadColumns = [
-    '1. Inbox (Novos)',
-    '2. Em Contato',
-    '3. Follow-up 1',
-    '4. Follow-up 2',
-    '5. Follow-up 3',
-    '6. Qualificado (SQL)',
-    '7. Agendamento Demo',
-    '8. Demo Realizada',
-    '9. Elaborando Proposta',
-    '10. Proposta Enviada',
-    '11. Em Negociação',
-    '12. Aprovação Interna',
-    '13. Fechado-Ganho',
-    '14. Fechado-Perdido',
-    '15. Pausado',
-    '16. Descartado',
-    '17. Nurturing',
-  ];
-  const customerColumns = [
-    '18. Novos Clientes',
-    '19. Onboarding',
-    '20. Ativo - Novo',
-    '21. Ativo - Maduro (90d+)',
-    '22. Oportunidade Upsell',
-    '23. Oportunidade Recompra',
-    '24. Em Risco',
-    '25. Em Recompra',
-    '26. Inativo',
-  ];
-  const licitacaoColumns = [
-    '1. Monitoramento de PCA',
-    '2. Mapeamento de Áreas',
-    '3. Apoio ao ETP / TR',
-    '4. Cotação de Preços',
-    '5. Gestão de ARPs',
-    '6. Monitoramento de Edital',
-    '7. Análise Técnica do Edital',
-    '8. Cadastro e Disputa',
-    '9. Gestão de Contrato/Ata',
-    '10. Perdido',
-    '11. Não Atendido',
-  ];
 
   useEffect(() => {
     let isMounted = true;
@@ -1583,7 +1540,6 @@ function App() {
     newOpportunityForm.item_tipo,
     newOpportunityForm.uasg_codigo,
     newOpportunityForm.codigo_item_catalogo,
-    comprasFilters.estado,
   ]);
 
   useEffect(() => {
@@ -2124,29 +2080,6 @@ function App() {
     }));
   };
 
-  const runComprasSearch = async () => {
-    setComprasLoading(true);
-    try {
-      const endpoint = comprasFilters.tipo === 'servico'
-        ? '/api/licitacoes/compras/precos/servico'
-        : '/api/licitacoes/compras/precos/material';
-      const response = await axios.get(endpoint, {
-        params: {
-          codigoItemCatalogo: comprasFilters.codigoItemCatalogo,
-          codigoUasg: comprasFilters.codigoUasg,
-          estado: comprasFilters.estado,
-          tamanhoPagina: 20,
-        },
-      });
-      setComprasResults(Array.isArray(response.data?.resultado) ? response.data.resultado : []);
-    } catch (error) {
-      console.error('Error searching Compras.gov data:', error);
-      setComprasResults([]);
-    } finally {
-      setComprasLoading(false);
-    }
-  };
-
   // Buscar editais/licitações no PNCP
   const runPncpSearch = async (page = 1) => {
     setPncpSearchLoading(true);
@@ -2318,7 +2251,7 @@ function App() {
     }
   };
 
-  const updateSelectedOpportunity = async (changes) => {
+  const updateSelectedOpportunity = useCallback(async (changes) => {
     if (!selectedOpportunity) {
       return;
     }
@@ -2333,7 +2266,20 @@ function App() {
     } catch (error) {
       console.error('Error updating licitacao opportunity:', error);
     }
-  };
+  }, [selectedOpportunity]);
+
+  useEffect(() => {
+    if (!selectedOpportunity || !hasItemsDrivingOpportunityValue) {
+      return;
+    }
+    const currentValue = parseCurrency(selectedOpportunity.valor_oportunidade);
+    const nextValue = Number(itemsParticipationTotal.toFixed(2));
+    setSelectedOpportunityValueInput(toPtBrDecimalInput(nextValue));
+    if (currentValue === nextValue) {
+      return;
+    }
+    updateSelectedOpportunity({ valor_oportunidade: nextValue });
+  }, [selectedOpportunity, hasItemsDrivingOpportunityValue, itemsParticipationTotal, updateSelectedOpportunity]);
 
   const deleteSelectedOpportunity = async () => {
     if (!selectedOpportunity) {
@@ -2610,19 +2556,6 @@ function App() {
       setSelectedLinkedContacts(prev => prev.filter(link => String(link.id) !== String(linkId)));
     } catch (error) {
       console.error('Error unlinking contact:', error);
-    }
-  };
-
-  const createIntermediario = async () => {
-    if (!newIntermediarioForm.razao_social.trim()) {
-      return;
-    }
-    try {
-      const response = await axios.post('/api/licitacoes/intermediarios', newIntermediarioForm);
-      setLicitacaoIntermediarios(prev => [...prev, response.data]);
-      setNewIntermediarioForm({ razao_social: '', cnpj: '' });
-    } catch (error) {
-      console.error('Error creating intermediario:', error);
     }
   };
 
