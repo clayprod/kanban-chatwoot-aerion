@@ -2574,7 +2574,7 @@ function App() {
         };
       })
       .sort((a, b) => a.stageNumber - b.stageNumber);
-  }, [overviewData.byStage, leadColumns, customerColumns]);
+  }, [overviewData.byStage]);
 
   const maxStageCount = useMemo(
     () => Math.max(1, ...stageFunnelData.map(item => item.count)),
