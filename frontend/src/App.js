@@ -501,6 +501,22 @@ const normalizeText = (value) => {
     .replace(/\p{Diacritic}/gu, '');
 };
 
+const normalizePncpControlId = (value) => String(value || '').trim().toLowerCase();
+
+const extractPncpPathKey = (value) => {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  try {
+    const parsed = new URL(text, 'https://pncp.gov.br');
+    const match = parsed.pathname.match(/\/(?:app\/editais|editais|compras)\/([^/?#]+\/[^/?#]+\/[^/?#]+)/i);
+    return String(match?.[1] || '').toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
 const contactRoleOptions = [
   'Intermediário',
   'Contato técnico',
@@ -990,16 +1006,21 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
   };
 
   const formattedValue = formatCurrency(opportunity.valor_oportunidade);
+  const pncpOpportunityUrl = opportunity.links_pncp || opportunity?.links?.pncp || null;
   const prazoClass = opportunity.prazo_status === 'atrasado'
     ? 'bg-status-danger/10 text-status-danger'
     : opportunity.prazo_status === 'vence_48h'
       ? 'bg-status-warning/10 text-status-warning'
-      : 'bg-primary/10 text-primary';
+      : opportunity.prazo_status === 'sem_data'
+        ? 'bg-muted/20 text-muted'
+        : 'bg-primary/10 text-primary';
   const prazoLabel = opportunity.prazo_status === 'atrasado'
     ? 'Prazo atrasado'
     : opportunity.prazo_status === 'vence_48h'
       ? 'Vence em 48h'
-      : 'Em dia';
+      : opportunity.prazo_status === 'sem_data'
+        ? 'Sem prazo definido'
+        : 'No prazo';
 
   const formatDateShort = (dateStr) => {
     if (!dateStr) return null;
@@ -1073,7 +1094,20 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
         </div>
       </div>
       <div className="mt-2">
-        <h4 className="text-sm font-semibold text-ink leading-snug truncate">{opportunity.titulo}</h4>
+        <h4 className="text-sm font-semibold text-ink leading-snug truncate">
+          {pncpOpportunityUrl ? (
+            <a
+              href={pncpOpportunityUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+              onClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {opportunity.titulo}
+            </a>
+          ) : opportunity.titulo}
+        </h4>
         <p className="text-xs text-muted mt-1 truncate">{opportunity.orgao_nome || 'Órgão não definido'}</p>
       </div>
       <div className="mt-2 space-y-1 text-[11px]">
@@ -1741,6 +1775,65 @@ function App() {
     if (!query) return catalogOptions.slice(0, 200);
     return catalogOptions.filter(option => normalizeText(`${option.codigo || ''} ${option.descricao || ''}`).includes(query)).slice(0, 200);
   }, [catalogOptions, catalogoLookupQuery]);
+
+  const pncpInPipelineIndex = useMemo(() => {
+    const controls = new Set();
+    const paths = new Set();
+    const ids = new Set();
+
+    licitacaoOpportunities.forEach(opportunity => {
+      const metadata = opportunity?.metadados || {};
+      const controlCandidates = [
+        opportunity?.numero_compra,
+        metadata?.pncp_numero_controle,
+      ];
+      controlCandidates.forEach(candidate => {
+        const normalized = normalizePncpControlId(candidate);
+        if (normalized) {
+          controls.add(normalized);
+        }
+      });
+
+      const idCandidate = String(metadata?.pncp_id || '').trim();
+      if (idCandidate) {
+        ids.add(idCandidate);
+      }
+
+      const pathCandidates = [
+        opportunity?.links_pncp,
+        opportunity?.links?.pncp,
+      ];
+      pathCandidates.forEach(candidate => {
+        const pathKey = extractPncpPathKey(candidate);
+        if (pathKey) {
+          paths.add(pathKey);
+        }
+      });
+    });
+
+    return { controls, paths, ids };
+  }, [licitacaoOpportunities]);
+
+  const visiblePncpResults = useMemo(() => {
+    return (pncpSearchResults.items || []).filter(item => {
+      if (pncpHiddenIds.includes(item.id)) {
+        return false;
+      }
+      const controlId = normalizePncpControlId(item.numero_controle_pncp);
+      if (controlId && pncpInPipelineIndex.controls.has(controlId)) {
+        return false;
+      }
+      const pathKey = extractPncpPathKey(item.url || item.item_url);
+      if (pathKey && pncpInPipelineIndex.paths.has(pathKey)) {
+        return false;
+      }
+      const itemId = String(item.id || '').trim();
+      if (itemId && pncpInPipelineIndex.ids.has(itemId)) {
+        return false;
+      }
+      return true;
+    });
+  }, [pncpSearchResults.items, pncpHiddenIds, pncpInPipelineIndex]);
 
   const filteredPncpModalidades = useMemo(() => {
     const query = normalizeText(pncpModalidadeQuery || '').trim();
@@ -3549,6 +3642,9 @@ function App() {
                         {pncpSearchResults.total > 0 && (
                           <>
                             <span>{pncpSearchResults.total.toLocaleString('pt-BR')} resultados</span>
+                            {visiblePncpResults.length !== pncpSearchResults.items.length && (
+                              <span>{visiblePncpResults.length.toLocaleString('pt-BR')} visíveis</span>
+                            )}
                             <span>Pág. {pncpSearchResults.pagina}/{pncpSearchResults.totalPaginas}</span>
                           </>
                         )}
@@ -3638,13 +3734,19 @@ function App() {
                     )}
 
                     {/* Resultados da busca PNCP */}
-                    {pncpSearchResults.items.filter(item => !pncpHiddenIds.includes(item.id)).length > 0 && !showPncpHidden && (
+                    {visiblePncpResults.length > 0 && !showPncpHidden && (
                       <div className="mt-4 space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-theme">
-                        {pncpSearchResults.items.filter(item => !pncpHiddenIds.includes(item.id)).map((item) => (
+                        {visiblePncpResults.map((item) => (
                           <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 transition-colors">
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 min-w-0">
-                                <h4 className="font-semibold text-sm text-ink truncate">{item.titulo}</h4>
+                                <h4 className="font-semibold text-sm text-ink truncate">
+                                  {item.url ? (
+                                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                                      {item.titulo}
+                                    </a>
+                                  ) : item.titulo}
+                                </h4>
                                 <p className="text-xs text-muted mt-1 line-clamp-2">{item.descricao}</p>
                                 <div className="flex flex-wrap gap-2 mt-2 text-xs">
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary">
@@ -3733,9 +3835,14 @@ function App() {
                     )}
 
                     {/* Mensagem quando não há resultados */}
-                    {!pncpSearchLoading && pncpSearchResults.items.length === 0 && pncpSearchResults.total === 0 && (
+                    {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total === 0 && (
                       <div className="mt-4 text-center text-sm text-muted py-8">
                         Use os filtros acima e clique em "Buscar" para encontrar licitações no PNCP.
+                      </div>
+                    )}
+                    {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total > 0 && (
+                      <div className="mt-4 text-center text-sm text-muted py-8">
+                        Todos os resultados desta página já estão no pipeline ou foram ocultados.
                       </div>
                     )}
                   </>
@@ -4419,7 +4526,7 @@ function App() {
                                   <div className="flex items-center gap-2">
                                     <span className={`text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
                                     <strong className="text-xs text-primary">#{item.numero_item || '-'}</strong>
-                                    <span className="text-xs truncate max-w-[200px]">{item.descricao || 'Sem descrição'}</span>
+                                    <span className={isExpanded ? 'text-xs whitespace-normal break-words flex-1' : 'text-xs truncate max-w-[200px]'}>{item.descricao || 'Sem descrição'}</span>
                                     <span className={`text-[11px] px-2 py-0.5 rounded-full ${checklistStatus.className}`}>{checklistStatus.counts}</span>
                                   </div>
                                   <div className="flex items-center gap-2">
