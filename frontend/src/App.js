@@ -1360,12 +1360,8 @@ function App() {
   const loadLicitacoes = useCallback(async () => {
     setLicitacaoLoading(true);
     try {
-      const [opportunitiesResponse, intermediariosResponse] = await Promise.all([
-        axios.get('/api/licitacoes/opportunities'),
-        axios.get('/api/licitacoes/intermediarios'),
-      ]);
+      const opportunitiesResponse = await axios.get('/api/licitacoes/opportunities');
       setLicitacaoOpportunities(opportunitiesResponse.data || []);
-      setLicitacaoIntermediarios(intermediariosResponse.data || []);
     } catch (error) {
       console.error('Error loading licitacoes:', error);
     } finally {
