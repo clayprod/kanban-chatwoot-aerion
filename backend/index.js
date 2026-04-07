@@ -2954,6 +2954,7 @@ app.get('/api/licitacoes/pncp/orgaos/:cnpj/compras', async (req, res) => {
 // ============ PNCP SEARCH ENDPOINTS (Busca de Editais/Contratações) ============
 
 // Função auxiliar para normalizar item da busca PNCP
+// A API PNCP pode retornar campos com nomes diferentes dependendo do endpoint
 const normalizePncpItem = (item, matchedTermo = null) => ({
   id: item.id,
   titulo: item.title || 'Sem título',
@@ -2963,14 +2964,14 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
   numero_sequencial: item.numero_sequencial,
   ano: item.ano,
   orgao: {
-    cnpj: item.orgao_cnpj,
-    nome: item.orgao_nome,
-    id: item.orgao_id,
+    cnpj: item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
+    nome: item.orgao_nome || item.nomeOrgao || item.orgaoNome || item.razaoSocialOrgao || '',
+    id: item.orgao_id || item.idOrgao || item.orgaoId || '',
   },
   unidade: {
-    codigo: item.unidade_codigo,
-    nome: item.unidade_nome,
-    id: item.unidade_id,
+    codigo: item.unidade_codigo || item.codigoUnidade || item.unidadeOrgaoCodigoUnidade || item.unidadeCodigo || '',
+    nome: item.unidade_nome || item.nomeUnidade || item.unidadeOrgaoNomeUnidade || item.unidadeNome || '',
+    id: item.unidade_id || item.idUnidade || item.unidadeId || '',
   },
   modalidade: {
     id: item.modalidade_licitacao_id,
@@ -3039,6 +3040,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     } = req.query;
 
     const qText = String(q || '').trim();
+    const normalizedStatus = normalizeSearchText(status);
+    const mappedStatus = normalizedStatus === 'suspenso' ? 'suspensa' : status;
     const orgaoFilterRaw = String(orgao_cnpj || '').trim();
     const unidadeFilterRaw = String(unidade_codigo || '').trim();
     const orgaoDigits = orgaoFilterRaw.replace(/\D/g, '');
@@ -3051,16 +3054,18 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     const baseParams = {
       tipos_documento,
-      status,
       pagina,
       tam,
     };
+    if (mappedStatus && String(mappedStatus) !== 'todos') {
+      baseParams.status = mappedStatus;
+    }
     if (modalidade_licitacao_id) baseParams.modalidade_licitacao_id = modalidade_licitacao_id;
     if (tipo_id) baseParams.tipo_id = tipo_id;
     if (uf) baseParams.uf = uf;
     if (esfera_id) baseParams.esfera_id = esfera_id;
-    if (orgao_cnpj) baseParams.orgao_cnpj = orgao_cnpj;
-    if (unidade_codigo) baseParams.unidade_codigo = unidade_codigo;
+    // Nota: orgao_cnpj e unidade_codigo não são suportados pela API /api/search/
+    // O filtro é aplicado client-side após receber os resultados
 
     let allItems = [];
     const tamNum = Math.max(1, Math.min(100, Number(tam) || 20));
@@ -3142,33 +3147,94 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       // Busca tradicional sem IA
       const hasEntityFilter = Boolean(orgaoFilterRaw || unidadeFilterRaw);
       const effectiveSearchTerm = hasEntityFilter
-        ? (entityQuerySeed || qText)
+        ? (qText || entityQuerySeed)
         : qText;
-      const firstData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
-      const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
-      const totalFromApi = Number(firstData?.total) || 0;
-      const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
 
-      if (hasEntityFilter) {
-        const maxPages = 20;
-        const collected = [...firstItems.map(item => ({ ...item, __matched_termo: effectiveSearchTerm }))];
+      // Função auxiliar para buscar múltiplas páginas
+      const fetchMultiplePages = async (searchTerm, maxPages) => {
+        const firstData = await fetchPncpSearch({ ...baseParams, q: searchTerm, pagina: 1, tam: tamNum });
+        const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
+        const totalFromApi = Number(firstData?.total) || 0;
+        const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
+        const collected = [...firstItems.map(item => ({ ...item, __matched_termo: searchTerm }))];
         let page = 2;
-
         while (page <= maxPages && ((page - 1) * apiPageSize) < totalFromApi) {
-          const nextData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: page, tam: tamNum });
+          const nextData = await fetchPncpSearch({ ...baseParams, q: searchTerm, pagina: page, tam: tamNum });
           const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
-          if (nextItems.length === 0) {
-            break;
-          }
-          collected.push(...nextItems.map(item => ({ ...item, __matched_termo: effectiveSearchTerm })));
-          if (nextItems.length < apiPageSize) {
-            break;
-          }
+          if (nextItems.length === 0) break;
+          collected.push(...nextItems.map(item => ({ ...item, __matched_termo: searchTerm })));
+          if (nextItems.length < apiPageSize) break;
           page += 1;
         }
+        return { items: collected, total: totalFromApi };
+      };
 
-        allItems = collected;
+      if (hasEntityFilter) {
+        // Quando há filtro de órgão/UASG, fazemos buscas paralelas:
+        // 1. Busca pelo termo principal (se houver)
+        // 2. Busca pelo código da entidade (UASG ou CNPJ)
+        // 3. Busca combinando termo + código da entidade (para melhorar cobertura)
+        // Isso garante que encontramos resultados mesmo que não estejam nas primeiras páginas do termo principal
+        const searchPromises = [];
+        const maxPagesPerSearch = 20;
+        console.log('[PNCP Search] Entity filter active:', { orgaoFilterRaw, unidadeFilterRaw, entityQuerySeed, qText });
+
+        // Busca pelo termo principal
+        if (qText) {
+          searchPromises.push(fetchMultiplePages(qText, maxPagesPerSearch));
+        }
+
+        // Busca pelo código da entidade (UASG tem prioridade)
+        if (entityQuerySeed && entityQuerySeed !== qText) {
+          searchPromises.push(fetchMultiplePages(entityQuerySeed, maxPagesPerSearch));
+        }
+
+        // Busca combinando termo + código da entidade (melhora cobertura)
+        if (qText && entityQuerySeed && entityQuerySeed !== qText) {
+          const combinedSearch = `${qText} ${entityQuerySeed}`;
+          searchPromises.push(fetchMultiplePages(combinedSearch, 10));
+        }
+
+        // Se não há nenhum termo, busca só pela entidade
+        if (searchPromises.length === 0 && entityQuerySeed) {
+          searchPromises.push(fetchMultiplePages(entityQuerySeed, maxPagesPerSearch));
+        }
+
+        const results = await Promise.all(searchPromises);
+
+        // Combinar resultados removendo duplicatas
+        const seenIds = new Set();
+        const combined = [];
+        for (const result of results) {
+          console.log(`[PNCP Search] Got ${result.items.length} items from search, total: ${result.total}`);
+          if (result.items.length > 0) {
+            const sample = result.items[0];
+            console.log('[PNCP Search] Sample item keys:', Object.keys(sample).join(', '));
+            console.log('[PNCP Search] Sample unidade data:', {
+              unidade_codigo: sample.unidade_codigo,
+              codigoUnidade: sample.codigoUnidade,
+              unidadeOrgaoCodigoUnidade: sample.unidadeOrgaoCodigoUnidade,
+              unidade_nome: sample.unidade_nome,
+              nomeUnidade: sample.nomeUnidade,
+            });
+          }
+          for (const item of result.items) {
+            const itemId = item.id || `${item.orgao_cnpj}-${item.ano}-${item.numero_sequencial}`;
+            if (!seenIds.has(itemId)) {
+              seenIds.add(itemId);
+              combined.push(item);
+            }
+          }
+        }
+        console.log(`[PNCP Search] Combined ${combined.length} unique items`);
+        allItems = combined;
       } else {
+        // Busca simples sem filtro de entidade - paginação direta da API
+        const firstData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
+        const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
+        const totalFromApi = Number(firstData?.total) || 0;
+        const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
+
         const startOffset = (paginaNum - 1) * tamNum;
         let apiPage = Math.floor(startOffset / apiPageSize) + 1;
         const offsetInFirstPage = startOffset % apiPageSize;
@@ -3269,6 +3335,15 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const normalizedOrgaoTextFilter = normalizeSearchText(rawOrgaoFilter).trim();
     const normalizedUnidadeTextFilter = normalizeSearchText(rawUnidadeFilter).trim();
     if (normalizedOrgaoTextFilter || normalizedUnidadeTextFilter) {
+      console.log(`[PNCP Filter] Before client-side filter: ${allItems.length} items`);
+      console.log(`[PNCP Filter] Filtering by orgao: "${normalizedOrgaoTextFilter}", unidade: "${normalizedUnidadeTextFilter}"`);
+      if (allItems.length > 0) {
+        console.log('[PNCP Filter] Sample normalized item:', {
+          orgao: allItems[0]?.orgao,
+          unidade: allItems[0]?.unidade,
+          titulo: allItems[0]?.titulo?.substring(0, 50),
+        });
+      }
       allItems = allItems.filter(item => {
         const orgaoCnpjItem = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
         const orgaoNomeItem = normalizeSearchText(item?.orgao?.nome || '').trim();
@@ -3286,20 +3361,21 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           || unidadeCodigoItem.includes(normalizedUnidadeTextFilter)
           || unidadeNomeItem.includes(normalizedUnidadeTextFilter)
         );
+
+        // Debug: log primeiro item que passa ou não passa o filtro
+        if (allItems.indexOf(item) < 3) {
+          console.log('[PNCP Filter] Item check:', {
+            titulo: item?.titulo?.substring(0, 40),
+            unidadeCodigo: unidadeCodigoItem,
+            unidadeNome: unidadeNomeItem,
+            matchesUnidade,
+            matchesOrgao,
+          });
+        }
+
         return matchesOrgao && matchesUnidade;
       });
-    }
-
-    const normalizedQText = normalizeSearchText(qText).trim();
-    if (hasLocalEntityFilter && normalizedQText) {
-      const queryTokenCount = tokenizeSearchTerms(qText).length;
-      allItems = allItems.filter(item => {
-        const text = normalizeSearchText(`${item?.titulo || ''} ${item?.descricao || ''} ${item?.itens_resumo_texto || ''}`);
-        if (queryTokenCount < 2) {
-          return containsTermStrict(text, normalizedQText);
-        }
-        return containsTermStrict(text, normalizedQText) || isPncpItemRelevantToQuery(item, qText);
-      });
+      console.log(`[PNCP Filter] After client-side filter: ${allItems.length} items`);
     }
 
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;

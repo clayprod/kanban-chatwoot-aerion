@@ -1360,9 +1360,6 @@ function App() {
   const [pncpUasgOptions, setPncpUasgOptions] = useState([]);
   const [pncpOrgaoLookupLoading, setPncpOrgaoLookupLoading] = useState(false);
   const [pncpUasgLookupLoading, setPncpUasgLookupLoading] = useState(false);
-  const [pncpModalidadeQuery, setPncpModalidadeQuery] = useState('');
-  const [pncpTipoQuery, setPncpTipoQuery] = useState('');
-  const [pncpModoQuery, setPncpModoQuery] = useState('');
   const [pncpSearchExpanded, setPncpSearchExpanded] = useState(true);
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
@@ -1724,27 +1721,6 @@ function App() {
   }, [showNewOpportunityForm, newOpportunityForm.codigo_item_catalogo, catalogOptions]);
 
   useEffect(() => {
-    const selected = modalidadeOptions.find(option => String(option.id) === String(pncpSearchFilters.modalidade_licitacao_id));
-    if (selected) {
-      setPncpModalidadeQuery(getLookupOptionLabel(selected));
-    }
-  }, [pncpSearchFilters.modalidade_licitacao_id, modalidadeOptions]);
-
-  useEffect(() => {
-    const selected = tipoInstrumentoOptions.find(option => String(option.id) === String(pncpSearchFilters.tipo_id));
-    if (selected) {
-      setPncpTipoQuery(getLookupOptionLabel(selected));
-    }
-  }, [pncpSearchFilters.tipo_id, tipoInstrumentoOptions]);
-
-  useEffect(() => {
-    const selected = modoDisputaOptions.find(option => String(option.id) === String(pncpSearchFilters.modo_disputa_id));
-    if (selected) {
-      setPncpModoQuery(getLookupOptionLabel(selected));
-    }
-  }, [pncpSearchFilters.modo_disputa_id, modoDisputaOptions]);
-
-  useEffect(() => {
     if (!authStatus.authenticated || activeView !== 'Licitações') {
       return;
     }
@@ -2100,24 +2076,6 @@ function App() {
       return true;
     });
   }, [pncpSearchResults.items, pncpHiddenIds, pncpInPipelineIndex]);
-
-  const filteredPncpModalidades = useMemo(() => {
-    const query = normalizeText(pncpModalidadeQuery || '').trim();
-    if (!query) return modalidadeOptions;
-    return modalidadeOptions.filter(option => normalizeText(`${option.nome || ''} ${option.id || ''}`).includes(query));
-  }, [modalidadeOptions, pncpModalidadeQuery]);
-
-  const filteredPncpTipos = useMemo(() => {
-    const query = normalizeText(pncpTipoQuery || '').trim();
-    if (!query) return tipoInstrumentoOptions;
-    return tipoInstrumentoOptions.filter(option => normalizeText(`${option.nome || ''} ${option.id || ''}`).includes(query));
-  }, [tipoInstrumentoOptions, pncpTipoQuery]);
-
-  const filteredPncpModos = useMemo(() => {
-    const query = normalizeText(pncpModoQuery || '').trim();
-    if (!query) return modoDisputaOptions;
-    return modoDisputaOptions.filter(option => normalizeText(`${option.nome || ''} ${option.id || ''}`).includes(query));
-  }, [modoDisputaOptions, pncpModoQuery]);
 
   const agentOptions = useMemo(() => {
     const names = contacts

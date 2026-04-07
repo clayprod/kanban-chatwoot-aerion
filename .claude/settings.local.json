@@ -11,7 +11,8 @@
       "Bash(timeout 15 node:*)",
       "Bash(timeout 10 node:*)",
       "Bash(node -e:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }
