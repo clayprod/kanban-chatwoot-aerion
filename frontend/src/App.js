@@ -57,11 +57,14 @@ const licitacaoColumns = [
   '5. Gestão de ARPs',
   '6. Monitoramento de Edital',
   '7. Análise Técnica do Edital',
-  '8. Cadastro e Disputa',
-  '9. Gestão de Contrato/Ata',
-  '10. Perdido',
-  '11. Não Atendido',
-  '12. Descartado',
+  '8. Impugnação',
+  '9. Cadastro e Disputa',
+  '10. Recurso',
+  '11. Contrarazão',
+  '12. Gestão de Contrato/Ata',
+  '13. Perdido',
+  '14. Não Atendido',
+  '15. Descartado',
 ];
 
 const processBlueprint = {
