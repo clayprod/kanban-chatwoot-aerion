@@ -201,32 +201,49 @@ const LICITACAO_FASES = [
   '5. Gestão de ARPs',
   '6. Monitoramento de Edital',
   '7. Análise Técnica do Edital',
-  '8. Cadastro e Disputa',
-  '9. Gestão de Contrato/Ata',
-  '10. Perdido',
-  '11. Não Atendido',
-  '12. Descartado',
+  '8. Impugnação',
+  '9. Cadastro e Disputa',
+  '10. Recurso',
+  '11. Contrarazão',
+  '12. Gestão de Contrato/Ata',
+  '13. Perdido',
+  '14. Não Atendido',
+  '15. Descartado',
 ];
 const LICITACAO_FASES_LEGACY_MAP = {
   '2. Mapeamento de Areas': '2. Mapeamento de Áreas',
   '4. Cotacao de Precos': '4. Cotação de Preços',
   '5. Gestao de ARPs': '5. Gestão de ARPs',
-  '7. Cadastro e Disputa': '8. Cadastro e Disputa',
-  '8. Gestão de Contrato/Ata': '9. Gestão de Contrato/Ata',
-  '8. Gestao de Contrato/Ata': '9. Gestão de Contrato/Ata',
-  '9. Perdido': '10. Perdido',
-  '10. Não Atendido': '11. Não Atendido',
-  '10. Nao Atendido': '11. Não Atendido',
+  '7. Cadastro e Disputa': '9. Cadastro e Disputa',
+  '8. Cadastro e Disputa': '9. Cadastro e Disputa',
+  '8. Gestão de Contrato/Ata': '12. Gestão de Contrato/Ata',
+  '8. Gestao de Contrato/Ata': '12. Gestão de Contrato/Ata',
+  '9. Gestão de Contrato/Ata': '12. Gestão de Contrato/Ata',
+  '9. Gestao de Contrato/Ata': '12. Gestão de Contrato/Ata',
+  '9. Perdido': '13. Perdido',
+  '10. Perdido': '13. Perdido',
+  '10. Não Atendido': '14. Não Atendido',
+  '10. Nao Atendido': '14. Não Atendido',
+  '11. Não Atendido': '14. Não Atendido',
+  '11. Nao Atendido': '14. Não Atendido',
+  '12. Descartado': '15. Descartado',
 };
 
 const migrateLicitacaoFases = async () => {
   const migrations = [
-    ['7. Cadastro e Disputa', '8. Cadastro e Disputa'],
-    ['8. Gestão de Contrato/Ata', '9. Gestão de Contrato/Ata'],
-    ['8. Gestao de Contrato/Ata', '9. Gestão de Contrato/Ata'],
-    ['9. Perdido', '10. Perdido'],
-    ['10. Não Atendido', '11. Não Atendido'],
-    ['10. Nao Atendido', '11. Não Atendido'],
+    ['7. Cadastro e Disputa', '9. Cadastro e Disputa'],
+    ['8. Cadastro e Disputa', '9. Cadastro e Disputa'],
+    ['8. Gestão de Contrato/Ata', '12. Gestão de Contrato/Ata'],
+    ['8. Gestao de Contrato/Ata', '12. Gestão de Contrato/Ata'],
+    ['9. Gestão de Contrato/Ata', '12. Gestão de Contrato/Ata'],
+    ['9. Gestao de Contrato/Ata', '12. Gestão de Contrato/Ata'],
+    ['9. Perdido', '13. Perdido'],
+    ['10. Perdido', '13. Perdido'],
+    ['10. Não Atendido', '14. Não Atendido'],
+    ['10. Nao Atendido', '14. Não Atendido'],
+    ['11. Não Atendido', '14. Não Atendido'],
+    ['11. Nao Atendido', '14. Não Atendido'],
+    ['12. Descartado', '15. Descartado'],
   ];
   for (const [from, to] of migrations) {
     await pool.query(
@@ -3080,6 +3097,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     let termosUsados = [qText || entityQuerySeed || ''];
     let termosNegativos = [];
     let fonteIA = null;
+    let iaPositivos = []; // Sinônimos positivos da IA — usados também no filtro local do endpoint de contratações
     const iaForcada = usar_ia === 'true';
     const shouldUseAi = iaForcada && qText && qText.length >= 3 && !isSpecificNoticeIdentifierQuery(qText);
 
@@ -3089,9 +3107,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       const termosResult = await getTermosCorrelatos(qText);
       fonteIA = termosResult.fonte;
       termosNegativos = termosResult.negativos || [];
+      iaPositivos = (termosResult.positivos || termosResult.correlatos || []).slice(0, 8);
 
       // Usar até 8 termos correlatos (além do original) para ampliar cobertura
-      let termosParaBuscar = [qText, ...(termosResult.positivos || termosResult.correlatos || []).slice(0, 8)];
+      let termosParaBuscar = [qText, ...iaPositivos];
 
       // Se há filtro de UASG/órgão, adicionar buscas combinadas para melhorar cobertura
       const hasEntityFilterAI = Boolean(orgaoFilterRaw || unidadeFilterRaw);
@@ -3195,7 +3214,6 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         // 2. Busca pelo código da entidade (UASG ou CNPJ)
         // 3. Busca combinando termo + código da entidade (para melhorar cobertura)
         // Isso garante que encontramos resultados mesmo que não estejam nas primeiras páginas do termo principal
-        const searchPromises = [];
         const maxPagesPerSearch = 20;
         console.log('[PNCP Search] Entity filter active:', { orgaoFilterRaw, unidadeFilterRaw, entityQuerySeed, qText, status: mappedStatus });
 
@@ -3305,6 +3323,110 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
         allItems = fetched.slice(0, tamNum).map(item => ({ ...item, __matched_termo: effectiveSearchTerm }));
         totalItems = totalFromApi;
+      }
+    }
+
+    // BUSCA SUPLEMENTAR: quando UASG está ativo, consultar /v1/contratacoes/publicacao
+    // que suporta codigoUnidadeOrgao nativamente. A API /api/search/ não indexa UASG
+    // como campo filtrável e pode não retornar itens por diferença de terminologia
+    // (ex: busca "drone" não encontra "aeronaves remotamente pilotadas").
+    if (entityQuerySeed && /^\d{5,6}$/.test(entityQuerySeed)) {
+      try {
+        const hoje = new Date();
+        const doisAnosAtras = new Date(hoje);
+        doisAnosAtras.setFullYear(hoje.getFullYear() - 2);
+        const seisM = new Date(hoje);
+        seisM.setMonth(hoje.getMonth() + 6);
+        const fmtDate = (d) => d.toISOString().split('T')[0].replace(/-/g, '');
+
+        const consultaPageSize = 50;
+        const maxConsultaPages = 10;
+        let consultaPage = 1;
+        let consultaHasMore = true;
+        const consultaRawItems = [];
+
+        while (consultaHasMore && consultaPage <= maxConsultaPages) {
+          const data = await fetchPncp('v1/contratacoes/publicacao', {
+            codigoUnidadeOrgao: entityQuerySeed,
+            dataInicial: fmtDate(doisAnosAtras),
+            dataFinal: fmtDate(seisM),
+            pagina: consultaPage,
+            tamanhoPagina: consultaPageSize,
+          });
+          const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+          if (items.length === 0) break;
+          consultaRawItems.push(...items);
+          consultaHasMore = items.length >= consultaPageSize;
+          consultaPage++;
+        }
+
+        console.log(`[PNCP Contratações UASG ${entityQuerySeed}] ${consultaRawItems.length} itens encontrados`);
+
+        if (consultaRawItems.length > 0) {
+          // Termos para filtro local: qText + sinônimos da IA, excluindo termos puramente numéricos
+          const textTermsForFilter = [qText, ...iaPositivos].filter(t => t && t.length >= 3 && !/^\d+$/.test(t.trim()));
+          // IDs já presentes em allItems para deduplicação
+          const seenIdsSet = new Set(allItems.map(it => String(it.id || it.numero_controle_pncp || '')).filter(Boolean));
+
+          let addedCount = 0;
+          for (const item of consultaRawItems) {
+            const itemId = item.numeroControlePNCP
+              || `${item.cnpjOrgao || item.orgaoEntidade?.cnpj || ''}-${item.anoCompra}-${item.sequencialCompra}`;
+            if (seenIdsSet.has(itemId)) continue;
+
+            // Filtro de status local (quando status !== 'todos')
+            if (mappedStatus && mappedStatus !== 'todos') {
+              const statusNorm = normalizeSearchText(mappedStatus.replace(/_/g, ' '));
+              const itemStatus = normalizeSearchText(item.situacaoCompraDescricao || '');
+              if (!itemStatus.includes(statusNorm)) continue;
+            }
+
+            // Filtro de texto local: ao menos um token de qualquer termo deve aparecer no objeto
+            if (textTermsForFilter.length > 0) {
+              const text = normalizeSearchText(`${item.objetoCompra || ''} ${item.informacaoComplementar || ''}`);
+              const matchesText = textTermsForFilter.some(term => {
+                const tokens = normalizeSearchText(term).split(/\s+/).filter(t => t.length >= 3);
+                return tokens.length > 0 && tokens.some(t => text.includes(t));
+              });
+              if (!matchesText) continue;
+            }
+
+            seenIdsSet.add(itemId);
+            addedCount++;
+            allItems.push({
+              id: itemId,
+              title: item.objetoCompra || '',
+              description: item.objetoCompra || '',
+              item_url: item.linkSistemaOrigem || null,
+              numero_controle_pncp: item.numeroControlePNCP,
+              numero_sequencial: item.sequencialCompra,
+              ano: item.anoCompra,
+              orgao_cnpj: item.cnpjOrgao || item.orgaoEntidade?.cnpj || '',
+              orgao_nome: item.nomeOrgao || item.orgaoEntidade?.razaoSocial || '',
+              unidade_codigo: item.codigoUnidadeOrgao || item.unidadeOrgao?.codigoUnidade || '',
+              unidade_nome: item.nomeUnidadeOrgao || item.unidadeOrgao?.nomeUnidade || '',
+              modalidade_licitacao_id: item.modalidadeId,
+              modalidade_licitacao_nome: item.modalidadeNome,
+              situacao_id: item.situacaoCompraId,
+              situacao_nome: item.situacaoCompraDescricao,
+              data_publicacao_pncp: item.dataPublicacaoPncp,
+              data_atualizacao_pncp: item.dataAtualizacaoPncp,
+              valor_global: item.valorTotalEstimado,
+              valor_total_estimado: item.valorTotalEstimado,
+              valor_total_homologado: item.valorTotalHomologado,
+              uf: item.unidadeOrgao?.ufSigla || item.ufSigla || '',
+              municipio_nome: item.unidadeOrgao?.municipioNome || item.municipioNome || '',
+              __matched_termo: qText || entityQuerySeed,
+              __from_consulta_uasg: true,
+            });
+          }
+
+          if (addedCount > 0) {
+            console.log(`[PNCP Contratações UASG ${entityQuerySeed}] +${addedCount} itens adicionados. Total: ${allItems.length}`);
+          }
+        }
+      } catch (err) {
+        console.error(`[PNCP Contratações UASG] Erro ao buscar UASG ${entityQuerySeed}:`, err.message);
       }
     }
 
