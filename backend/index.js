@@ -3416,6 +3416,9 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
               valor_total_homologado: item.valorTotalHomologado,
               uf: item.unidadeOrgao?.ufSigla || item.ufSigla || '',
               municipio_nome: item.unidadeOrgao?.municipioNome || item.municipioNome || '',
+              // Datas de abertura/encerramento de propostas (nomes possíveis no PNCP)
+              data_inicio_vigencia: item.dataAberturaPropostas || item.dataInicioPropostas || item.dataInicioVigencia || null,
+              data_fim_vigencia: item.dataEncerramentoProposta || item.dataEncerramentoPropostas || item.dataFimPropostas || item.dataFimVigencia || null,
               __matched_termo: qText || entityQuerySeed,
               __from_consulta_uasg: true,
             });

@@ -29,7 +29,8 @@
       "Bash(python3 -c \" import json, sys d = json.load\\(sys.stdin\\) print\\('Total:', d.get\\('total'\\), 'Items:', len\\(d.get\\('items', []\\)\\)\\) for i in d.get\\('items', []\\)[:5]: print\\('-', i.get\\('titulo',''\\)[:80], '| UASG:', i.get\\('unidade',{}\\).get\\('codigo',''\\)\\) \")",
       "Bash(python3 -c \" import json, sys d = json.load\\(sys.stdin\\) for i in d.get\\('items', []\\): if '90035' in i.get\\('titulo',''\\): print\\(json.dumps\\(i, indent=2, ensure_ascii=False\\)\\) break \")",
       "Bash(taskkill //F //IM node.exe)",
-      "Bash(taskkill //PID 30808 //F)"
+      "Bash(taskkill //PID 30808 //F)",
+      "Bash(taskkill //PID 13116 //F)"
     ]
   }
 }

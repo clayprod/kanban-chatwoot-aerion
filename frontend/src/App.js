@@ -454,14 +454,6 @@ const getContactLabel = (contact) => {
   return `${name} (#${contact?.id || ''})`;
 };
 
-const getLookupOptionLabel = (option) => {
-  if (!option) return '';
-  if (option.nome && option.id) return `${option.nome} (#${option.id})`;
-  if (option.nome && option.cnpj) return `${option.nome} - ${option.cnpj}`;
-  if (option.codigo && option.nome) return `${option.codigo} - ${option.nome}`;
-  if (option.codigo && option.descricao) return `${option.codigo} - ${option.descricao}`;
-  return String(option.nome || option.descricao || option.codigo || option.id || '');
-};
 
 const resolveContactIdFromInput = (inputValue, contactList = []) => {
   const text = String(inputValue || '').trim();
@@ -2543,6 +2535,11 @@ function App() {
     try {
       const dataSessao = item.data_sessao || item.data_inicio_vigencia || item.data_fim_vigencia;
       const prazoProposta = item.data_envio_proposta_limite || item.data_fim_vigencia;
+      // Mapear situação PNCP para status da oportunidade
+      const pncpSituacaoNome = (item.situacao?.nome || '').toLowerCase();
+      const statusFromPncp = pncpSituacaoNome.includes('suspens') ? 'suspenso'
+        : (pncpSituacaoNome.includes('revogad') || pncpSituacaoNome.includes('anuladoo') || pncpSituacaoNome.includes('cancel')) ? 'cancelado'
+        : 'ativo';
       const queryText = normalizeText(pncpSearchFilters.q || '').trim();
       const shouldImportAllItems = queryText.length < 3;
 
@@ -2559,6 +2556,7 @@ function App() {
 
       setNewOpportunityForm(prev => ({
         ...prev,
+        status: statusFromPncp,
         titulo: item.titulo || `${item.tipo?.nome || 'Edital'} - ${item.orgao?.nome || 'Órgão'}`,
         orgao_nome: item.orgao?.nome || '',
         orgao_cnpj: item.orgao?.cnpj || '',
