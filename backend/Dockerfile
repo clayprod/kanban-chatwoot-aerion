@@ -1,20 +1,19 @@
-# Use a Node.js runtime as a base image
 FROM node:18-alpine
 
-# Set the working directory in the container
+# Install Python3 + pip for rfb_import.py
+RUN apk add --no-cache python3 py3-pip
+
 WORKDIR /app
 
-# Copy package.json and package-lock.json to the working directory
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
-# Copy the rest of the application code
+# Install Python dependencies for RFB import script
+COPY scripts/requirements.txt ./scripts/
+RUN pip3 install --break-system-packages --no-cache-dir -r scripts/requirements.txt
+
 COPY . .
 
-# Expose the port the app runs on
 EXPOSE 3001
 
-# Command to run the application
 CMD ["node", "index.js"]

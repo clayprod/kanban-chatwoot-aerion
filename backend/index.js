@@ -5,6 +5,7 @@ const cron = require('node-cron');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 require('dotenv').config();
 
@@ -4010,9 +4011,988 @@ app.put('/api/contacts/:id', async (req, res) => {
 });
 
 
+// ============================================================
+// BUSCA LEADS — CNPJ
+// ============================================================
+
+const CNPJ_CACHE_TABLE = 'cnpj_cache';
+
+const createCNPJCacheTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${CNPJ_CACHE_TABLE} (
+      cnpj CHAR(14) PRIMARY KEY,
+      data JSONB NOT NULL,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+};
+
+const normalizeCNPJ = (value) => String(value || '').replace(/[^\d]/g, '').slice(-14).padStart(14, '0');
+
+const normalizeCNPJData = (raw) => {
+  if (!raw) return null;
+
+  // publica.cnpj.ws — formato aninhado com chave "estabelecimento"
+  if (raw.estabelecimento) {
+    const e = raw.estabelecimento;
+    const phone1 = e.ddd1 && e.telefone1 ? `(${e.ddd1}) ${e.telefone1}` : '';
+    const phone2 = e.ddd2 && e.telefone2 ? `(${e.ddd2}) ${e.telefone2}` : '';
+    return {
+      cnpj: e.cnpj || '',
+      razao_social: raw.razao_social || '',
+      nome_fantasia: e.nome_fantasia || '',
+      descricao_situacao_cadastral: e.situacao_cadastral || '',
+      data_situacao_cadastral: e.data_situacao_cadastral || '',
+      data_inicio_atividade: e.data_inicio_atividade || '',
+      cnae_fiscal: e.atividade_principal?.id || '',
+      cnae_fiscal_descricao: e.atividade_principal?.descricao || '',
+      cnaes_secundarios: (e.atividades_secundarias || []).map(a => ({ codigo: a.id, descricao: a.descricao })),
+      logradouro: [e.tipo_logradouro, e.logradouro].filter(Boolean).join(' '),
+      numero: e.numero || '',
+      complemento: e.complemento || '',
+      bairro: e.bairro || '',
+      cep: e.cep || '',
+      municipio: e.cidade?.nome || '',
+      uf: e.estado?.sigla || '',
+      ddd_telefone_1: phone1,
+      ddd_telefone_2: phone2,
+      email: e.email || '',
+      capital_social: Number(raw.capital_social) || 0,
+      descricao_porte: raw.porte?.descricao || raw.porte?.id || '',
+      natureza_juridica: raw.natureza_juridica?.descricao || '',
+      opcao_pelo_simples: raw.simples?.simples || false,
+      opcao_pelo_mei: raw.simples?.mei || false,
+      tipo: e.tipo || 'Matriz',
+      qsa: (raw.socios || []).map(s => ({
+        nome_socio: s.nome || '',
+        qualificacao: s.qualificacao_socio?.descricao || '',
+        faixa_etaria: s.faixa_etaria || '',
+        data_entrada_sociedade: s.data_entrada || '',
+      })),
+      _source: 'cnpj_ws',
+    };
+  }
+
+  // BrasilAPI / formato flat
+  return {
+    cnpj: raw.cnpj || '',
+    razao_social: raw.razao_social || '',
+    nome_fantasia: raw.nome_fantasia || '',
+    descricao_situacao_cadastral: raw.descricao_situacao_cadastral || String(raw.situacao_cadastral || ''),
+    data_situacao_cadastral: raw.data_situacao_cadastral || '',
+    data_inicio_atividade: raw.data_inicio_atividade || '',
+    cnae_fiscal: raw.cnae_fiscal || '',
+    cnae_fiscal_descricao: raw.cnae_fiscal_descricao || '',
+    cnaes_secundarios: (raw.cnaes_secundarios || []).map(a => ({ codigo: a.codigo, descricao: a.descricao })),
+    logradouro: raw.logradouro || '',
+    numero: raw.numero || '',
+    complemento: raw.complemento || '',
+    bairro: raw.bairro || '',
+    cep: raw.cep || '',
+    municipio: raw.municipio || '',
+    uf: raw.uf || '',
+    ddd_telefone_1: raw.ddd_telefone_1 || '',
+    ddd_telefone_2: raw.ddd_telefone_2 || '',
+    email: raw.email || '',
+    capital_social: Number(raw.capital_social) || 0,
+    descricao_porte: raw.descricao_porte || '',
+    natureza_juridica: raw.natureza_juridica_descricao || '',
+    opcao_pelo_simples: raw.opcao_pelo_simples || false,
+    opcao_pelo_mei: raw.opcao_pelo_mei || false,
+    tipo: raw.descricao_matriz_filial || 'Matriz',
+    qsa: (raw.qsa || []).map(s => ({
+      nome_socio: s.nome_socio || '',
+      qualificacao: s.qualificacao_socio_descricao || '',
+      faixa_etaria: s.faixa_etaria || '',
+      data_entrada_sociedade: s.data_entrada_sociedade || '',
+    })),
+    _source: 'brasilapi',
+  };
+};
+
+const fetchCNPJFromAPI = async (cnpj) => {
+  const clean = normalizeCNPJ(cnpj);
+  if (!clean || clean.replace(/0/g, '').length === 0) throw new Error('CNPJ inválido');
+
+  // Checar cache (7 dias)
+  const cached = await pool.query(
+    `SELECT data FROM ${CNPJ_CACHE_TABLE} WHERE cnpj = $1 AND fetched_at > NOW() - INTERVAL '7 days'`,
+    [clean]
+  );
+  if (cached.rows.length > 0) return cached.rows[0].data;
+
+  let raw = null;
+  let lastError = null;
+
+  // Tentar publica.cnpj.ws primeiro (tem email)
+  try {
+    const res = await fetch(`https://publica.cnpj.ws/cnpj/${clean}`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'kanban-dashboard/1.0' },
+    });
+    if (res.ok) raw = await res.json();
+    else lastError = `cnpj.ws: ${res.status}`;
+  } catch (e) {
+    lastError = e.message;
+  }
+
+  // Fallback: BrasilAPI
+  if (!raw) {
+    try {
+      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${clean}`, {
+        headers: { Accept: 'application/json', 'User-Agent': 'kanban-dashboard/1.0' },
+      });
+      if (res.ok) raw = await res.json();
+      else lastError = `brasilapi: ${res.status}`;
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+
+  if (!raw) throw new Error(lastError || 'Falha ao consultar CNPJ');
+
+  const normalized = normalizeCNPJData(raw);
+
+  await pool.query(
+    `INSERT INTO ${CNPJ_CACHE_TABLE} (cnpj, data) VALUES ($1, $2)
+     ON CONFLICT (cnpj) DO UPDATE SET data = $2, fetched_at = NOW()`,
+    [clean, JSON.stringify(normalized)]
+  ).catch(() => {}); // falha de cache não bloqueia
+
+  return normalized;
+};
+
+// Token OAuth2 para conecta.gov.br (busca por nome)
+let _conectaToken = null;
+let _conectaTokenExp = 0;
+
+const getConectaToken = async () => {
+  if (_conectaToken && Date.now() < _conectaTokenExp) return _conectaToken;
+  const clientId = process.env.CNPJ_CLIENT_ID;
+  const clientSecret = process.env.CNPJ_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  try {
+    const creds = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const res = await fetch('https://h-apigateway.conecta.gov.br/oauth2/jwt-token', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=client_credentials',
+    });
+    if (!res.ok) return null;
+    const td = await res.json();
+    _conectaToken = td.access_token;
+    _conectaTokenExp = Date.now() + Math.max(0, (td.expires_in || 3600) - 120) * 1000;
+    return _conectaToken;
+  } catch {
+    return null;
+  }
+};
+
+// GET /api/leads/cnpj/:cnpj
+app.get('/api/leads/cnpj/:cnpj', async (req, res) => {
+  try {
+    const data = await fetchCNPJFromAPI(req.params.cnpj);
+    res.json(data);
+  } catch (err) {
+    console.error('Error fetching CNPJ:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/leads/cnpj/batch  body: { cnpjs: string[] }
+app.post('/api/leads/cnpj/batch', async (req, res) => {
+  const { cnpjs } = req.body;
+  if (!Array.isArray(cnpjs) || cnpjs.length === 0) {
+    return res.status(400).json({ error: 'Forneça um array de CNPJs' });
+  }
+  const limited = cnpjs.slice(0, 50);
+  const results = [];
+  for (let i = 0; i < limited.length; i++) {
+    const cnpj = limited[i];
+    try {
+      const data = await fetchCNPJFromAPI(cnpj);
+      results.push({ cnpj: normalizeCNPJ(cnpj), success: true, data });
+    } catch (err) {
+      results.push({ cnpj: normalizeCNPJ(cnpj), success: false, error: err.message });
+    }
+    if (i < limited.length - 1) await new Promise(r => setTimeout(r, 300));
+  }
+  res.json(results);
+});
+
+// GET /api/leads/search?q=...&tipo=cnpj|razao_social|nome_fantasia|socio&uf=...
+app.get('/api/leads/search', async (req, res) => {
+  const { q, tipo = 'razao_social', uf } = req.query;
+  if (!q) return res.status(400).json({ error: 'Parâmetro q é obrigatório' });
+
+  // Se parece CNPJ (8+ dígitos), faz lookup direto
+  const digits = q.replace(/[^\d]/g, '');
+  if (digits.length >= 8) {
+    try {
+      const data = await fetchCNPJFromAPI(q);
+      return res.json({ results: [data], total: 1, source: 'cnpj_direto' });
+    } catch (err) {
+      // Se falhar busca direta e é texto misto, cai no search por nome
+      if (digits.length === 14) return res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Busca por nome via conecta.gov.br
+  const token = await getConectaToken();
+  if (!token) {
+    return res.json({
+      results: [],
+      total: 0,
+      source: 'none',
+      requires_config: true,
+      message: 'Para pesquisa por razão social, nome fantasia ou sócio, configure CNPJ_CLIENT_ID e CNPJ_CLIENT_SECRET no .env do servidor (API conecta.gov.br).',
+    });
+  }
+
+  try {
+    const tipoPath = tipo === 'nome_fantasia' ? 'nome-fantasia' : tipo === 'socio' ? 'socio' : 'razao-social';
+    const url = `https://h-apigateway.conecta.gov.br/consulta-cnpj/v2/${tipoPath}/${encodeURIComponent(q)}`;
+    const searchRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (!searchRes.ok) {
+      const txt = await searchRes.text().catch(() => '');
+      return res.status(searchRes.status).json({ error: `Erro na API de busca: ${searchRes.status} — ${txt.slice(0, 200)}` });
+    }
+    const data = await searchRes.json();
+    let results = Array.isArray(data) ? data : (data.estabelecimentos || data.cnpjs || data.results || (data.cnpj ? [data] : []));
+    results = results.map(normalizeCNPJData).filter(Boolean);
+    if (uf) results = results.filter(r => (r.uf || '').toUpperCase() === uf.toUpperCase());
+    res.json({ results, total: results.length, source: 'conecta' });
+  } catch (err) {
+    console.error('Error searching CNPJ by name:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/leads/existing-cnpjs — mapa cnpj → { id, name } para detecção de duplicatas
+app.get('/api/leads/existing-cnpjs', async (req, res) => {
+  const accountId = getAccountId(req);
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, custom_attributes->>'CNPJ' AS cnpj,
+              additional_attributes->>'company_name' AS company_name
+       FROM contacts
+       WHERE account_id = $1 AND custom_attributes->>'CNPJ' IS NOT NULL`,
+      [accountId]
+    );
+    const map = {};
+    for (const row of rows) {
+      const clean = normalizeCNPJ(row.cnpj);
+      if (clean) map[clean] = { id: row.id, name: row.name, company_name: row.company_name };
+    }
+    res.json(map);
+  } catch (err) {
+    console.error('Error fetching existing CNPJs:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/leads/import
+app.post('/api/leads/import', async (req, res) => {
+  const accountId = getAccountId(req);
+  const { leads, defaultStage = '1. Inbox (Novos)', overwriteDuplicates = false } = req.body;
+  if (!Array.isArray(leads) || leads.length === 0) {
+    return res.status(400).json({ error: 'Nenhum lead fornecido' });
+  }
+  const results = { imported: 0, updated: 0, skipped: 0, errors: [] };
+
+  for (const lead of leads.slice(0, 100)) {
+    try {
+      const cnpj = normalizeCNPJ(lead.cnpj);
+      const name = (lead.razao_social || lead.nome_fantasia || 'Empresa').slice(0, 255);
+      const email = (lead.email || '').toLowerCase().trim().slice(0, 255) || null;
+      const rawPhone = lead.ddd_telefone_1 || lead.ddd_telefone_2 || '';
+      const phone = rawPhone ? rawPhone.replace(/\s/g, '').slice(0, 20) : null;
+      const location = [lead.municipio, lead.uf].filter(Boolean).join(', ');
+
+      const existByCNPJ = await pool.query(
+        `SELECT id FROM contacts WHERE account_id = $1 AND custom_attributes->>'CNPJ' = $2 LIMIT 1`,
+        [accountId, cnpj]
+      );
+      const existByName = existByCNPJ.rows.length === 0
+        ? await pool.query(
+            `SELECT id FROM contacts WHERE account_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1`,
+            [accountId, name]
+          )
+        : { rows: [] };
+      const existing = existByCNPJ.rows[0] || existByName.rows[0];
+
+      if (existing && !overwriteDuplicates) { results.skipped++; continue; }
+
+      const qsa = Array.isArray(lead.qsa) ? lead.qsa : [];
+      const sociosStr = qsa.map(s => s.nome_socio || s.nome || '').filter(Boolean).join('; ');
+
+      const customAttr = { Funil_Vendas: defaultStage, CNPJ: cnpj };
+      if (lead.cnae_fiscal_descricao) customAttr.CNAE_Principal = String(lead.cnae_fiscal_descricao).slice(0, 255);
+      if (lead.cnae_fiscal) customAttr.CNAE_Codigo = String(lead.cnae_fiscal);
+      if (lead.capital_social != null) customAttr.Capital_Social = String(lead.capital_social);
+      if (lead.descricao_situacao_cadastral) customAttr.Situacao_Cadastral = String(lead.descricao_situacao_cadastral).slice(0, 100);
+      if (lead.data_inicio_atividade) customAttr.Data_Abertura = String(lead.data_inicio_atividade);
+      if (lead.descricao_porte) customAttr.Porte = String(lead.descricao_porte).slice(0, 100);
+      if (sociosStr) customAttr.Socios = sociosStr.slice(0, 500);
+      if (lead.opcao_pelo_simples != null) customAttr.Simples_Nacional = lead.opcao_pelo_simples ? 'Sim' : 'Não';
+      if (lead.opcao_pelo_mei != null) customAttr.MEI = lead.opcao_pelo_mei ? 'Sim' : 'Não';
+
+      const addAttr = { company_name: (lead.nome_fantasia || lead.razao_social || '').slice(0, 255) };
+
+      if (existing && overwriteDuplicates) {
+        await pool.query(
+          `UPDATE contacts SET
+             name = $1,
+             email = COALESCE($2, email),
+             phone_number = COALESCE($3, phone_number),
+             location = COALESCE(NULLIF($4,''), location),
+             custom_attributes = custom_attributes || $5::jsonb,
+             additional_attributes = additional_attributes || $6::jsonb,
+             updated_at = NOW()
+           WHERE id = $7`,
+          [name, email, phone, location, JSON.stringify(customAttr), JSON.stringify(addAttr), existing.id]
+        );
+        results.updated++;
+      } else {
+        const ins = await pool.query(
+          `INSERT INTO contacts (account_id, name, email, phone_number, location, custom_attributes, additional_attributes, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING id`,
+          [accountId, name, email, phone, location, JSON.stringify(customAttr), JSON.stringify(addAttr)]
+        );
+        const newId = ins.rows[0]?.id;
+        if (newId) {
+          await pool.query(
+            `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source)
+             VALUES ($1, $2, NULL, $3, NOW(), 'import_cnpj')`,
+            [newId, accountId, defaultStage]
+          ).catch(() => {});
+        }
+        results.imported++;
+      }
+    } catch (err) {
+      console.error('Import error for CNPJ', lead.cnpj, ':', err.message);
+      results.errors.push({ cnpj: lead.cnpj, error: err.message });
+    }
+  }
+
+  res.json(results);
+});
+
+// ── CNAE helpers ────────────────────────────────────────────
+let _cnaeCache = null;
+let _cnaeCacheTime = 0;
+
+const getCNAEList = async () => {
+  if (_cnaeCache && Date.now() - _cnaeCacheTime < 86400000) return _cnaeCache;
+  try {
+    const res = await fetch('https://servicodados.ibge.gov.br/api/v2/cnae/subclasses', {
+      headers: { Accept: 'application/json', 'User-Agent': 'kanban-dashboard/1.0' },
+    });
+    if (!res.ok) throw new Error(`IBGE CNAE: ${res.status}`);
+    const data = await res.json();
+    _cnaeCache = (Array.isArray(data) ? data : []).map(c => ({
+      codigo: String(c.id || c.codigo || ''),
+      descricao: String(c.descricao || ''),
+    })).filter(c => c.codigo);
+    _cnaeCacheTime = Date.now();
+    return _cnaeCache;
+  } catch (e) {
+    console.error('Error fetching CNAE list:', e.message);
+    return _cnaeCache || [];
+  }
+};
+
+// Pré-filtra CNAEs por keywords (sem acentos, case-insensitive)
+const stripAccents = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+const preFilterCNAE = (cnaeList, query) => {
+  const words = stripAccents(query).replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
+  if (!words.length) return cnaeList;
+  const scored = [];
+  for (const c of cnaeList) {
+    const desc = stripAccents(c.descricao);
+    const code = stripAccents(c.codigo);
+    let score = 0;
+    for (const w of words) {
+      if (desc.includes(w)) score += 2;
+      if (code.includes(w)) score += 1;
+    }
+    if (score > 0) scored.push({ ...c, _score: score });
+  }
+  return scored.sort((a, b) => b._score - a._score);
+};
+
+const suggestCNAEWithAI = async (query) => {
+  const cnaeList = await getCNAEList();
+
+  // Pré-filtrar para reduzir tokens enviados à IA
+  const preFiltered = preFilterCNAE(cnaeList, query);
+  // Se pré-filtro retornou poucos resultados, envia todos (a IA sabe mais que keyword match)
+  const toSend = preFiltered.length >= 5 ? preFiltered.slice(0, 300) : cnaeList;
+  const cnaeStr = toSend.map(c => `${c.codigo}|${c.descricao}`).join('\n');
+
+  const systemPrompt = `Você é especialista em CNAE (Classificação Nacional de Atividades Econômicas do Brasil).
+
+CNAEs disponíveis (codigo|descricao):
+${cnaeStr}
+
+Dado uma descrição de setor ou tipo de empresa, identifique os CNAEs mais relevantes.
+Considere sinônimos e termos técnicos do setor.
+Retorne SOMENTE JSON (sem markdown, sem texto fora do JSON):
+{"cnaes":[{"codigo":"XXXX-X/XX","descricao":"...","relevancia":"alta|media|baixa"}],"resumo":"uma linha sobre o setor"}
+Máximo 15 CNAEs, mais relevantes primeiro.`;
+
+  const providers = [];
+  if (OPENAI_API_KEY) providers.push({ url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: 'gpt-4o-mini' });
+  if (GROQ_API_KEY) providers.push({ url: 'https://api.groq.com/openai/v1/chat/completions', key: GROQ_API_KEY, model: GROQ_AI_MODEL });
+
+  if (!providers.length) {
+    // Fallback sem IA: retorna top resultados do pré-filtro com relevância estimada
+    const fallback = preFiltered.slice(0, 15).map((c, i) => ({
+      codigo: c.codigo, descricao: c.descricao,
+      relevancia: i < 5 ? 'alta' : i < 10 ? 'media' : 'baixa',
+    }));
+    return fallback.length > 0
+      ? { cnaes: fallback, resumo: `Resultado por busca de texto para "${query}" (sem IA configurada)` }
+      : { cnaes: [], resumo: null, message: 'Configure OPENAI_API_KEY ou GROQ_API_KEY para busca inteligente.' };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    for (const provider of providers) {
+      try {
+        const res = await fetch(provider.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` },
+          body: JSON.stringify({
+            model: provider.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: `Setor/ramo: "${query}"` },
+            ],
+            temperature: 0.1,
+            max_tokens: 1500,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          console.error(`CNAE AI (${provider.model}) ${res.status}:`, errText.slice(0, 200));
+          continue;
+        }
+        const data = await res.json();
+        const content = data.choices?.[0]?.message?.content || '';
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed.cnaes)) return parsed;
+        }
+        console.error(`CNAE AI (${provider.model}) invalid JSON:`, content.slice(0, 200));
+      } catch (innerErr) {
+        if (innerErr.name === 'AbortError') throw innerErr;
+        console.error(`CNAE AI provider (${provider.model}):`, innerErr.message);
+      }
+    }
+    // Todas as IAs falharam — fallback por keyword
+    const fallback = preFiltered.slice(0, 15).map((c, i) => ({
+      codigo: c.codigo, descricao: c.descricao,
+      relevancia: i < 5 ? 'alta' : i < 10 ? 'media' : 'baixa',
+    }));
+    return fallback.length > 0
+      ? { cnaes: fallback, resumo: `Resultado por busca de texto (IA indisponível)` }
+      : { cnaes: [], resumo: null, message: 'Nenhum CNAE encontrado para esse termo.' };
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('suggestCNAEWithAI:', e.message);
+    const fallback = preFiltered.slice(0, 10).map((c, i) => ({
+      codigo: c.codigo, descricao: c.descricao,
+      relevancia: i < 3 ? 'alta' : 'media',
+    }));
+    return fallback.length > 0
+      ? { cnaes: fallback, resumo: 'Resultado parcial (timeout da IA)' }
+      : null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+// GET /api/leads/cnae/filter?q=... — filtro por keyword, sem IA (para o dropdown do frontend)
+app.get('/api/leads/cnae/filter', async (req, res) => {
+  const { q } = req.query;
+  try {
+    const list = await getCNAEList();
+    if (!q || !q.trim()) return res.json(list.slice(0, 50));
+    const filtered = preFilterCNAE(list, q).slice(0, 50);
+    res.json(filtered.map(({ _score, ...c }) => c));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/leads/cnae/list
+app.get('/api/leads/cnae/list', async (req, res) => {
+  try {
+    const list = await getCNAEList();
+    res.json(list);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/leads/cnae/suggest?q=...
+app.get('/api/leads/cnae/suggest', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: 'Parâmetro q é obrigatório' });
+  try {
+    const result = await suggestCNAEWithAI(q);
+    if (!result) {
+      return res.json({ cnaes: [], resumo: null, message: 'Nenhuma IA disponível. Configure OPENAI_API_KEY ou GROQ_API_KEY.' });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('CNAE suggest error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/leads/cnae/search?codes=XXXX-X/XX,YYYY-Y/YY
+app.get('/api/leads/cnae/search', async (req, res) => {
+  const { codes } = req.query;
+  if (!codes) return res.status(400).json({ error: 'Parâmetro codes é obrigatório' });
+
+  const codeList = codes.split(',').map(c => c.trim()).filter(Boolean).slice(0, 5);
+  const token = await getConectaToken();
+  if (!token) {
+    return res.json({
+      results: [],
+      total: 0,
+      requires_config: true,
+      message: 'Para buscar empresas por CNAE, configure CNPJ_CLIENT_ID e CNPJ_CLIENT_SECRET no .env (API conecta.gov.br).',
+    });
+  }
+
+  const allResults = [];
+  for (const code of codeList) {
+    try {
+      const url = `https://h-apigateway.conecta.gov.br/consulta-cnpj/v2/cnae/${encodeURIComponent(code)}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+      if (!r.ok) { console.error('CNAE search error', code, r.status); continue; }
+      const data = await r.json();
+      const items = Array.isArray(data) ? data : (data.estabelecimentos || data.results || (data.cnpj ? [data] : []));
+      for (const item of items) {
+        const normalized = normalizeCNPJData(item);
+        if (normalized) allResults.push({ ...normalized, _cnae_buscado: code });
+      }
+    } catch (e) { console.error('CNAE search:', code, e.message); }
+    if (codeList.indexOf(code) < codeList.length - 1) await new Promise(r => setTimeout(r, 200));
+  }
+
+  // Deduplicar por CNPJ
+  const seen = new Set();
+  const unique = allResults.filter(r => {
+    const k = normalizeCNPJ(r.cnpj || '');
+    if (!k || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+
+  res.json({ results: unique, total: unique.length, source: 'conecta_cnae' });
+});
+
+// ============================================================
+// FIM BUSCA LEADS
+// ============================================================
+
+// ============================================================
+// RFB LOCAL — dados abertos da Receita Federal
+// ============================================================
+
+// In-memory import progress state
+let rfbImportState = {
+  status: 'idle', // idle | running | done | error
+  message: '',
+  file: '',
+  percent: 0,
+  records: 0,
+  error: '',
+  startedAt: null,
+};
+
+function startRFBImport() {
+  if (rfbImportState.status === 'running') return; // already running
+  rfbImportState = { status: 'running', message: 'Iniciando importação...', file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
+
+  const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  const py = spawn(pythonCmd, [scriptPath], {
+    env: { ...process.env },
+    cwd: path.join(__dirname, 'scripts'),
+  });
+
+  let buf = '';
+  py.stdout.on('data', (chunk) => {
+    buf += chunk.toString();
+    const lines = buf.split('\n');
+    buf = lines.pop(); // keep incomplete line
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const msg = JSON.parse(trimmed);
+        rfbImportState = {
+          status: msg.status === 'done' ? 'done' : msg.status === 'error' ? 'error' : 'running',
+          message: msg.message || '',
+          file: msg.file || '',
+          percent: msg.percent || 0,
+          records: msg.records || 0,
+          error: msg.error || '',
+          startedAt: rfbImportState.startedAt,
+        };
+      } catch (_) {
+        // non-JSON stdout line, ignore
+      }
+    }
+  });
+
+  py.stderr.on('data', (chunk) => {
+    console.error('[rfb_import]', chunk.toString());
+  });
+
+  py.on('close', (code) => {
+    if (rfbImportState.status !== 'done' && rfbImportState.status !== 'error') {
+      rfbImportState.status = code === 0 ? 'done' : 'error';
+      rfbImportState.message = code === 0 ? 'Import concluído!' : `Import falhou (código ${code})`;
+    }
+    // invalidate caches so new data is reflected
+    _rfbMunicipiosCache = null;
+    _rfbCnaesCache = null;
+    console.log('[rfb_import] finished with code', code);
+  });
+
+  py.on('error', (err) => {
+    rfbImportState.status = 'error';
+    rfbImportState.error = err.message;
+    rfbImportState.message = `Falha ao iniciar script: ${err.message}`;
+    console.error('[rfb_import] spawn error:', err);
+  });
+}
+
+const createRFBTables = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rfb_empresas (
+      cnpj_basico TEXT PRIMARY KEY,
+      razao_social TEXT,
+      natureza_juridica TEXT,
+      qualificacao_do_responsavel TEXT,
+      capital_social TEXT,
+      porte_da_empresa TEXT,
+      ente_federativo_responsavel TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_estabelecimentos (
+      cnpj_basico TEXT,
+      cnpj_ordem TEXT,
+      cnpj_dv TEXT,
+      identificador_matriz_filial TEXT,
+      nome_fantasia TEXT,
+      situacao_cadastral TEXT,
+      data_situacao_cadastral TEXT,
+      motivo_situacao_cadastral TEXT,
+      nome_da_cidade_no_exterior TEXT,
+      pais TEXT,
+      data_de_inicio_da_atividade TEXT,
+      cnae_fiscal_principal TEXT,
+      cnae_fiscal_secundaria TEXT,
+      tipo_de_logradouro TEXT,
+      logradouro TEXT,
+      numero TEXT,
+      complemento TEXT,
+      bairro TEXT,
+      cep TEXT,
+      uf TEXT,
+      municipio TEXT,
+      ddd1 TEXT, telefone1 TEXT,
+      ddd2 TEXT, telefone2 TEXT,
+      ddd_do_fax TEXT, fax TEXT,
+      correio_eletronico TEXT,
+      situacao_especial TEXT,
+      data_da_situacao_especial TEXT,
+      PRIMARY KEY (cnpj_basico, cnpj_ordem, cnpj_dv)
+    );
+    CREATE TABLE IF NOT EXISTS rfb_socios (
+      cnpj_basico TEXT,
+      identificador_de_socio TEXT,
+      nome_do_socio TEXT,
+      cnpj_ou_cpf_do_socio TEXT,
+      qualificacao_do_socio TEXT,
+      data_de_entrada_sociedade TEXT,
+      pais TEXT,
+      representante_legal TEXT,
+      nome_do_representante TEXT,
+      qualificacao_do_representante_legal TEXT,
+      faixa_etaria TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_simples (
+      cnpj_basico TEXT PRIMARY KEY,
+      opcao_pelo_simples TEXT,
+      data_opcao_simples TEXT,
+      data_exclusao_simples TEXT,
+      opcao_pelo_mei TEXT,
+      data_opcao_mei TEXT,
+      data_exclusao_mei TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_municipios (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_cnaes (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_import_log (
+      id SERIAL PRIMARY KEY,
+      started_at TIMESTAMPTZ DEFAULT NOW(),
+      finished_at TIMESTAMPTZ,
+      status TEXT,
+      records_empresas BIGINT DEFAULT 0,
+      records_estabelecimentos BIGINT DEFAULT 0,
+      dev_limit INTEGER,
+      notes TEXT
+    );
+  `);
+};
+
+// Cache em memória para listas de referência
+let _rfbMunicipiosCache = null;
+let _rfbCnaesCache = null;
+
+// GET /api/rfb/status
+app.get('/api/rfb/status', async (req, res) => {
+  try {
+    const [logRow, empCount, estCount] = await Promise.all([
+      pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
+      pool.query(`SELECT COUNT(*) FROM rfb_empresas`),
+      pool.query(`SELECT COUNT(*) FROM rfb_estabelecimentos`),
+    ]);
+    const last = logRow.rows[0];
+    const empresas = parseInt(empCount.rows[0].count, 10);
+    const estabelecimentos = parseInt(estCount.rows[0].count, 10);
+    res.json({
+      imported: estabelecimentos > 0,
+      last_import: last?.finished_at || null,
+      dev_limit: last?.dev_limit ?? null,
+      records: { empresas, estabelecimentos },
+    });
+  } catch (err) {
+    res.json({ imported: false, error: err.message });
+  }
+});
+
+// GET /api/rfb/municipios
+app.get('/api/rfb/municipios', async (req, res) => {
+  try {
+    if (!_rfbMunicipiosCache) {
+      const r = await pool.query('SELECT codigo, descricao FROM rfb_municipios ORDER BY descricao');
+      _rfbMunicipiosCache = r.rows;
+    }
+    res.json(_rfbMunicipiosCache);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rfb/cnaes
+app.get('/api/rfb/cnaes', async (req, res) => {
+  try {
+    if (!_rfbCnaesCache) {
+      const r = await pool.query('SELECT codigo, descricao FROM rfb_cnaes ORDER BY codigo');
+      _rfbCnaesCache = r.rows;
+    }
+    res.json(_rfbCnaesCache);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rfb/cnpj/:cnpj — lookup completo por CNPJ (14 dígitos)
+app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
+  try {
+    const cnpj = String(req.params.cnpj).replace(/\D/g, '').padStart(14, '0').slice(-14);
+    const basico = cnpj.slice(0, 8);
+    const ordem  = cnpj.slice(8, 12);
+    const dv     = cnpj.slice(12, 14);
+
+    const [estRow, sociosRow] = await Promise.all([
+      pool.query(`
+        SELECT e.*, emp.razao_social, emp.capital_social, emp.porte_da_empresa, emp.natureza_juridica,
+               m.descricao AS municipio_nome, c.descricao AS cnae_descricao,
+               s.opcao_pelo_simples, s.opcao_pelo_mei
+        FROM rfb_estabelecimentos e
+        JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+        LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
+        LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
+        LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
+        WHERE e.cnpj_basico = $1 AND e.cnpj_ordem = $2 AND e.cnpj_dv = $3
+        LIMIT 1
+      `, [basico, ordem, dv]),
+      pool.query('SELECT * FROM rfb_socios WHERE cnpj_basico = $1', [basico]),
+    ]);
+
+    if (estRow.rows.length === 0) return res.status(404).json({ error: 'CNPJ não encontrado na base local.' });
+
+    const e = estRow.rows[0];
+    res.json({ ...e, socios: sociosRow.rows, source: 'rfb_local' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rfb/search
+// Params: cnpj, nome, socio, uf, municipio, cnae, situacao, page, page_size, order_by
+app.get('/api/rfb/search', async (req, res) => {
+  try {
+    const {
+      cnpj = '', nome = '', socio = '', uf = '',
+      municipio = '', cnae = '', situacao = '',
+      page = '1', page_size = '10',
+      order_by = 'razao_social',
+    } = req.query;
+
+    const limit  = Math.min(Math.max(parseInt(page_size, 10) || 10, 1), 100);
+    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+
+    const params = [];
+    const where  = [];
+
+    if (cnpj.trim()) {
+      const clean = cnpj.replace(/\D/g, '');
+      if (clean.length === 14) {
+        params.push(clean.slice(0, 8), clean.slice(8, 12), clean.slice(12, 14));
+        where.push(`(e.cnpj_basico = $${params.length - 2} AND e.cnpj_ordem = $${params.length - 1} AND e.cnpj_dv = $${params.length})`);
+      } else if (clean.length >= 8) {
+        params.push(clean.slice(0, 8));
+        where.push(`e.cnpj_basico = $${params.length}`);
+      }
+    }
+
+    if (nome.trim()) {
+      params.push(`%${nome.trim().toUpperCase()}%`);
+      where.push(`(emp.razao_social ILIKE $${params.length} OR e.nome_fantasia ILIKE $${params.length})`);
+    }
+
+    if (socio.trim()) {
+      params.push(`%${socio.trim().toUpperCase()}%`);
+      where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_socios WHERE nome_do_socio ILIKE $${params.length})`);
+    }
+
+    if (uf.trim()) {
+      params.push(uf.trim().toUpperCase());
+      where.push(`e.uf = $${params.length}`);
+    }
+
+    if (municipio.trim()) {
+      params.push(municipio.trim());
+      where.push(`(e.municipio = $${params.length} OR m.descricao ILIKE $${params.length})`);
+    }
+
+    if (cnae.trim()) {
+      // Aceita código completo (ex: 4731800) ou parcial (ex: 4731)
+      const cnaeClean = cnae.replace(/\D/g, '');
+      params.push(`${cnaeClean}%`);
+      where.push(`e.cnae_fiscal_principal LIKE $${params.length}`);
+    }
+
+    if (situacao.trim()) {
+      params.push(situacao.trim());
+      where.push(`e.situacao_cadastral = $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    // Coluna de ordenação válida
+    const ORDER_COLS = {
+      razao_social: 'emp.razao_social',
+      nome_fantasia: 'e.nome_fantasia',
+      uf: 'e.uf',
+      situacao: 'e.situacao_cadastral',
+    };
+    const orderCol = ORDER_COLS[order_by] || 'emp.razao_social';
+
+    const baseQuery = `
+      FROM rfb_estabelecimentos e
+      JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+      LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
+      LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
+      LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
+      ${whereClause}
+    `;
+
+    const [dataRows, countRow] = await Promise.all([
+      pool.query(`
+        SELECT
+          e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
+          emp.razao_social, e.nome_fantasia,
+          e.situacao_cadastral, e.data_de_inicio_da_atividade,
+          e.cnae_fiscal_principal, c.descricao AS cnae_descricao,
+          e.uf, m.descricao AS municipio_nome,
+          e.logradouro, e.numero, e.complemento, e.bairro, e.cep,
+          e.tipo_de_logradouro,
+          e.ddd1, e.telefone1, e.ddd2, e.telefone2,
+          e.correio_eletronico,
+          emp.capital_social, emp.porte_da_empresa,
+          emp.natureza_juridica,
+          s.opcao_pelo_simples, s.opcao_pelo_mei
+        ${baseQuery}
+        ORDER BY ${orderCol} NULLS LAST
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `, [...params, limit, offset]),
+      pool.query(`SELECT COUNT(*) ${baseQuery}`, params),
+    ]);
+
+    res.json({
+      results: dataRows.rows,
+      total: parseInt(countRow.rows[0].count, 10),
+      page: parseInt(page, 10) || 1,
+      page_size: limit,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rfb/import-progress
+app.get('/api/rfb/import-progress', (req, res) => {
+  res.json(rfbImportState);
+});
+
+// POST /api/rfb/import/start — manual trigger (re-import)
+app.post('/api/rfb/import/start', (req, res) => {
+  if (rfbImportState.status === 'running') {
+    return res.status(409).json({ error: 'Import já em andamento' });
+  }
+  startRFBImport();
+  res.json({ ok: true, message: 'Import iniciado' });
+});
+
+// ============================================================
+// FIM RFB LOCAL
+// ============================================================
+
 const startServer = async () => {
   try {
     await createHistoryTable();
+    await createCNPJCacheTable();
+    await createRFBTables();
+    // Auto-import RFB data if tables are empty
+    try {
+      const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
+      if (parseInt(rows[0].count, 10) === 0) {
+        console.log('[rfb] Tabelas vazias — iniciando import automático...');
+        startRFBImport();
+      }
+    } catch (e) {
+      console.error('[rfb] Erro ao verificar tabelas:', e.message);
+    }
     await createLicitacaoTables();
     await migrateLicitacaoFases();
     await seedHistorySnapshot();

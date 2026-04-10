@@ -17,7 +17,7 @@ COPY backend/ ./
 
 # Stage 3: Final image with Nginx, Node.js and Supervisor
 FROM node:18-alpine
-RUN apk add --no-cache nginx supervisor
+RUN apk add --no-cache nginx supervisor python3 py3-pip
 
 # Copy built frontend and nginx config
 COPY --from=frontend-builder /app/frontend/build /usr/share/nginx/html
@@ -26,6 +26,9 @@ COPY frontend/nginx.conf /etc/nginx/nginx.conf
 # Copy backend
 WORKDIR /app
 COPY --from=backend-builder /app/backend ./
+
+# Install Python dependencies for RFB import script
+RUN pip3 install --break-system-packages --no-cache-dir -r scripts/requirements.txt
 
 # Copy and setup supervisor
 COPY supervisord.conf /etc/supervisord.conf
