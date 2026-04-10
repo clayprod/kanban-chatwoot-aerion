@@ -1526,6 +1526,19 @@ function App() {
       axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
       return;
     }
+    // If not imported yet, poll DB counts every 15s regardless of progress state
+    if (!rfbStatus?.imported) {
+      const id = setInterval(() => {
+        axios.get('/api/rfb/status').then(s => {
+          setRfbStatus(s.data);
+          if (s.data.imported) {
+            axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
+            axios.get('/api/rfb/cnaes').then(r => setRfbCnaes(r.data || [])).catch(() => {});
+          }
+        }).catch(() => {});
+      }, 15000);
+      return () => clearInterval(id);
+    }
     if (status !== 'running') return;
     const id = setInterval(() => {
       axios.get('/api/rfb/import-progress').then(r => {
@@ -5826,26 +5839,33 @@ function App() {
                       </div>
                     ) : (
                       <div className="mb-4">
-                        <p className="text-sm text-muted mb-4">
-                          A base de dados da Receita Federal está sendo preparada. Isso pode levar alguns minutos.
+                        <p className="text-sm text-muted mb-1">
+                          Importação em andamento no servidor — isso pode levar 1-2 horas na primeira vez.
                         </p>
-                        <div className="w-full h-2 bg-cardAlt rounded-full overflow-hidden mb-4">
-                          <div className="h-full bg-primary/30 rounded-full animate-pulse" style={{ width: '60%' }} />
+                        {rfbStatus?.records && (
+                          <div className="flex gap-4 text-xs text-muted mb-3 mt-2">
+                            <span>🏢 <span className="text-ink font-medium">{(rfbStatus.records.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
+                            <span>📍 <span className="text-ink font-medium">{(rfbStatus.records.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
+                          </div>
+                        )}
+                        <div className="w-full h-1.5 bg-cardAlt rounded-full overflow-hidden mb-4">
+                          <div className="h-full bg-primary/40 rounded-full animate-pulse" style={{ width: '100%' }} />
                         </div>
+                        <p className="text-xs text-muted mb-4">
+                          {rfbStatus?.records?.estabelecimentos > 0
+                            ? 'Aguardando conclusão do import...'
+                            : 'Importando tabelas de referência e dados cadastrais...'}
+                        </p>
                         <button
                           onClick={() => {
                             axios.get('/api/rfb/import-progress').then(r => {
                               setRfbImportProgress(r.data);
-                              if (r.data.status === 'done' || r.data.status === 'idle') {
-                                axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
-                                axios.get('/api/rfb/municipios').then(s => setRfbMunicipios(s.data || [])).catch(() => {});
-                                axios.get('/api/rfb/cnaes').then(s => setRfbCnaes(s.data || [])).catch(() => {});
-                              }
                             }).catch(() => {});
+                            axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
                           }}
                           className="text-sm px-4 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition"
                         >
-                          Verificar status
+                          Atualizar contagem
                         </button>
                       </div>
                     )}
