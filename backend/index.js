@@ -5000,15 +5000,17 @@ const startServer = async () => {
     await createHistoryTable();
     await createCNPJCacheTable();
     await createRFBTables();
-    // Auto-import RFB data if tables are empty
-    try {
-      const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
-      if (parseInt(rows[0].count, 10) === 0) {
-        console.log('[rfb] Tabelas vazias — iniciando import automático...');
-        startRFBImport();
+    // Auto-import RFB data if tables are empty (desabilitar com RFB_SKIP_AUTO_IMPORT=1)
+    if (!process.env.RFB_SKIP_AUTO_IMPORT) {
+      try {
+        const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
+        if (parseInt(rows[0].count, 10) === 0) {
+          console.log('[rfb] Tabelas vazias — iniciando import automático...');
+          startRFBImport();
+        }
+      } catch (e) {
+        console.error('[rfb] Erro ao verificar tabelas:', e.message);
       }
-    } catch (e) {
-      console.error('[rfb] Erro ao verificar tabelas:', e.message);
     }
     await createLicitacaoTables();
     await migrateLicitacaoFases();
