@@ -5839,34 +5839,46 @@ function App() {
                       </div>
                     ) : (
                       <div className="mb-4">
-                        <p className="text-sm text-muted mb-1">
-                          Importação em andamento no servidor — isso pode levar 1-2 horas na primeira vez.
+                        <p className="text-sm text-muted mb-4">
+                          Importação em andamento — atualizando a cada 15s
                         </p>
-                        {rfbStatus?.records && (
-                          <div className="flex gap-4 text-xs text-muted mb-3 mt-2">
-                            <span>🏢 <span className="text-ink font-medium">{(rfbStatus.records.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
-                            <span>📍 <span className="text-ink font-medium">{(rfbStatus.records.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
-                          </div>
-                        )}
-                        <div className="w-full h-1.5 bg-cardAlt rounded-full overflow-hidden mb-4">
-                          <div className="h-full bg-primary/40 rounded-full animate-pulse" style={{ width: '100%' }} />
-                        </div>
-                        <p className="text-xs text-muted mb-4">
-                          {rfbStatus?.records?.estabelecimentos > 0
-                            ? 'Aguardando conclusão do import...'
-                            : 'Importando tabelas de referência e dados cadastrais...'}
-                        </p>
-                        <button
-                          onClick={() => {
-                            axios.get('/api/rfb/import-progress').then(r => {
-                              setRfbImportProgress(r.data);
-                            }).catch(() => {});
-                            axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
-                          }}
-                          className="text-sm px-4 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition"
-                        >
-                          Atualizar contagem
-                        </button>
+                        {/* Etapas do import */}
+                        {(() => {
+                          const rec = rfbStatus?.records || {};
+                          const steps = [
+                            { label: 'Tabelas de referência', done: (rec.cnaes ?? rfbStatus?.cnaes) > 0 || rfbStatus?.refs },
+                            { label: 'Empresas', count: rec.empresas, target: 8000000 },
+                            { label: 'Estabelecimentos', count: rec.estabelecimentos, target: 10000000 },
+                          ];
+                          const totalTarget = 18000000;
+                          const totalDone = (rec.empresas || 0) + (rec.estabelecimentos || 0);
+                          const pct = Math.min(99, Math.round((totalDone / totalTarget) * 100));
+                          const currentStep = rec.estabelecimentos > 0 ? 'Estabelecimentos' : rec.empresas > 0 ? 'Empresas' : 'Tabelas de referência';
+                          return (
+                            <>
+                              <div className="space-y-2 mb-4">
+                                {steps.map(s => (
+                                  <div key={s.label} className="flex items-center gap-2 text-xs">
+                                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.count > 0 || s.done ? 'bg-primary' : 'bg-border animate-pulse'}`} />
+                                    <span className={s.count > 0 || s.done ? 'text-ink' : 'text-muted'}>{s.label}</span>
+                                    {s.count > 0 && (
+                                      <span className="ml-auto text-muted">{s.count.toLocaleString('pt-BR')} registros</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="w-full h-1.5 bg-cardAlt rounded-full overflow-hidden mb-1">
+                                {totalDone > 0
+                                  ? <div className="h-full bg-primary rounded-full transition-all duration-1000" style={{ width: `${Math.max(3, pct)}%` }} />
+                                  : <div className="h-full bg-primary/40 rounded-full animate-pulse" style={{ width: '100%' }} />
+                                }
+                              </div>
+                              {totalDone > 0 && (
+                                <p className="text-xs text-muted text-right">{pct}% — {totalDone.toLocaleString('pt-BR')} de ~18M registros</p>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
