@@ -31,6 +31,7 @@ const AUTH_PUBLIC_PATHS = new Set([
   '/licitacoes/pncp/modalidades',
   '/licitacoes/pncp/modos-disputa',
   '/licitacoes/pncp/tipos-instrumentos',
+  '/rfb/import-progress',
 ]);
 
 const isAuthConfigured = () => Boolean(AUTH_EMAIL && AUTH_PASSWORD && AUTH_TOKEN_SECRET);
@@ -4746,6 +4747,22 @@ const createRFBTables = async () => {
       descricao TEXT
     );
     CREATE TABLE IF NOT EXISTS rfb_cnaes (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_natureza (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_qualificacoes (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_paises (
+      codigo TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS rfb_motivos (
       codigo TEXT PRIMARY KEY,
       descricao TEXT
     );

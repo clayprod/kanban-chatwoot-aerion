@@ -30,7 +30,31 @@
       "Bash(python3 -c \" import json, sys d = json.load\\(sys.stdin\\) for i in d.get\\('items', []\\): if '90035' in i.get\\('titulo',''\\): print\\(json.dumps\\(i, indent=2, ensure_ascii=False\\)\\) break \")",
       "Bash(taskkill //F //IM node.exe)",
       "Bash(taskkill //PID 30808 //F)",
-      "Bash(taskkill //PID 13116 //F)"
+      "Bash(taskkill //PID 13116 //F)",
+      "Bash(npx react-scripts:*)",
+      "Read(//c/Users/clayp/AppData/Local/Temp/claude/C--kanban-dashboard/bb0ecc3e-f601-4bd4-b603-c968ba2799d8/tasks/**)",
+      "Bash(node --check /c/kanban-dashboard/backend/index.js)",
+      "Bash(npm install:*)",
+      "Bash(taskkill /PID 17192 /F)",
+      "Bash(cmd.exe /c \"taskkill /PID 17192 /F\")",
+      "Bash(cmd.exe /c \"taskkill /PID 17192 /F 2>&1\")",
+      "Bash(cmd.exe /c \"FOR /F \\\\\"tokens=5\\\\\" %P IN \\('netstat -ano ^| findstr \\\\\":3001 \\\\\"'\\) DO taskkill /PID %P /F\")",
+      "Bash(cmd.exe /c \"wmic process where \\\\\"name='node.exe'\\\\\" get ProcessId,CommandLine 2>&1\")",
+      "Bash(cmd.exe /c \"wmic process where \\\\\"name='node.exe'\\\\\" get ProcessId,CommandLine\")",
+      "Bash(powershell.exe -Command \"Get-Process node | Select-Object Id, CommandLine\")",
+      "Bash(kill -9 17192)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(node --check index.js)",
+      "Bash(handle.exe -p 17192)",
+      "Bash(pip --version)",
+      "Bash(pip3 --version)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(taskkill:*)"
     ]
   }
 }

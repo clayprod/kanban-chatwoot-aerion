@@ -75,15 +75,21 @@ def webdav_list(token, path=''):
 
 def discover_files(token):
     progress('running', 'Descobrindo arquivos disponíveis na RF...')
-    root = webdav_list(token)
+    # The date folders are nested under /Dados/Cadastros/CNPJ/
+    cnpj_path = '/Dados/Cadastros/CNPJ'
+    try:
+        cnpj_items = webdav_list(token, cnpj_path)
+    except Exception:
+        # Fallback: try root (old URL format)
+        cnpj_items = webdav_list(token)
     dated = sorted(
-        [i for i in root if i['is_dir'] and re.search(r'\d{4}-\d{2}', i['href'])],
+        [i for i in cnpj_items if i['is_dir'] and re.search(r'\d{4}-\d{2}', i['href'])],
         key=lambda x: x['href'], reverse=True
     )
-    folder = ''
-    if dated:
-        folder = '/' + dated[0]['href'].split('/public.php/webdav')[-1].strip('/')
-        progress('running', f'Pasta mais recente: {folder.split("/")[-1]}')
+    if not dated:
+        raise ValueError(f'Nenhuma pasta com data encontrada em {cnpj_path}')
+    folder = '/' + dated[0]['href'].split('/public.php/webdav')[-1].strip('/')
+    progress('running', f'Pasta mais recente: {folder.split("/")[-1]}')
     files = webdav_list(token, folder)
     zips = [f for f in files if not f['is_dir'] and f['href'].lower().endswith('.zip')]
     return zips
@@ -287,10 +293,14 @@ def main():
             selected  = select_files(all_zips, dev_limit)
             progress('running', f'{len(selected)} arquivo(s) para baixar')
 
+            if not selected:
+                progress('error', 'Nenhum arquivo encontrado no servidor da RF', error='no_files_found')
+                sys.exit(1)
+
             def _dl(z):
                 return download_file(token, z['href'], DATA_PATH)
 
-            with ThreadPoolExecutor(max_workers=min(WORKERS, len(selected))) as ex:
+            with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(selected)))) as ex:
                 futures = {ex.submit(_dl, z): z for z in selected}
                 for fut in as_completed(futures):
                     try:
