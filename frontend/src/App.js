@@ -1517,15 +1517,20 @@ function App() {
     }
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll import progress while running
+  // Poll import progress while running; refresh status when done
   useEffect(() => {
     if (activeView !== 'Busca Leads' || !authStatus.authenticated) return;
-    if (rfbImportProgress?.status !== 'running') return;
+    const status = rfbImportProgress?.status;
+    // If already done, just refresh rfbStatus once
+    if (status === 'done') {
+      axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
+      return;
+    }
+    if (status !== 'running') return;
     const id = setInterval(() => {
       axios.get('/api/rfb/import-progress').then(r => {
         setRfbImportProgress(r.data);
         if (r.data.status === 'done') {
-          // Refresh status so search UI appears
           axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
           axios.get('/api/rfb/municipios').then(s => setRfbMunicipios(s.data || [])).catch(() => {});
           axios.get('/api/rfb/cnaes').then(s => setRfbCnaes(s.data || [])).catch(() => {});
@@ -5828,7 +5833,16 @@ function App() {
                           <div className="h-full bg-primary/30 rounded-full animate-pulse" style={{ width: '60%' }} />
                         </div>
                         <button
-                          onClick={() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)).catch(() => {})}
+                          onClick={() => {
+                            axios.get('/api/rfb/import-progress').then(r => {
+                              setRfbImportProgress(r.data);
+                              if (r.data.status === 'done' || r.data.status === 'idle') {
+                                axios.get('/api/rfb/status').then(s => setRfbStatus(s.data)).catch(() => {});
+                                axios.get('/api/rfb/municipios').then(s => setRfbMunicipios(s.data || [])).catch(() => {});
+                                axios.get('/api/rfb/cnaes').then(s => setRfbCnaes(s.data || [])).catch(() => {});
+                              }
+                            }).catch(() => {});
+                          }}
                           className="text-sm px-4 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition"
                         >
                           Verificar status
