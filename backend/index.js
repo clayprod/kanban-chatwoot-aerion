@@ -5015,6 +5015,11 @@ const startServer = async () => {
     await seedHistorySnapshot();
     await pollStageChanges();
     cron.schedule('0 * * * *', pollStageChanges);
+    // Atualização mensal da base RFB — todo dia 1º às 03:00
+    cron.schedule('0 3 1 * *', () => {
+      console.log('[rfb] Atualização mensal agendada — iniciando...');
+      startRFBImport();
+    });
     cron.schedule('30 7 * * *', async () => {
       try {
         await runComprasSync();
