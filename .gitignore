@@ -3,3 +3,5 @@ frontend/.env
 backend/.env
 node_modules
 nul
+backend/data/
+backend/scripts/__pycache__/
