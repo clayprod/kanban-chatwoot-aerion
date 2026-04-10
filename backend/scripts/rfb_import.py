@@ -354,11 +354,10 @@ def main():
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 for member in zf.namelist():
-                    if not member.lower().endswith(('.csv', '.txt', '.ESTABELE', '.EMPRE', '.SOCIO', '.SIMPLES')):
-                        # RFB files sometimes have no extension
-                        if '.' in Path(member).name:
-                            continue
-                    csv_path = DATA_PATH / member
+                    # Skip directories
+                    if member.endswith('/'):
+                        continue
+                    csv_path = DATA_PATH / Path(member).name
                     zf.extract(member, DATA_PATH)
                     n = import_csv(conn, csv_path, table)
                     totals[table] = totals.get(table, 0) + n
