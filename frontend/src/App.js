@@ -5853,7 +5853,6 @@ function App() {
                           const totalTarget = 18000000;
                           const totalDone = (rec.empresas || 0) + (rec.estabelecimentos || 0);
                           const pct = Math.min(99, Math.round((totalDone / totalTarget) * 100));
-                          const currentStep = rec.estabelecimentos > 0 ? 'Estabelecimentos' : rec.empresas > 0 ? 'Empresas' : 'Tabelas de referência';
                           return (
                             <>
                               <div className="space-y-2 mb-4">
