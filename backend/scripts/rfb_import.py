@@ -279,7 +279,7 @@ def main():
     parser.add_argument('--limit', type=int, default=None)
     args = parser.parse_args()
 
-    dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '1'))
+    dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '0'))
     DATA_PATH.mkdir(parents=True, exist_ok=True)
 
     progress('running', f'Iniciando import (DEV_LIMIT={dev_limit})...')
@@ -357,18 +357,18 @@ def main():
                     # Skip directories
                     if member.endswith('/'):
                         continue
-                    csv_path = DATA_PATH / Path(member).name
-                    zf.extract(member, DATA_PATH)
-                    n = import_csv(conn, csv_path, table)
+                    # extract() retorna o path completo do arquivo extraído (preserva subdirs)
+                    extracted_path = Path(zf.extract(member, DATA_PATH))
+                    n = import_csv(conn, extracted_path, table)
                     totals[table] = totals.get(table, 0) + n
                     progress('running', f'{table}: {n:,} linhas importadas de {member}',
                              file=member, records=totals[table])
                     try:
-                        csv_path.unlink()
+                        extracted_path.unlink()
                     except Exception:
                         pass
         except Exception as e:
-            progress('running', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
+            progress('error', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
 
     create_indexes(conn)
     conn.close()
