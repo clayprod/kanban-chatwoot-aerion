@@ -4776,6 +4776,13 @@ const createRFBTables = async () => {
       dev_limit INTEGER,
       notes TEXT
     );
+    CREATE TABLE IF NOT EXISTS rfb_arquivos (
+      filename TEXT PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      remote_size BIGINT NOT NULL,
+      records BIGINT NOT NULL DEFAULT 0,
+      imported_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
 };
 

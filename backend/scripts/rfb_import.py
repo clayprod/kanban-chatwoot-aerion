@@ -273,10 +273,36 @@ def create_indexes(conn):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def load_imported_files(conn):
+    """Retorna dict filename -> remote_size para arquivos já importados com sucesso."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT filename, remote_size FROM rfb_arquivos')
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
+def record_imported_file(conn, filename, table, remote_size, records):
+    """Registra ou atualiza um arquivo importado na tabela de controle."""
+    with conn.cursor() as cur:
+        cur.execute(
+            '''INSERT INTO rfb_arquivos (filename, table_name, remote_size, records, imported_at)
+               VALUES (%s, %s, %s, %s, NOW())
+               ON CONFLICT (filename) DO UPDATE
+               SET remote_size = EXCLUDED.remote_size,
+                   records = EXCLUDED.records,
+                   imported_at = NOW()''',
+            (filename, table, remote_size, records)
+        )
+    conn.commit()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip-download', action='store_true')
     parser.add_argument('--limit', type=int, default=None)
+    parser.add_argument('--force', action='store_true', help='Reimportar mesmo arquivos já importados')
     args = parser.parse_args()
 
     dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '0'))
@@ -284,56 +310,84 @@ def main():
 
     progress('running', f'Iniciando import (DEV_LIMIT={dev_limit})...')
 
-    # ── Download ──────────────────────────────────────────────────────────────
-    local_zips = []
-    if not args.skip_download:
-        try:
-            token     = parse_token(BASE_URL)
-            all_zips  = discover_files(token)
-            selected  = select_files(all_zips, dev_limit)
-            progress('running', f'{len(selected)} arquivo(s) para baixar')
-
-            if not selected:
-                progress('error', 'Nenhum arquivo encontrado no servidor da RF', error='no_files_found')
-                sys.exit(1)
-
-            def _dl(z):
-                return download_file(token, z['href'], DATA_PATH)
-
-            with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(selected)))) as ex:
-                futures = {ex.submit(_dl, z): z for z in selected}
-                for fut in as_completed(futures):
-                    try:
-                        local_zips.append(fut.result())
-                    except Exception as e:
-                        progress('running', f'Erro no download: {e}', error=str(e))
-        except Exception as e:
-            progress('error', f'Erro ao descobrir arquivos: {e}', error=str(e))
-            sys.exit(1)
-    else:
-        local_zips = list(DATA_PATH.glob('*.zip'))
-        progress('running', f'{len(local_zips)} arquivo(s) já baixados')
-
-    if not local_zips:
-        progress('error', 'Nenhum arquivo disponível para importar', error='no_files')
-        sys.exit(1)
-
-    # ── Import ────────────────────────────────────────────────────────────────
-    progress('running', 'Conectando ao banco de dados...')
+    # ── Conectar ao banco cedo para verificar arquivos já importados ──────────
     db_url = os.environ.get('DATABASE_URL', '')
     if not db_url:
         progress('error', 'DATABASE_URL não encontrada', error='no_db_url')
         sys.exit(1)
-
     try:
         conn = psycopg2.connect(db_url)
     except Exception as e:
         progress('error', f'Falha ao conectar ao banco: {e}', error=str(e))
         sys.exit(1)
 
-    # Limpar tabelas que serão recarregadas
-    cats_present = set(classify(z.name) for z in local_zips)
-    tbls_to_clear = [FILE_TABLE_MAP[c.lower()] for c in cats_present if c.lower() in FILE_TABLE_MAP]
+    already_imported = {} if args.force else load_imported_files(conn)
+    if already_imported:
+        progress('running', f'{len(already_imported)} arquivo(s) já importados anteriormente — serão pulados se não mudaram')
+
+    # ── Download ──────────────────────────────────────────────────────────────
+    # Lista de (zip_path, remote_size) a importar
+    to_import = []  # [(Path, int)]
+
+    if not args.skip_download:
+        try:
+            token     = parse_token(BASE_URL)
+            all_zips  = discover_files(token)
+            selected  = select_files(all_zips, dev_limit)
+
+            if not selected:
+                progress('error', 'Nenhum arquivo encontrado no servidor da RF', error='no_files_found')
+                sys.exit(1)
+
+            # Filtrar os que já foram importados com o mesmo tamanho
+            to_download = []
+            skipped = 0
+            for z in selected:
+                filename = Path(z['href']).name
+                rsize    = z.get('size', 0)
+                if filename in already_imported and already_imported[filename] == rsize and rsize > 0:
+                    skipped += 1
+                else:
+                    to_download.append(z)
+
+            if skipped:
+                progress('running', f'{skipped} arquivo(s) inalterados — pulando download e import')
+            progress('running', f'{len(to_download)} arquivo(s) novos/alterados para baixar')
+
+            if not to_download:
+                progress('done', 'Nenhuma atualização disponível — base já está atual!',
+                         records=0, percent=100)
+                conn.close()
+                return
+
+            def _dl(z):
+                return download_file(token, z['href'], DATA_PATH), z.get('size', 0)
+
+            with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(to_download)))) as ex:
+                futures = {ex.submit(_dl, z): z for z in to_download}
+                for fut in as_completed(futures):
+                    try:
+                        local_path, rsize = fut.result()
+                        to_import.append((local_path, rsize))
+                    except Exception as e:
+                        progress('running', f'Erro no download: {e}', error=str(e))
+        except Exception as e:
+            progress('error', f'Erro ao descobrir arquivos: {e}', error=str(e))
+            sys.exit(1)
+    else:
+        # --skip-download: usar ZIPs já presentes em DATA_PATH
+        for p in DATA_PATH.glob('*.zip'):
+            to_import.append((p, p.stat().st_size))
+        progress('running', f'{len(to_import)} arquivo(s) encontrados localmente')
+
+    if not to_import:
+        progress('error', 'Nenhum arquivo disponível para importar', error='no_files')
+        sys.exit(1)
+
+    # ── Import ────────────────────────────────────────────────────────────────
+    # Limpar só as tabelas dos arquivos que serão (re)importados
+    cats_present = set(classify(p.name).lower() for p, _ in to_import)
+    tbls_to_clear = [FILE_TABLE_MAP[c] for c in cats_present if c in FILE_TABLE_MAP]
     if tbls_to_clear:
         progress('running', f'Limpando tabelas: {", ".join(tbls_to_clear)}')
         with conn.cursor() as cur:
@@ -342,8 +396,8 @@ def main():
         conn.commit()
 
     totals = {}
-    total_zips = len(local_zips)
-    for zip_idx, zip_path in enumerate(local_zips):
+    total_zips = len(to_import)
+    for zip_idx, (zip_path, remote_size) in enumerate(to_import):
         cat   = classify(zip_path.name).lower()
         table = FILE_TABLE_MAP.get(cat)
         if not table:
@@ -351,15 +405,16 @@ def main():
 
         progress('running', f'Processando {zip_path.name}... ({zip_idx+1}/{total_zips})',
                  file=zip_path.name, percent=int((zip_idx / total_zips) * 100))
+        zip_records = 0
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 for member in zf.namelist():
-                    # Skip directories
                     if member.endswith('/'):
                         continue
-                    # extract() retorna o path completo do arquivo extraído (preserva subdirs)
+                    # extract() retorna o path completo preservando subdirs
                     extracted_path = Path(zf.extract(member, DATA_PATH))
                     n = import_csv(conn, extracted_path, table)
+                    zip_records += n
                     totals[table] = totals.get(table, 0) + n
                     progress('running', f'{table}: {n:,} linhas importadas de {member}',
                              file=member, records=totals[table])
@@ -367,6 +422,15 @@ def main():
                         extracted_path.unlink()
                     except Exception:
                         pass
+
+            # Registrar import bem-sucedido e apagar o ZIP
+            record_imported_file(conn, zip_path.name, table, remote_size, zip_records)
+            try:
+                zip_path.unlink()
+                progress('running', f'ZIP removido: {zip_path.name}')
+            except Exception:
+                pass
+
         except Exception as e:
             progress('error', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
 
