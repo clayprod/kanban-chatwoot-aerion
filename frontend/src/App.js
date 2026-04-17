@@ -5846,7 +5846,7 @@ function App() {
                         {(() => {
                           const rec = rfbStatus?.records || {};
                           const steps = [
-                            { label: 'Tabelas de referência', done: (rec.cnaes ?? rfbStatus?.cnaes) > 0 || rfbStatus?.refs },
+                            { label: 'Tabelas de referência', done: (rec.cnaes || 0) > 0 || (rec.municipios || 0) > 0 },
                             { label: 'Empresas', count: rec.empresas, target: 8000000 },
                             { label: 'Estabelecimentos', count: rec.estabelecimentos, target: 10000000 },
                           ];

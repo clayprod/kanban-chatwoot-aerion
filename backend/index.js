@@ -4793,10 +4793,13 @@ let _rfbCnaesCache = null;
 // GET /api/rfb/status
 app.get('/api/rfb/status', async (req, res) => {
   try {
-    const [logRow, empCount, estCount] = await Promise.all([
+    const [logRow, empCount, estCount, simCount, cnaeCount, munCount] = await Promise.all([
       pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
       pool.query(`SELECT COUNT(*) FROM rfb_empresas`),
       pool.query(`SELECT COUNT(*) FROM rfb_estabelecimentos`),
+      pool.query(`SELECT COUNT(*) FROM rfb_simples`),
+      pool.query(`SELECT COUNT(*) FROM rfb_cnaes`),
+      pool.query(`SELECT COUNT(*) FROM rfb_municipios`),
     ]);
     const last = logRow.rows[0];
     const empresas = parseInt(empCount.rows[0].count, 10);
@@ -4805,7 +4808,13 @@ app.get('/api/rfb/status', async (req, res) => {
       imported: estabelecimentos > 0,
       last_import: last?.finished_at || null,
       dev_limit: last?.dev_limit ?? null,
-      records: { empresas, estabelecimentos },
+      records: {
+        empresas,
+        estabelecimentos,
+        simples: parseInt(simCount.rows[0].count, 10),
+        cnaes: parseInt(cnaeCount.rows[0].count, 10),
+        municipios: parseInt(munCount.rows[0].count, 10),
+      },
     });
   } catch (err) {
     res.json({ imported: false, error: err.message });
