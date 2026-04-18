@@ -5711,12 +5711,13 @@ function App() {
               return `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}`;
             };
             const situacaoClass = (s) => {
-              if (s === '2') return 'bg-status-success/10 text-status-success border-status-success/30';
-              if (s === '4' || s === '8') return 'bg-status-danger/10 text-status-danger border-status-danger/30';
-              if (s === '3') return 'bg-status-warning/10 text-status-warning border-status-warning/30';
+              const v = String(s || '');
+              if (v === 'Ativa'   || v === '2' || v === '02') return 'bg-status-success/10 text-status-success border-status-success/30';
+              if (v === 'Inapta'  || v === 'Baixada' || v === '4' || v === '04' || v === '8' || v === '08') return 'bg-status-danger/10 text-status-danger border-status-danger/30';
+              if (v === 'Suspensa'|| v === '3' || v === '03') return 'bg-status-warning/10 text-status-warning border-status-warning/30';
               return 'bg-cardAlt text-muted border-border';
             };
-            const SITUACAO_MAP = { '1': 'Nula', '2': 'Ativa', '3': 'Suspensa', '4': 'Inapta', '8': 'Baixada' };
+            const SITUACAO_MAP = { '1': 'Nula', '01': 'Nula', '2': 'Ativa', '02': 'Ativa', '3': 'Suspensa', '03': 'Suspensa', '4': 'Inapta', '04': 'Inapta', '8': 'Baixada', '08': 'Baixada' };
             const situacaoLabel = (s) => SITUACAO_MAP[String(s || '')] || s || '—';
             const UF_LIST = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
 
