@@ -4827,11 +4827,12 @@ app.get('/api/rfb/status', async (req, res) => {
     // COUNT(*) em tabelas grandes é muito lento — usar estimativa do catálogo do PG
     const fastCount = (table) =>
       pool.query(`SELECT reltuples::BIGINT AS count FROM pg_class WHERE relname = $1`, [table]);
-    const [logRow, empCount, estCount, simCount, cnaeCount, munCount] = await Promise.all([
+    const [logRow, empCount, estCount, simCount, socCount, cnaeCount, munCount] = await Promise.all([
       pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
       fastCount('rfb_empresas'),
       fastCount('rfb_estabelecimentos'),
       fastCount('rfb_simples'),
+      fastCount('rfb_socios'),
       pool.query(`SELECT COUNT(*) FROM rfb_cnaes`),
       pool.query(`SELECT COUNT(*) FROM rfb_municipios`),
     ]);
@@ -4845,6 +4846,7 @@ app.get('/api/rfb/status', async (req, res) => {
       records: {
         empresas,
         estabelecimentos,
+        socios: parseInt(socCount.rows[0].count, 10),
         simples: parseInt(simCount.rows[0].count, 10),
         cnaes: parseInt(cnaeCount.rows[0].count, 10),
         municipios: parseInt(munCount.rows[0].count, 10),
