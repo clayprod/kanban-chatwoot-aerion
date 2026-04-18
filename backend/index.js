@@ -4977,9 +4977,12 @@ app.get('/api/rfb/search', async (req, res) => {
   try {
     const {
       cnpj = '', nome = '', nome_op = 'contains',
-      socio = '', socio_op = 'contains', uf = '',
-      municipio = '', cnae = '', situacao = '', porte = '',
+      nome2 = '', nome2_op = 'contains', nome_logic = 'AND',
+      socio = '', socio_op = 'contains',
+      socio2 = '', socio2_op = 'contains', socio_logic = 'AND',
+      uf = '', municipio = '', cnae = '', situacao = '', porte = '',
       endereco = '', endereco_op = 'contains',
+      endereco2 = '', endereco2_op = 'contains', endereco_logic = 'AND',
       simples = '', mei = '',
       only_matriz = 'true',
       capital_min = '', capital_max = '',
@@ -5023,21 +5026,38 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
-    if (nome.trim()) {
-      where.push(applyTextOp(['emp.razao_social', 'e.nome_fantasia'], nome, nome_op));
+    // Nome — aceita até 2 termos combinados com AND/OR
+    {
+      const n1 = nome.trim(), n2 = nome2.trim();
+      if (n1 || n2) {
+        const cols = ['emp.razao_social', 'e.nome_fantasia'];
+        const clauses = [];
+        if (n1) clauses.push(applyTextOp(cols, n1, nome_op));
+        if (n2) clauses.push(applyTextOp(cols, n2, nome2_op));
+        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${nome_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+      }
     }
 
-    if (socio.trim()) {
-      const v = socio.trim();
-      let pattern;
-      if (socio_op === 'starts')  pattern = `${v}%`;
-      else if (socio_op === 'ends')    pattern = `%${v}`;
-      else if (socio_op === 'exact')   pattern = v;
-      else                             pattern = `%${v}%`;
-      params.push(pattern);
-      const idx = params.length;
-      const neg = socio_op === 'not_contains' ? 'NOT ' : '';
-      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ${neg}ILIKE immutable_unaccent(lower($${idx})))`);
+    // Sócio — aceita até 2 termos combinados com AND/OR
+    {
+      const buildSocioClause = (v, op) => {
+        let pattern;
+        if (op === 'starts') pattern = `${v}%`;
+        else if (op === 'ends') pattern = `%${v}`;
+        else if (op === 'exact') pattern = v;
+        else pattern = `%${v}%`;
+        params.push(pattern);
+        const idx = params.length;
+        const neg = op === 'not_contains';
+        return `e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ${neg ? 'NOT ' : ''}ILIKE immutable_unaccent(lower($${idx})))`;
+      };
+      const s1 = socio.trim(), s2 = socio2.trim();
+      if (s1 || s2) {
+        const clauses = [];
+        if (s1) clauses.push(buildSocioClause(s1, socio_op));
+        if (s2) clauses.push(buildSocioClause(s2, socio2_op));
+        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${socio_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+      }
     }
 
     if (uf.trim()) {
@@ -5076,8 +5096,16 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`emp.porte_da_empresa IN ($${params.length - 1}, $${params.length})`);
     }
 
-    if (endereco.trim()) {
-      where.push(applyTextOp(['e.logradouro', 'e.bairro', 'e.cep', 'e.complemento'], endereco, endereco_op));
+    // Endereço — aceita até 2 termos combinados com AND/OR
+    {
+      const cols = ['e.logradouro', 'e.bairro', 'e.cep', 'e.complemento'];
+      const e1 = endereco.trim(), e2 = endereco2.trim();
+      if (e1 || e2) {
+        const clauses = [];
+        if (e1) clauses.push(applyTextOp(cols, e1, endereco_op));
+        if (e2) clauses.push(applyTextOp(cols, e2, endereco2_op));
+        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${endereco_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+      }
     }
 
     // Simples Nacional / MEI
