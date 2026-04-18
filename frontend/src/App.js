@@ -6174,7 +6174,7 @@ function App() {
                           onBlur={() => setTimeout(() => setRfbCnaeDropdownOpen(false), 200)}
                         />
                         {rfbCnaeDropdownOpen && filteredCnaes.length > 0 && (
-                          <div className="absolute z-30 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-card">
+                          <div className="absolute z-30 left-0 mt-1 min-w-full w-max max-w-xs max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-card">
                             {filteredCnaes.map(c => (
                               <button
                                 key={c.codigo}
@@ -6182,7 +6182,7 @@ function App() {
                                 className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-cardAlt border-b border-border/50 last:border-0 flex gap-2"
                               >
                                 <span className="font-mono text-muted flex-shrink-0">{c.codigo}</span>
-                                <span className="truncate">{c.descricao}</span>
+                                <span>{c.descricao}</span>
                               </button>
                             ))}
                           </div>
