@@ -5911,9 +5911,10 @@ function App() {
                             { label: 'Tabelas de referência', done: (rec.cnaes || 0) > 0 || (rec.municipios || 0) > 0 },
                             { label: 'Empresas', count: rec.empresas, target: 8000000 },
                             { label: 'Estabelecimentos', count: rec.estabelecimentos, target: 10000000 },
+                            { label: 'Sócios', count: rec.socios, target: 22000000 },
                           ];
-                          const totalTarget = 18000000;
-                          const totalDone = (rec.empresas || 0) + (rec.estabelecimentos || 0);
+                          const totalTarget = 40000000;
+                          const totalDone = (rec.empresas || 0) + (rec.estabelecimentos || 0) + (rec.socios || 0);
                           const pct = Math.min(99, Math.round((totalDone / totalTarget) * 100));
                           return (
                             <>
@@ -5968,6 +5969,7 @@ function App() {
                     <div className="flex flex-wrap items-center gap-4 text-sm text-muted">
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
+                      <span><span className={`font-semibold ${(rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{(rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
                       <button
                         onClick={() => {
                           axios.post('/api/rfb/import/start')

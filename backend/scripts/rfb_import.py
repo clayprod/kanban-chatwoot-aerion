@@ -373,20 +373,36 @@ def main():
                 progress('error', 'Nenhum arquivo encontrado no servidor da RF', error='no_files_found')
                 sys.exit(1)
 
-            # Filtrar os que já foram importados com o mesmo tamanho
+            # Separar em novos/alterados vs já importados (mesmo tamanho)
             to_download = []
-            skipped = 0
+            already_ok  = []  # [(filename, rsize)] já importados e inalterados
             for z in selected:
                 filename = Path(z['href']).name
                 rsize    = z.get('size', 0)
                 if filename in already_imported and already_imported[filename] == rsize and rsize > 0:
-                    skipped += 1
+                    already_ok.append(z)
                 else:
                     to_download.append(z)
 
+            # Se algum arquivo de uma categoria vai ser truncado+reimportado,
+            # os demais arquivos dessa mesma categoria também precisam ser
+            # baixados de novo — senão o TRUNCATE apaga os dados deles sem
+            # repor.  Detectamos quais categorias têm arquivos novos e
+            # adicionamos os "já ok" dessas categorias à fila de download.
+            cats_with_new = {classify(Path(z['href']).name) for z in to_download}
+            rescued = []
+            for z in already_ok:
+                if classify(Path(z['href']).name) in cats_with_new:
+                    to_download.append(z)
+                    rescued.append(Path(z['href']).name)
+                # else: categoria intacta, pode ficar como está
+
+            skipped = len(already_ok) - len(rescued)
             if skipped:
                 progress('running', f'{skipped} arquivo(s) inalterados — pulando download e import')
-            progress('running', f'{len(to_download)} arquivo(s) novos/alterados para baixar')
+            if rescued:
+                progress('running', f'{len(rescued)} arquivo(s) adicionados de volta por truncate de categoria')
+            progress('running', f'{len(to_download)} arquivo(s) para baixar')
 
             if not to_download:
                 progress('done', 'Nenhuma atualização disponível — base já está atual!',
