@@ -1372,6 +1372,10 @@ function App() {
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
+  const [rfbEndereco, setRfbEndereco] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.endereco || ''; } catch { return ''; } });
+  const [rfbEnderecoOp, setRfbEnderecoOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.enderecoOp || 'contains'; } catch { return 'contains'; } });
+  const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || ''; } catch { return ''; } });
+  const [rfbMei, setRfbMei] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.mei || ''; } catch { return ''; } });
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
   const [rfbPage, setRfbPage] = useState(1);
@@ -5782,6 +5786,9 @@ function App() {
                 if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
                 if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
                 if (rfbAberturaRange[1] > 0) params.set('abertura_max_anos', rfbAberturaRange[1]);
+                if (rfbEndereco.trim()) { params.set('endereco', rfbEndereco.trim()); params.set('endereco_op', rfbEnderecoOp); }
+                if (rfbSimples) params.set('simples', rfbSimples);
+                if (rfbMei) params.set('mei', rfbMei);
                 params.set('page', pg);
                 params.set('page_size', rfbPageSize);
                 params.set('order_by', rfbOrderBy);
@@ -5790,7 +5797,7 @@ function App() {
                 setRfbTotal(res.data.total || 0);
                 setRfbPage(pg);
                 // Persistir busca
-                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange })); } catch {}
+                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei })); } catch {}
               } catch (e) {
                 setRfbError(e.response?.data?.error || 'Erro na busca.');
               } finally { setRfbLoading(false); }
@@ -5802,6 +5809,10 @@ function App() {
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
               setRfbAberturaRange([0, 0]);
+              setRfbEndereco('');
+              setRfbEnderecoOp('contains');
+              setRfbSimples('');
+              setRfbMei('');
               setRfbCnaeInput('');
               setRfbMunicipioInput('');
               setRfbResults([]);
@@ -6027,6 +6038,27 @@ function App() {
                       />
                     </div>
 
+                    {/* Endereço */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1">Endereço / Bairro / CEP</label>
+                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
+                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
+                          <button key={op} onClick={() => setRfbEnderecoOp(op)}
+                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbEnderecoOp === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
+                          >{sym}</button>
+                        ))}
+                      </div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        placeholder="Rua, bairro, CEP..."
+                        value={rfbEndereco}
+                        onChange={e => setRfbEndereco(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
+                      />
+                    </div>
+
                     {/* UF */}
                     <div>
                       <label className="block text-xs text-muted mb-1">UF</label>
@@ -6131,6 +6163,31 @@ function App() {
                         <option value="">Selecionar situação...</option>
                         {Object.entries(SITUACAO_MAP).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
+                    </div>
+
+                    {/* Simples Nacional / MEI */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1.5">Regime Tributário</label>
+                      <div className="space-y-1.5">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-primary"
+                            checked={rfbSimples === 'S'}
+                            onChange={e => setRfbSimples(e.target.checked ? 'S' : '')}
+                          />
+                          <span className="text-xs text-ink">Simples Nacional</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-primary"
+                            checked={rfbMei === 'S'}
+                            onChange={e => setRfbMei(e.target.checked ? 'S' : '')}
+                          />
+                          <span className="text-xs text-ink">MEI</span>
+                        </label>
+                      </div>
                     </div>
 
                     {/* Capital Social slider */}
