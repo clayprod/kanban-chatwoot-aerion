@@ -5959,9 +5959,21 @@ function App() {
                         )}
                       </p>
                     </div>
-                    <div className="flex gap-4 text-sm text-muted">
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-muted">
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
+                      <button
+                        onClick={() => {
+                          axios.post('/api/rfb/import/start')
+                            .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                            .catch(() => {});
+                          setRfbStatus(false);
+                        }}
+                        className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition"
+                        title="Reimportar base da Receita Federal"
+                      >
+                        ↺ Reimportar
+                      </button>
                     </div>
                   </div>
                 </div>
