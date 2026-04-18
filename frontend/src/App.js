@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Leads (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return { ..._rfbDef, ...(s.filters || {}) }; } catch { return _rfbDef; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: ['2'], porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); return { ..._rfbDef, ...saved, situacao }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -5787,7 +5787,7 @@ function App() {
                 if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
                 if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
-                if (rfbFilters.situacao.trim()) params.set('situacao', rfbFilters.situacao.trim());
+                if (rfbFilters.situacao.length > 0) params.set('situacao', rfbFilters.situacao.join(','));
                 if (rfbFilters.porte.trim()) params.set('porte', rfbFilters.porte.trim());
                 if (rfbCapitalRange[0] > 0) params.set('capital_min', rfbCapitalRange[0]);
                 if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
@@ -5814,7 +5814,7 @@ function App() {
             };
 
             const handleClear = () => {
-              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' };
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: ['2'], porte: '' };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
@@ -6193,14 +6193,19 @@ function App() {
                     {/* Situação */}
                     <div>
                       <label className="block text-xs text-muted mb-1">Situação</label>
-                      <select
-                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        value={rfbFilters.situacao}
-                        onChange={e => setRfbFilters(p => ({ ...p, situacao: e.target.value }))}
-                      >
-                        <option value="">Selecionar situação...</option>
-                        {Object.entries(SITUACAO_MAP).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                      </select>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[['2','Ativa'],['3','Suspensa'],['4','Inapta'],['8','Baixada'],['1','Nula']].map(([code, label]) => {
+                          const checked = rfbFilters.situacao.includes(code);
+                          return (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() => setRfbFilters(p => ({ ...p, situacao: checked ? p.situacao.filter(s => s !== code) : [...p.situacao, code] }))}
+                              className={`text-xs px-2 py-1 rounded-lg border transition ${checked ? 'bg-primary/15 border-primary/40 text-primary font-medium' : 'bg-cardAlt border-border text-muted hover:border-primary/30'}`}
+                            >{label}</button>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {/* Porte */}
@@ -6431,12 +6436,10 @@ function App() {
                                   <p className="text-ink"><span className="font-mono">{row.cnae_fiscal_principal}</span>{row.cnae_descricao ? ` — ${row.cnae_descricao}` : ''}</p>
                                 </div>
                               )}
-                              {row.socios_nomes && (
-                                <div className="sm:col-span-2 lg:col-span-3">
-                                  <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
-                                  <p className="text-ink">{row.socios_nomes}</p>
-                                </div>
-                              )}
+                              <div className="sm:col-span-2 lg:col-span-3">
+                                <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
+                                <p className="text-ink">{row.socios_nomes || <span className="text-muted">—</span>}</p>
+                              </div>
                             </div>
 
                             {/* Filiais section */}
@@ -6486,7 +6489,7 @@ function App() {
                       return (
                         <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
                           {/* Desktop header */}
-                          <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-2.5 border-b border-border bg-cardAlt text-xs font-semibold text-muted uppercase tracking-wide">
+                          <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_116px] gap-x-3 px-4 py-2.5 border-b border-border bg-cardAlt text-xs font-semibold text-muted uppercase tracking-wide">
                             <span>CNPJ</span>
                             <span>Razão Social</span>
                             <span>Nome Fantasia</span>
@@ -6545,7 +6548,7 @@ function App() {
                                 </div>
 
                                 {/* Desktop grid row */}
-                                <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-3 items-center text-sm">
+                                <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_116px] gap-x-3 px-4 py-3 items-center text-sm">
                                   <div className="min-w-0">
                                     <span className="font-mono text-xs text-muted">{fmtCNPJ(row.cnpj)}</span>
                                     {row.filiais_count > 0 && (
