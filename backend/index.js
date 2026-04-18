@@ -4687,6 +4687,13 @@ function startRFBImport() {
 const createRFBTables = async () => {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`).catch(() => {});
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`).catch(() => {});
+  // Wrapper imutável necessário para índices de expressão com unaccent
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+    RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+      SELECT public.unaccent($1);
+    $$
+  `).catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rfb_empresas (
       cnpj_basico TEXT PRIMARY KEY,
@@ -4791,6 +4798,23 @@ const createRFBTables = async () => {
       imported_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Índices críticos — criados em background para não bloquear o startup
+  setImmediate(async () => {
+    const criticalIndexes = [
+      `CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem ON rfb_estabelecimentos(cnpj_ordem)`,
+      `CREATE INDEX IF NOT EXISTS idx_rfb_est_basico ON rfb_estabelecimentos(cnpj_basico)`,
+      `CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico ON rfb_socios(cnpj_basico)`,
+    ];
+    for (const idx of criticalIndexes) {
+      const name = idx.match(/idx_rfb_\w+/)?.[0] || '?';
+      try {
+        await pool.query(idx);
+        console.log(`[rfb] Índice ${name} OK`);
+      } catch (e) {
+        console.log(`[rfb] Índice ${name}: ${e.message}`);
+      }
+    }
+  });
 };
 
 // Cache em memória para listas de referência
@@ -5106,8 +5130,13 @@ app.get('/api/rfb/search', async (req, res) => {
       ${whereClause}
     `;
 
-    const [dataRows, countRow] = await Promise.all([
-      pool.query(`
+    // Limite de tempo por query — evita bloquear a conexão indefinidamente
+    const client = await pool.connect();
+    let dataRows, countRow;
+    try {
+      await client.query(`SET statement_timeout = '120s'`);
+      [dataRows, countRow] = await Promise.all([
+      client.query(`
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
           e.cnpj_basico, e.cnpj_ordem,
@@ -5149,8 +5178,11 @@ app.get('/api/rfb/search', async (req, res) => {
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `, [...params, limit, offset]),
       // Limitar scan do COUNT para evitar timeout em buscas amplas
-      pool.query(`SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`, params),
+      client.query(`SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`, params),
     ]);
+    } finally {
+      client.release();
+    }
 
     res.json({
       results: dataRows.rows,
@@ -5159,7 +5191,8 @@ app.get('/api/rfb/search', async (req, res) => {
       page_size: limit,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[rfb/search] Erro:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno na busca' });
   }
 });
 

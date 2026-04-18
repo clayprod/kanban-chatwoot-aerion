@@ -271,10 +271,12 @@ def create_indexes(conn):
     progress('running', 'Criando índices...')
     idxs = [
         'CREATE INDEX IF NOT EXISTS idx_rfb_est_basico   ON rfb_estabelecimentos(cnpj_basico)',
+        'CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem    ON rfb_estabelecimentos(cnpj_ordem)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf       ON rfb_estabelecimentos(uf)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_est_municipio ON rfb_estabelecimentos(municipio)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae     ON rfb_estabelecimentos(cnae_fiscal_principal)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao ON rfb_estabelecimentos(situacao_cadastral)',
+        'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte    ON rfb_empresas(porte_da_empresa)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico ON rfb_socios(cnpj_basico)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao    ON rfb_empresas(razao_social text_pattern_ops)',
         'CREATE INDEX IF NOT EXISTS idx_rfb_socios_nome  ON rfb_socios(nome_do_socio text_pattern_ops)',
