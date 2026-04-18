@@ -4680,6 +4680,7 @@ function startRFBImport() {
 }
 
 const createRFBTables = async () => {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rfb_empresas (
       cnpj_basico TEXT PRIMARY KEY,
@@ -4967,9 +4968,12 @@ app.get('/api/rfb/search', async (req, res) => {
       else if (op === 'ends')    { pattern = `%${v}`; }
       else if (op === 'exact')   { pattern = v; }
       else                       { pattern = `%${v}%`; } // contains (default)
-      params.push(pattern.toUpperCase());
+      params.push(pattern);
       const idx = params.length;
-      const conds = cols.map(col => `UPPER(${col}) ${negated ? 'NOT ' : ''}ILIKE $${idx}`);
+      // unaccent() + ILIKE: insensível a maiúsculas, minúsculas e acentos
+      const conds = cols.map(col =>
+        `unaccent(UPPER(${col})) ${negated ? 'NOT ' : ''}ILIKE unaccent(UPPER($${idx}))`
+      );
       return conds.length === 1 ? conds[0] : `(${conds.join(' OR ')})`;
     };
 
@@ -4995,10 +4999,10 @@ app.get('/api/rfb/search', async (req, res) => {
       else if (socio_op === 'ends')    pattern = `%${v}`;
       else if (socio_op === 'exact')   pattern = v;
       else                             pattern = `%${v}%`;
-      params.push(pattern.toUpperCase());
+      params.push(pattern);
       const idx = params.length;
       const neg = socio_op === 'not_contains' ? 'NOT ' : '';
-      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE UPPER(nome_do_socio) ${neg}ILIKE $${idx})`);
+      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE unaccent(UPPER(nome_do_socio)) ${neg}ILIKE unaccent(UPPER($${idx})))`);
     }
 
     if (uf.trim()) {
