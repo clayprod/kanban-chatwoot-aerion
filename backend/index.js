@@ -4305,7 +4305,11 @@ app.post('/api/leads/import', async (req, res) => {
   for (const lead of leads.slice(0, 100)) {
     try {
       const cnpj = normalizeCNPJ(lead.cnpj);
-      const name = (lead.razao_social || lead.nome_fantasia || 'Empresa').slice(0, 255);
+      // Nome do contato: sócio (se disponível) ou razão social
+      const fullName = lead.primeiro_nome
+        ? `${lead.primeiro_nome}${lead.sobrenome ? ' ' + lead.sobrenome : ''}`.trim()
+        : (lead.razao_social || lead.nome_fantasia || 'Empresa');
+      const name = fullName.slice(0, 255);
       const email = (lead.email || '').toLowerCase().trim().slice(0, 255) || null;
       const rawPhone = lead.ddd_telefone_1 || lead.ddd_telefone_2 || '';
       const phone = rawPhone ? rawPhone.replace(/\s/g, '').slice(0, 20) : null;
@@ -4331,7 +4335,8 @@ app.post('/api/leads/import', async (req, res) => {
       const customAttr = { Funil_Vendas: defaultStage, CNPJ: cnpj };
       if (lead.cnae_fiscal_descricao) customAttr.CNAE_Principal = String(lead.cnae_fiscal_descricao).slice(0, 255);
       if (lead.cnae_fiscal) customAttr.CNAE_Codigo = String(lead.cnae_fiscal);
-      if (lead.capital_social != null) customAttr.Capital_Social = String(lead.capital_social);
+      const capVal = String(lead.capital_social || '').trim();
+      if (capVal) customAttr.Capital_Social = capVal;
       if (lead.descricao_situacao_cadastral) customAttr.Situacao_Cadastral = String(lead.descricao_situacao_cadastral).slice(0, 100);
       if (lead.data_inicio_atividade) customAttr.Data_Abertura = String(lead.data_inicio_atividade);
       if (lead.descricao_porte) customAttr.Porte = String(lead.descricao_porte).slice(0, 100);
