@@ -4948,7 +4948,7 @@ app.get('/api/rfb/search', async (req, res) => {
     const {
       cnpj = '', nome = '', nome_op = 'contains',
       socio = '', socio_op = 'contains', uf = '',
-      municipio = '', cnae = '', situacao = '',
+      municipio = '', cnae = '', situacao = '', porte = '',
       endereco = '', endereco_op = 'contains',
       simples = '', mei = '',
       only_matriz = 'true',
@@ -5030,11 +5030,17 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (situacao.trim()) {
-      // Aceita '2' ou '02' (DB armazena com zero, ex: '02')
       const sit = situacao.trim();
       const sitPadded = sit.padStart(2, '0');
       params.push(sit); params.push(sitPadded);
       where.push(`e.situacao_cadastral IN ($${params.length - 1}, $${params.length})`);
+    }
+
+    if (porte.trim()) {
+      const p = porte.trim();
+      const pPadded = p.padStart(2, '0');
+      params.push(p); params.push(pPadded);
+      where.push(`emp.porte_da_empresa IN ($${params.length - 1}, $${params.length})`);
     }
 
     if (endereco.trim()) {
