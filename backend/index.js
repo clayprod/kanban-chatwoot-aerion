@@ -4891,9 +4891,37 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
   }
 });
 
+// GET /api/rfb/filiais/:cnpjBasico — retorna todas as filiais (cnpj_ordem != '0001') de um CNPJ base
+app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
+  const { cnpjBasico } = req.params;
+  try {
+    const r = await pool.query(`
+      SELECT
+        e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
+        e.cnpj_ordem,
+        e.nome_fantasia, e.situacao_cadastral,
+        e.data_de_inicio_da_atividade,
+        e.uf, m.descricao AS municipio_nome,
+        e.logradouro, e.numero, e.complemento, e.bairro, e.cep,
+        e.tipo_de_logradouro,
+        e.ddd1, e.telefone1, e.ddd2, e.telefone2,
+        e.correio_eletronico,
+        e.cnae_fiscal_principal, c.descricao AS cnae_descricao
+      FROM rfb_estabelecimentos e
+      LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
+      LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
+      WHERE e.cnpj_basico = $1 AND e.cnpj_ordem != '0001'
+      ORDER BY e.cnpj_ordem
+    `, [cnpjBasico]);
+    res.json(r.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/rfb/search
 // Params: cnpj, nome, nome_op, socio, socio_op, uf, municipio, cnae, situacao,
-//         endereco, endereco_op, simples, mei,
+//         endereco, endereco_op, simples, mei, only_matriz,
 //         capital_min, capital_max, abertura_min_anos, abertura_max_anos,
 //         page, page_size, order_by
 app.get('/api/rfb/search', async (req, res) => {
@@ -4904,6 +4932,7 @@ app.get('/api/rfb/search', async (req, res) => {
       municipio = '', cnae = '', situacao = '',
       endereco = '', endereco_op = 'contains',
       simples = '', mei = '',
+      only_matriz = 'true',
       capital_min = '', capital_max = '',
       abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
@@ -4990,6 +5019,9 @@ app.get('/api/rfb/search', async (req, res) => {
     if (mei === 'S') where.push(`s.opcao_pelo_mei = 'S'`);
     if (mei === 'N') where.push(`(s.opcao_pelo_mei IS NULL OR s.opcao_pelo_mei != 'S')`);
 
+    // Mostrar apenas matriz (cnpj_ordem = '0001') por padrão
+    if (only_matriz !== 'false') where.push(`e.cnpj_ordem = '0001'`);
+
     // Capital social (TEXT → NUMERIC)
     const capitalExpr = `NULLIF(replace(replace(emp.capital_social,'.',''),',','.'), '')::NUMERIC`;
     if (capital_min !== '') {
@@ -5040,6 +5072,7 @@ app.get('/api/rfb/search', async (req, res) => {
       pool.query(`
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
+          e.cnpj_basico, e.cnpj_ordem,
           emp.razao_social, e.nome_fantasia,
           e.situacao_cadastral, e.data_de_inicio_da_atividade,
           e.cnae_fiscal_principal, c.descricao AS cnae_descricao,
@@ -5052,7 +5085,8 @@ app.get('/api/rfb/search', async (req, res) => {
           emp.natureza_juridica,
           s.opcao_pelo_simples, s.opcao_pelo_mei,
           (SELECT string_agg(nome_do_socio, ' · ' ORDER BY nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS socios_nomes,
-          (SELECT MIN(nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS primeiro_socio
+          (SELECT MIN(nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS primeiro_socio,
+          (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count
         ${baseQuery}
         ORDER BY ${orderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
