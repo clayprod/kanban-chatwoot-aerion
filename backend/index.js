@@ -4893,6 +4893,7 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
 
 // GET /api/rfb/search
 // Params: cnpj, nome, nome_op, socio, socio_op, uf, municipio, cnae, situacao,
+//         endereco, endereco_op, simples, mei,
 //         capital_min, capital_max, abertura_min_anos, abertura_max_anos,
 //         page, page_size, order_by
 app.get('/api/rfb/search', async (req, res) => {
@@ -4901,6 +4902,8 @@ app.get('/api/rfb/search', async (req, res) => {
       cnpj = '', nome = '', nome_op = 'contains',
       socio = '', socio_op = 'contains', uf = '',
       municipio = '', cnae = '', situacao = '',
+      endereco = '', endereco_op = 'contains',
+      simples = '', mei = '',
       capital_min = '', capital_max = '',
       abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
@@ -4976,6 +4979,16 @@ app.get('/api/rfb/search', async (req, res) => {
       params.push(situacao.trim());
       where.push(`e.situacao_cadastral = $${params.length}`);
     }
+
+    if (endereco.trim()) {
+      where.push(applyTextOp(['e.logradouro', 'e.bairro', 'e.cep', 'e.complemento'], endereco, endereco_op));
+    }
+
+    // Simples Nacional / MEI
+    if (simples === 'S') where.push(`s.opcao_pelo_simples = 'S'`);
+    if (simples === 'N') where.push(`(s.opcao_pelo_simples IS NULL OR s.opcao_pelo_simples != 'S')`);
+    if (mei === 'S') where.push(`s.opcao_pelo_mei = 'S'`);
+    if (mei === 'N') where.push(`(s.opcao_pelo_mei IS NULL OR s.opcao_pelo_mei != 'S')`);
 
     // Capital social (TEXT → NUMERIC)
     const capitalExpr = `NULLIF(replace(replace(emp.capital_social,'.',''),',','.'), '')::NUMERIC`;
