@@ -5807,7 +5807,9 @@ function App() {
                 // Persistir busca
                 try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
               } catch (e) {
-                setRfbError(e.response?.data?.error || 'Erro na busca.');
+                const status = e.response?.status;
+                const msg = e.response?.data?.error || e.message || 'Erro na busca.';
+                setRfbError(status === 504 ? 'Tempo limite excedido — busca muito ampla ou índice ainda sendo criado.' : msg);
               } finally { setRfbLoading(false); }
             };
 
