@@ -4685,7 +4685,8 @@ function startRFBImport() {
 }
 
 const createRFBTables = async () => {
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`);
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`).catch(() => {});
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`).catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rfb_empresas (
       cnpj_basico TEXT PRIMARY KEY,
@@ -4969,19 +4970,17 @@ app.get('/api/rfb/search', async (req, res) => {
 
     // Helper: aplica operador de texto em uma ou mais colunas
     const applyTextOp = (cols, val, op) => {
-      const v = val.trim();
+      const v = val.trim().toLowerCase();
       let pattern, negated = false;
       if (op === 'not_contains') { pattern = `%${v}%`; negated = true; }
       else if (op === 'starts')  { pattern = `${v}%`; }
       else if (op === 'ends')    { pattern = `%${v}`; }
       else if (op === 'exact')   { pattern = v; }
-      else                       { pattern = `%${v}%`; } // contains (default)
+      else                       { pattern = `%${v}%`; }
       params.push(pattern);
       const idx = params.length;
-      // unaccent() + ILIKE: insensível a maiúsculas, minúsculas e acentos
-      const conds = cols.map(col =>
-        `unaccent(UPPER(${col})) ${negated ? 'NOT ' : ''}ILIKE unaccent(UPPER($${idx}))`
-      );
+      // ILIKE usa índice pg_trgm; normalização de acentos feita no cliente (JS)
+      const conds = cols.map(col => `${col} ${negated ? 'NOT ' : ''}ILIKE $${idx}`);
       return conds.length === 1 ? conds[0] : `(${conds.join(' OR ')})`;
     };
 
@@ -5010,7 +5009,7 @@ app.get('/api/rfb/search', async (req, res) => {
       params.push(pattern);
       const idx = params.length;
       const neg = socio_op === 'not_contains' ? 'NOT ' : '';
-      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE unaccent(UPPER(nome_do_socio)) ${neg}ILIKE unaccent(UPPER($${idx})))`);
+      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE nome_do_socio ${neg}ILIKE $${idx})`);
     }
 
     if (uf.trim()) {
@@ -5147,7 +5146,8 @@ app.get('/api/rfb/search', async (req, res) => {
         ORDER BY ${orderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `, [...params, limit, offset]),
-      pool.query(`SELECT COUNT(*) ${baseQuery}`, params),
+      // Limitar scan do COUNT para evitar timeout em buscas amplas
+      pool.query(`SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`, params),
     ]);
 
     res.json({

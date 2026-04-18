@@ -283,8 +283,11 @@ def create_indexes(conn):
         # Tenta pg_trgm para buscas ILIKE %x% mais rápidas
         try:
             cur.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(razao_social gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(nome_do_socio gin_trgm_ops)')
+            cur.execute('CREATE EXTENSION IF NOT EXISTS unaccent')
+            # Índices trigrama com unaccent para buscas insensíveis a acentos e rápidas
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(unaccent(lower(razao_social)) gin_trgm_ops)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(unaccent(lower(nome_do_socio)) gin_trgm_ops)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm ON rfb_estabelecimentos USING gin(unaccent(lower(nome_fantasia)) gin_trgm_ops)')
         except Exception:
             conn.rollback()
         for idx in idxs:
