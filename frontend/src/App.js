@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Leads (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.filters || { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' }; } catch { return { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' }; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.filters || { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; } catch { return { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -5786,6 +5786,7 @@ function App() {
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
                 if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
                 if (rfbFilters.situacao.trim()) params.set('situacao', rfbFilters.situacao.trim());
+                if (rfbFilters.porte.trim()) params.set('porte', rfbFilters.porte.trim());
                 if (rfbCapitalRange[0] > 0) params.set('capital_min', rfbCapitalRange[0]);
                 if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
                 if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
@@ -5809,7 +5810,7 @@ function App() {
             };
 
             const handleClear = () => {
-              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' };
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
@@ -6195,6 +6196,22 @@ function App() {
                       >
                         <option value="">Selecionar situação...</option>
                         {Object.entries(SITUACAO_MAP).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Porte */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1">Porte</label>
+                      <select
+                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        value={rfbFilters.porte}
+                        onChange={e => setRfbFilters(p => ({ ...p, porte: e.target.value }))}
+                      >
+                        <option value="">Selecionar porte...</option>
+                        <option value="01">Micro Empresa</option>
+                        <option value="03">Empresa de Pequeno Porte</option>
+                        <option value="05">Demais</option>
+                        <option value="00">Não informado</option>
                       </select>
                     </div>
 
