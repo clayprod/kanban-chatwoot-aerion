@@ -4799,11 +4799,14 @@ let _rfbCnaesCache = null;
 // GET /api/rfb/status
 app.get('/api/rfb/status', async (req, res) => {
   try {
+    // COUNT(*) em tabelas grandes é muito lento — usar estimativa do catálogo do PG
+    const fastCount = (table) =>
+      pool.query(`SELECT reltuples::BIGINT AS count FROM pg_class WHERE relname = $1`, [table]);
     const [logRow, empCount, estCount, simCount, cnaeCount, munCount] = await Promise.all([
       pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
-      pool.query(`SELECT COUNT(*) FROM rfb_empresas`),
-      pool.query(`SELECT COUNT(*) FROM rfb_estabelecimentos`),
-      pool.query(`SELECT COUNT(*) FROM rfb_simples`),
+      fastCount('rfb_empresas'),
+      fastCount('rfb_estabelecimentos'),
+      fastCount('rfb_simples'),
       pool.query(`SELECT COUNT(*) FROM rfb_cnaes`),
       pool.query(`SELECT COUNT(*) FROM rfb_municipios`),
     ]);
