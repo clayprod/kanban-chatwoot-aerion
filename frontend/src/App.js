@@ -1377,6 +1377,18 @@ function App() {
   const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || ''; } catch { return ''; } });
   const [rfbMei, setRfbMei] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.mei || ''; } catch { return ''; } });
   const [rfbOnlyMatriz, setRfbOnlyMatriz] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.onlyMatriz !== false; } catch { return true; } });
+  const [rfbNome2, setRfbNome2] = useState('');
+  const [rfbNome2Op, setRfbNome2Op] = useState('contains');
+  const [rfbNomeLogic, setRfbNomeLogic] = useState('AND');
+  const [rfbNomeExpanded, setRfbNomeExpanded] = useState(false);
+  const [rfbSocio2, setRfbSocio2] = useState('');
+  const [rfbSocio2Op, setRfbSocio2Op] = useState('contains');
+  const [rfbSocioLogic, setRfbSocioLogic] = useState('AND');
+  const [rfbSocioExpanded, setRfbSocioExpanded] = useState(false);
+  const [rfbEndereco2, setRfbEndereco2] = useState('');
+  const [rfbEndereco2Op, setRfbEndereco2Op] = useState('contains');
+  const [rfbEnderecoLogic, setRfbEnderecoLogic] = useState('AND');
+  const [rfbEnderecoExpanded, setRfbEnderecoExpanded] = useState(false);
   const [rfbShowFilters, setRfbShowFilters] = useState(false);
   const [rfbFiliais, setRfbFiliais] = useState({}); // cnpjBasico → filiais[]
   const [rfbResults, setRfbResults] = useState([]);
@@ -5783,7 +5795,11 @@ function App() {
                 const params = new URLSearchParams();
                 if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
                 if (rfbFilters.nome.trim()) { params.set('nome', stripAccents(rfbFilters.nome.trim())); params.set('nome_op', rfbOps.nome); }
+                if (rfbNome2.trim()) { params.set('nome2', stripAccents(rfbNome2.trim())); params.set('nome2_op', rfbNome2Op); }
+                if (rfbFilters.nome.trim() && rfbNome2.trim()) params.set('nome_logic', rfbNomeLogic);
                 if (rfbFilters.socio.trim()) { params.set('socio', stripAccents(rfbFilters.socio.trim())); params.set('socio_op', rfbOps.socio); }
+                if (rfbSocio2.trim()) { params.set('socio2', stripAccents(rfbSocio2.trim())); params.set('socio2_op', rfbSocio2Op); }
+                if (rfbFilters.socio.trim() && rfbSocio2.trim()) params.set('socio_logic', rfbSocioLogic);
                 if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
                 if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
@@ -5794,6 +5810,8 @@ function App() {
                 if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
                 if (rfbAberturaRange[1] > 0) params.set('abertura_max_anos', rfbAberturaRange[1]);
                 if (rfbEndereco.trim()) { params.set('endereco', stripAccents(rfbEndereco.trim())); params.set('endereco_op', rfbEnderecoOp); }
+                if (rfbEndereco2.trim()) { params.set('endereco2', stripAccents(rfbEndereco2.trim())); params.set('endereco2_op', rfbEndereco2Op); }
+                if (rfbEndereco.trim() && rfbEndereco2.trim()) params.set('endereco_logic', rfbEnderecoLogic);
                 if (rfbSimples) params.set('simples', rfbSimples);
                 if (rfbMei) params.set('mei', rfbMei);
                 if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
@@ -5819,8 +5837,10 @@ function App() {
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
               setRfbAberturaRange([0, 0]);
-              setRfbEndereco('');
-              setRfbEnderecoOp('contains');
+              setRfbEndereco(''); setRfbEnderecoOp('contains');
+              setRfbNome2(''); setRfbNome2Op('contains'); setRfbNomeLogic('AND'); setRfbNomeExpanded(false);
+              setRfbSocio2(''); setRfbSocio2Op('contains'); setRfbSocioLogic('AND'); setRfbSocioExpanded(false);
+              setRfbEndereco2(''); setRfbEndereco2Op('contains'); setRfbEnderecoLogic('AND'); setRfbEnderecoExpanded(false);
               setRfbSimples('');
               setRfbMei('');
               setRfbOnlyMatriz(true);
@@ -6036,68 +6056,102 @@ function App() {
                       />
                     </div>
 
-                    {/* Nome */}
-                    <div>
-                      <label className="block text-xs text-muted mb-1">Nome / Razão Social</label>
-                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
-                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
-                          <button key={op} onClick={() => setRfbOps(p => ({ ...p, nome: op }))}
-                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbOps.nome === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
-                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
-                          >{sym}</button>
-                        ))}
-                      </div>
-                      <input
-                        type="text"
-                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        placeholder="Ex. Farmácia..."
-                        value={rfbFilters.nome}
-                        onChange={e => setRfbFilters(p => ({ ...p, nome: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
-                      />
-                    </div>
+                    {/* shared helpers — scoped to this block via IIFE */}
+                    {(() => {
+                      const OP_LIST = [['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']];
+                      const OP_TITLES = { contains:'Contém', not_contains:'Não contém', starts:'Começa com', ends:'Termina com', exact:'Igual a' };
+                      const OpPills = ({ val, set }) => (
+                        <div className="flex gap-0.5 flex-wrap">
+                          {OP_LIST.map(([op, sym]) => (
+                            <button key={op} onClick={() => set(op)} title={OP_TITLES[op]}
+                              className={`px-1.5 py-0.5 text-xs rounded border transition ${val === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                            >{sym}</button>
+                          ))}
+                        </div>
+                      );
+                      const LogicToggle = ({ val, set }) => (
+                        <div className="flex gap-0.5">
+                          {['AND','OR'].map(l => (
+                            <button key={l} onClick={() => set(l)}
+                              className={`px-1.5 py-0.5 text-xs rounded border font-medium transition ${val === l ? 'bg-primary/80 text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                            >{l === 'AND' ? 'E' : 'OU'}</button>
+                          ))}
+                        </div>
+                      );
+                      const inputCls = "w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40";
+                      return (
+                        <>
+                          {/* Nome */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs text-muted">Nome / Razão Social</label>
+                              <button onClick={() => setRfbNomeExpanded(p => !p)} className="text-xs text-primary hover:opacity-70">{rfbNomeExpanded ? '− menos' : '+ E/OU'}</button>
+                            </div>
+                            <OpPills val={rfbOps.nome} set={op => setRfbOps(p => ({ ...p, nome: op }))} />
+                            <input type="text" className={`${inputCls} mt-1.5`} placeholder="Ex. Farmácia..."
+                              value={rfbFilters.nome} onChange={e => setRfbFilters(p => ({ ...p, nome: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                            {rfbNomeExpanded && (
+                              <div className="mt-2 pl-2 border-l-2 border-primary/30 space-y-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <LogicToggle val={rfbNomeLogic} set={setRfbNomeLogic} />
+                                  <OpPills val={rfbNome2Op} set={setRfbNome2Op} />
+                                </div>
+                                <input type="text" className={inputCls} placeholder="Segundo termo..."
+                                  value={rfbNome2} onChange={e => setRfbNome2(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                              </div>
+                            )}
+                          </div>
 
-                    {/* Sócio */}
-                    <div>
-                      <label className="block text-xs text-muted mb-1">Sócio</label>
-                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
-                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
-                          <button key={op} onClick={() => setRfbOps(p => ({ ...p, socio: op }))}
-                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbOps.socio === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
-                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
-                          >{sym}</button>
-                        ))}
-                      </div>
-                      <input
-                        type="text"
-                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        placeholder="Nome do sócio..."
-                        value={rfbFilters.socio}
-                        onChange={e => setRfbFilters(p => ({ ...p, socio: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
-                      />
-                    </div>
+                          {/* Sócio */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs text-muted">Sócio</label>
+                              <button onClick={() => setRfbSocioExpanded(p => !p)} className="text-xs text-primary hover:opacity-70">{rfbSocioExpanded ? '− menos' : '+ E/OU'}</button>
+                            </div>
+                            <OpPills val={rfbOps.socio} set={op => setRfbOps(p => ({ ...p, socio: op }))} />
+                            <input type="text" className={`${inputCls} mt-1.5`} placeholder="Nome do sócio..."
+                              value={rfbFilters.socio} onChange={e => setRfbFilters(p => ({ ...p, socio: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                            {rfbSocioExpanded && (
+                              <div className="mt-2 pl-2 border-l-2 border-primary/30 space-y-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <LogicToggle val={rfbSocioLogic} set={setRfbSocioLogic} />
+                                  <OpPills val={rfbSocio2Op} set={setRfbSocio2Op} />
+                                </div>
+                                <input type="text" className={inputCls} placeholder="Segundo sócio..."
+                                  value={rfbSocio2} onChange={e => setRfbSocio2(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                              </div>
+                            )}
+                          </div>
 
-                    {/* Endereço */}
-                    <div>
-                      <label className="block text-xs text-muted mb-1">Endereço / Bairro / CEP</label>
-                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
-                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
-                          <button key={op} onClick={() => setRfbEnderecoOp(op)}
-                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbEnderecoOp === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
-                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
-                          >{sym}</button>
-                        ))}
-                      </div>
-                      <input
-                        type="text"
-                        className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        placeholder="Rua, bairro, CEP..."
-                        value={rfbEndereco}
-                        onChange={e => setRfbEndereco(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
-                      />
-                    </div>
+                          {/* Endereço */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-xs text-muted">Endereço / Bairro / CEP</label>
+                              <button onClick={() => setRfbEnderecoExpanded(p => !p)} className="text-xs text-primary hover:opacity-70">{rfbEnderecoExpanded ? '− menos' : '+ E/OU'}</button>
+                            </div>
+                            <OpPills val={rfbEnderecoOp} set={setRfbEnderecoOp} />
+                            <input type="text" className={`${inputCls} mt-1.5`} placeholder="Rua, bairro, CEP..."
+                              value={rfbEndereco} onChange={e => setRfbEndereco(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                            {rfbEnderecoExpanded && (
+                              <div className="mt-2 pl-2 border-l-2 border-primary/30 space-y-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <LogicToggle val={rfbEnderecoLogic} set={setRfbEnderecoLogic} />
+                                  <OpPills val={rfbEndereco2Op} set={setRfbEndereco2Op} />
+                                </div>
+                                <input type="text" className={inputCls} placeholder="Segundo termo..."
+                                  value={rfbEndereco2} onChange={e => setRfbEndereco2(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }} />
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
 
                     {/* UF */}
                     <div>
@@ -6525,7 +6579,7 @@ function App() {
                               </div>
                             );
                             return (
-                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 ${isExp ? 'bg-cardAlt/40' : ''}`}>
+                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 transition-colors ${isExp ? 'bg-primary/8 border-l-[3px] border-l-primary' : ''}`}>
                                 {/* Mobile card row */}
                                 <div className="lg:hidden px-4 py-3 flex items-start gap-3">
                                   <div className="flex-1 min-w-0" onClick={toggleExpand}>
@@ -6558,10 +6612,10 @@ function App() {
                                     )}
                                   </div>
                                   <div className="min-w-0">
-                                    <p className="font-medium text-ink truncate">{row.razao_social || '—'}</p>
+                                    <p className={`font-medium text-ink ${isExp ? 'break-words' : 'truncate'}`}>{row.razao_social || '—'}</p>
                                     {isDup && <p className="text-xs text-status-warning">Já no CRM</p>}
                                   </div>
-                                  <span className="text-xs text-muted truncate">{row.nome_fantasia || '—'}</span>
+                                  <span className={`text-xs text-muted ${isExp ? 'break-words' : 'truncate'}`}>{row.nome_fantasia || '—'}</span>
                                   <span className="text-xs text-muted truncate">{row.municipio_nome || '—'}</span>
                                   <span className="text-xs text-muted">{row.uf || '—'}</span>
                                   <span className={`text-xs px-2 py-0.5 rounded-full border font-medium w-fit ${situacaoClass(row.situacao_cadastral)}`}>
