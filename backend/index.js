@@ -5058,10 +5058,13 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (situacao.trim()) {
-      const sit = situacao.trim();
-      const sitPadded = sit.padStart(2, '0');
-      params.push(sit); params.push(sitPadded);
-      where.push(`e.situacao_cadastral IN ($${params.length - 1}, $${params.length})`);
+      // Aceita múltiplos valores separados por vírgula (ex: "2,3,4")
+      const sits = situacao.split(',').map(s => s.trim()).filter(Boolean);
+      // Cada código aceita a versão com e sem zero à esquerda (ex: '2' e '02')
+      const codes = [...new Set(sits.flatMap(s => [s, s.padStart(2, '0')]))];
+      const start = params.length + 1;
+      codes.forEach(c => params.push(c));
+      where.push(`e.situacao_cadastral IN (${codes.map((_, i) => `$${start + i}`).join(', ')})`);
     }
 
     if (porte.trim()) {
