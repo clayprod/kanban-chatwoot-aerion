@@ -4821,9 +4821,20 @@ app.get('/api/rfb/status', async (req, res) => {
   }
 });
 
-// GET /api/rfb/municipios
+// GET /api/rfb/municipios — com ?uf=XX filtra municípios daquela UF
 app.get('/api/rfb/municipios', async (req, res) => {
   try {
+    const { uf } = req.query;
+    if (uf && uf.trim()) {
+      const r = await pool.query(`
+        SELECT DISTINCT e.municipio AS codigo, m.descricao
+        FROM rfb_estabelecimentos e
+        JOIN rfb_municipios m ON e.municipio = m.codigo
+        WHERE e.uf = $1
+        ORDER BY m.descricao
+      `, [uf.trim().toUpperCase()]);
+      return res.json(r.rows);
+    }
     if (!_rfbMunicipiosCache) {
       const r = await pool.query('SELECT codigo, descricao FROM rfb_municipios ORDER BY descricao');
       _rfbMunicipiosCache = r.rows;
@@ -4881,12 +4892,17 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
 });
 
 // GET /api/rfb/search
-// Params: cnpj, nome, socio, uf, municipio, cnae, situacao, page, page_size, order_by
+// Params: cnpj, nome, nome_op, socio, socio_op, uf, municipio, cnae, situacao,
+//         capital_min, capital_max, abertura_min_anos, abertura_max_anos,
+//         page, page_size, order_by
 app.get('/api/rfb/search', async (req, res) => {
   try {
     const {
-      cnpj = '', nome = '', socio = '', uf = '',
+      cnpj = '', nome = '', nome_op = 'contains',
+      socio = '', socio_op = 'contains', uf = '',
       municipio = '', cnae = '', situacao = '',
+      capital_min = '', capital_max = '',
+      abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
       order_by = 'razao_social',
     } = req.query;
@@ -4896,6 +4912,21 @@ app.get('/api/rfb/search', async (req, res) => {
 
     const params = [];
     const where  = [];
+
+    // Helper: aplica operador de texto em uma ou mais colunas
+    const applyTextOp = (cols, val, op) => {
+      const v = val.trim();
+      let pattern, negated = false;
+      if (op === 'not_contains') { pattern = `%${v}%`; negated = true; }
+      else if (op === 'starts')  { pattern = `${v}%`; }
+      else if (op === 'ends')    { pattern = `%${v}`; }
+      else if (op === 'exact')   { pattern = v; }
+      else                       { pattern = `%${v}%`; } // contains (default)
+      params.push(pattern.toUpperCase());
+      const idx = params.length;
+      const conds = cols.map(col => `UPPER(${col}) ${negated ? 'NOT ' : ''}ILIKE $${idx}`);
+      return conds.length === 1 ? conds[0] : `(${conds.join(' OR ')})`;
+    };
 
     if (cnpj.trim()) {
       const clean = cnpj.replace(/\D/g, '');
@@ -4909,13 +4940,20 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (nome.trim()) {
-      params.push(`%${nome.trim().toUpperCase()}%`);
-      where.push(`(emp.razao_social ILIKE $${params.length} OR e.nome_fantasia ILIKE $${params.length})`);
+      where.push(applyTextOp(['emp.razao_social', 'e.nome_fantasia'], nome, nome_op));
     }
 
     if (socio.trim()) {
-      params.push(`%${socio.trim().toUpperCase()}%`);
-      where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_socios WHERE nome_do_socio ILIKE $${params.length})`);
+      const v = socio.trim();
+      let pattern;
+      if (socio_op === 'starts')  pattern = `${v}%`;
+      else if (socio_op === 'ends')    pattern = `%${v}`;
+      else if (socio_op === 'exact')   pattern = v;
+      else                             pattern = `%${v}%`;
+      params.push(pattern.toUpperCase());
+      const idx = params.length;
+      const neg = socio_op === 'not_contains' ? 'NOT ' : '';
+      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE UPPER(nome_do_socio) ${neg}ILIKE $${idx})`);
     }
 
     if (uf.trim()) {
@@ -4929,7 +4967,6 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (cnae.trim()) {
-      // Aceita código completo (ex: 4731800) ou parcial (ex: 4731)
       const cnaeClean = cnae.replace(/\D/g, '');
       params.push(`${cnaeClean}%`);
       where.push(`e.cnae_fiscal_principal LIKE $${params.length}`);
@@ -4940,16 +4977,42 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`e.situacao_cadastral = $${params.length}`);
     }
 
+    // Capital social (TEXT → NUMERIC)
+    const capitalExpr = `NULLIF(replace(replace(emp.capital_social,'.',''),',','.'), '')::NUMERIC`;
+    if (capital_min !== '') {
+      params.push(parseFloat(capital_min));
+      where.push(`${capitalExpr} >= $${params.length}`);
+    }
+    if (capital_max !== '') {
+      params.push(parseFloat(capital_max));
+      where.push(`${capitalExpr} <= $${params.length}`);
+    }
+
+    // Tempo de abertura em anos (YYYYMMDD → DATE)
+    const aberturaExpr = `TO_DATE(NULLIF(data_de_inicio_da_atividade, '00000000'), 'YYYYMMDD')`;
+    if (abertura_min_anos !== '') {
+      const years = parseInt(abertura_min_anos, 10);
+      where.push(`e.data_de_inicio_da_atividade ~ '^\\d{8}$' AND ${aberturaExpr} <= NOW() - INTERVAL '${years} years'`);
+    }
+    if (abertura_max_anos !== '') {
+      const years = parseInt(abertura_max_anos, 10);
+      where.push(`e.data_de_inicio_da_atividade ~ '^\\d{8}$' AND ${aberturaExpr} >= NOW() - INTERVAL '${years} years'`);
+    }
+
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
-    // Coluna de ordenação válida
-    const ORDER_COLS = {
-      razao_social: 'emp.razao_social',
-      nome_fantasia: 'e.nome_fantasia',
-      uf: 'e.uf',
-      situacao: 'e.situacao_cadastral',
+    // Ordenação
+    const ORDER_MAP = {
+      razao_social:  'emp.razao_social NULLS LAST',
+      nome_fantasia: 'e.nome_fantasia NULLS LAST',
+      uf:            'e.uf NULLS LAST',
+      situacao:      'e.situacao_cadastral NULLS LAST',
+      capital_desc:  `${capitalExpr} DESC NULLS LAST`,
+      capital_asc:   `${capitalExpr} ASC NULLS LAST`,
+      abertura_desc: 'e.data_de_inicio_da_atividade DESC NULLS LAST',
+      abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
-    const orderCol = ORDER_COLS[order_by] || 'emp.razao_social';
+    const orderClause = ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST';
 
     const baseQuery = `
       FROM rfb_estabelecimentos e
@@ -4974,9 +5037,11 @@ app.get('/api/rfb/search', async (req, res) => {
           e.correio_eletronico,
           emp.capital_social, emp.porte_da_empresa,
           emp.natureza_juridica,
-          s.opcao_pelo_simples, s.opcao_pelo_mei
+          s.opcao_pelo_simples, s.opcao_pelo_mei,
+          (SELECT string_agg(nome_do_socio, ' · ' ORDER BY nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS socios_nomes,
+          (SELECT MIN(nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS primeiro_socio
         ${baseQuery}
-        ORDER BY ${orderCol} NULLS LAST
+        ORDER BY ${orderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `, [...params, limit, offset]),
       pool.query(`SELECT COUNT(*) ${baseQuery}`, params),
