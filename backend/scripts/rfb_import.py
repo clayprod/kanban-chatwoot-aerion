@@ -284,11 +284,17 @@ def create_indexes(conn):
         try:
             cur.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
             cur.execute('CREATE EXTENSION IF NOT EXISTS unaccent')
-            # Índices trigrama com unaccent para buscas insensíveis a acentos e rápidas
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(unaccent(lower(razao_social)) gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(unaccent(lower(nome_do_socio)) gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm ON rfb_estabelecimentos USING gin(unaccent(lower(nome_fantasia)) gin_trgm_ops)')
-        except Exception:
+            cur.execute("""
+                CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+                RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+                  SELECT public.unaccent($1);
+                $$
+            """)
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(immutable_unaccent(lower(razao_social)) gin_trgm_ops)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(immutable_unaccent(lower(nome_do_socio)) gin_trgm_ops)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(nome_fantasia)) gin_trgm_ops)')
+        except Exception as ex:
+            print(f'[warn] índices trigrama: {ex}')
             conn.rollback()
         for idx in idxs:
             try:

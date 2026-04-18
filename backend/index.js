@@ -4970,7 +4970,7 @@ app.get('/api/rfb/search', async (req, res) => {
 
     // Helper: aplica operador de texto em uma ou mais colunas
     const applyTextOp = (cols, val, op) => {
-      const v = val.trim().toLowerCase();
+      const v = val.trim();
       let pattern, negated = false;
       if (op === 'not_contains') { pattern = `%${v}%`; negated = true; }
       else if (op === 'starts')  { pattern = `${v}%`; }
@@ -4979,8 +4979,10 @@ app.get('/api/rfb/search', async (req, res) => {
       else                       { pattern = `%${v}%`; }
       params.push(pattern);
       const idx = params.length;
-      // ILIKE usa índice pg_trgm; normalização de acentos feita no cliente (JS)
-      const conds = cols.map(col => `${col} ${negated ? 'NOT ' : ''}ILIKE $${idx}`);
+      // immutable_unaccent + ILIKE usa índice GIN trigrama e é insensível a acentos
+      const conds = cols.map(col =>
+        `immutable_unaccent(lower(${col})) ${negated ? 'NOT ' : ''}ILIKE immutable_unaccent(lower($${idx}))`
+      );
       return conds.length === 1 ? conds[0] : `(${conds.join(' OR ')})`;
     };
 
@@ -5009,7 +5011,7 @@ app.get('/api/rfb/search', async (req, res) => {
       params.push(pattern);
       const idx = params.length;
       const neg = socio_op === 'not_contains' ? 'NOT ' : '';
-      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE nome_do_socio ${neg}ILIKE $${idx})`);
+      where.push(`e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ${neg}ILIKE immutable_unaccent(lower($${idx})))`);
     }
 
     if (uf.trim()) {
