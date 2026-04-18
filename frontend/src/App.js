@@ -1376,6 +1376,9 @@ function App() {
   const [rfbEnderecoOp, setRfbEnderecoOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.enderecoOp || 'contains'; } catch { return 'contains'; } });
   const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || ''; } catch { return ''; } });
   const [rfbMei, setRfbMei] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.mei || ''; } catch { return ''; } });
+  const [rfbOnlyMatriz, setRfbOnlyMatriz] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.onlyMatriz !== false; } catch { return true; } });
+  const [rfbShowFilters, setRfbShowFilters] = useState(false);
+  const [rfbFiliais, setRfbFiliais] = useState({}); // cnpjBasico → filiais[]
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
   const [rfbPage, setRfbPage] = useState(1);
@@ -5789,6 +5792,7 @@ function App() {
                 if (rfbEndereco.trim()) { params.set('endereco', rfbEndereco.trim()); params.set('endereco_op', rfbEnderecoOp); }
                 if (rfbSimples) params.set('simples', rfbSimples);
                 if (rfbMei) params.set('mei', rfbMei);
+                if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
                 params.set('page', pg);
                 params.set('page_size', rfbPageSize);
                 params.set('order_by', rfbOrderBy);
@@ -5797,7 +5801,7 @@ function App() {
                 setRfbTotal(res.data.total || 0);
                 setRfbPage(pg);
                 // Persistir busca
-                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei })); } catch {}
+                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
               } catch (e) {
                 setRfbError(e.response?.data?.error || 'Erro na busca.');
               } finally { setRfbLoading(false); }
@@ -5813,6 +5817,8 @@ function App() {
               setRfbEnderecoOp('contains');
               setRfbSimples('');
               setRfbMei('');
+              setRfbOnlyMatriz(true);
+              setRfbFiliais({});
               setRfbCnaeInput('');
               setRfbMunicipioInput('');
               setRfbResults([]);
@@ -5977,10 +5983,24 @@ function App() {
                 )}
 
                 {/* Two-column layout */}
-                <div className="flex gap-5 items-start">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+
+                  {/* Mobile filter toggle */}
+                  <div className="lg:hidden flex items-center gap-3">
+                    <button
+                      onClick={() => setRfbShowFilters(p => !p)}
+                      className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border border-border bg-card shadow-card text-ink hover:border-primary/40 transition"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 12h10M10 20h4"/></svg>
+                      {rfbShowFilters ? 'Ocultar filtros' : 'Mostrar filtros'}
+                    </button>
+                    {rfbResults.length > 0 && (
+                      <span className="text-xs text-muted">{rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
 
                   {/* ── Sidebar de filtros ─────────────────────────────── */}
-                  <div className="w-48 flex-shrink-0 rounded-2xl border border-border bg-card shadow-card p-4 space-y-4 sticky top-20">
+                  <div className={`${rfbShowFilters ? 'block' : 'hidden'} lg:block w-full lg:w-52 lg:flex-shrink-0 rounded-2xl border border-border bg-card shadow-card p-4 space-y-4 lg:sticky lg:top-20`}>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">Filtros de Busca</p>
 
                     {/* CNPJ */}
@@ -6238,6 +6258,19 @@ function App() {
                       </div>
                     </div>
 
+                    {/* Somente matriz */}
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          className="accent-primary"
+                          checked={rfbOnlyMatriz}
+                          onChange={e => setRfbOnlyMatriz(e.target.checked)}
+                        />
+                        <span className="text-xs text-ink">Somente matriz (CNPJ 0001)</span>
+                      </label>
+                    </div>
+
                     {/* Import settings */}
                     <div className="pt-2 border-t border-border">
                       <label className="block text-xs text-muted mb-1">Estágio no Chatwoot (import)</label>
@@ -6322,103 +6355,194 @@ function App() {
                     )}
 
                     {/* Results table */}
-                    {!rfbLoading && rfbResults.length > 0 && (
-                      <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
-                        <div className="grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-2.5 border-b border-border bg-cardAlt text-xs font-semibold text-muted uppercase tracking-wide">
-                          <span>CNPJ</span>
-                          <span>Razão Social</span>
-                          <span>Nome Fantasia</span>
-                          <span>Município</span>
-                          <span>UF</span>
-                          <span>Situação</span>
-                          <span></span>
-                        </div>
-                        {rfbResults.map((row, idx) => {
-                          const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
-                          const isDup = Boolean(leadExistingCNPJs[cleanCNPJ]);
-                          const isExp = rfbExpanded === cleanCNPJ;
-                          return (
-                            <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 ${isExp ? 'bg-cardAlt/40' : ''}`}>
-                              <div className="grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-3 items-center text-sm">
-                                <span className="font-mono text-xs text-muted">{fmtCNPJ(row.cnpj)}</span>
-                                <div className="min-w-0">
-                                  <p className="font-medium text-ink truncate">{row.razao_social || '—'}</p>
-                                  {isDup && <p className="text-xs text-status-warning">Já no CRM</p>}
-                                </div>
-                                <span className="text-xs text-muted truncate">{row.nome_fantasia || '—'}</span>
-                                <span className="text-xs text-muted truncate">{row.municipio_nome || '—'}</span>
-                                <span className="text-xs text-muted">{row.uf || '—'}</span>
-                                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium w-fit ${situacaoClass(row.situacao_cadastral)}`}>
-                                  {situacaoLabel(row.situacao_cadastral)}
-                                </span>
-                                <div className="flex gap-1.5 items-center flex-shrink-0">
-                                  <button
-                                    onClick={() => handleRfbImport(row)}
-                                    disabled={leadImportLoading}
-                                    className={`text-xs px-2.5 py-1.5 rounded-lg border transition disabled:opacity-40 whitespace-nowrap ${isDup ? 'border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20' : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                  >
-                                    {isDup ? 'Atualizar' : 'Importar'}
-                                  </button>
-                                  <button
-                                    onClick={() => setRfbExpanded(isExp ? null : cleanCNPJ)}
-                                    className="text-xs text-muted hover:text-ink px-1.5 py-1.5 rounded-lg border border-border bg-cardAlt transition hover:border-primary/40"
-                                  >
-                                    {isExp ? '↑' : '↓'}
-                                  </button>
+                    {!rfbLoading && rfbResults.length > 0 && (() => {
+                      const ExpandedPanel = ({ row }) => {
+                        const filiais = rfbFiliais[row.cnpj_basico];
+                        const loadFiliais = () => {
+                          if (!row.cnpj_basico || filiais !== undefined) return;
+                          setRfbFiliais(p => ({ ...p, [row.cnpj_basico]: null })); // null = loading
+                          axios.get(`/api/rfb/filiais/${row.cnpj_basico}`)
+                            .then(r => setRfbFiliais(p => ({ ...p, [row.cnpj_basico]: r.data || [] })))
+                            .catch(() => setRfbFiliais(p => ({ ...p, [row.cnpj_basico]: [] })));
+                        };
+                        return (
+                          <div className="border-t border-border/60 bg-cardAlt px-4 py-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+                              <div>
+                                <p className="font-semibold text-muted uppercase tracking-wide mb-1">Endereço</p>
+                                <p className="text-ink">
+                                  {[row.tipo_de_logradouro, row.logradouro, row.numero, row.complemento].filter(Boolean).join(' ')}{row.bairro ? `, ${row.bairro}` : ''}
+                                </p>
+                                <p className="text-muted">{row.cep ? `CEP ${String(row.cep).replace(/(\d{5})(\d{3})/, '$1-$2')}` : ''}{row.municipio_nome ? ` · ${row.municipio_nome}/${row.uf}` : ''}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted uppercase tracking-wide mb-1">Contato</p>
+                                {row.correio_eletronico && <p className="text-primary truncate">{row.correio_eletronico}</p>}
+                                {row.ddd1 && row.telefone1 && <p className="text-ink">({row.ddd1}) {row.telefone1}</p>}
+                                {row.ddd2 && row.telefone2 && <p className="text-ink">({row.ddd2}) {row.telefone2}</p>}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted uppercase tracking-wide mb-1">Empresa</p>
+                                {row.capital_social && <p className="text-ink">Capital: {fmtCapital(row.capital_social)}</p>}
+                                {row.porte_da_empresa && <p className="text-muted">Porte: {row.porte_da_empresa}</p>}
+                                {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {fmtDate(row.data_de_inicio_da_atividade)}{calcAge(row.data_de_inicio_da_atividade) ? ` · ${calcAge(row.data_de_inicio_da_atividade)}` : ''}</p>}
+                                <div className="flex gap-2 mt-1.5 flex-wrap">
+                                  {row.opcao_pelo_mei === 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">MEI</span>}
+                                  {row.opcao_pelo_simples === 'S' && row.opcao_pelo_mei !== 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">Simples</span>}
                                 </div>
                               </div>
-
-                              {isExp && (
-                                <div className="border-t border-border/60 bg-cardAlt px-4 py-4">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
-                                    <div>
-                                      <p className="font-semibold text-muted uppercase tracking-wide mb-1">Endereço</p>
-                                      <p className="text-ink">
-                                        {[row.tipo_de_logradouro, row.logradouro, row.numero, row.complemento].filter(Boolean).join(' ')}{row.bairro ? `, ${row.bairro}` : ''}
-                                      </p>
-                                      <p className="text-muted">{row.cep ? `CEP ${String(row.cep).replace(/(\d{5})(\d{3})/, '$1-$2')}` : ''}{row.municipio_nome ? ` · ${row.municipio_nome}/${row.uf}` : ''}</p>
-                                    </div>
-                                    <div>
-                                      <p className="font-semibold text-muted uppercase tracking-wide mb-1">Contato</p>
-                                      {row.correio_eletronico && <p className="text-primary truncate">{row.correio_eletronico}</p>}
-                                      {row.ddd1 && row.telefone1 && <p className="text-ink">({row.ddd1}) {row.telefone1}</p>}
-                                      {row.ddd2 && row.telefone2 && <p className="text-ink">({row.ddd2}) {row.telefone2}</p>}
-                                    </div>
-                                    <div>
-                                      <p className="font-semibold text-muted uppercase tracking-wide mb-1">Empresa</p>
-                                      {row.capital_social && <p className="text-ink">Capital: {fmtCapital(row.capital_social)}</p>}
-                                      {row.porte_da_empresa && <p className="text-muted">Porte: {row.porte_da_empresa}</p>}
-                                      {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {fmtDate(row.data_de_inicio_da_atividade)}{calcAge(row.data_de_inicio_da_atividade) ? ` · ${calcAge(row.data_de_inicio_da_atividade)}` : ''}</p>}
-                                      <div className="flex gap-2 mt-1.5 flex-wrap">
-                                        {row.opcao_pelo_mei === 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">MEI</span>}
-                                        {row.opcao_pelo_simples === 'S' && row.opcao_pelo_mei !== 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">Simples</span>}
-                                      </div>
-                                    </div>
-                                    {row.cnae_fiscal_principal && (
-                                      <div className="md:col-span-2 lg:col-span-3">
-                                        <p className="font-semibold text-muted uppercase tracking-wide mb-1">CNAE Principal</p>
-                                        <p className="text-ink"><span className="font-mono">{row.cnae_fiscal_principal}</span>{row.cnae_descricao ? ` — ${row.cnae_descricao}` : ''}</p>
-                                      </div>
-                                    )}
-                                    {row.socios_nomes && (
-                                      <div className="md:col-span-2 lg:col-span-3">
-                                        <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
-                                        <p className="text-ink">{row.socios_nomes}</p>
-                                      </div>
-                                    )}
-                                  </div>
+                              {row.cnae_fiscal_principal && (
+                                <div className="sm:col-span-2 lg:col-span-3">
+                                  <p className="font-semibold text-muted uppercase tracking-wide mb-1">CNAE Principal</p>
+                                  <p className="text-ink"><span className="font-mono">{row.cnae_fiscal_principal}</span>{row.cnae_descricao ? ` — ${row.cnae_descricao}` : ''}</p>
+                                </div>
+                              )}
+                              {row.socios_nomes && (
+                                <div className="sm:col-span-2 lg:col-span-3">
+                                  <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
+                                  <p className="text-ink">{row.socios_nomes}</p>
                                 </div>
                               )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
+
+                            {/* Filiais section */}
+                            {row.filiais_count > 0 && (
+                              <div className="mt-4 pt-3 border-t border-border/60">
+                                <div className="flex items-center gap-3 mb-2">
+                                  <p className="text-xs font-semibold text-muted uppercase tracking-wide">{row.filiais_count} Filia{row.filiais_count === 1 ? 'l' : 'is'}</p>
+                                  {filiais === undefined && (
+                                    <button onClick={loadFiliais} className="text-xs text-primary hover:underline">Carregar filiais</button>
+                                  )}
+                                  {filiais === null && <span className="text-xs text-muted">Carregando...</span>}
+                                </div>
+                                {Array.isArray(filiais) && filiais.length > 0 && (
+                                  <div className="space-y-2">
+                                    {filiais.map(f => {
+                                      const fCNPJ = String(f.cnpj || '').replace(/\D/g, '');
+                                      const fDup = Boolean(leadExistingCNPJs[fCNPJ]);
+                                      return (
+                                        <div key={fCNPJ} className="rounded-xl border border-border bg-card px-3 py-2.5 flex flex-wrap gap-2 items-center text-xs">
+                                          <span className="font-mono text-muted flex-shrink-0">{fmtCNPJ(f.cnpj)}</span>
+                                          <span className="text-ink flex-1 min-w-0 truncate">{f.nome_fantasia || '—'}</span>
+                                          <span className="text-muted flex-shrink-0">{f.municipio_nome || '—'}/{f.uf || '—'}</span>
+                                          <span className={`px-2 py-0.5 rounded-full border font-medium flex-shrink-0 ${situacaoClass(f.situacao_cadastral)}`}>
+                                            {situacaoLabel(f.situacao_cadastral)}
+                                          </span>
+                                          <button
+                                            onClick={() => handleRfbImport({ ...f, razao_social: row.razao_social, capital_social: row.capital_social, porte_da_empresa: row.porte_da_empresa, opcao_pelo_simples: row.opcao_pelo_simples, opcao_pelo_mei: row.opcao_pelo_mei, socios_nomes: row.socios_nomes, primeiro_socio: row.primeiro_socio })}
+                                            disabled={leadImportLoading}
+                                            className={`text-xs px-2 py-1 rounded-lg border transition disabled:opacity-40 flex-shrink-0 ${fDup ? 'border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20' : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                          >
+                                            {fDup ? 'Atualizar' : 'Importar'}
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {Array.isArray(filiais) && filiais.length === 0 && (
+                                  <p className="text-xs text-muted">Nenhuma filial encontrada.</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      };
+
+                      return (
+                        <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
+                          {/* Desktop header */}
+                          <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-2.5 border-b border-border bg-cardAlt text-xs font-semibold text-muted uppercase tracking-wide">
+                            <span>CNPJ</span>
+                            <span>Razão Social</span>
+                            <span>Nome Fantasia</span>
+                            <span>Município</span>
+                            <span>UF</span>
+                            <span>Situação</span>
+                            <span></span>
+                          </div>
+                          {rfbResults.map((row, idx) => {
+                            const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
+                            const isDup = Boolean(leadExistingCNPJs[cleanCNPJ]);
+                            const isExp = rfbExpanded === cleanCNPJ;
+                            const toggleExpand = () => {
+                              setRfbExpanded(isExp ? null : cleanCNPJ);
+                            };
+                            const actionBtns = (
+                              <div className="flex gap-1.5 items-center flex-shrink-0">
+                                <button
+                                  onClick={() => handleRfbImport(row)}
+                                  disabled={leadImportLoading}
+                                  className={`text-xs px-2.5 py-1.5 rounded-lg border transition disabled:opacity-40 whitespace-nowrap ${isDup ? 'border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20' : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                >
+                                  {isDup ? 'Atualizar' : 'Importar'}
+                                </button>
+                                <button
+                                  onClick={toggleExpand}
+                                  className="text-xs text-muted hover:text-ink px-1.5 py-1.5 rounded-lg border border-border bg-cardAlt transition hover:border-primary/40"
+                                >
+                                  {isExp ? '↑' : '↓'}
+                                </button>
+                              </div>
+                            );
+                            return (
+                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 ${isExp ? 'bg-cardAlt/40' : ''}`}>
+                                {/* Mobile card row */}
+                                <div className="lg:hidden px-4 py-3 flex items-start gap-3">
+                                  <div className="flex-1 min-w-0" onClick={toggleExpand}>
+                                    <div className="flex items-start gap-2 flex-wrap">
+                                      <p className="font-medium text-ink text-sm leading-snug">{row.razao_social || '—'}</p>
+                                      {isDup && <span className="text-xs text-status-warning flex-shrink-0">Já no CRM</span>}
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                      <span className="font-mono text-xs text-muted">{fmtCNPJ(row.cnpj)}</span>
+                                      {row.municipio_nome && <span className="text-xs text-muted">{row.municipio_nome}/{row.uf}</span>}
+                                      <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${situacaoClass(row.situacao_cadastral)}`}>
+                                        {situacaoLabel(row.situacao_cadastral)}
+                                      </span>
+                                      {row.filiais_count > 0 && (
+                                        <span className="text-xs px-1.5 py-0.5 rounded-full border border-border bg-cardAlt text-muted">
+                                          {row.filiais_count} filial{row.filiais_count !== 1 ? 'is' : ''}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {actionBtns}
+                                </div>
+
+                                {/* Desktop grid row */}
+                                <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_auto] gap-x-3 px-4 py-3 items-center text-sm">
+                                  <div className="min-w-0">
+                                    <span className="font-mono text-xs text-muted">{fmtCNPJ(row.cnpj)}</span>
+                                    {row.filiais_count > 0 && (
+                                      <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full border border-border bg-cardAlt text-muted">+{row.filiais_count}</span>
+                                    )}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="font-medium text-ink truncate">{row.razao_social || '—'}</p>
+                                    {isDup && <p className="text-xs text-status-warning">Já no CRM</p>}
+                                  </div>
+                                  <span className="text-xs text-muted truncate">{row.nome_fantasia || '—'}</span>
+                                  <span className="text-xs text-muted truncate">{row.municipio_nome || '—'}</span>
+                                  <span className="text-xs text-muted">{row.uf || '—'}</span>
+                                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium w-fit ${situacaoClass(row.situacao_cadastral)}`}>
+                                    {situacaoLabel(row.situacao_cadastral)}
+                                  </span>
+                                  {actionBtns}
+                                </div>
+
+                                {isExp && <ExpandedPanel row={row} />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     {/* Empty state */}
                     {!rfbLoading && rfbResults.length === 0 && rfbTotal === 0 && !rfbError && (
                       <div className="text-center py-16 text-muted text-sm">
-                        {Object.values(rfbFilters).some(v => v) ? 'Nenhum resultado encontrado. Tente outros filtros.' : 'Use os filtros ao lado para buscar empresas.'}
+                        {(Object.values(rfbFilters).some(v => v) || rfbEndereco || rfbSimples || rfbMei) ? 'Nenhum resultado encontrado. Tente outros filtros.' : 'Use os filtros para buscar empresas.'}
                       </div>
                     )}
 
