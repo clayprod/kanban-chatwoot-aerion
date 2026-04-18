@@ -4848,7 +4848,7 @@ app.get('/api/rfb/status', async (req, res) => {
       records: {
         empresas,
         estabelecimentos,
-        socios: parseInt(socCount.rows[0].count, 10),
+        socios: Math.max(0, parseInt(socCount.rows[0].count, 10)),
         simples: parseInt(simCount.rows[0].count, 10),
         cnaes: parseInt(cnaeCount.rows[0].count, 10),
         municipios: parseInt(munCount.rows[0].count, 10),
