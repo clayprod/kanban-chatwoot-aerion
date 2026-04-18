@@ -5205,8 +5205,15 @@ app.get('/api/rfb/search', async (req, res) => {
           END AS porte_da_empresa,
           emp.natureza_juridica,
           s.opcao_pelo_simples, s.opcao_pelo_mei,
-          (SELECT string_agg(nome_do_socio, ' · ' ORDER BY nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS socios_nomes,
-          (SELECT MIN(nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS primeiro_socio,
+          (SELECT string_agg(
+             s2.nome_do_socio || COALESCE(' (' || q2.descricao || ')', ''),
+             ' · ' ORDER BY s2.nome_do_socio
+           ) FROM rfb_socios s2
+           LEFT JOIN rfb_qualificacoes q2 ON s2.qualificacao_do_socio = q2.codigo
+           WHERE s2.cnpj_basico = e.cnpj_basico) AS socios_nomes,
+          (SELECT s3.nome_do_socio FROM rfb_socios s3
+           WHERE s3.cnpj_basico = e.cnpj_basico
+           ORDER BY s3.nome_do_socio LIMIT 1) AS primeiro_socio,
           (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count
         ${baseQuery}
         ORDER BY ${orderClause}
