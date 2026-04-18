@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Leads (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.filters || { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; } catch { return { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '', porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return { ..._rfbDef, ...(s.filters || {}) }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
