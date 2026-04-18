@@ -5773,6 +5773,8 @@ function App() {
             };
 
             // ── Search ────────────────────────────────────────────────────
+            // Normaliza acentos para usar índice pg_trgm no backend
+            const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
             const handleRfbSearch = async (pageOverride) => {
               setRfbLoading(true);
               setRfbError(null);
@@ -5780,8 +5782,8 @@ function App() {
               try {
                 const params = new URLSearchParams();
                 if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
-                if (rfbFilters.nome.trim()) { params.set('nome', rfbFilters.nome.trim()); params.set('nome_op', rfbOps.nome); }
-                if (rfbFilters.socio.trim()) { params.set('socio', rfbFilters.socio.trim()); params.set('socio_op', rfbOps.socio); }
+                if (rfbFilters.nome.trim()) { params.set('nome', stripAccents(rfbFilters.nome.trim())); params.set('nome_op', rfbOps.nome); }
+                if (rfbFilters.socio.trim()) { params.set('socio', stripAccents(rfbFilters.socio.trim())); params.set('socio_op', rfbOps.socio); }
                 if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
                 if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
@@ -5791,7 +5793,7 @@ function App() {
                 if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
                 if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
                 if (rfbAberturaRange[1] > 0) params.set('abertura_max_anos', rfbAberturaRange[1]);
-                if (rfbEndereco.trim()) { params.set('endereco', rfbEndereco.trim()); params.set('endereco_op', rfbEnderecoOp); }
+                if (rfbEndereco.trim()) { params.set('endereco', stripAccents(rfbEndereco.trim())); params.set('endereco_op', rfbEnderecoOp); }
                 if (rfbSimples) params.set('simples', rfbSimples);
                 if (rfbMei) params.set('mei', rfbMei);
                 if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
