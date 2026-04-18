@@ -4826,13 +4826,17 @@ app.get('/api/rfb/municipios', async (req, res) => {
   try {
     const { uf } = req.query;
     if (uf && uf.trim()) {
+      // Aceita tanto sigla (SP) quanto código numérico (25) — converte para ambos
+      const ufSigla = uf.trim().toUpperCase();
+      const ufNumMap = { AC:'01',AL:'02',AP:'03',AM:'04',BA:'05',CE:'06',DF:'07',ES:'08',GO:'09',MA:'10',MT:'11',MS:'12',MG:'13',PA:'14',PB:'15',PR:'16',PE:'17',PI:'18',RJ:'19',RN:'20',RS:'21',RO:'22',RR:'23',SC:'24',SP:'25',SE:'26',TO:'27' };
+      const ufCod = ufNumMap[ufSigla] || ufSigla;
       const r = await pool.query(`
         SELECT DISTINCT e.municipio AS codigo, m.descricao
         FROM rfb_estabelecimentos e
         JOIN rfb_municipios m ON e.municipio = m.codigo
-        WHERE e.uf = $1
+        WHERE e.uf IN ($1, $2)
         ORDER BY m.descricao
-      `, [uf.trim().toUpperCase()]);
+      `, [ufSigla, ufCod]);
       return res.json(r.rows);
     }
     if (!_rfbMunicipiosCache) {
@@ -4901,7 +4905,16 @@ app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
         e.cnpj_ordem,
         e.nome_fantasia, e.situacao_cadastral,
         e.data_de_inicio_da_atividade,
-        e.uf, m.descricao AS municipio_nome,
+        CASE e.uf
+          WHEN '01' THEN 'AC' WHEN '02' THEN 'AL' WHEN '03' THEN 'AP' WHEN '04' THEN 'AM'
+          WHEN '05' THEN 'BA' WHEN '06' THEN 'CE' WHEN '07' THEN 'DF' WHEN '08' THEN 'ES'
+          WHEN '09' THEN 'GO' WHEN '10' THEN 'MA' WHEN '11' THEN 'MT' WHEN '12' THEN 'MS'
+          WHEN '13' THEN 'MG' WHEN '14' THEN 'PA' WHEN '15' THEN 'PB' WHEN '16' THEN 'PR'
+          WHEN '17' THEN 'PE' WHEN '18' THEN 'PI' WHEN '19' THEN 'RJ' WHEN '20' THEN 'RN'
+          WHEN '21' THEN 'RS' WHEN '22' THEN 'RO' WHEN '23' THEN 'RR' WHEN '24' THEN 'SC'
+          WHEN '25' THEN 'SP' WHEN '26' THEN 'SE' WHEN '27' THEN 'TO'
+          ELSE e.uf
+        END AS uf, m.descricao AS municipio_nome,
         e.logradouro, e.numero, e.complemento, e.bairro, e.cep,
         e.tipo_de_logradouro,
         e.ddd1, e.telefone1, e.ddd2, e.telefone2,
@@ -4989,8 +5002,11 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (uf.trim()) {
-      params.push(uf.trim().toUpperCase());
-      where.push(`e.uf = $${params.length}`);
+      const ufSigla = uf.trim().toUpperCase();
+      const _ufNumMap = { AC:'01',AL:'02',AP:'03',AM:'04',BA:'05',CE:'06',DF:'07',ES:'08',GO:'09',MA:'10',MT:'11',MS:'12',MG:'13',PA:'14',PB:'15',PR:'16',PE:'17',PI:'18',RJ:'19',RN:'20',RS:'21',RO:'22',RR:'23',SC:'24',SP:'25',SE:'26',TO:'27' };
+      const ufCod = _ufNumMap[ufSigla] || ufSigla;
+      params.push(ufSigla); params.push(ufCod);
+      where.push(`e.uf IN ($${params.length - 1}, $${params.length})`);
     }
 
     if (municipio.trim()) {
@@ -5076,7 +5092,16 @@ app.get('/api/rfb/search', async (req, res) => {
           emp.razao_social, e.nome_fantasia,
           e.situacao_cadastral, e.data_de_inicio_da_atividade,
           e.cnae_fiscal_principal, c.descricao AS cnae_descricao,
-          e.uf, m.descricao AS municipio_nome,
+          CASE e.uf
+            WHEN '01' THEN 'AC' WHEN '02' THEN 'AL' WHEN '03' THEN 'AP' WHEN '04' THEN 'AM'
+            WHEN '05' THEN 'BA' WHEN '06' THEN 'CE' WHEN '07' THEN 'DF' WHEN '08' THEN 'ES'
+            WHEN '09' THEN 'GO' WHEN '10' THEN 'MA' WHEN '11' THEN 'MT' WHEN '12' THEN 'MS'
+            WHEN '13' THEN 'MG' WHEN '14' THEN 'PA' WHEN '15' THEN 'PB' WHEN '16' THEN 'PR'
+            WHEN '17' THEN 'PE' WHEN '18' THEN 'PI' WHEN '19' THEN 'RJ' WHEN '20' THEN 'RN'
+            WHEN '21' THEN 'RS' WHEN '22' THEN 'RO' WHEN '23' THEN 'RR' WHEN '24' THEN 'SC'
+            WHEN '25' THEN 'SP' WHEN '26' THEN 'SE' WHEN '27' THEN 'TO'
+            ELSE e.uf
+          END AS uf, m.descricao AS municipio_nome,
           e.logradouro, e.numero, e.complemento, e.bairro, e.cep,
           e.tipo_de_logradouro,
           e.ddd1, e.telefone1, e.ddd2, e.telefone2,

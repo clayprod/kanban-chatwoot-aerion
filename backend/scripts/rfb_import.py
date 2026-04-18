@@ -23,6 +23,24 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
+# ── Mapeamento UF numérico → sigla (código sequencial alfabético da RFB) ──────
+UF_CODE_MAP = {
+    '01': 'AC', '02': 'AL', '03': 'AP', '04': 'AM', '05': 'BA',
+    '06': 'CE', '07': 'DF', '08': 'ES', '09': 'GO', '10': 'MA',
+    '11': 'MT', '12': 'MS', '13': 'MG', '14': 'PA', '15': 'PB',
+    '16': 'PR', '17': 'PE', '18': 'PI', '19': 'RJ', '20': 'RN',
+    '21': 'RS', '22': 'RO', '23': 'RR', '24': 'SC', '25': 'SP',
+    '26': 'SE', '27': 'TO',
+}
+
+def normalize_uf(val):
+    if not val:
+        return val
+    v = val.strip()
+    if v in UF_CODE_MAP:
+        return UF_CODE_MAP[v]
+    return v
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 load_dotenv(Path(__file__).parent.parent / '.env')
@@ -225,6 +243,11 @@ def import_csv(conn, csv_path, table):
             while len(row) < n:
                 row.append('')
             row = [v.strip() if v and v.strip() else None for v in row[:n]]
+            # Normaliza UF numérico → sigla (ex: '08' → 'ES')
+            if table == 'rfb_estabelecimentos':
+                uf_idx = cols.index('uf') if 'uf' in cols else -1
+                if uf_idx >= 0 and row[uf_idx]:
+                    row[uf_idx] = normalize_uf(row[uf_idx])
             batch.append(row)
             if len(batch) >= CHUNK_SIZE:
                 with conn.cursor() as cur:
