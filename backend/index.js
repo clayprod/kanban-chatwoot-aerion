@@ -5030,8 +5030,11 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (situacao.trim()) {
-      params.push(situacao.trim());
-      where.push(`e.situacao_cadastral = $${params.length}`);
+      // Aceita '2' ou '02' (DB armazena com zero, ex: '02')
+      const sit = situacao.trim();
+      const sitPadded = sit.padStart(2, '0');
+      params.push(sit); params.push(sitPadded);
+      where.push(`e.situacao_cadastral IN ($${params.length - 1}, $${params.length})`);
     }
 
     if (endereco.trim()) {
@@ -5099,7 +5102,12 @@ app.get('/api/rfb/search', async (req, res) => {
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
           e.cnpj_basico, e.cnpj_ordem,
           emp.razao_social, e.nome_fantasia,
-          e.situacao_cadastral, e.data_de_inicio_da_atividade,
+          CASE LTRIM(e.situacao_cadastral, '0')
+            WHEN '1' THEN 'Nula' WHEN '2' THEN 'Ativa' WHEN '3' THEN 'Suspensa'
+            WHEN '4' THEN 'Inapta' WHEN '8' THEN 'Baixada'
+            ELSE e.situacao_cadastral
+          END AS situacao_cadastral,
+          e.data_de_inicio_da_atividade,
           e.cnae_fiscal_principal, c.descricao AS cnae_descricao,
           CASE e.uf
             WHEN '01' THEN 'AC' WHEN '02' THEN 'AL' WHEN '03' THEN 'AP' WHEN '04' THEN 'AM'
@@ -5115,7 +5123,12 @@ app.get('/api/rfb/search', async (req, res) => {
           e.tipo_de_logradouro,
           e.ddd1, e.telefone1, e.ddd2, e.telefone2,
           e.correio_eletronico,
-          emp.capital_social, emp.porte_da_empresa,
+          emp.capital_social,
+          CASE emp.porte_da_empresa
+            WHEN '00' THEN 'Não informado' WHEN '01' THEN 'Micro Empresa'
+            WHEN '03' THEN 'Empresa de Pequeno Porte' WHEN '05' THEN 'Demais'
+            ELSE emp.porte_da_empresa
+          END AS porte_da_empresa,
           emp.natureza_juridica,
           s.opcao_pelo_simples, s.opcao_pelo_mei,
           (SELECT string_agg(nome_do_socio, ' · ' ORDER BY nome_do_socio) FROM rfb_socios WHERE cnpj_basico = e.cnpj_basico) AS socios_nomes,
