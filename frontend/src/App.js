@@ -5741,12 +5741,13 @@ function App() {
               const partes = nomeSocio ? nomeSocio.split(/\s+/) : [];
               const primeiro_nome = nomeSocio ? partes[0] : (row.razao_social || '');
               const sobrenome = partes.length > 1 ? partes.slice(1).join(' ') : '';
-              // Telefone: formatar com hífen se tiver 8+ dígitos
+              // Telefone: formato E.164 para Chatwoot (+5511987654321)
               const fmtTel = (ddd, tel) => {
                 if (!ddd || !tel) return null;
+                const d = String(ddd).replace(/\D/g, '');
                 const t = String(tel).replace(/\D/g, '');
-                const formatted = t.length >= 9 ? `${t.slice(0,5)}-${t.slice(5)}` : t.length === 8 ? `${t.slice(0,4)}-${t.slice(4)}` : t;
-                return `(${ddd}) ${formatted}`;
+                if (!d || !t) return null;
+                return `+55${d}${t}`;
               };
               const lead = {
                 cnpj: cleanCNPJ,
@@ -5769,13 +5770,14 @@ function App() {
                 opcao_pelo_mei: row.opcao_pelo_mei === 'S',
                 qsa: nomeSocio ? [{ nome: nomeSocio }] : [],
               };
+              const isExisting = Boolean(leadExistingCNPJs[cleanCNPJ]);
               setLeadImportLoading(true);
               setLeadImportStatus(null);
               try {
                 const r = await axios.post('/api/leads/import', {
                   leads: [lead],
                   defaultStage: leadImportSettings.defaultStage,
-                  overwriteDuplicates: leadImportSettings.overwriteDuplicates,
+                  overwriteDuplicates: isExisting || leadImportSettings.overwriteDuplicates,
                 });
                 setLeadImportStatus(r.data);
                 axios.get('/api/leads/existing-cnpjs').then(x => setLeadExistingCNPJs(x.data || {})).catch(() => {});
@@ -5989,7 +5991,7 @@ function App() {
                     <div className="flex flex-wrap items-center gap-4 text-sm text-muted">
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
-                      <span><span className={`font-semibold ${(rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{(rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
+                      <span><span className={`font-semibold ${Math.max(0, rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{Math.max(0, rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
                       <button
                         onClick={() => {
                           axios.post('/api/rfb/import/start')
