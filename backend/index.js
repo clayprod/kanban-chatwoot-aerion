@@ -4625,13 +4625,15 @@ let rfbImportState = {
   startedAt: null,
 };
 
-function startRFBImport() {
+function startRFBImport({ force = false } = {}) {
   if (rfbImportState.status === 'running') return; // already running
-  rfbImportState = { status: 'running', message: 'Iniciando importação...', file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
+  rfbImportState = { status: 'running', message: force ? 'Iniciando importação completa (force)...' : 'Iniciando importação...', file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
 
   const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
   const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-  const py = spawn(pythonCmd, [scriptPath], {
+  const args = [scriptPath];
+  if (force) args.push('--force');
+  const py = spawn(pythonCmd, args, {
     env: { ...process.env },
     cwd: path.join(__dirname, 'scripts'),
   });
@@ -5235,12 +5237,14 @@ app.get('/api/rfb/import-progress', (req, res) => {
 });
 
 // POST /api/rfb/import/start — manual trigger (re-import)
+// Body: { force: true } para ignorar cache e re-baixar tudo
 app.post('/api/rfb/import/start', (req, res) => {
   if (rfbImportState.status === 'running') {
     return res.status(409).json({ error: 'Import já em andamento' });
   }
-  startRFBImport();
-  res.json({ ok: true, message: 'Import iniciado' });
+  const force = Boolean(req.body?.force);
+  startRFBImport({ force });
+  res.json({ ok: true, message: force ? 'Import completo iniciado (force)' : 'Import iniciado' });
 });
 
 // ============================================================

@@ -5998,9 +5998,22 @@ function App() {
                           setRfbStatus(false);
                         }}
                         className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition"
-                        title="Reimportar base da Receita Federal"
+                        title="Baixar apenas arquivos novos/alterados"
                       >
-                        ↺ Reimportar
+                        ↺ Atualizar
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!window.confirm('Isso vai re-baixar TODOS os arquivos da RFB (pode demorar horas). Continuar?')) return;
+                          axios.post('/api/rfb/import/start', { force: true })
+                            .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                            .catch(() => {});
+                          setRfbStatus(false);
+                        }}
+                        className="text-xs px-3 py-1.5 rounded-xl border border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20 transition"
+                        title="Re-baixar e reimportar TUDO do zero (ignora cache)"
+                      >
+                        ↺ Reimport completo
                       </button>
                     </div>
                   </div>
