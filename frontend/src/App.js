@@ -1368,12 +1368,15 @@ function App() {
 
   // ── Busca Leads (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState({ cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' });
+  const [rfbFilters, setRfbFilters] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.filters || { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' }; } catch { return { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' }; } });
+  const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
+  const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
+  const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
   const [rfbPage, setRfbPage] = useState(1);
-  const [rfbPageSize, setRfbPageSize] = useState(10);
-  const [rfbOrderBy, setRfbOrderBy] = useState('razao_social');
+  const [rfbPageSize, setRfbPageSize] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.pageSize || 10; } catch { return 10; } });
+  const [rfbOrderBy, setRfbOrderBy] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.orderBy || 'razao_social'; } catch { return 'razao_social'; } });
   const [rfbLoading, setRfbLoading] = useState(false);
   const [rfbError, setRfbError] = useState(null);
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
@@ -5683,12 +5686,22 @@ function App() {
               return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(n);
             };
             const calcAge = (dateStr) => {
-              if (!dateStr) return null;
-              const [y, m, d] = dateStr.split('-').map(Number);
-              if (!y) return null;
-              const diff = (new Date() - new Date(y, (m || 1) - 1, d || 1)) / (1000 * 60 * 60 * 24 * 365.25);
+              if (!dateStr || dateStr === '00000000') return null;
+              const s = String(dateStr).replace(/\D/g, '');
+              if (s.length < 8) return null;
+              const y = parseInt(s.slice(0, 4), 10);
+              const mo = parseInt(s.slice(4, 6), 10) - 1;
+              const d = parseInt(s.slice(6, 8), 10);
+              const diff = (Date.now() - new Date(y, mo, d).getTime()) / (1000 * 60 * 60 * 24 * 365.25);
               const years = Math.floor(diff);
+              if (years < 0 || years > 200) return null;
               return years < 1 ? '< 1 ano' : `${years} ${years === 1 ? 'ano' : 'anos'}`;
+            };
+            const fmtDate = (dateStr) => {
+              if (!dateStr || dateStr === '00000000') return dateStr || '—';
+              const s = String(dateStr).replace(/\D/g, '');
+              if (s.length < 8) return dateStr;
+              return `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}`;
             };
             const situacaoClass = (s) => {
               if (s === '2') return 'bg-status-success/10 text-status-success border-status-success/30';
@@ -5703,11 +5716,26 @@ function App() {
             // ── Import ────────────────────────────────────────────────────
             const handleRfbImport = async (row) => {
               const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
+              // Usar nome do primeiro sócio como nome/sobrenome do contato
+              const nomeSocio = (row.primeiro_socio || '').trim();
+              const partes = nomeSocio ? nomeSocio.split(/\s+/) : [];
+              const primeiro_nome = nomeSocio ? partes[0] : (row.razao_social || '');
+              const sobrenome = partes.length > 1 ? partes.slice(1).join(' ') : '';
+              // Telefone: formatar com hífen se tiver 8+ dígitos
+              const fmtTel = (ddd, tel) => {
+                if (!ddd || !tel) return null;
+                const t = String(tel).replace(/\D/g, '');
+                const formatted = t.length >= 9 ? `${t.slice(0,5)}-${t.slice(5)}` : t.length === 8 ? `${t.slice(0,4)}-${t.slice(4)}` : t;
+                return `(${ddd}) ${formatted}`;
+              };
               const lead = {
                 cnpj: cleanCNPJ,
                 razao_social: row.razao_social,
+                primeiro_nome,
+                sobrenome,
                 email: row.correio_eletronico,
-                ddd_telefone_1: row.ddd1 && row.telefone1 ? `(${row.ddd1}) ${row.telefone1}` : null,
+                ddd_telefone_1: fmtTel(row.ddd1, row.telefone1),
+                ddd_telefone_2: fmtTel(row.ddd2, row.telefone2),
                 municipio: row.municipio_nome,
                 uf: row.uf,
                 nome_fantasia: row.nome_fantasia,
@@ -5719,7 +5747,7 @@ function App() {
                 descricao_porte: row.porte_da_empresa,
                 opcao_pelo_simples: row.opcao_pelo_simples === 'S',
                 opcao_pelo_mei: row.opcao_pelo_mei === 'S',
-                qsa: [],
+                qsa: nomeSocio ? [{ nome: nomeSocio }] : [],
               };
               setLeadImportLoading(true);
               setLeadImportStatus(null);
@@ -5744,12 +5772,16 @@ function App() {
               try {
                 const params = new URLSearchParams();
                 if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
-                if (rfbFilters.nome.trim()) params.set('nome', rfbFilters.nome.trim());
-                if (rfbFilters.socio.trim()) params.set('socio', rfbFilters.socio.trim());
+                if (rfbFilters.nome.trim()) { params.set('nome', rfbFilters.nome.trim()); params.set('nome_op', rfbOps.nome); }
+                if (rfbFilters.socio.trim()) { params.set('socio', rfbFilters.socio.trim()); params.set('socio_op', rfbOps.socio); }
                 if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
                 if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
                 if (rfbFilters.situacao.trim()) params.set('situacao', rfbFilters.situacao.trim());
+                if (rfbCapitalRange[0] > 0) params.set('capital_min', rfbCapitalRange[0]);
+                if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
+                if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
+                if (rfbAberturaRange[1] > 0) params.set('abertura_max_anos', rfbAberturaRange[1]);
                 params.set('page', pg);
                 params.set('page_size', rfbPageSize);
                 params.set('order_by', rfbOrderBy);
@@ -5757,13 +5789,19 @@ function App() {
                 setRfbResults(res.data.results || []);
                 setRfbTotal(res.data.total || 0);
                 setRfbPage(pg);
+                // Persistir busca
+                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange })); } catch {}
               } catch (e) {
                 setRfbError(e.response?.data?.error || 'Erro na busca.');
               } finally { setRfbLoading(false); }
             };
 
             const handleClear = () => {
-              setRfbFilters({ cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' });
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: '' };
+              setRfbFilters(empty);
+              setRfbOps({ nome: 'contains', socio: 'contains' });
+              setRfbCapitalRange([0, 0]);
+              setRfbAberturaRange([0, 0]);
               setRfbCnaeInput('');
               setRfbMunicipioInput('');
               setRfbResults([]);
@@ -5771,6 +5809,7 @@ function App() {
               setRfbPage(1);
               setRfbError(null);
               setLeadImportStatus(null);
+              try { localStorage.removeItem('rfb_search'); } catch {}
             };
 
             const totalPages = Math.ceil(rfbTotal / rfbPageSize);
@@ -5949,6 +5988,14 @@ function App() {
                     {/* Nome */}
                     <div>
                       <label className="block text-xs text-muted mb-1">Nome / Razão Social</label>
+                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
+                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
+                          <button key={op} onClick={() => setRfbOps(p => ({ ...p, nome: op }))}
+                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbOps.nome === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
+                          >{sym}</button>
+                        ))}
+                      </div>
                       <input
                         type="text"
                         className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
@@ -5962,6 +6009,14 @@ function App() {
                     {/* Sócio */}
                     <div>
                       <label className="block text-xs text-muted mb-1">Sócio</label>
+                      <div className="flex gap-0.5 mb-1.5 flex-wrap">
+                        {[['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']].map(([op, sym]) => (
+                          <button key={op} onClick={() => setRfbOps(p => ({ ...p, socio: op }))}
+                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbOps.socio === op ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                            title={op === 'contains' ? 'Contém' : op === 'not_contains' ? 'Não contém' : op === 'starts' ? 'Começa com' : op === 'ends' ? 'Termina com' : 'Igual a'}
+                          >{sym}</button>
+                        ))}
+                      </div>
                       <input
                         type="text"
                         className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
@@ -5978,7 +6033,16 @@ function App() {
                       <select
                         className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
                         value={rfbFilters.uf}
-                        onChange={e => setRfbFilters(p => ({ ...p, uf: e.target.value }))}
+                        onChange={e => {
+                          const uf = e.target.value;
+                          setRfbFilters(p => ({ ...p, uf, municipio: '' }));
+                          setRfbMunicipioInput('');
+                          if (uf) {
+                            axios.get(`/api/rfb/municipios?uf=${uf}`).then(r => setRfbMunicipios(r.data || [])).catch(() => {});
+                          } else {
+                            axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
+                          }
+                        }}
                       >
                         <option value="">Selecionar estado...</option>
                         {UF_LIST.map(u => <option key={u} value={u}>{u}</option>)}
@@ -6069,9 +6133,57 @@ function App() {
                       </select>
                     </div>
 
+                    {/* Capital Social slider */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1">Capital Social</label>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-xs text-muted">
+                          <span>{rfbCapitalRange[0] > 0 ? `R$ ${(rfbCapitalRange[0]/1000).toFixed(0)}k` : 'Mín'}</span>
+                          <span>{rfbCapitalRange[1] > 0 ? `R$ ${rfbCapitalRange[1] >= 1000000 ? (rfbCapitalRange[1]/1000000).toFixed(1)+'M' : (rfbCapitalRange[1]/1000).toFixed(0)+'k'}` : 'Máx'}</span>
+                        </div>
+                        <input type="range" min="0" max="5000000" step="50000"
+                          className="w-full accent-primary h-1"
+                          value={rfbCapitalRange[0]}
+                          onChange={e => setRfbCapitalRange(p => [Math.min(Number(e.target.value), p[1] || 5000000), p[1]])}
+                        />
+                        <input type="range" min="0" max="5000000" step="50000"
+                          className="w-full accent-primary h-1"
+                          value={rfbCapitalRange[1] || 5000000}
+                          onChange={e => setRfbCapitalRange(p => [p[0], Math.max(Number(e.target.value), p[0])])}
+                        />
+                        {(rfbCapitalRange[0] > 0 || rfbCapitalRange[1] > 0) && (
+                          <button onClick={() => setRfbCapitalRange([0, 0])} className="text-xs text-muted hover:text-status-danger">× limpar</button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tempo de abertura slider */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1">Tempo de abertura</label>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-xs text-muted">
+                          <span>{rfbAberturaRange[0] > 0 ? `${rfbAberturaRange[0]} anos` : 'Mín'}</span>
+                          <span>{rfbAberturaRange[1] > 0 ? `${rfbAberturaRange[1]} anos` : 'Máx'}</span>
+                        </div>
+                        <input type="range" min="0" max="50" step="1"
+                          className="w-full accent-primary h-1"
+                          value={rfbAberturaRange[0]}
+                          onChange={e => setRfbAberturaRange(p => [Math.min(Number(e.target.value), p[1] || 50), p[1]])}
+                        />
+                        <input type="range" min="0" max="50" step="1"
+                          className="w-full accent-primary h-1"
+                          value={rfbAberturaRange[1] || 50}
+                          onChange={e => setRfbAberturaRange(p => [p[0], Math.max(Number(e.target.value), p[0])])}
+                        />
+                        {(rfbAberturaRange[0] > 0 || rfbAberturaRange[1] > 0) && (
+                          <button onClick={() => setRfbAberturaRange([0, 0])} className="text-xs text-muted hover:text-status-danger">× limpar</button>
+                        )}
+                      </div>
+                    </div>
+
                     {/* Import settings */}
                     <div className="pt-2 border-t border-border">
-                      <label className="block text-xs text-muted mb-1">Estágio padrão</label>
+                      <label className="block text-xs text-muted mb-1">Estágio no Chatwoot (import)</label>
                       <select
                         className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
                         value={leadImportSettings.defaultStage}
@@ -6129,6 +6241,10 @@ function App() {
                             <option value="nome_fantasia">Ordenar: Nome Fantasia</option>
                             <option value="uf">Ordenar: UF</option>
                             <option value="situacao">Ordenar: Situação</option>
+                            <option value="capital_desc">Capital: maior primeiro</option>
+                            <option value="capital_asc">Capital: menor primeiro</option>
+                            <option value="abertura_desc">Mais recentes</option>
+                            <option value="abertura_asc">Mais antigas</option>
                           </select>
                           <select
                             className="rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
@@ -6215,7 +6331,7 @@ function App() {
                                       <p className="font-semibold text-muted uppercase tracking-wide mb-1">Empresa</p>
                                       {row.capital_social && <p className="text-ink">Capital: {fmtCapital(row.capital_social)}</p>}
                                       {row.porte_da_empresa && <p className="text-muted">Porte: {row.porte_da_empresa}</p>}
-                                      {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {row.data_de_inicio_da_atividade} · {calcAge(row.data_de_inicio_da_atividade)}</p>}
+                                      {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {fmtDate(row.data_de_inicio_da_atividade)}{calcAge(row.data_de_inicio_da_atividade) ? ` · ${calcAge(row.data_de_inicio_da_atividade)}` : ''}</p>}
                                       <div className="flex gap-2 mt-1.5 flex-wrap">
                                         {row.opcao_pelo_mei === 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">MEI</span>}
                                         {row.opcao_pelo_simples === 'S' && row.opcao_pelo_mei !== 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">Simples</span>}
@@ -6225,6 +6341,12 @@ function App() {
                                       <div className="md:col-span-2 lg:col-span-3">
                                         <p className="font-semibold text-muted uppercase tracking-wide mb-1">CNAE Principal</p>
                                         <p className="text-ink"><span className="font-mono">{row.cnae_fiscal_principal}</span>{row.cnae_descricao ? ` — ${row.cnae_descricao}` : ''}</p>
+                                      </div>
+                                    )}
+                                    {row.socios_nomes && (
+                                      <div className="md:col-span-2 lg:col-span-3">
+                                        <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
+                                        <p className="text-ink">{row.socios_nomes}</p>
                                       </div>
                                     )}
                                   </div>
