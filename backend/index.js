@@ -5194,10 +5194,12 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     // Simples Nacional / MEI
-    if (simples === 'S') where.push(`s.opcao_pelo_simples = 'S'`);
-    if (simples === 'N') where.push(`(s.opcao_pelo_simples IS NULL OR s.opcao_pelo_simples != 'S')`);
-    if (mei === 'S') where.push(`s.opcao_pelo_mei = 'S'`);
-    if (mei === 'N') where.push(`(s.opcao_pelo_mei IS NULL OR s.opcao_pelo_mei != 'S')`);
+    // Subquery em rfb_simples em vez de filtrar coluna de LEFT JOIN (s.*) —
+    // filtrar LEFT JOIN no WHERE impede otimização do planner.
+    if (simples === 'S') where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_simples = 'S')`);
+    if (simples === 'N') where.push(`e.cnpj_basico NOT IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_simples = 'S')`);
+    if (mei === 'S') where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_mei = 'S')`);
+    if (mei === 'N') where.push(`e.cnpj_basico NOT IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_mei = 'S')`);
 
     // Mostrar apenas matriz (cnpj_ordem = '0001') por padrão
     if (only_matriz !== 'false') where.push(`e.cnpj_ordem = '0001'`);
