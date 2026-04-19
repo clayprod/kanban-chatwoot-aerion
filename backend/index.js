@@ -5282,14 +5282,27 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (cnae.trim()) {
-      const cnaeClean = cnae.replace(/\D/g, '');
-      params.push(`${cnaeClean}%`);
-      const cnaeIdx = params.length;
-      // Inclui CNAEs secundários: campo armazena códigos separados por vírgula (ex: "4711301,6201500")
-      where.push(`(e.cnae_fiscal_principal LIKE $${cnaeIdx} OR EXISTS (
-        SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
-        WHERE _sec LIKE $${cnaeIdx}
-      ))`);
+      // Aceita múltiplos CNAEs separados por vírgula (ex: "4711301,6201500")
+      const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
+      if (cnaeCodes.length === 1) {
+        params.push(`${cnaeCodes[0]}%`);
+        const idx = params.length;
+        where.push(`(e.cnae_fiscal_principal LIKE $${idx} OR EXISTS (
+          SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
+          WHERE _sec LIKE $${idx}
+        ))`);
+      } else {
+        // Múltiplos: OR entre cada código (prefixo)
+        const clauses = cnaeCodes.map(code => {
+          params.push(`${code}%`);
+          const idx = params.length;
+          return `e.cnae_fiscal_principal LIKE $${idx} OR EXISTS (
+            SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
+            WHERE _sec LIKE $${idx}
+          )`;
+        });
+        where.push(`(${clauses.join(' OR ')})`);
+      }
     }
 
     if (situacao.trim()) {
