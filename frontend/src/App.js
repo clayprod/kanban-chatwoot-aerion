@@ -5916,7 +5916,7 @@ function App() {
                         <p className="text-sm text-status-danger mb-3">Erro durante a importação:</p>
                         <p className="text-xs font-mono bg-cardAlt border border-border rounded-xl p-3 text-status-danger">{prog.error || prog.message}</p>
                         <button
-                          onClick={() => axios.post('/api/rfb/import/start').then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data))).catch(() => {})}
+                          onClick={() => axios.post('/api/rfb/import/start', { staging: true }).then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data))).catch(() => {})}
                           className="mt-4 text-sm px-4 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition"
                         >
                           Tentar novamente
@@ -6010,77 +6010,54 @@ function App() {
                       <span><span className={`font-semibold ${Math.max(0, rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{Math.max(0, rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
                       <button
                         onClick={() => {
-                          axios.post('/api/rfb/import/start')
+                          axios.post('/api/rfb/import/start', { staging: true })
                             .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
                             .catch(() => {});
                           setRfbStatus(false);
                         }}
                         className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition"
-                        title="Baixar apenas arquivos novos/alterados"
+                        title="Atualiza sem derrubar a base — swap atômico no final"
                       >
                         ↺ Atualizar
                       </button>
                       <button
                         onClick={() => setRfbReimportConfirm(true)}
-                        className="text-xs px-3 py-1.5 rounded-xl border border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20 transition"
-                        title="Re-baixar e reimportar TUDO do zero (ignora cache)"
+                        className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink transition"
+                        title="Opções avançadas de reimport"
                       >
-                        ↺ Reimport completo
+                        ···
                       </button>
                     </div>
                   </div>
                 </div>
 
-                {/* ── Dialog de confirmação de Reimport Completo ─────────────── */}
+                {/* ── Dialog opções avançadas (··· botão) ────────────────────── */}
                 {rfbReimportConfirm && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbReimportConfirm(false)}>
                     <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
                       <div className="flex items-start gap-3">
                         <span className="text-2xl mt-0.5">⚠️</span>
                         <div>
-                          <p className="font-semibold text-ink text-base">Reimport Completo da Base RFB</p>
-                          <p className="text-sm text-muted mt-0.5">Você tem certeza?</p>
+                          <p className="font-semibold text-ink text-base">Reimport Completo (destrutivo)</p>
+                          <p className="text-sm text-muted mt-0.5">Apaga e rebaixa tudo do zero. Use o botão "Atualizar" para atualização normal.</p>
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex flex-col gap-2 text-sm">
-                        <p className="font-semibold text-primary">Atualizar (recomendado):</p>
-                        <ul className="text-ink space-y-1 list-none">
-                          <li>✓ Baixa somente arquivos novos/alterados desde o último import</li>
-                          <li>✓ App continua funcionando durante todo o processo</li>
-                          <li>✓ Dados existentes preservados até o swap final</li>
-                          <li className="text-muted">Tempo estimado: 2–6 horas (só o que mudou)</li>
-                        </ul>
-                      </div>
-
                       <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2 text-sm">
-                        <p className="font-semibold text-status-danger">Reimport Completo (destrutivo):</p>
                         <ul className="text-status-danger/80 space-y-1 list-none">
-                          <li>✗ Todos os dados RFB serão apagados e rebaixados (~60 GB)</li>
-                          <li>✗ O processo pode levar <strong>4–8 horas</strong></li>
-                          <li>✗ Buscas ficam indisponíveis durante o processo</li>
+                          <li>✗ Todos os dados RFB serão apagados imediatamente</li>
+                          <li>✗ Todos os arquivos (~60 GB) serão rebaixados</li>
+                          <li>✗ Buscas ficam indisponíveis durante o processo (4–8 horas)</li>
                         </ul>
                       </div>
 
-                      <div className="flex gap-2 justify-end pt-1 flex-wrap">
+                      <div className="flex gap-2 justify-end pt-1">
                         <button
+                          autoFocus
                           onClick={() => setRfbReimportConfirm(false)}
                           className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
                         >
                           Cancelar
-                        </button>
-                        <button
-                          autoFocus
-                          onClick={() => {
-                            setRfbReimportConfirm(false);
-                            axios.post('/api/rfb/import/start', { staging: true })
-                              .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
-                              .catch(() => {});
-                            setRfbStatus(false);
-                          }}
-                          className="px-4 py-2 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-semibold hover:bg-primary/20 transition ring-2 ring-primary/30"
-                        >
-                          ↺ Atualizar (zero-downtime)
                         </button>
                         <button
                           onClick={() => {
@@ -6092,7 +6069,7 @@ function App() {
                           }}
                           className="px-4 py-2 rounded-lg bg-status-danger/90 hover:bg-status-danger text-white text-sm font-semibold transition"
                         >
-                          Reimport Completo
+                          Sim, Reimport Completo
                         </button>
                       </div>
                     </div>
