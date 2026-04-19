@@ -4947,7 +4947,10 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
       pool.query(`
         SELECT e.*, emp.razao_social, emp.capital_social, emp.porte_da_empresa, emp.natureza_juridica,
                m.descricao AS municipio_nome, c.descricao AS cnae_descricao,
-               s.opcao_pelo_simples, s.opcao_pelo_mei
+               s.opcao_pelo_simples, s.opcao_pelo_mei,
+               (SELECT json_agg(json_build_object('codigo', c2.codigo, 'descricao', c2.descricao) ORDER BY c2.codigo)
+                FROM rfb_cnaes c2
+                WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
         FROM rfb_estabelecimentos e
         JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
         LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
@@ -5161,7 +5164,12 @@ app.get('/api/rfb/search', async (req, res) => {
     if (cnae.trim()) {
       const cnaeClean = cnae.replace(/\D/g, '');
       params.push(`${cnaeClean}%`);
-      where.push(`e.cnae_fiscal_principal LIKE $${params.length}`);
+      const cnaeIdx = params.length;
+      // Inclui CNAEs secundários: campo armazena códigos separados por vírgula (ex: "4711301,6201500")
+      where.push(`(e.cnae_fiscal_principal LIKE $${cnaeIdx} OR EXISTS (
+        SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
+        WHERE _sec LIKE $${cnaeIdx}
+      ))`);
     }
 
     if (situacao.trim()) {
@@ -5309,7 +5317,11 @@ app.get('/api/rfb/search', async (req, res) => {
           (SELECT s3.nome_do_socio FROM rfb_socios s3
            WHERE s3.cnpj_basico = e.cnpj_basico
            ORDER BY s3.nome_do_socio LIMIT 1) AS primeiro_socio,
-          (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count
+          (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count,
+          e.cnae_fiscal_secundaria,
+          (SELECT json_agg(json_build_object('codigo', c2.codigo, 'descricao', c2.descricao) ORDER BY c2.codigo)
+           FROM rfb_cnaes c2
+           WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
         ${baseQuery}
         ORDER BY ${sqlOrderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}

@@ -6643,6 +6643,18 @@ function App() {
                                   <p className="text-ink"><span className="font-mono">{row.cnae_fiscal_principal}</span>{row.cnae_descricao ? ` — ${row.cnae_descricao}` : ''}</p>
                                 </div>
                               )}
+                              {Array.isArray(row.cnaes_secundarios) && row.cnaes_secundarios.length > 0 && (
+                                <div className="sm:col-span-2 lg:col-span-3">
+                                  <p className="font-semibold text-muted uppercase tracking-wide mb-1">CNAEs Secundários ({row.cnaes_secundarios.length})</p>
+                                  <ul className="space-y-0.5">
+                                    {row.cnaes_secundarios.map(c => (
+                                      <li key={c.codigo} className="text-ink text-sm">
+                                        <span className="font-mono text-muted">{c.codigo}</span>{c.descricao ? ` — ${c.descricao}` : ''}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                               <div className="sm:col-span-2 lg:col-span-3">
                                 <p className="font-semibold text-muted uppercase tracking-wide mb-1">Sócios</p>
                                 <p className="text-ink">{row.socios_nomes || <span className="text-muted">—</span>}</p>
