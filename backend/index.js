@@ -5487,9 +5487,6 @@ app.get('/api/rfb/search', async (req, res) => {
            ) FROM rfb_socios s2
            LEFT JOIN rfb_qualificacoes q2 ON s2.qualificacao_do_socio = q2.codigo
            WHERE s2.cnpj_basico = e.cnpj_basico) AS socios_nomes,
-          (SELECT s3.nome_do_socio FROM rfb_socios s3
-           WHERE s3.cnpj_basico = e.cnpj_basico
-           ORDER BY s3.nome_do_socio LIMIT 1) AS primeiro_socio,
           (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count,
           e.cnae_fiscal_secundaria,
           (SELECT json_agg(json_build_object('codigo', c2.codigo, 'descricao', c2.descricao) ORDER BY c2.codigo)
@@ -5531,6 +5528,12 @@ app.get('/api/rfb/search', async (req, res) => {
         clientData.release();
         clientCount.release();
       }
+    }
+
+    // Deriva primeiro_socio de socios_nomes (evita segunda subquery no PG)
+    for (const row of dataRows.rows) {
+      const first = (row.socios_nomes || '').split(' · ')[0];
+      row.primeiro_socio = first.replace(/\s*\(.*\)\s*$/, '').trim() || null;
     }
 
     // Re-ordenar em JS (evita full sort no PG para buscas amplas).
