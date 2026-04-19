@@ -5805,10 +5805,11 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            const handleRfbSearch = async (pageOverride) => {
+            const handleRfbSearch = async (pageOverride, pageSizeOverride) => {
               setRfbLoading(true);
               setRfbError(null);
               const pg = pageOverride != null ? pageOverride : rfbPage;
+              const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
               try {
                 const params = new URLSearchParams();
                 if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
@@ -5834,7 +5835,7 @@ function App() {
                 if (rfbMei) params.set('mei', rfbMei);
                 if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
                 params.set('page', pg);
-                params.set('page_size', rfbPageSize);
+                params.set('page_size', ps);
                 params.set('order_by', rfbOrderBy);
                 // Passa total cacheado em paginações (page>1) para evitar re-executar count
                 if (pg > 1 && rfbTotal > 0) params.set('known_total', rfbTotal);
@@ -5843,7 +5844,7 @@ function App() {
                 setRfbTotal(res.data.total || 0);
                 setRfbPage(pg);
                 // Persistir busca
-                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: rfbPageSize, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
+                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
               } catch (e) {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
@@ -6627,7 +6628,7 @@ function App() {
                           <select
                             className="rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
                             value={rfbPageSize}
-                            onChange={e => { setRfbPageSize(Number(e.target.value)); handleRfbSearch(1); }}
+                            onChange={e => { const n = Number(e.target.value); setRfbPageSize(n); handleRfbSearch(1, n); }}
                           >
                             {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n} por página</option>)}
                           </select>
