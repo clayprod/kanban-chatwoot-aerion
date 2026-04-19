@@ -1665,6 +1665,20 @@ app.get('/api/overview/by-stage', async (req, res) => {
   }
 });
 
+app.get('/api/labels', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const { rows } = await pool.query(
+      `SELECT title, color FROM labels WHERE account_id = $1 ORDER BY title`,
+      [accountId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching labels:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/api/overview/by-label', async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -4296,7 +4310,7 @@ app.get('/api/leads/existing-cnpjs', async (req, res) => {
 // POST /api/leads/import
 app.post('/api/leads/import', async (req, res) => {
   const accountId = getAccountId(req);
-  const { leads, defaultStage = '1. Inbox (Novos)', overwriteDuplicates = false } = req.body;
+  const { leads, defaultStage = '1. Inbox (Novos)', overwriteDuplicates = false, labels = [] } = req.body;
   if (!Array.isArray(leads) || leads.length === 0) {
     return res.status(400).json({ error: 'Nenhum lead fornecido' });
   }
@@ -4346,6 +4360,7 @@ app.post('/api/leads/import', async (req, res) => {
 
       const addAttr = { company_name: (lead.nome_fantasia || lead.razao_social || '').slice(0, 255) };
 
+      let contactId;
       if (existing && overwriteDuplicates) {
         await pool.query(
           `UPDATE contacts SET
@@ -4359,6 +4374,7 @@ app.post('/api/leads/import', async (req, res) => {
            WHERE id = $7`,
           [name, email, phone, location, JSON.stringify(customAttr), JSON.stringify(addAttr), existing.id]
         );
+        contactId = existing.id;
         results.updated++;
       } else {
         const ins = await pool.query(
@@ -4366,15 +4382,34 @@ app.post('/api/leads/import', async (req, res) => {
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING id`,
           [accountId, name, email, phone, location, JSON.stringify(customAttr), JSON.stringify(addAttr)]
         );
-        const newId = ins.rows[0]?.id;
-        if (newId) {
+        contactId = ins.rows[0]?.id;
+        if (contactId) {
           await pool.query(
             `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source)
              VALUES ($1, $2, NULL, $3, NOW(), 'import_cnpj')`,
-            [newId, accountId, defaultStage]
+            [contactId, accountId, defaultStage]
           ).catch(() => {});
         }
         results.imported++;
+      }
+
+      // Aplicar etiquetas ao contato
+      if (contactId && Array.isArray(labels) && labels.length > 0) {
+        for (const labelTitle of labels) {
+          const tag = await pool.query(
+            `INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
+            [labelTitle]
+          );
+          const tagId = tag.rows[0]?.id;
+          if (tagId) {
+            await pool.query(
+              `INSERT INTO taggings (tag_id, taggable_type, taggable_id, context, created_at)
+               VALUES ($1, 'Contact', $2, 'labels', NOW())
+               ON CONFLICT DO NOTHING`,
+              [tagId, contactId]
+            ).catch(() => {});
+          }
+        }
       }
     } catch (err) {
       console.error('Import error for CNPJ', lead.cnpj, ':', err.message);
@@ -4991,6 +5026,7 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
       order_by = 'razao_social',
+      known_total = '',  // client passes cached total on page>1 to skip count query
     } = req.query;
 
     const limit  = Math.min(Math.max(parseInt(page_size, 10) || 10, 1), 100);
@@ -5029,14 +5065,59 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     // Nome — aceita até 2 termos combinados com AND/OR
+    // MATERIALIZED CTE: força o PG a executar o UNION e materializar os CNPJs antes de
+    // planejar o JOIN com outros filtros. Sem isso, o índice GIN estima 2.7M linhas (vs real
+    // ~29K), fazendo o planner escolher hash join com 64 partições em disco → timeout.
+    // Com CTE materializado, o PG usa a contagem real e escolhe nested loop → <2s.
+    const nomeCtes  = [];  // strings 'alias AS MATERIALIZED (...)'
+    const nomeJoins = [];  // strings 'JOIN alias ON alias.cnpj_basico = e.cnpj_basico'
     {
       const n1 = nome.trim(), n2 = nome2.trim();
       if (n1 || n2) {
-        const cols = ['emp.razao_social', 'e.nome_fantasia'];
-        const clauses = [];
-        if (n1) clauses.push(applyTextOp(cols, n1, nome_op));
-        if (n2) clauses.push(applyTextOp(cols, n2, nome2_op));
-        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${nome_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+        // Monta o SQL do UNION para um termo (sem parâmetro ainda — recebe idx externo)
+        const unionSql = (idx) =>
+          `SELECT cnpj_basico FROM rfb_empresas WHERE immutable_unaccent(lower(razao_social)) ILIKE immutable_unaccent(lower($${idx}))
+           UNION
+           SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnpj_ordem = '0001' AND immutable_unaccent(lower(nome_fantasia)) ILIKE immutable_unaccent(lower($${idx}))`;
+
+        const addNomeTerm = (v, op) => {
+          const negated = op === 'not_contains';
+          let pattern;
+          if (negated)              pattern = `%${v}%`;
+          else if (op === 'starts') pattern = `${v}%`;
+          else if (op === 'ends')   pattern = `%${v}`;
+          else if (op === 'exact')  pattern = v;
+          else                      pattern = `%${v}%`;
+          params.push(pattern);
+          return { idx: params.length, negated };
+        };
+
+        const t1 = n1 ? addNomeTerm(n1, nome_op)  : null;
+        const t2 = n2 ? addNomeTerm(n2, nome2_op) : null;
+
+        // Termos negativos (NOT IN): mantém subquery — raro e não causa disk-spill pois
+        // o planner os aplica depois dos filtros positivos reduzirem o conjunto.
+        [t1, t2].forEach(t => {
+          if (t?.negated) {
+            where.push(`e.cnpj_basico NOT IN (${unionSql(t.idx)})`);
+          }
+        });
+
+        // Termos positivos: MATERIALIZED CTE + JOIN
+        const positivos = [t1, t2].filter(t => t && !t.negated);
+        if (positivos.length === 2 && nome_logic === 'OR') {
+          // OR: um único CTE combinando os dois conjuntos
+          const alias = '_nome_or';
+          nomeCtes.push(`${alias} AS MATERIALIZED (${unionSql(positivos[0].idx)} UNION ${unionSql(positivos[1].idx)})`);
+          nomeJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+        } else {
+          // AND (ou termo único): um CTE por termo, um JOIN por CTE
+          positivos.forEach((t, i) => {
+            const alias = `_nome${i + 1}`;
+            nomeCtes.push(`${alias} AS MATERIALIZED (${unionSql(t.idx)})`);
+            nomeJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+          });
+        }
       }
     }
 
@@ -5156,8 +5237,10 @@ app.get('/api/rfb/search', async (req, res) => {
     };
     const orderClause = ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST';
 
+    const ctePrefix  = nomeCtes.length > 0 ? `WITH ${nomeCtes.join(',\n')}` : '';
     const baseQuery = `
       FROM rfb_estabelecimentos e
+      ${nomeJoins.join('\n      ')}
       JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
       LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
       LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
@@ -5165,13 +5248,14 @@ app.get('/api/rfb/search', async (req, res) => {
       ${whereClause}
     `;
 
-    // Limite de tempo por query — evita bloquear a conexão indefinidamente
-    const client = await pool.connect();
-    let dataRows, countRow;
-    try {
-      await client.query(`SET statement_timeout = '120s'`);
-      [dataRows, countRow] = await Promise.all([
-      client.query(`
+    // Duas conexões separadas para execução paralela real (mesma conexão seria sequencial).
+    // random_page_cost=1.0 diz ao planner que o storage é SSD (I/O aleatório ≈ sequencial),
+    // evitando seq scan de 49M linhas quando nested loop com índice é mais eficiente.
+    // ORDER BY na SQL usa e.cnpj_basico (chave primária = 0-copy index scan + early termination).
+    // Os resultados são re-ordenados em JS pelo campo solicitado — evita full sort no PG para
+    // buscas amplas (ex: "elg" → 28K matches → ORDER BY razao_social forçaria sort de 28K rows).
+    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0`;
+    const dataQuery = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
           e.cnpj_basico, e.cnpj_ordem,
@@ -5216,15 +5300,60 @@ app.get('/api/rfb/search', async (req, res) => {
            ORDER BY s3.nome_do_socio LIMIT 1) AS primeiro_socio,
           (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count
         ${baseQuery}
-        ORDER BY ${orderClause}
+        ORDER BY e.cnpj_basico NULLS LAST
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-      `, [...params, limit, offset]),
-      // Limitar scan do COUNT para evitar timeout em buscas amplas
-      client.query(`SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`, params),
-    ]);
-    } finally {
-      client.release();
+      `;
+    const dataQueryFull  = `${ctePrefix} ${dataQuery}`;
+    // Se o cliente já tem o total (paginação page>1), pula a query de count para economizar
+    // ~12s em buscas filtradas (ELG+SC etc.). O total não muda entre páginas.
+    const cachedTotal    = known_total !== '' ? parseInt(known_total, 10) : NaN;
+    const skipCount      = !isNaN(cachedTotal) && cachedTotal >= 0;
+    const countQueryFull = skipCount ? null : `${ctePrefix} SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`;
+
+    let dataRows, countRow;
+    if (skipCount) {
+      const clientData = await pool.connect();
+      try {
+        await clientData.query(SESSION_OPTS);
+        dataRows = await clientData.query(dataQueryFull, [...params, limit, offset]);
+      } finally {
+        clientData.release();
+      }
+      countRow = { rows: [{ count: String(cachedTotal) }] };
+    } else {
+      const [clientData, clientCount] = await Promise.all([pool.connect(), pool.connect()]);
+      try {
+        await Promise.all([
+          clientData.query(SESSION_OPTS),
+          clientCount.query(SESSION_OPTS),
+        ]);
+        [dataRows, countRow] = await Promise.all([
+          clientData.query(dataQueryFull, [...params, limit, offset]),
+          clientCount.query(countQueryFull, params),
+        ]);
+      } finally {
+        clientData.release();
+        clientCount.release();
+      }
     }
+
+    // Re-ordenar em JS (evita full sort no PG para buscas amplas).
+    // Dados já vêm paginados pelo offset correto via ORDER BY cnpj_basico na SQL.
+    const capitalNum = (row) => {
+      const n = parseFloat(String(row.capital_social || '0').replace(/\./g, '').replace(',', '.'));
+      return isNaN(n) ? 0 : n;
+    };
+    const JS_SORT = {
+      razao_social:  (a, b) => (a.razao_social || '').localeCompare(b.razao_social || '', 'pt-BR'),
+      nome_fantasia: (a, b) => (a.nome_fantasia || '').localeCompare(b.nome_fantasia || '', 'pt-BR'),
+      uf:            (a, b) => (a.uf || '').localeCompare(b.uf || ''),
+      situacao:      (a, b) => (a.situacao_cadastral || '').localeCompare(b.situacao_cadastral || ''),
+      capital_desc:  (a, b) => capitalNum(b) - capitalNum(a),
+      capital_asc:   (a, b) => capitalNum(a) - capitalNum(b),
+      abertura_desc: (a, b) => (b.data_de_inicio_da_atividade || '').localeCompare(a.data_de_inicio_da_atividade || ''),
+      abertura_asc:  (a, b) => (a.data_de_inicio_da_atividade || '').localeCompare(b.data_de_inicio_da_atividade || ''),
+    };
+    if (JS_SORT[order_by]) dataRows.rows.sort(JS_SORT[order_by]);
 
     res.json({
       results: dataRows.rows,
