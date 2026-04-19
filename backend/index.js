@@ -5251,7 +5251,11 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_desc: 'e.data_de_inicio_da_atividade DESC NULLS LAST',
       abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
-    const useSqlOrder = nomeCtes.length > 0;  // CTE ativo → sort SQL correto e global
+    // SQL ORDER BY quando qualquer filtro reduz o conjunto (where OU CTE de nome).
+    // Sem filtro nenhum, ORDER BY coluna não-PK ordena 49M linhas → timeout;
+    // mantemos ORDER BY cnpj_basico (PK) + JS sort por página só nesse caso extremo.
+    // only_matriz='0001' já está em where[] por padrão, então useSqlOrder é quase sempre true.
+    const useSqlOrder = where.length > 0 || nomeCtes.length > 0;
     const sqlOrderClause = useSqlOrder
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
