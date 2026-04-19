@@ -5295,8 +5295,20 @@ app.get('/api/rfb/search', async (req, res) => {
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
 
-    const allCtes   = [...nomeCtes, ...endCtes];
-    const allJoins  = [...nomeJoins, ...endJoins];
+    let allCtes  = [...nomeCtes, ...endCtes];
+    let allJoins = [...nomeJoins, ...endJoins];
+
+    // When nome AND endereço CTEs are both active, pre-intersect them into a single
+    // tiny CTE (_inter) so the final JOIN hits rfb_estabelecimentos with ~100s of rows
+    // instead of triggering a 49M-row hash join with two large sets (98K × 60K).
+    if (nomeCtes.length > 0 && endCtes.length > 0) {
+      const aliasRe = /JOIN (\S+) ON/;
+      const allAliases = [...nomeJoins, ...endJoins].map(j => j.match(aliasRe)[1]);
+      const interSql = allAliases.map(a => `SELECT cnpj_basico FROM ${a}`).join('\nINTERSECT\n');
+      allCtes.push(`_inter AS MATERIALIZED (${interSql})`);
+      allJoins = [`JOIN _inter ON _inter.cnpj_basico = e.cnpj_basico`];
+    }
+
     const ctePrefix = allCtes.length > 0 ? `WITH ${allCtes.join(',\n')}` : '';
     const baseQuery = `
       FROM rfb_estabelecimentos e
