@@ -4975,7 +4975,7 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
 
 // POST /api/rfb/cnpj-enrich/:cnpj — busca CNPJ na API pública e faz upsert local
 // Resolve gap: CNPJs em rfb_empresas mas ausentes em rfb_estabelecimentos
-app.post('/api/rfb/cnpj-enrich/:cnpj', requireAuth, async (req, res) => {
+app.post('/api/rfb/cnpj-enrich/:cnpj', async (req, res) => {
   try {
     const cnpj   = String(req.params.cnpj).replace(/\D/g, '').padStart(14, '0').slice(-14);
     const basico = cnpj.slice(0, 8);
