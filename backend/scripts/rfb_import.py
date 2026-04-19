@@ -380,6 +380,10 @@ def main():
     parser.add_argument('--staging', action='store_true',
                         help='Zero-downtime: importa em tabelas _new, cria índices, swap atômico. '
                              'App continua servindo as tabelas originais durante todo o processo.')
+    parser.add_argument('--append', action='store_true',
+                        help='Importa apenas arquivos faltantes (não em rfb_arquivos) direto nas '
+                             'tabelas de produção sem truncar. Ideal para preencher gaps sem '
+                             'reimportar tudo.')
     args = parser.parse_args()
 
     dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '0'))
@@ -399,6 +403,8 @@ def main():
         sys.exit(1)
 
     already_imported = {} if args.force else load_imported_files(conn)
+    if args.append and not args.force:
+        progress('running', 'Modo append: importará apenas arquivos não presentes em rfb_arquivos')
     if already_imported:
         progress('running', f'{len(already_imported)} arquivo(s) já importados anteriormente — serão pulados se não mudaram')
 
@@ -432,13 +438,16 @@ def main():
             # baixados de novo — senão o TRUNCATE apaga os dados deles sem
             # repor.  Detectamos quais categorias têm arquivos novos e
             # adicionamos os "já ok" dessas categorias à fila de download.
+            # Em modo --append não há truncate, então arquivos já importados
+            # de uma mesma categoria ficam intocados.
             cats_with_new = {classify(Path(z['href']).name) for z in to_download}
             rescued = []
-            for z in already_ok:
-                if classify(Path(z['href']).name) in cats_with_new:
-                    to_download.append(z)
-                    rescued.append(Path(z['href']).name)
-                # else: categoria intacta, pode ficar como está
+            if not args.append:
+                for z in already_ok:
+                    if classify(Path(z['href']).name) in cats_with_new:
+                        to_download.append(z)
+                        rescued.append(Path(z['href']).name)
+                    # else: categoria intacta, pode ficar como está
 
             skipped = len(already_ok) - len(rescued)
             if skipped:
@@ -489,6 +498,12 @@ def main():
         idx_suffix = '_new'
         # Resolve nome da tabela alvo: rfb_empresas → rfb_empresas_new
         def target_table(base): return base + '_new'
+    elif args.append:
+        # Gap-fill: insere apenas arquivos faltantes direto nas tabelas de produção.
+        # ON CONFLICT DO NOTHING garante idempotência. Sem truncate.
+        progress('running', 'Modo append — inserindo arquivos faltantes sem truncar tabelas')
+        idx_suffix = ''
+        def target_table(base): return base
     else:
         # Modo padrão: truncate + import direto nas tabelas de produção.
         if tbls_affected:
@@ -542,6 +557,8 @@ def main():
 
     if args.staging:
         swap_staging_tables(conn, set(tbls_affected))
+    elif args.append:
+        progress('running', 'Append concluído — índices atualizados nas tabelas de produção')
 
     conn.close()
 
