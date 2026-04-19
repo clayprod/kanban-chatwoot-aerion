@@ -1416,6 +1416,7 @@ function App() {
   const [rfbImportDialogLabels, setRfbImportDialogLabels] = useState([]);
   const [chatwootLabels, setChatwootLabels] = useState([]);
   const [rfbReimportConfirm, setRfbReimportConfirm] = useState(false);
+  const [rfbUpdateConfirm, setRfbUpdateConfirm] = useState(false);
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
@@ -6009,14 +6010,8 @@ function App() {
                       <span><span className="font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
                       <span><span className={`font-semibold ${Math.max(0, rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{Math.max(0, rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
                       <button
-                        onClick={() => {
-                          axios.post('/api/rfb/import/start', { staging: true })
-                            .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
-                            .catch(() => {});
-                          setRfbStatus(false);
-                        }}
+                        onClick={() => setRfbUpdateConfirm(true)}
                         className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition"
-                        title="Atualiza sem derrubar a base — swap atômico no final"
                       >
                         ↺ Atualizar
                       </button>
@@ -6030,6 +6025,52 @@ function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* ── Dialog confirmação de Atualizar (zero-downtime) ─────────── */}
+                {rfbUpdateConfirm && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbUpdateConfirm(false)}>
+                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                      <div>
+                        <p className="font-semibold text-ink text-base">Atualizar base da Receita Federal</p>
+                        <p className="text-sm text-muted mt-1">Baixa os arquivos novos ou alterados desde o último import e atualiza a base sem derrubar as buscas.</p>
+                      </div>
+
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex flex-col gap-2 text-sm">
+                        <ul className="text-ink space-y-1.5 list-none">
+                          <li>✓ App continua funcionando durante todo o processo</li>
+                          <li>✓ Dados atuais preservados até o swap final (milissegundos)</li>
+                          <li>✓ Só baixa o que mudou — muito mais rápido que um reimport completo</li>
+                        </ul>
+                      </div>
+
+                      <div className="rounded-xl border border-status-warning/30 bg-status-warning/8 p-3 text-sm text-status-warning">
+                        <strong>Isso não precisa ser feito manualmente.</strong> Um agendamento automático já executa essa atualização a cada 30 dias. Só faça se precisar dos dados mais recentes antes do próximo ciclo.
+                      </div>
+
+                      <div className="flex gap-2 justify-end pt-1">
+                        <button
+                          autoFocus
+                          onClick={() => setRfbUpdateConfirm(false)}
+                          className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRfbUpdateConfirm(false);
+                            axios.post('/api/rfb/import/start', { staging: true })
+                              .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                              .catch(() => {});
+                            setRfbStatus(false);
+                          }}
+                          className="px-4 py-2 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-semibold hover:bg-primary/20 transition"
+                        >
+                          ↺ Confirmar Atualização
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* ── Dialog opções avançadas (··· botão) ────────────────────── */}
                 {rfbReimportConfirm && (
