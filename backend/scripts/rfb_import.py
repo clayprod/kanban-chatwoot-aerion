@@ -295,6 +295,9 @@ def create_indexes(conn):
             cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(immutable_unaccent(lower(razao_social)) gin_trgm_ops)')
             cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(immutable_unaccent(lower(nome_do_socio)) gin_trgm_ops)')
             cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(nome_fantasia)) gin_trgm_ops)')
+            # Índices GIN para filtro de endereço standalone (logradouro e bairro)
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_logradouro_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_bairro_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)')
         except Exception as ex:
             print(f'[warn] índices trigrama: {ex}')
             conn.rollback()
