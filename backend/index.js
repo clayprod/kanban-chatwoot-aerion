@@ -5190,8 +5190,10 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     // Endereço — aceita até 2 termos combinados com AND/OR
+    // APENAS logradouro e bairro: são as únicas colunas com índice GIN trigrama.
+    // Incluir cep/complemento no OR forçava seq scan de 49M linhas mesmo com índice.
     {
-      const cols = ['e.logradouro', 'e.bairro', 'e.cep', 'e.complemento'];
+      const cols = ['e.logradouro', 'e.bairro'];
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {
         const clauses = [];
