@@ -1417,6 +1417,7 @@ function App() {
   const [chatwootLabels, setChatwootLabels] = useState([]);
   const [rfbReimportConfirm, setRfbReimportConfirm] = useState(false);
   const [rfbUpdateConfirm, setRfbUpdateConfirm] = useState(false);
+  const [rfbEnriching, setRfbEnriching] = useState({}); // cnpj → true|'done'|'error'
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
@@ -6682,6 +6683,32 @@ function App() {
                                 <p className="text-ink">{row.socios_nomes || <span className="text-muted">—</span>}</p>
                               </div>
                             </div>
+
+                            {/* Enrich from Receita Federal */}
+                            {(() => {
+                              const enrichState = rfbEnriching[row.cnpj];
+                              return (
+                                <div className="mt-3 pt-3 border-t border-border/60 flex items-center gap-3">
+                                  <button
+                                    disabled={enrichState === true}
+                                    onClick={async () => {
+                                      setRfbEnriching(p => ({ ...p, [row.cnpj]: true }));
+                                      try {
+                                        const r = await axios.post(`/api/rfb/cnpj-enrich/${row.cnpj}`);
+                                        setRfbResults(prev => prev.map(x => x.cnpj === row.cnpj ? { ...x, ...r.data } : x));
+                                        setRfbEnriching(p => ({ ...p, [row.cnpj]: 'done' }));
+                                      } catch {
+                                        setRfbEnriching(p => ({ ...p, [row.cnpj]: 'error' }));
+                                      }
+                                    }}
+                                    className="text-xs px-3 py-1.5 rounded-lg border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition disabled:opacity-50"
+                                  >
+                                    {enrichState === true ? 'Consultando Receita...' : enrichState === 'done' ? '✓ Atualizado da Receita' : enrichState === 'error' ? '✗ Erro ao consultar' : '↺ Atualizar dados da Receita Federal'}
+                                  </button>
+                                  {!enrichState && <span className="text-xs text-muted">Busca dados atualizados diretamente na RF e atualiza a base local</span>}
+                                </div>
+                              );
+                            })()}
 
                             {/* Filiais section */}
                             {row.filiais_count > 0 && (
