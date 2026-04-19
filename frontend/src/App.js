@@ -18,7 +18,7 @@ import './App.css';
 // Configurar axios para enviar cookies em todas as requisições
 axios.defaults.withCredentials = true;
 
-const viewTabs = ['Overview', 'Board', 'Licitações', 'Busca Leads', 'Processo'];
+const viewTabs = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
 const leadColumns = [
   '1. Inbox (Novos)',
   '2. Em Contato',
@@ -1366,7 +1366,7 @@ function App() {
   });
   const [showPncpHidden, setShowPncpHidden] = useState(false);
 
-  // ── Busca Leads (RFB Local) ──────────────────────────────
+  // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
   const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: ['2'], porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); return { ..._rfbDef, ...saved, situacao }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
@@ -1534,9 +1534,9 @@ function App() {
       });
   }, [authStatus.authenticated]);
 
-  // Carrega status RFB + listas de referência ao entrar na aba Busca Leads
+  // Carrega status RFB + listas de referência ao entrar na aba Busca Lead B2B
   useEffect(() => {
-    if (!authStatus.authenticated || activeView !== 'Busca Leads') return;
+    if (!authStatus.authenticated || activeView !== 'Busca Lead B2B') return;
     axios.get('/api/rfb/status').then(r => setRfbStatus(r.data)).catch(() => setRfbStatus(false));
     axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)).catch(() => {});
     if (rfbMunicipios.length === 0) axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
@@ -1548,7 +1548,7 @@ function App() {
 
   // Poll import progress while running; refresh status when done
   useEffect(() => {
-    if (activeView !== 'Busca Leads' || !authStatus.authenticated) return;
+    if (activeView !== 'Busca Lead B2B' || !authStatus.authenticated) return;
     const status = rfbImportProgress?.status;
     // If already done, just refresh rfbStatus once
     if (status === 'done') {
@@ -5700,7 +5700,7 @@ function App() {
             </div>
           )}
 
-          {activeView === 'Busca Leads' && (() => { // eslint-disable-line no-extra-parens
+          {activeView === 'Busca Lead B2B' && (() => { // eslint-disable-line no-extra-parens
             // ── Helpers ──────────────────────────────────────────────────
             const fmtCNPJ = (v) => {
               const d = String(v || '').replace(/[^\d]/g, '').padStart(14, '0').slice(-14);
@@ -5805,11 +5805,13 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            const handleRfbSearch = async (pageOverride, pageSizeOverride) => {
+            const handleRfbSearch = async (pageOverride, pageSizeOverride, orderByOverride) => {
               setRfbLoading(true);
               setRfbError(null);
               const pg = pageOverride != null ? pageOverride : rfbPage;
               const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
+              const ob = orderByOverride != null ? orderByOverride : rfbOrderBy;
+              if (pg === 1) setRfbExpanded(null);
               try {
                 const params = new URLSearchParams();
                 if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
@@ -5836,7 +5838,7 @@ function App() {
                 if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
                 params.set('page', pg);
                 params.set('page_size', ps);
-                params.set('order_by', rfbOrderBy);
+                params.set('order_by', ob);
                 // Passa total cacheado em paginações (page>1) para evitar re-executar count
                 if (pg > 1 && rfbTotal > 0) params.set('known_total', rfbTotal);
                 const res = await axios.get(`/api/rfb/search?${params}`);
@@ -5844,7 +5846,7 @@ function App() {
                 setRfbTotal(res.data.total || 0);
                 setRfbPage(pg);
                 // Persistir busca
-                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: rfbOrderBy, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
+                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
               } catch (e) {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
@@ -6614,7 +6616,7 @@ function App() {
                           <select
                             className="rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
                             value={rfbOrderBy}
-                            onChange={e => { setRfbOrderBy(e.target.value); handleRfbSearch(1); }}
+                            onChange={e => { const v = e.target.value; setRfbOrderBy(v); handleRfbSearch(1, null, v); }}
                           >
                             <option value="razao_social">Ordenar: Razão Social</option>
                             <option value="nome_fantasia">Ordenar: Nome Fantasia</option>
