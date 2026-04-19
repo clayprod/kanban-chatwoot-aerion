@@ -5269,10 +5269,15 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (municipio.trim()) {
-      // Subquery no rfb_municipios (5500 linhas) em vez de filtrar coluna de LEFT JOIN —
-      // permite ao planner resolver o código primeiro e depois usar índice em e.municipio.
-      params.push(`%${municipio.trim()}%`);
-      where.push(`e.municipio IN (SELECT codigo FROM rfb_municipios WHERE immutable_unaccent(lower(descricao)) ILIKE immutable_unaccent(lower($${params.length})))`);
+      if (/^\d+$/.test(municipio.trim())) {
+        // Frontend envia o código numérico diretamente (ex: '7107' = SAO PAULO)
+        params.push(municipio.trim());
+        where.push(`e.municipio = $${params.length}`);
+      } else {
+        // Fallback: texto livre → busca por nome no rfb_municipios
+        params.push(`%${municipio.trim()}%`);
+        where.push(`e.municipio IN (SELECT codigo FROM rfb_municipios WHERE immutable_unaccent(lower(descricao)) ILIKE immutable_unaccent(lower($${params.length})))`);
+      }
     }
 
     if (cnae.trim()) {
