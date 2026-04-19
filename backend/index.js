@@ -4973,6 +4973,118 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
   }
 });
 
+// POST /api/rfb/cnpj-enrich/:cnpj — busca CNPJ na API pública e faz upsert local
+// Resolve gap: CNPJs em rfb_empresas mas ausentes em rfb_estabelecimentos
+app.post('/api/rfb/cnpj-enrich/:cnpj', requireAuth, async (req, res) => {
+  try {
+    const cnpj   = String(req.params.cnpj).replace(/\D/g, '').padStart(14, '0').slice(-14);
+    const basico = cnpj.slice(0, 8);
+    const ordem  = cnpj.slice(8, 12);
+    const dv     = cnpj.slice(12, 14);
+
+    const apiRes = await fetch(`https://publica.cnpj.ws/cnpj/${cnpj}`, {
+      headers: { 'User-Agent': 'kanban-dashboard/1.0' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!apiRes.ok) return res.status(404).json({ error: `CNPJ não encontrado na Receita Federal (${apiRes.status})` });
+    const api = await apiRes.json();
+    const est = api.estabelecimento;
+    if (!est) return res.status(404).json({ error: 'Dados de estabelecimento ausentes na resposta da API' });
+
+    const SIT_MAP = { Ativa: '02', Baixada: '08', Suspensa: '03', Inapta: '04', Nula: '01' };
+    const fmtDate = d => d ? d.replace(/-/g, '') : null;
+    const sit = SIT_MAP[est.situacao_cadastral] || est.situacao_cadastral;
+    const idMatFil = est.tipo === 'Matriz' ? '1' : '2';
+    const cnaeSec = (est.atividades_secundarias || []).map(a => a.id).join(',') || null;
+
+    // Resolve código do município a partir do nome
+    const munRow = await pool.query(
+      `SELECT codigo FROM rfb_municipios WHERE immutable_unaccent(lower(descricao)) = immutable_unaccent(lower($1)) LIMIT 1`,
+      [est.cidade?.nome || '']
+    );
+    const munCod = munRow.rows[0]?.codigo || null;
+
+    const client = await pool.connect();
+    try {
+      // Upsert rfb_empresas (garante razao_social atualizada)
+      await client.query(`
+        INSERT INTO rfb_empresas (cnpj_basico, razao_social, natureza_juridica, capital_social, porte_da_empresa)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (cnpj_basico) DO UPDATE SET
+          razao_social = EXCLUDED.razao_social,
+          natureza_juridica = EXCLUDED.natureza_juridica,
+          capital_social = EXCLUDED.capital_social,
+          porte_da_empresa = EXCLUDED.porte_da_empresa
+      `, [basico, api.razao_social, api.natureza_juridica?.id, api.capital_social, api.porte?.id]);
+
+      // Upsert rfb_estabelecimentos
+      await client.query(`
+        INSERT INTO rfb_estabelecimentos (
+          cnpj_basico, cnpj_ordem, cnpj_dv, identificador_matriz_filial,
+          nome_fantasia, situacao_cadastral, data_situacao_cadastral,
+          data_de_inicio_da_atividade, cnae_fiscal_principal, cnae_fiscal_secundaria,
+          tipo_de_logradouro, logradouro, numero, complemento, bairro, cep,
+          uf, municipio, ddd1, telefone1, ddd2, telefone2, correio_eletronico
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+        ON CONFLICT (cnpj_basico, cnpj_ordem, cnpj_dv) DO UPDATE SET
+          nome_fantasia = EXCLUDED.nome_fantasia,
+          situacao_cadastral = EXCLUDED.situacao_cadastral,
+          data_situacao_cadastral = EXCLUDED.data_situacao_cadastral,
+          data_de_inicio_da_atividade = EXCLUDED.data_de_inicio_da_atividade,
+          cnae_fiscal_principal = EXCLUDED.cnae_fiscal_principal,
+          cnae_fiscal_secundaria = EXCLUDED.cnae_fiscal_secundaria,
+          tipo_de_logradouro = EXCLUDED.tipo_de_logradouro,
+          logradouro = EXCLUDED.logradouro, numero = EXCLUDED.numero,
+          complemento = EXCLUDED.complemento, bairro = EXCLUDED.bairro,
+          cep = EXCLUDED.cep, uf = EXCLUDED.uf, municipio = EXCLUDED.municipio,
+          ddd1 = EXCLUDED.ddd1, telefone1 = EXCLUDED.telefone1,
+          ddd2 = EXCLUDED.ddd2, telefone2 = EXCLUDED.telefone2,
+          correio_eletronico = EXCLUDED.correio_eletronico
+      `, [
+        basico, ordem, dv, idMatFil,
+        est.nome_fantasia || null, sit, fmtDate(est.data_situacao_cadastral),
+        fmtDate(est.data_inicio_atividade), est.atividade_principal?.id, cnaeSec,
+        est.tipo_logradouro, est.logradouro, est.numero, est.complemento, est.bairro, est.cep,
+        est.estado?.sigla, munCod, est.ddd1, est.telefone1, est.ddd2 || null, est.telefone2 || null,
+        est.email,
+      ]);
+
+      // Upsert rfb_socios
+      if (Array.isArray(api.socios) && api.socios.length > 0) {
+        await client.query('DELETE FROM rfb_socios WHERE cnpj_basico = $1', [basico]);
+        for (const s of api.socios) {
+          await client.query(`
+            INSERT INTO rfb_socios (cnpj_basico, identificador_de_socio, nome_do_socio,
+              cnpj_ou_cpf_do_socio, qualificacao_do_socio, data_de_entrada_sociedade, faixa_etaria)
+            VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING
+          `, [basico, s.tipo === 'Pessoa Física' ? '2' : '1', s.nome,
+              s.cpf_cnpj_socio, String(s.qualificacao_socio?.id || ''), fmtDate(s.data_entrada), s.faixa_etaria]);
+        }
+      }
+
+      // Retorna o registro no mesmo formato do /api/rfb/cnpj/:cnpj
+      const result = await client.query(`
+        SELECT e.*, emp.razao_social, emp.capital_social, emp.porte_da_empresa, emp.natureza_juridica,
+               m.descricao AS municipio_nome, c.descricao AS cnae_descricao,
+               s.opcao_pelo_simples, s.opcao_pelo_mei
+        FROM rfb_estabelecimentos e
+        JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+        LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
+        LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
+        LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
+        WHERE e.cnpj_basico = $1 AND e.cnpj_ordem = $2 AND e.cnpj_dv = $3
+      `, [basico, ordem, dv]);
+      const socios = await client.query('SELECT * FROM rfb_socios WHERE cnpj_basico = $1', [basico]);
+      res.json({ ...result.rows[0], socios: socios.rows, source: 'rfb_api' });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('[cnpj-enrich]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/rfb/filiais/:cnpjBasico — retorna todas as filiais (cnpj_ordem != '0001') de um CNPJ base
 app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
   const { cnpjBasico } = req.params;
