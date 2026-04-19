@@ -1411,6 +1411,11 @@ function App() {
   const [leadImportSettings, setLeadImportSettings] = useState({ defaultStage: '1. Inbox (Novos)', overwriteDuplicates: false });
   const [leadImportStatus, setLeadImportStatus] = useState(null);
   const [leadImportLoading, setLeadImportLoading] = useState(false);
+  const [rfbImportDialog, setRfbImportDialog] = useState(null); // null | { row, isDup }
+  const [rfbImportDialogStage, setRfbImportDialogStage] = useState('1. Inbox (Novos)');
+  const [rfbImportDialogLabels, setRfbImportDialogLabels] = useState([]);
+  const [chatwootLabels, setChatwootLabels] = useState([]);
+  const [rfbReimportConfirm, setRfbReimportConfirm] = useState(false);
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
@@ -5734,14 +5739,21 @@ function App() {
             const UF_LIST = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
 
             // ── Import ────────────────────────────────────────────────────
-            const handleRfbImport = async (row) => {
+            const openImportDialog = (row, isDup) => {
+              setRfbImportDialogStage(leadImportSettings.defaultStage);
+              setRfbImportDialogLabels([]);
+              setRfbImportDialog({ row, isDup });
+              if (chatwootLabels.length === 0) {
+                axios.get('/api/labels').then(r => setChatwootLabels(r.data || [])).catch(() => {});
+              }
+            };
+
+            const handleRfbImport = async (row, { stage, labels } = {}) => {
               const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
-              // Usar nome do primeiro sócio como nome/sobrenome do contato
               const nomeSocio = (row.primeiro_socio || '').trim();
               const partes = nomeSocio ? nomeSocio.split(/\s+/) : [];
               const primeiro_nome = nomeSocio ? partes[0] : (row.razao_social || '');
               const sobrenome = partes.length > 1 ? partes.slice(1).join(' ') : '';
-              // Telefone: formato E.164 para Chatwoot (+5511987654321)
               const fmtTel = (ddd, tel) => {
                 if (!ddd || !tel) return null;
                 const d = String(ddd).replace(/\D/g, '');
@@ -5771,13 +5783,15 @@ function App() {
                 qsa: nomeSocio ? [{ nome: nomeSocio }] : [],
               };
               const isExisting = Boolean(leadExistingCNPJs[cleanCNPJ]);
+              setRfbImportDialog(null);
               setLeadImportLoading(true);
               setLeadImportStatus(null);
               try {
                 const r = await axios.post('/api/leads/import', {
                   leads: [lead],
-                  defaultStage: leadImportSettings.defaultStage,
+                  defaultStage: stage || leadImportSettings.defaultStage,
                   overwriteDuplicates: isExisting || leadImportSettings.overwriteDuplicates,
+                  labels: labels || [],
                 });
                 setLeadImportStatus(r.data);
                 axios.get('/api/leads/existing-cnpjs').then(x => setLeadExistingCNPJs(x.data || {})).catch(() => {});
@@ -5820,6 +5834,8 @@ function App() {
                 params.set('page', pg);
                 params.set('page_size', rfbPageSize);
                 params.set('order_by', rfbOrderBy);
+                // Passa total cacheado em paginações (page>1) para evitar re-executar count
+                if (pg > 1 && rfbTotal > 0) params.set('known_total', rfbTotal);
                 const res = await axios.get(`/api/rfb/search?${params}`);
                 setRfbResults(res.data.results || []);
                 setRfbTotal(res.data.total || 0);
@@ -6005,13 +6021,7 @@ function App() {
                         ↺ Atualizar
                       </button>
                       <button
-                        onClick={() => {
-                          if (!window.confirm('Isso vai re-baixar TODOS os arquivos da RFB (pode demorar horas). Continuar?')) return;
-                          axios.post('/api/rfb/import/start', { force: true })
-                            .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
-                            .catch(() => {});
-                          setRfbStatus(false);
-                        }}
+                        onClick={() => setRfbReimportConfirm(true)}
                         className="text-xs px-3 py-1.5 rounded-xl border border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20 transition"
                         title="Re-baixar e reimportar TUDO do zero (ignora cache)"
                       >
@@ -6020,6 +6030,141 @@ function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* ── Dialog de confirmação de Reimport Completo ─────────────── */}
+                {rfbReimportConfirm && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbReimportConfirm(false)}>
+                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-start gap-3">
+                        <span className="text-2xl mt-0.5">⚠️</span>
+                        <div>
+                          <p className="font-semibold text-ink text-base">Reimport Completo da Base RFB</p>
+                          <p className="text-sm text-muted mt-0.5">Você tem certeza?</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2 text-sm">
+                        <p className="font-semibold text-status-danger">O que vai acontecer:</p>
+                        <ul className="text-status-danger/80 space-y-1 list-none">
+                          <li>✗ Todos os dados RFB serão apagados do banco</li>
+                          <li>✗ Todos os arquivos (~60 GB) serão baixados novamente</li>
+                          <li>✗ O processo pode levar <strong>4–8 horas</strong></li>
+                          <li>✗ Buscas ficarão indisponíveis durante o processo</li>
+                        </ul>
+                      </div>
+
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-ink">
+                        <p className="font-semibold text-primary mb-1">Prefira "Apenas Atualizar":</p>
+                        <p className="text-muted">Baixa somente os arquivos novos ou alterados desde o último import. <strong className="text-ink">Não apaga a base existente.</strong> Muito mais rápido — indicado para atualizações mensais.</p>
+                      </div>
+
+                      <div className="flex gap-2 justify-end pt-1 flex-wrap">
+                        <button
+                          onClick={() => setRfbReimportConfirm(false)}
+                          className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          autoFocus
+                          onClick={() => {
+                            setRfbReimportConfirm(false);
+                            axios.post('/api/rfb/import/start')
+                              .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                              .catch(() => {});
+                            setRfbStatus(false);
+                          }}
+                          className="px-4 py-2 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-semibold hover:bg-primary/20 transition ring-2 ring-primary/30"
+                        >
+                          ↺ Apenas Atualizar
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRfbReimportConfirm(false);
+                            axios.post('/api/rfb/import/start', { force: true })
+                              .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                              .catch(() => {});
+                            setRfbStatus(false);
+                          }}
+                          className="px-4 py-2 rounded-lg bg-status-danger/90 hover:bg-status-danger text-white text-sm font-semibold transition"
+                        >
+                          Sim, Reimport Completo
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Dialog de confirmação de import ───────────────────────── */}
+                {rfbImportDialog && (() => {
+                  const { row, isDup } = rfbImportDialog;
+                  const toggleLabel = (title) => setRfbImportDialogLabels(prev =>
+                    prev.includes(title) ? prev.filter(l => l !== title) : [...prev, title]
+                  );
+                  return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbImportDialog(null)}>
+                      <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                        {/* Header */}
+                        <div>
+                          <p className="text-xs text-muted uppercase tracking-wide mb-0.5">{isDup ? 'Atualizar contato' : 'Importar para o Chatwoot'}</p>
+                          <p className="font-semibold text-ink text-base leading-tight">{row.razao_social}</p>
+                          {row.nome_fantasia && <p className="text-sm text-muted">{row.nome_fantasia}</p>}
+                          <p className="text-xs text-muted font-mono mt-1">{fmtCNPJ(row.cnpj)}</p>
+                        </div>
+
+                        {/* Estágio */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">Estágio no Chatwoot</label>
+                          <select
+                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            value={rfbImportDialogStage}
+                            onChange={e => setRfbImportDialogStage(e.target.value)}
+                          >
+                            {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                          </select>
+                        </div>
+
+                        {/* Etiquetas */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">Etiquetas {chatwootLabels.length === 0 && <span className="text-muted/60">(carregando…)</span>}</label>
+                          {chatwootLabels.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {chatwootLabels.map(lbl => {
+                                const sel = rfbImportDialogLabels.includes(lbl.title);
+                                return (
+                                  <button
+                                    key={lbl.title}
+                                    onClick={() => toggleLabel(lbl.title)}
+                                    className={`text-xs px-2.5 py-1 rounded-full border transition ${sel ? 'border-transparent text-white font-medium' : 'border-border text-muted hover:border-primary/40 hover:text-ink'}`}
+                                    style={sel ? { backgroundColor: lbl.color || '#6366f1' } : {}}
+                                  >
+                                    {lbl.title}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Ações */}
+                        <div className="flex gap-2 justify-end pt-1">
+                          <button
+                            onClick={() => setRfbImportDialog(null)}
+                            className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink hover:border-primary/40 transition"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            onClick={() => handleRfbImport(row, { stage: rfbImportDialogStage, labels: rfbImportDialogLabels })}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold text-white transition ${isDup ? 'bg-status-warning hover:bg-status-warning/90' : 'bg-primary hover:bg-primary/90'}`}
+                          >
+                            {isDup ? 'Atualizar' : 'Importar'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Import status banner */}
                 {leadImportStatus && (
@@ -6381,9 +6526,9 @@ function App() {
                       </label>
                     </div>
 
-                    {/* Import settings */}
+                    {/* Import settings — estágio padrão para o dialog */}
                     <div className="pt-2 border-t border-border">
-                      <label className="block text-xs text-muted mb-1">Estágio no Chatwoot (import)</label>
+                      <label className="block text-xs text-muted mb-1">Estágio padrão (import)</label>
                       <select
                         className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
                         value={leadImportSettings.defaultStage}
@@ -6391,15 +6536,6 @@ function App() {
                       >
                         {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
                       </select>
-                      <label className="flex items-center gap-1.5 text-xs text-muted mt-2 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={leadImportSettings.overwriteDuplicates}
-                          onChange={e => setLeadImportSettings(p => ({ ...p, overwriteDuplicates: e.target.checked }))}
-                          className="rounded border-border accent-primary"
-                        />
-                        Sobrescrever duplicatas
-                      </label>
                     </div>
 
                     {/* Buttons */}
@@ -6537,7 +6673,7 @@ function App() {
                                             {situacaoLabel(f.situacao_cadastral)}
                                           </span>
                                           <button
-                                            onClick={() => handleRfbImport({ ...f, razao_social: row.razao_social, capital_social: row.capital_social, porte_da_empresa: row.porte_da_empresa, opcao_pelo_simples: row.opcao_pelo_simples, opcao_pelo_mei: row.opcao_pelo_mei, socios_nomes: row.socios_nomes, primeiro_socio: row.primeiro_socio })}
+                                            onClick={() => openImportDialog({ ...f, razao_social: row.razao_social, capital_social: row.capital_social, porte_da_empresa: row.porte_da_empresa, opcao_pelo_simples: row.opcao_pelo_simples, opcao_pelo_mei: row.opcao_pelo_mei, socios_nomes: row.socios_nomes, primeiro_socio: row.primeiro_socio }, fDup)}
                                             disabled={leadImportLoading}
                                             className={`text-xs px-2 py-1 rounded-lg border transition disabled:opacity-40 flex-shrink-0 ${fDup ? 'border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20' : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'}`}
                                           >
@@ -6579,7 +6715,7 @@ function App() {
                             const actionBtns = (
                               <div className="flex gap-1.5 items-center flex-shrink-0">
                                 <button
-                                  onClick={() => handleRfbImport(row)}
+                                  onClick={() => openImportDialog(row, isDup)}
                                   disabled={leadImportLoading}
                                   className={`text-xs px-2.5 py-1.5 rounded-lg border transition disabled:opacity-40 whitespace-nowrap ${isDup ? 'border-status-warning/40 bg-status-warning/10 text-status-warning hover:bg-status-warning/20' : 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/20'}`}
                                 >
