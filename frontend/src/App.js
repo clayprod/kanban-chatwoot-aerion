@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: ['2'], porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); return { ..._rfbDef, ...saved, situacao }; } catch { return _rfbDef; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); return { ..._rfbDef, ...saved, situacao, cnae }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -5823,7 +5823,7 @@ function App() {
                 if (rfbFilters.socio.trim() && rfbSocio2.trim()) params.set('socio_logic', rfbSocioLogic);
                 if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
                 if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
-                if (rfbFilters.cnae.trim()) params.set('cnae', rfbFilters.cnae.trim());
+                if (rfbFilters.cnae.length > 0) params.set('cnae', rfbFilters.cnae.join(','));
                 if (rfbFilters.situacao.length > 0) params.set('situacao', rfbFilters.situacao.join(','));
                 if (rfbFilters.porte.trim()) params.set('porte', rfbFilters.porte.trim());
                 if (rfbCapitalRange[0] > 0) params.set('capital_min', rfbCapitalRange[0]);
@@ -5855,7 +5855,7 @@ function App() {
             };
 
             const handleClear = () => {
-              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: '', situacao: ['2'], porte: '' };
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '' };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
@@ -5883,11 +5883,9 @@ function App() {
             // CNAE dropdown
             const cnaeQuery = rfbCnaeInput.trim().toLowerCase();
             const filteredCnaes = cnaeQuery.length >= 1
-              ? rfbCnaes.filter(c => c.codigo.includes(cnaeQuery) || c.descricao.toLowerCase().includes(cnaeQuery)).slice(0, 30)
+              ? rfbCnaes.filter(c => !rfbFilters.cnae.includes(c.codigo) && (c.codigo.includes(cnaeQuery) || c.descricao.toLowerCase().includes(cnaeQuery))).slice(0, 30)
               : [];
-            const cnaeLabel = rfbFilters.cnae
-              ? (rfbCnaes.find(c => c.codigo === rfbFilters.cnae)?.descricao || rfbFilters.cnae)
-              : null;
+            const cnaeLabel = (codigo) => rfbCnaes.find(c => c.codigo === codigo)?.descricao || codigo;
 
             // Município dropdown
             const munQuery = rfbMunicipioInput.trim().toUpperCase();
@@ -6418,11 +6416,15 @@ function App() {
                     {/* CNAE */}
                     <div>
                       <label className="block text-xs text-muted mb-1">CNAE</label>
-                      {cnaeLabel && (
-                        <span className="inline-flex items-center gap-1 mb-1.5 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 max-w-full">
-                          <span className="font-mono flex-shrink-0">{rfbFilters.cnae}</span>
-                          <button onClick={() => { setRfbFilters(p => ({ ...p, cnae: '' })); setRfbCnaeInput(''); }} className="hover:text-status-danger flex-shrink-0 leading-none">×</button>
-                        </span>
+                      {rfbFilters.cnae.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {rfbFilters.cnae.map(cod => (
+                            <span key={cod} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 max-w-full">
+                              <span className="font-mono flex-shrink-0">{cod}</span>
+                              <button onClick={() => setRfbFilters(p => ({ ...p, cnae: p.cnae.filter(c => c !== cod) }))} className="hover:text-status-danger flex-shrink-0 leading-none">×</button>
+                            </span>
+                          ))}
+                        </div>
                       )}
                       <div className="relative">
                         <input
@@ -6439,11 +6441,11 @@ function App() {
                             {filteredCnaes.map(c => (
                               <button
                                 key={c.codigo}
-                                onMouseDown={e => { e.preventDefault(); setRfbFilters(p => ({ ...p, cnae: c.codigo })); setRfbCnaeInput(''); setRfbCnaeDropdownOpen(false); }}
+                                onMouseDown={e => { e.preventDefault(); setRfbFilters(p => ({ ...p, cnae: p.cnae.includes(c.codigo) ? p.cnae : [...p.cnae, c.codigo] })); setRfbCnaeInput(''); setRfbCnaeDropdownOpen(false); }}
                                 className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-cardAlt border-b border-border/50 last:border-0 flex gap-2"
                               >
                                 <span className="font-mono text-muted flex-shrink-0">{c.codigo}</span>
-                                <span>{c.descricao}</span>
+                                <span>{cnaeLabel(c.codigo) !== c.codigo ? c.descricao : c.descricao}</span>
                               </button>
                             ))}
                           </div>
