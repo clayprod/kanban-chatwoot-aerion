@@ -6043,19 +6043,23 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2 text-sm">
-                        <p className="font-semibold text-status-danger">O que vai acontecer:</p>
-                        <ul className="text-status-danger/80 space-y-1 list-none">
-                          <li>✗ Todos os dados RFB serão apagados do banco</li>
-                          <li>✗ Todos os arquivos (~60 GB) serão baixados novamente</li>
-                          <li>✗ O processo pode levar <strong>4–8 horas</strong></li>
-                          <li>✗ Buscas ficarão indisponíveis durante o processo</li>
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex flex-col gap-2 text-sm">
+                        <p className="font-semibold text-primary">Atualizar (recomendado):</p>
+                        <ul className="text-ink space-y-1 list-none">
+                          <li>✓ Baixa somente arquivos novos/alterados desde o último import</li>
+                          <li>✓ App continua funcionando durante todo o processo</li>
+                          <li>✓ Dados existentes preservados até o swap final</li>
+                          <li className="text-muted">Tempo estimado: 2–6 horas (só o que mudou)</li>
                         </ul>
                       </div>
 
-                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-ink">
-                        <p className="font-semibold text-primary mb-1">Prefira "Apenas Atualizar":</p>
-                        <p className="text-muted">Baixa somente os arquivos novos ou alterados desde o último import. <strong className="text-ink">Não apaga a base existente.</strong> Muito mais rápido — indicado para atualizações mensais.</p>
+                      <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2 text-sm">
+                        <p className="font-semibold text-status-danger">Reimport Completo (destrutivo):</p>
+                        <ul className="text-status-danger/80 space-y-1 list-none">
+                          <li>✗ Todos os dados RFB serão apagados e rebaixados (~60 GB)</li>
+                          <li>✗ O processo pode levar <strong>4–8 horas</strong></li>
+                          <li>✗ Buscas ficam indisponíveis durante o processo</li>
+                        </ul>
                       </div>
 
                       <div className="flex gap-2 justify-end pt-1 flex-wrap">
@@ -6069,14 +6073,14 @@ function App() {
                           autoFocus
                           onClick={() => {
                             setRfbReimportConfirm(false);
-                            axios.post('/api/rfb/import/start')
+                            axios.post('/api/rfb/import/start', { staging: true })
                               .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
                               .catch(() => {});
                             setRfbStatus(false);
                           }}
                           className="px-4 py-2 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-semibold hover:bg-primary/20 transition ring-2 ring-primary/30"
                         >
-                          ↺ Apenas Atualizar
+                          ↺ Atualizar (zero-downtime)
                         </button>
                         <button
                           onClick={() => {
@@ -6088,7 +6092,7 @@ function App() {
                           }}
                           className="px-4 py-2 rounded-lg bg-status-danger/90 hover:bg-status-danger text-white text-sm font-semibold transition"
                         >
-                          Sim, Reimport Completo
+                          Reimport Completo
                         </button>
                       </div>
                     </div>

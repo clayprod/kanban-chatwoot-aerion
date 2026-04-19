@@ -4660,14 +4660,16 @@ let rfbImportState = {
   startedAt: null,
 };
 
-function startRFBImport({ force = false } = {}) {
+function startRFBImport({ force = false, staging = false } = {}) {
   if (rfbImportState.status === 'running') return; // already running
-  rfbImportState = { status: 'running', message: force ? 'Iniciando importação completa (force)...' : 'Iniciando importação...', file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
+  const modeLabel = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : 'incremental';
+  rfbImportState = { status: 'running', message: `Iniciando importação ${modeLabel}...`, file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
 
   const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
   const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
   const args = [scriptPath];
   if (force) args.push('--force');
+  if (staging) args.push('--staging');
   const py = spawn(pythonCmd, args, {
     env: { ...process.env },
     cwd: path.join(__dirname, 'scripts'),
@@ -5451,14 +5453,16 @@ app.get('/api/rfb/import-progress', (req, res) => {
 });
 
 // POST /api/rfb/import/start — manual trigger (re-import)
-// Body: { force: true } para ignorar cache e re-baixar tudo
+// Body: { force: true } força re-download; { staging: true } zero-downtime
 app.post('/api/rfb/import/start', (req, res) => {
   if (rfbImportState.status === 'running') {
     return res.status(409).json({ error: 'Import já em andamento' });
   }
-  const force = Boolean(req.body?.force);
-  startRFBImport({ force });
-  res.json({ ok: true, message: force ? 'Import completo iniciado (force)' : 'Import iniciado' });
+  const force   = Boolean(req.body?.force);
+  const staging = Boolean(req.body?.staging);
+  startRFBImport({ force, staging });
+  const mode = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : 'incremental';
+  res.json({ ok: true, message: `Import ${mode} iniciado` });
 });
 
 // ============================================================

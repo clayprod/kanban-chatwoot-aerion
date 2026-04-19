@@ -227,10 +227,47 @@ FILE_TABLE_MAP = {
     'motivos':          'rfb_motivos',
 }
 
+# ── Staging helpers ───────────────────────────────────────────────────────────
+
+ALL_RFB_TABLES = list(FILE_TABLE_MAP.values())  # todas as tabelas gerenciadas
+
+def create_staging_tables(conn):
+    """Cria rfb_*_new copiando o schema das tabelas de produção."""
+    progress('running', 'Criando tabelas staging (_new)...')
+    with conn.cursor() as cur:
+        for t in ALL_RFB_TABLES:
+            cur.execute(f'DROP TABLE IF EXISTS {t}_new CASCADE')
+            cur.execute(f'CREATE TABLE {t}_new (LIKE {t} INCLUDING DEFAULTS)')
+    conn.commit()
+
+
+def swap_staging_tables(conn, staged_tables):
+    """Swap atômico: prod → _old, _new → prod, drop _old.
+    staged_tables: conjunto de nomes de tabelas que foram importadas em _new.
+    Tabelas não staged (não houve mudança de arquivo) ficam intocadas.
+    """
+    progress('running', 'Aplicando swap atômico das tabelas staging...')
+    with conn.cursor() as cur:
+        # Renomeia em uma única transação: prod→_old, new→prod
+        for t in staged_tables:
+            cur.execute(f'ALTER TABLE {t} RENAME TO {t}_old')
+            cur.execute(f'ALTER TABLE {t}_new RENAME TO {t}')
+        # Drop das tabelas _old (fora do bloco crítico mas ainda no mesmo commit)
+        for t in staged_tables:
+            cur.execute(f'DROP TABLE {t}_old CASCADE')
+        # Limpa staging de tabelas que não foram usadas
+        for t in ALL_RFB_TABLES:
+            if t not in staged_tables:
+                cur.execute(f'DROP TABLE IF EXISTS {t}_new CASCADE')
+    conn.commit()
+    progress('running', f'Swap concluído: {", ".join(staged_tables)}')
+
+
 # ── Import ────────────────────────────────────────────────────────────────────
 
 def import_csv(conn, csv_path, table):
-    cols = TABLE_COLUMNS[table]
+    base_table = table.removesuffix('_new')  # rfb_empresas_new → rfb_empresas
+    cols = TABLE_COLUMNS[base_table]
     n    = len(cols)
     sql  = f'INSERT INTO {table} ({",".join(cols)}) VALUES %s ON CONFLICT DO NOTHING'
     total = 0
@@ -244,7 +281,7 @@ def import_csv(conn, csv_path, table):
                 row.append('')
             row = [v.strip() if v and v.strip() else None for v in row[:n]]
             # Normaliza UF numérico → sigla (ex: '08' → 'ES')
-            if table == 'rfb_estabelecimentos':
+            if base_table == 'rfb_estabelecimentos':
                 uf_idx = cols.index('uf') if 'uf' in cols else -1
                 if uf_idx >= 0 and row[uf_idx]:
                     row[uf_idx] = normalize_uf(row[uf_idx])
@@ -267,22 +304,23 @@ def import_csv(conn, csv_path, table):
     return total
 
 
-def create_indexes(conn):
-    progress('running', 'Criando índices...')
+def create_indexes(conn, suffix=''):
+    """Cria índices. suffix='' para produção, suffix='_new' para staging."""
+    s = suffix  # alias curto
+    progress('running', f'Criando índices{" (staging)" if s else ""}...')
     idxs = [
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_basico   ON rfb_estabelecimentos(cnpj_basico)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem    ON rfb_estabelecimentos(cnpj_ordem)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf       ON rfb_estabelecimentos(uf)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_municipio ON rfb_estabelecimentos(municipio)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae     ON rfb_estabelecimentos(cnae_fiscal_principal)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao ON rfb_estabelecimentos(situacao_cadastral)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte    ON rfb_empresas(porte_da_empresa)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico ON rfb_socios(cnpj_basico)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao    ON rfb_empresas(razao_social text_pattern_ops)',
-        'CREATE INDEX IF NOT EXISTS idx_rfb_socios_nome  ON rfb_socios(nome_do_socio text_pattern_ops)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_basico{s}    ON rfb_estabelecimentos{s}(cnpj_basico)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem{s}     ON rfb_estabelecimentos{s}(cnpj_ordem)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf{s}        ON rfb_estabelecimentos{s}(uf)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_municipio{s} ON rfb_estabelecimentos{s}(municipio)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae{s}      ON rfb_estabelecimentos{s}(cnae_fiscal_principal)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao{s}  ON rfb_estabelecimentos{s}(situacao_cadastral)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte{s}     ON rfb_empresas{s}(porte_da_empresa)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico{s} ON rfb_socios{s}(cnpj_basico)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao{s}     ON rfb_empresas{s}(razao_social text_pattern_ops)',
+        f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_nome{s}   ON rfb_socios{s}(nome_do_socio text_pattern_ops)',
     ]
     with conn.cursor() as cur:
-        # Tenta pg_trgm para buscas ILIKE %x% mais rápidas
         try:
             cur.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
             cur.execute('CREATE EXTENSION IF NOT EXISTS unaccent')
@@ -292,12 +330,11 @@ def create_indexes(conn):
                   SELECT public.unaccent($1);
                 $$
             """)
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm ON rfb_empresas USING gin(immutable_unaccent(lower(razao_social)) gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm ON rfb_socios USING gin(immutable_unaccent(lower(nome_do_socio)) gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(nome_fantasia)) gin_trgm_ops)')
-            # Índices GIN para filtro de endereço standalone (logradouro e bairro)
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_logradouro_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_rfb_est_bairro_trgm ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm{s}      ON rfb_empresas{s} USING gin(immutable_unaccent(lower(razao_social)) gin_trgm_ops)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm{s}         ON rfb_socios{s} USING gin(immutable_unaccent(lower(nome_do_socio)) gin_trgm_ops)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm{s}   ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(nome_fantasia)) gin_trgm_ops)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_logradouro_trgm{s} ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_bairro_trgm{s}     ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)')
         except Exception as ex:
             print(f'[warn] índices trigrama: {ex}')
             conn.rollback()
@@ -340,6 +377,9 @@ def main():
     parser.add_argument('--skip-download', action='store_true')
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--force', action='store_true', help='Reimportar mesmo arquivos já importados')
+    parser.add_argument('--staging', action='store_true',
+                        help='Zero-downtime: importa em tabelas _new, cria índices, swap atômico. '
+                             'App continua servindo as tabelas originais durante todo o processo.')
     args = parser.parse_args()
 
     dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '0'))
@@ -437,16 +477,28 @@ def main():
         progress('error', 'Nenhum arquivo disponível para importar', error='no_files')
         sys.exit(1)
 
-    # ── Import ────────────────────────────────────────────────────────────────
-    # Limpar só as tabelas dos arquivos que serão (re)importados
-    cats_present = set(classify(p.name).lower() for p, _ in to_import)
-    tbls_to_clear = [FILE_TABLE_MAP[c] for c in cats_present if c in FILE_TABLE_MAP]
-    if tbls_to_clear:
-        progress('running', f'Limpando tabelas: {", ".join(tbls_to_clear)}')
-        with conn.cursor() as cur:
-            for t in tbls_to_clear:
-                cur.execute(f'TRUNCATE TABLE {t} CASCADE')
-        conn.commit()
+    # ── Staging ou Truncate ───────────────────────────────────────────────────
+    cats_present  = set(classify(p.name).lower() for p, _ in to_import)
+    tbls_affected = [FILE_TABLE_MAP[c] for c in cats_present if c in FILE_TABLE_MAP]
+
+    if args.staging:
+        # Zero-downtime: importa em _new, índices em _new, swap atômico no final.
+        # O app continua servindo as tabelas originais durante todo o processo.
+        progress('running', 'Modo staging ativado — app continua no ar durante import')
+        create_staging_tables(conn)
+        idx_suffix = '_new'
+        # Resolve nome da tabela alvo: rfb_empresas → rfb_empresas_new
+        def target_table(base): return base + '_new'
+    else:
+        # Modo padrão: truncate + import direto nas tabelas de produção.
+        if tbls_affected:
+            progress('running', f'Limpando tabelas: {", ".join(tbls_affected)}')
+            with conn.cursor() as cur:
+                for t in tbls_affected:
+                    cur.execute(f'TRUNCATE TABLE {t} CASCADE')
+            conn.commit()
+        idx_suffix = ''
+        def target_table(base): return base
 
     totals = {}
     total_zips = len(to_import)
@@ -456,6 +508,7 @@ def main():
         if not table:
             continue
 
+        tgt = target_table(table)
         progress('running', f'Processando {zip_path.name}... ({zip_idx+1}/{total_zips})',
                  file=zip_path.name, percent=int((zip_idx / total_zips) * 100))
         zip_records = 0
@@ -464,19 +517,17 @@ def main():
                 for member in zf.namelist():
                     if member.endswith('/'):
                         continue
-                    # extract() retorna o path completo preservando subdirs
                     extracted_path = Path(zf.extract(member, DATA_PATH))
-                    n = import_csv(conn, extracted_path, table)
+                    n = import_csv(conn, extracted_path, tgt)
                     zip_records += n
                     totals[table] = totals.get(table, 0) + n
-                    progress('running', f'{table}: {n:,} linhas importadas de {member}',
+                    progress('running', f'{tgt}: {n:,} linhas importadas de {member}',
                              file=member, records=totals[table])
                     try:
                         extracted_path.unlink()
                     except Exception:
                         pass
 
-            # Registrar import bem-sucedido e apagar o ZIP
             record_imported_file(conn, zip_path.name, table, remote_size, zip_records)
             try:
                 zip_path.unlink()
@@ -487,7 +538,11 @@ def main():
         except Exception as e:
             progress('error', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
 
-    create_indexes(conn)
+    create_indexes(conn, suffix=idx_suffix)
+
+    if args.staging:
+        swap_staging_tables(conn, set(tbls_affected))
+
     conn.close()
 
     total_records = sum(totals.values())
