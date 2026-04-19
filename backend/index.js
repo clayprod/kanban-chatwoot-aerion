@@ -5229,6 +5229,10 @@ app.get('/api/rfb/search', async (req, res) => {
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
     // Ordenação
+    // Quando o CTE de nome está ativo, o conjunto já foi materializado (~29K CNPJs) →
+    // ORDER BY no SQL é seguro e correto (sort de 29K linhas, não 49M).
+    // Sem CTE, ORDER BY colunas não-PK forçaria sort de milhões de linhas → timeout,
+    // então usamos ORDER BY e.cnpj_basico (PK, early termination) + re-sort em JS por página.
     const ORDER_MAP = {
       razao_social:  'emp.razao_social NULLS LAST',
       nome_fantasia: 'e.nome_fantasia NULLS LAST',
@@ -5239,7 +5243,10 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_desc: 'e.data_de_inicio_da_atividade DESC NULLS LAST',
       abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
-    const orderClause = ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST';
+    const useSqlOrder = nomeCtes.length > 0;  // CTE ativo → sort SQL correto e global
+    const sqlOrderClause = useSqlOrder
+      ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
+      : 'e.cnpj_basico NULLS LAST';
 
     const ctePrefix  = nomeCtes.length > 0 ? `WITH ${nomeCtes.join(',\n')}` : '';
     const baseQuery = `
@@ -5304,7 +5311,7 @@ app.get('/api/rfb/search', async (req, res) => {
            ORDER BY s3.nome_do_socio LIMIT 1) AS primeiro_socio,
           (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count
         ${baseQuery}
-        ORDER BY e.cnpj_basico NULLS LAST
+        ORDER BY ${sqlOrderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
     const dataQueryFull  = `${ctePrefix} ${dataQuery}`;
@@ -5357,7 +5364,9 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_desc: (a, b) => (b.data_de_inicio_da_atividade || '').localeCompare(a.data_de_inicio_da_atividade || ''),
       abertura_asc:  (a, b) => (a.data_de_inicio_da_atividade || '').localeCompare(b.data_de_inicio_da_atividade || ''),
     };
-    if (JS_SORT[order_by]) dataRows.rows.sort(JS_SORT[order_by]);
+    // JS sort: só aplicar quando CTE não está ativo (sem nome filter), pois o SQL já
+    // ordenou corretamente o resultado via ORDER BY ${sqlOrderClause}.
+    if (!useSqlOrder && JS_SORT[order_by]) dataRows.rows.sort(JS_SORT[order_by]);
 
     res.json({
       results: dataRows.rows,
@@ -5396,6 +5405,22 @@ const startServer = async () => {
     await createHistoryTable();
     await createCNPJCacheTable();
     await createRFBTables();
+    // Índices GIN para filtro de endereço standalone (logradouro, bairro).
+    // CONCURRENTLY: não bloqueia a tabela durante o build (pode demorar horas em 49M linhas).
+    // Rodado em background sem await — não atrasa o startup.
+    (async () => {
+      const enderecoIdxs = [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_logradouro_trgm
+           ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)`,
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_bairro_trgm
+           ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)`,
+      ];
+      for (const sql of enderecoIdxs) {
+        try { await pool.query(sql); }
+        catch (e) { console.warn('[rfb] Índice GIN endereço:', e.message); }
+      }
+      console.log('[rfb] Índices GIN de endereço verificados.');
+    })();
     // Auto-import RFB data if tables are empty (desabilitar com RFB_SKIP_AUTO_IMPORT=1)
     if (!process.env.RFB_SKIP_AUTO_IMPORT) {
       try {
