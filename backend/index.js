@@ -5189,17 +5189,50 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`emp.porte_da_empresa IN ($${params.length - 1}, $${params.length})`);
     }
 
-    // Endereço — aceita até 2 termos combinados com AND/OR
-    // APENAS logradouro e bairro: são as únicas colunas com índice GIN trigrama.
-    // Incluir cep/complemento no OR forçava seq scan de 49M linhas mesmo com índice.
+    // Endereço — MATERIALIZED CTE (igual ao nome) para que o PG intersecte dois conjuntos
+    // pequenos em vez de varrer o CTE de nome (300K entries) e filtrar por endereço depois.
+    // Ex: nome="importacao" (300K CTE) + endereço="bom retiro" (200K CTE) → hash join
+    // das duas listas → 561 entradas → filtros UF/município triviais → muito mais rápido.
+    const endCtes  = [];
+    const endJoins = [];
     {
-      const cols = ['e.logradouro', 'e.bairro'];
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {
-        const clauses = [];
-        if (e1) clauses.push(applyTextOp(cols, e1, endereco_op));
-        if (e2) clauses.push(applyTextOp(cols, e2, endereco2_op));
-        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${endereco_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+        const buildEndCte = (v, op) => {
+          const negated = op === 'not_contains';
+          let pattern;
+          if (negated)              pattern = `%${v}%`;
+          else if (op === 'starts') pattern = `${v}%`;
+          else if (op === 'ends')   pattern = `%${v}`;
+          else if (op === 'exact')  pattern = v;
+          else                      pattern = `%${v}%`;
+          params.push(pattern);
+          const idx = params.length;
+          const endSql = `SELECT DISTINCT cnpj_basico FROM rfb_estabelecimentos
+                          WHERE cnpj_ordem = '0001'
+                            AND (immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower($${idx}))
+                                 OR immutable_unaccent(lower(bairro)) ILIKE immutable_unaccent(lower($${idx})))`;
+          if (negated) {
+            where.push(`e.cnpj_basico NOT IN (${endSql})`);
+            return null;
+          }
+          return { sql: endSql };
+        };
+
+        const r1 = e1 ? buildEndCte(e1, endereco_op)  : null;
+        const r2 = e2 ? buildEndCte(e2, endereco2_op) : null;
+        const positivos = [r1, r2].filter(Boolean);
+        if (positivos.length === 2 && endereco_logic === 'OR') {
+          const alias = '_end_or';
+          endCtes.push(`${alias} AS MATERIALIZED (${positivos[0].sql} UNION ${positivos[1].sql})`);
+          endJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+        } else {
+          positivos.forEach((r, i) => {
+            const alias = `_end${i + 1}`;
+            endCtes.push(`${alias} AS MATERIALIZED (${r.sql})`);
+            endJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+          });
+        }
       }
     }
 
@@ -5262,10 +5295,12 @@ app.get('/api/rfb/search', async (req, res) => {
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
 
-    const ctePrefix  = nomeCtes.length > 0 ? `WITH ${nomeCtes.join(',\n')}` : '';
+    const allCtes   = [...nomeCtes, ...endCtes];
+    const allJoins  = [...nomeJoins, ...endJoins];
+    const ctePrefix = allCtes.length > 0 ? `WITH ${allCtes.join(',\n')}` : '';
     const baseQuery = `
       FROM rfb_estabelecimentos e
-      ${nomeJoins.join('\n      ')}
+      ${allJoins.join('\n      ')}
       JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
       LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
       LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
