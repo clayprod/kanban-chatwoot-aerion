@@ -6076,42 +6076,61 @@ function App() {
                 {/* ── Dialog opções avançadas (··· botão) ────────────────────── */}
                 {rfbReimportConfirm && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbReimportConfirm(false)}>
-                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-start gap-3">
-                        <span className="text-2xl mt-0.5">⚠️</span>
-                        <div>
-                          <p className="font-semibold text-ink text-base">Reimport Completo (destrutivo)</p>
-                          <p className="text-sm text-muted mt-0.5">Apaga e rebaixa tudo do zero. Use o botão "Atualizar" para atualização normal.</p>
+                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-5" onClick={e => e.stopPropagation()}>
+                      <p className="font-semibold text-ink text-base">Opções avançadas de importação</p>
+
+                      {/* Gap-fill */}
+                      <div className="rounded-xl border border-border bg-cardAlt p-4 flex flex-col gap-2">
+                        <p className="font-medium text-ink text-sm">Preencher arquivos faltantes</p>
+                        <p className="text-xs text-muted">Baixa e importa apenas os arquivos da RFB que ainda não estão na base — sem apagar nada. Ideal para corrigir gaps de um import anterior incompleto.</p>
+                        <div className="flex justify-end mt-1">
+                          <button
+                            onClick={() => {
+                              setRfbReimportConfirm(false);
+                              axios.post('/api/rfb/import/start', { append: true })
+                                .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                                .catch(() => {});
+                              setRfbStatus(false);
+                            }}
+                            className="px-4 py-2 rounded-lg border border-primary bg-primary/10 text-primary text-sm font-semibold hover:bg-primary/20 transition"
+                          >
+                            Preencher gaps
+                          </button>
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2 text-sm">
-                        <ul className="text-status-danger/80 space-y-1 list-none">
-                          <li>✗ Todos os dados RFB serão apagados imediatamente</li>
-                          <li>✗ Todos os arquivos (~60 GB) serão rebaixados</li>
-                          <li>✗ Buscas ficam indisponíveis durante o processo (4–8 horas)</li>
-                        </ul>
+                      {/* Reimport completo */}
+                      <div className="rounded-xl border border-status-danger/30 bg-status-danger/8 p-4 flex flex-col gap-2">
+                        <div className="flex items-start gap-2">
+                          <span className="text-lg mt-0.5">⚠️</span>
+                          <div>
+                            <p className="font-medium text-ink text-sm">Reimport Completo (destrutivo)</p>
+                            <p className="text-xs text-muted mt-0.5">Apaga tudo e rebaixa do zero (~60 GB, 4–8 horas). Buscas ficam indisponíveis.</p>
+                          </div>
+                        </div>
+                        <div className="flex justify-end mt-1">
+                          <button
+                            onClick={() => {
+                              setRfbReimportConfirm(false);
+                              axios.post('/api/rfb/import/start', { force: true })
+                                .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
+                                .catch(() => {});
+                              setRfbStatus(false);
+                            }}
+                            className="px-4 py-2 rounded-lg bg-status-danger/90 hover:bg-status-danger text-white text-sm font-semibold transition"
+                          >
+                            Sim, Reimport Completo
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="flex gap-2 justify-end pt-1">
+                      <div className="flex justify-end">
                         <button
                           autoFocus
                           onClick={() => setRfbReimportConfirm(false)}
                           className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
                         >
                           Cancelar
-                        </button>
-                        <button
-                          onClick={() => {
-                            setRfbReimportConfirm(false);
-                            axios.post('/api/rfb/import/start', { force: true })
-                              .then(() => axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)))
-                              .catch(() => {});
-                            setRfbStatus(false);
-                          }}
-                          className="px-4 py-2 rounded-lg bg-status-danger/90 hover:bg-status-danger text-white text-sm font-semibold transition"
-                        >
-                          Sim, Reimport Completo
                         </button>
                       </div>
                     </div>

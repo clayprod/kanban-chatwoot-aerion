@@ -4660,9 +4660,9 @@ let rfbImportState = {
   startedAt: null,
 };
 
-function startRFBImport({ force = false, staging = false } = {}) {
+function startRFBImport({ force = false, staging = false, append = false } = {}) {
   if (rfbImportState.status === 'running') return; // already running
-  const modeLabel = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : 'incremental';
+  const modeLabel = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : append ? 'append (gap-fill)' : 'incremental';
   rfbImportState = { status: 'running', message: `Iniciando importação ${modeLabel}...`, file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
 
   const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
@@ -4670,6 +4670,7 @@ function startRFBImport({ force = false, staging = false } = {}) {
   const args = [scriptPath];
   if (force) args.push('--force');
   if (staging) args.push('--staging');
+  if (append) args.push('--append');
   const py = spawn(pythonCmd, args, {
     env: { ...process.env },
     cwd: path.join(__dirname, 'scripts'),
@@ -5570,15 +5571,16 @@ app.get('/api/rfb/import-progress', (req, res) => {
 });
 
 // POST /api/rfb/import/start — manual trigger (re-import)
-// Body: { force: true } força re-download; { staging: true } zero-downtime
+// Body: { force: true } força re-download; { staging: true } zero-downtime; { append: true } gap-fill
 app.post('/api/rfb/import/start', (req, res) => {
   if (rfbImportState.status === 'running') {
     return res.status(409).json({ error: 'Import já em andamento' });
   }
   const force   = Boolean(req.body?.force);
   const staging = Boolean(req.body?.staging);
-  startRFBImport({ force, staging });
-  const mode = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : 'incremental';
+  const append  = Boolean(req.body?.append);
+  startRFBImport({ force, staging, append });
+  const mode = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : append ? 'append (gap-fill)' : 'incremental';
   res.json({ ok: true, message: `Import ${mode} iniciado` });
 });
 
