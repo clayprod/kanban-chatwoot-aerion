@@ -4289,10 +4289,10 @@ app.get('/api/leads/existing-cnpjs', async (req, res) => {
   const accountId = getAccountId(req);
   try {
     const { rows } = await pool.query(
-      `SELECT id, name, custom_attributes->>'CNPJ' AS cnpj,
+      `SELECT id, name, COALESCE(custom_attributes->>'CNPJ_CPF', custom_attributes->>'CNPJ', custom_attributes->>'cnpj') AS cnpj,
               additional_attributes->>'company_name' AS company_name
        FROM contacts
-       WHERE account_id = $1 AND custom_attributes->>'CNPJ' IS NOT NULL`,
+       WHERE account_id = $1 AND (custom_attributes->>'CNPJ_CPF' IS NOT NULL OR custom_attributes->>'CNPJ' IS NOT NULL OR custom_attributes->>'cnpj' IS NOT NULL)`,
       [accountId]
     );
     const map = {};
@@ -4330,7 +4330,7 @@ app.post('/api/leads/import', async (req, res) => {
       const location = [lead.municipio, lead.uf].filter(Boolean).join(', ');
 
       const existByCNPJ = await pool.query(
-        `SELECT id FROM contacts WHERE account_id = $1 AND custom_attributes->>'CNPJ' = $2 LIMIT 1`,
+        `SELECT id FROM contacts WHERE account_id = $1 AND (custom_attributes->>'CNPJ_CPF' = $2 OR custom_attributes->>'CNPJ' = $2 OR custom_attributes->>'cnpj' = $2) LIMIT 1`,
         [accountId, cnpj]
       );
       const existByName = existByCNPJ.rows.length === 0
@@ -4346,7 +4346,7 @@ app.post('/api/leads/import', async (req, res) => {
       const qsa = Array.isArray(lead.qsa) ? lead.qsa : [];
       const sociosStr = qsa.map(s => s.nome_socio || s.nome || '').filter(Boolean).join('; ');
 
-      const customAttr = { Funil_Vendas: defaultStage, CNPJ: cnpj };
+      const customAttr = { Funil_Vendas: defaultStage, CNPJ_CPF: cnpj };
       if (lead.cnae_fiscal_descricao) customAttr.CNAE_Principal = String(lead.cnae_fiscal_descricao).slice(0, 255);
       if (lead.cnae_fiscal) customAttr.CNAE_Codigo = String(lead.cnae_fiscal);
       const capVal = String(lead.capital_social || '').trim();
