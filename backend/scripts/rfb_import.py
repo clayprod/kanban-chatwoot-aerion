@@ -309,6 +309,7 @@ def create_indexes(conn, suffix=''):
     s = suffix  # alias curto
     progress('running', f'Criando índices{" (staging)" if s else ""}...')
     idxs = [
+        f'CREATE UNIQUE INDEX IF NOT EXISTS idx_rfb_est_unique{s} ON rfb_estabelecimentos{s}(cnpj_basico, cnpj_ordem, cnpj_dv)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_basico{s}    ON rfb_estabelecimentos{s}(cnpj_basico)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem{s}     ON rfb_estabelecimentos{s}(cnpj_ordem)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf{s}        ON rfb_estabelecimentos{s}(uf)',
