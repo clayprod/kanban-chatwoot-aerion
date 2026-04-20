@@ -57,7 +57,15 @@
       "Bash(taskkill:*)",
       "Bash(ssh:*)",
       "Bash(sshpass:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(find:*)",
+      "Bash(npm run:*)",
+      "Read(//c/Users/clayp/**)",
+      "Bash(scp:*)",
+      "Bash(PGPASSWORD=36b27c2d33aa50e9a56d psql:*)",
+      "Read(//c/tmp/**)",
+      "Bash(node diag_tenryu.js)",
+      "Bash(timeout 60 node *)"
     ]
   }
 }

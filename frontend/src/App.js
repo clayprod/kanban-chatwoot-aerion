@@ -1541,9 +1541,7 @@ function App() {
     axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)).catch(() => {});
     if (rfbMunicipios.length === 0) axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
     if (rfbCnaes.length === 0) axios.get('/api/rfb/cnaes').then(r => setRfbCnaes(r.data || [])).catch(() => {});
-    if (!leadExistingLoaded) {
-      axios.get('/api/leads/existing-cnpjs').then(r => { setLeadExistingCNPJs(r.data || {}); setLeadExistingLoaded(true); }).catch(() => {});
-    }
+    axios.get('/api/leads/existing-cnpjs').then(r => { setLeadExistingCNPJs(r.data || {}); setLeadExistingLoaded(true); }).catch(() => {});
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll import progress while running; refresh status when done
@@ -6792,7 +6790,9 @@ function App() {
                           </div>
                           {rfbResults.map((row, idx) => {
                             const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
-                            const isDup = Boolean(leadExistingCNPJs[cleanCNPJ]);
+                            const crmContact = leadExistingCNPJs[cleanCNPJ] || null;
+                            const isDup = Boolean(crmContact);
+                            const crmUrl = crmContact ? `${CHATWOOT_BASE_URL}/app/accounts/2/contacts/${crmContact.id}` : null;
                             const isExp = rfbExpanded === cleanCNPJ;
                             const toggleExpand = () => {
                               setRfbExpanded(isExp ? null : cleanCNPJ);
@@ -6820,7 +6820,11 @@ function App() {
                                 <div className="lg:hidden px-4 py-3 flex items-start gap-3">
                                   <div className="flex-1 min-w-0" onClick={toggleExpand}>
                                     <div className="flex items-start gap-2 flex-wrap">
-                                      <p className="font-medium text-ink text-sm leading-snug">{row.razao_social || '—'}</p>
+                                      {crmUrl ? (
+                                        <a href={crmUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline text-sm leading-snug">{row.razao_social || '—'}</a>
+                                      ) : (
+                                        <p className="font-medium text-ink text-sm leading-snug">{row.razao_social || '—'}</p>
+                                      )}
                                       {isDup && <span className="text-xs text-status-warning flex-shrink-0">Já no CRM</span>}
                                     </div>
                                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -6848,7 +6852,11 @@ function App() {
                                     )}
                                   </div>
                                   <div className="min-w-0">
-                                    <p className={`font-medium text-ink ${isExp ? 'break-words' : 'truncate'}`}>{row.razao_social || '—'}</p>
+                                    {crmUrl ? (
+                                      <a href={crmUrl} target="_blank" rel="noreferrer" className={`font-medium text-primary hover:underline ${isExp ? 'break-words' : 'truncate block'}`}>{row.razao_social || '—'}</a>
+                                    ) : (
+                                      <p className={`font-medium text-ink ${isExp ? 'break-words' : 'truncate'}`}>{row.razao_social || '—'}</p>
+                                    )}
                                     {isDup && <p className="text-xs text-status-warning">Já no CRM</p>}
                                   </div>
                                   <span className={`text-xs text-muted ${isExp ? 'break-words' : 'truncate'}`}>{row.nome_fantasia || '—'}</span>
