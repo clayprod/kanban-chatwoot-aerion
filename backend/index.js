@@ -5240,24 +5240,44 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     // Sócio — aceita até 2 termos combinados com AND/OR
+    // Positivos: MATERIALIZED CTE + JOIN (evita correlated subquery em 27M rows)
+    // Negativos: mantém NOT IN subquery (raro, aplicado depois dos filtros positivos)
+    const socioCtes  = [];
+    const socioJoins = [];
     {
-      const buildSocioClause = (v, op) => {
-        let pattern;
-        if (op === 'starts') pattern = `${v}%`;
-        else if (op === 'ends') pattern = `%${v}`;
-        else if (op === 'exact') pattern = v;
-        else pattern = `%${v}%`;
-        params.push(pattern);
-        const idx = params.length;
-        const neg = op === 'not_contains';
-        return `e.cnpj_basico ${neg ? 'NOT ' : ''}IN (SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ${neg ? 'NOT ' : ''}ILIKE immutable_unaccent(lower($${idx})))`;
+      const socioSql = (idx) =>
+        `SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ILIKE immutable_unaccent(lower($${idx}))`;
+      const mkPattern = (v, op) => {
+        if (op === 'starts') return `${v}%`;
+        if (op === 'ends')   return `%${v}`;
+        if (op === 'exact')  return v;
+        return `%${v}%`;
       };
       const s1 = socio.trim(), s2 = socio2.trim();
       if (s1 || s2) {
-        const clauses = [];
-        if (s1) clauses.push(buildSocioClause(s1, socio_op));
-        if (s2) clauses.push(buildSocioClause(s2, socio2_op));
-        where.push(clauses.length === 1 ? clauses[0] : `(${clauses.join(` ${socio_logic === 'OR' ? 'OR' : 'AND'} `)})`);
+        // Negativos → WHERE
+        if (s1 && socio_op === 'not_contains') {
+          params.push(`%${s1}%`);
+          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length)})`);
+        }
+        if (s2 && socio2_op === 'not_contains') {
+          params.push(`%${s2}%`);
+          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length)})`);
+        }
+        // Positivos → CTE + JOIN
+        const pos = [];
+        if (s1 && socio_op !== 'not_contains') { params.push(mkPattern(s1, socio_op)); pos.push({ idx: params.length }); }
+        if (s2 && socio2_op !== 'not_contains') { params.push(mkPattern(s2, socio2_op)); pos.push({ idx: params.length }); }
+        if (pos.length === 2 && socio_logic === 'OR') {
+          socioCtes.push(`_socio_or AS MATERIALIZED (${socioSql(pos[0].idx)} UNION ${socioSql(pos[1].idx)})`);
+          socioJoins.push(`JOIN _socio_or ON _socio_or.cnpj_basico = e.cnpj_basico`);
+        } else {
+          pos.forEach((p, i) => {
+            const alias = `_socio${i + 1}`;
+            socioCtes.push(`${alias} AS MATERIALIZED (${socioSql(p.idx)})`);
+            socioJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+          });
+        }
       }
     }
 
@@ -5423,20 +5443,20 @@ app.get('/api/rfb/search', async (req, res) => {
     // Sem filtro nenhum, ORDER BY coluna não-PK ordena 49M linhas → timeout;
     // mantemos ORDER BY cnpj_basico (PK) + JS sort por página só nesse caso extremo.
     // only_matriz='0001' já está em where[] por padrão, então useSqlOrder é quase sempre true.
-    const useSqlOrder = where.length > 0 || nomeCtes.length > 0;
+    const useSqlOrder = where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0;
     const sqlOrderClause = useSqlOrder
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
 
-    let allCtes  = [...nomeCtes, ...endCtes];
-    let allJoins = [...nomeJoins, ...endJoins];
+    let allCtes  = [...nomeCtes, ...endCtes, ...socioCtes];
+    let allJoins = [...nomeJoins, ...endJoins, ...socioJoins];
 
-    // When nome AND endereço CTEs are both active, pre-intersect them into a single
-    // tiny CTE (_inter) so the final JOIN hits rfb_estabelecimentos with ~100s of rows
-    // instead of triggering a 49M-row hash join with two large sets (98K × 60K).
-    if (nomeCtes.length > 0 && endCtes.length > 0) {
+    // Quando dois ou mais grupos de CTEs (nome, endereço, sócio) estão ativos,
+    // pré-intersecta em _inter para minimizar o conjunto antes do JOIN final.
+    const multiGroupJoins = [...nomeJoins, ...endJoins, ...socioJoins];
+    if (multiGroupJoins.length > 1) {
       const aliasRe = /JOIN (\S+) ON/;
-      const allAliases = [...nomeJoins, ...endJoins].map(j => j.match(aliasRe)[1]);
+      const allAliases = multiGroupJoins.map(j => j.match(aliasRe)[1]);
       const interSql = allAliases.map(a => `SELECT cnpj_basico FROM ${a}`).join('\nINTERSECT\n');
       allCtes.push(`_inter AS MATERIALIZED (${interSql})`);
       allJoins = [`JOIN _inter ON _inter.cnpj_basico = e.cnpj_basico`];
