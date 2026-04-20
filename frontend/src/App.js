@@ -1407,7 +1407,6 @@ function App() {
   const [rfbMunicipioDropdownOpen, setRfbMunicipioDropdownOpen] = useState(false);
   const [rfbImportProgress, setRfbImportProgress] = useState(null); // null | { status, message, file, percent, records, error }
   const [leadExistingCNPJs, setLeadExistingCNPJs] = useState({});
-  const [leadExistingLoaded, setLeadExistingLoaded] = useState(false);
   const [leadImportSettings, setLeadImportSettings] = useState({ defaultStage: '1. Inbox (Novos)', overwriteDuplicates: false });
   const [leadImportStatus, setLeadImportStatus] = useState(null);
   const [leadImportLoading, setLeadImportLoading] = useState(false);
@@ -1541,7 +1540,7 @@ function App() {
     axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)).catch(() => {});
     if (rfbMunicipios.length === 0) axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
     if (rfbCnaes.length === 0) axios.get('/api/rfb/cnaes').then(r => setRfbCnaes(r.data || [])).catch(() => {});
-    axios.get('/api/leads/existing-cnpjs').then(r => { setLeadExistingCNPJs(r.data || {}); setLeadExistingLoaded(true); }).catch(() => {});
+    axios.get('/api/leads/existing-cnpjs').then(r => setLeadExistingCNPJs(r.data || {})).catch(() => {});
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll import progress while running; refresh status when done
