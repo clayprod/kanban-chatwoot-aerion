@@ -553,6 +553,10 @@ def main():
 
         except Exception as e:
             progress('error', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     create_indexes(conn, suffix=idx_suffix)
 
