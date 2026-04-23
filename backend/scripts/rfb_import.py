@@ -279,7 +279,7 @@ def import_csv(conn, csv_path, table):
             # Normaliza número de colunas
             while len(row) < n:
                 row.append('')
-            row = [v.strip() if v and v.strip() else None for v in row[:n]]
+            row = [(v.replace('\x00', '').strip() or None) if v else None for v in row[:n]]
             # Normaliza UF numérico → sigla (ex: '08' → 'ES')
             if base_table == 'rfb_estabelecimentos':
                 uf_idx = cols.index('uf') if 'uf' in cols else -1
