@@ -5318,13 +5318,16 @@ app.get('/api/rfb/search', async (req, res) => {
     if (cnae.trim()) {
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
       // Principal: usa idx_rfb_est_cnae (fast index scan).
-      // Secundário: usa idx_rfb_est_cnae_sec_arr (GIN array index, 302 MB — criado 2026-04-24).
+      // Secundário: usa idx_rfb_est_cnae_sec_arr (GIN, 302 MB — criado 2026-04-24).
+      // cnaeSecNarrow estreita o scan do secundário para UF+municipio quando disponíveis
+      // (sem narrow: seq scan de 70M linhas ~55s; com SP+municipio: ~1-2M linhas <2s).
+      const secNarrow = cnaeSecNarrow.length > 0 ? ' AND ' + cnaeSecNarrow.join(' AND ') : '';
       const parts = cnaeCodes.flatMap(code => {
         params.push(code);
         const i = params.length;
         return [
           `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
-          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'`,
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`,
         ];
       });
       cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
@@ -5522,7 +5525,7 @@ app.get('/api/rfb/search', async (req, res) => {
     // ORDER BY na SQL usa e.cnpj_basico (chave primária = 0-copy index scan + early termination).
     // Os resultados são re-ordenados em JS pelo campo solicitado — evita full sort no PG para
     // buscas amplas (ex: "elg" → 28K matches → ORDER BY razao_social forçaria sort de 28K rows).
-    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'`;
+    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0`;
     const dataQuery = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
