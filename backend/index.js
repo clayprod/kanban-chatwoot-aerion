@@ -5311,10 +5311,15 @@ app.get('/api/rfb/search', async (req, res) => {
     const cnaeJoins = [];
     if (cnae.trim()) {
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
-      const parts = cnaeCodes.map(code => {
+      // Cada código gera dois SELECTs: principal (idx_rfb_est_cnae, rápido) e secundário
+      // (seq scan mas executa UMA VEZ no CTE, não uma vez por linha outer como o OR EXISTS).
+      const parts = cnaeCodes.flatMap(code => {
         params.push(code);
         const i = params.length;
-        return `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
+        return [
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE $${i} = ANY(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',')) AND cnpj_ordem = '0001'`,
+        ];
       });
       cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
       cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
