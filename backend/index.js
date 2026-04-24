@@ -5318,17 +5318,13 @@ app.get('/api/rfb/search', async (req, res) => {
     if (cnae.trim()) {
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
       // Principal: usa idx_rfb_est_cnae (fast index scan).
-      // Secundário: usa idx_rfb_est_cnae_sec_arr (GIN) se existir; sem ele, não inclui
-      // (seq scan de 5-10M linhas SP+municipio excede o timeout de 120s).
-      // Para ativar busca por CNAE secundário: criar o índice no servidor:
-      //   CREATE INDEX CONCURRENTLY idx_rfb_est_cnae_sec_arr
-      //   ON rfb_estabelecimentos
-      //   USING gin(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ','));
+      // Secundário: usa idx_rfb_est_cnae_sec_arr (GIN array index, 302 MB — criado 2026-04-24).
       const parts = cnaeCodes.flatMap(code => {
         params.push(code);
         const i = params.length;
         return [
           `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE $${i} = ANY(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',')) AND cnpj_ordem = '0001'`,
         ];
       });
       cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
