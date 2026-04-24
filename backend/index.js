@@ -5343,12 +5343,14 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     // Endereço — estratégia dupla:
-    // • hasNarrowFilter (CNAE/nome/sócio presentes): WHERE EXISTS com idx_rfb_est_basico.
-    //   Com CNAE+SP → ~409 outer rows × 1-2 lookups each = <1s vs 32s do bitmap scan.
-    // • Sem filtros estreitos: MATERIALIZED CTE (igual ao comportamento anterior).
-    //   Endereço-only ainda faz bitmap scan, mas não há alternativa melhor sem filtros extras.
+    // • hasNarrowFilter (CNAE/nome/sócio): JOIN LATERAL que força nested loop.
+    //   O planner convertia WHERE EXISTS em hash semi-join + seq scan de 67M linhas.
+    //   LATERAL é sempre nested loop: 409 outer rows (CNAE+SP) × 1-2 lookups = <1s.
+    //   lateralEndJoins é appendado APÓS o _inter para não quebrar o regex de alias.
+    // • Sem filtros estreitos: MATERIALIZED CTE (bitmap scan — sem alternativa melhor).
     const endCtes  = [];
     const endJoins = [];
+    const lateralEndJoins = [];
     {
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {
@@ -5381,16 +5383,22 @@ app.get('/api/rfb/search', async (req, res) => {
         const positivos = [res1, res2].filter(r => r && !r.handled);
 
         if (hasNarrowFilter && positivos.length > 0) {
-          // EXISTS correlated — bom quando outer set já é estreito (CNAE/nome/sócio)
+          // JOIN LATERAL — garante nested loop, impede hash semi-join
           if (positivos.length === 2 && endereco_logic === 'OR') {
-            where.push(`EXISTS (SELECT 1 FROM rfb_estabelecimentos _e_end
-                        WHERE _e_end.cnpj_basico = e.cnpj_basico
-                          AND (${positivos[0].ilikeSql('_e_end')} OR ${positivos[1].ilikeSql('_e_end')}))`);
+            lateralEndJoins.push(
+              `JOIN LATERAL (SELECT 1 FROM rfb_estabelecimentos _e_lat
+               WHERE _e_lat.cnpj_basico = e.cnpj_basico
+                 AND (${positivos[0].ilikeSql('_e_lat')} OR ${positivos[1].ilikeSql('_e_lat')})
+               LIMIT 1) _e_lat_r ON true`
+            );
           } else {
             positivos.forEach((r, i) => {
-              where.push(`EXISTS (SELECT 1 FROM rfb_estabelecimentos _e_end${i + 1}
-                          WHERE _e_end${i + 1}.cnpj_basico = e.cnpj_basico
-                            AND ${r.ilikeSql(`_e_end${i + 1}`)})`);
+              const a = `_e_lat${i + 1}`;
+              lateralEndJoins.push(
+                `JOIN LATERAL (SELECT 1 FROM rfb_estabelecimentos ${a}
+                 WHERE ${a}.cnpj_basico = e.cnpj_basico AND ${r.ilikeSql(a)}
+                 LIMIT 1) ${a}_r ON true`
+              );
             });
           }
         } else if (positivos.length > 0) {
@@ -5482,6 +5490,8 @@ app.get('/api/rfb/search', async (req, res) => {
       allCtes.push(`_inter AS MATERIALIZED (${interSql})`);
       allJoins = [`JOIN _inter ON _inter.cnpj_basico = e.cnpj_basico`];
     }
+    // LATERAL joins são correlated e sempre nested loop — appendar após _inter
+    if (lateralEndJoins.length > 0) allJoins = [...allJoins, ...lateralEndJoins];
 
     const ctePrefix = allCtes.length > 0 ? `WITH ${allCtes.join(',\n')}` : '';
     const baseQuery = `
