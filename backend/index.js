@@ -5324,7 +5324,7 @@ app.get('/api/rfb/search', async (req, res) => {
         const i = params.length;
         return [
           `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
-          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE $${i} = ANY(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',')) AND cnpj_ordem = '0001'`,
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'`,
         ];
       });
       cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
