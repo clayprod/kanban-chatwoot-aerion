@@ -1415,7 +1415,6 @@ function App() {
   const [rfbImportDialogLabels, setRfbImportDialogLabels] = useState([]);
   const [rfbImportDialogSocio, setRfbImportDialogSocio] = useState('');
   const [rfbImportDialogTel1, setRfbImportDialogTel1] = useState('');
-  const [rfbImportDialogTel2, setRfbImportDialogTel2] = useState('');
   const [rfbImportDialogEmail, setRfbImportDialogEmail] = useState('');
   const [rfbImportDialogRegimes, setRfbImportDialogRegimes] = useState({ simples: false, mei: false, presumido: false, real: false });
   const [rfbSavedFilters, setRfbSavedFilters] = useState(() => { try { return JSON.parse(localStorage.getItem('rfb_saved_filters') || '[]'); } catch { return []; } });
@@ -5758,7 +5757,6 @@ function App() {
                 return d && t ? `+55${d}${t}` : '';
               };
               setRfbImportDialogTel1(fmtDialogTel(row.ddd1, row.telefone1));
-              setRfbImportDialogTel2(fmtDialogTel(row.ddd2, row.telefone2));
               setRfbImportDialogEmail(row.correio_eletronico || '');
               setRfbImportDialogRegimes({
                 simples: row.opcao_pelo_simples === 'S',
