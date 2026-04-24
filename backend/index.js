@@ -5302,23 +5302,24 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     if (cnae.trim()) {
-      // Aceita múltiplos CNAEs separados por vírgula (ex: "4711301,6201500")
+      // CNAEs são sempre códigos completos de 7 dígitos — usa = (igualdade) para que o
+      // planner use idx_rfb_est_cnae. LIKE '4651602%' não usa índice B-tree com locale != C,
+      // causando bitmap scan de 20M linhas (UF=SP) em vez de index scan de ~400 linhas.
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
       if (cnaeCodes.length === 1) {
-        params.push(`${cnaeCodes[0]}%`);
+        params.push(cnaeCodes[0]);
         const idx = params.length;
-        where.push(`(e.cnae_fiscal_principal LIKE $${idx} OR EXISTS (
+        where.push(`(e.cnae_fiscal_principal = $${idx} OR EXISTS (
           SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
-          WHERE _sec LIKE $${idx}
+          WHERE trim(_sec) = $${idx}
         ))`);
       } else {
-        // Múltiplos: OR entre cada código (prefixo)
         const clauses = cnaeCodes.map(code => {
-          params.push(`${code}%`);
+          params.push(code);
           const idx = params.length;
-          return `e.cnae_fiscal_principal LIKE $${idx} OR EXISTS (
+          return `e.cnae_fiscal_principal = $${idx} OR EXISTS (
             SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
-            WHERE _sec LIKE $${idx}
+            WHERE trim(_sec) = $${idx}
           )`;
         });
         where.push(`(${clauses.join(' OR ')})`);
@@ -5351,10 +5352,11 @@ app.get('/api/rfb/search', async (req, res) => {
     const endCtes  = [];
     const endJoins = [];
     const lateralEndJoins = [];
+    // hasNarrowFilter usado tanto para endereço LATERAL quanto para rfb_empresas LATERAL
+    const hasNarrowFilter = nomeCtes.length > 0 || socioCtes.length > 0 || cnae.trim() !== '';
     {
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {
-        const hasNarrowFilter = nomeCtes.length > 0 || socioCtes.length > 0 || cnae.trim() !== '';
 
         const buildEndResult = (v, op) => {
           const negated = op === 'not_contains';
@@ -5494,10 +5496,15 @@ app.get('/api/rfb/search', async (req, res) => {
     if (lateralEndJoins.length > 0) allJoins = [...allJoins, ...lateralEndJoins];
 
     const ctePrefix = allCtes.length > 0 ? `WITH ${allCtes.join(',\n')}` : '';
+    // hasNarrowFilter → LATERAL força nested loop: N lookups pontuais via idx_rfb_emp_basico
+    // em vez de hash join + seq scan de 67M linhas de rfb_empresas.
+    const rfbEmpJoin = hasNarrowFilter
+      ? `JOIN LATERAL (SELECT razao_social, capital_social, porte_da_empresa, natureza_juridica FROM rfb_empresas WHERE cnpj_basico = e.cnpj_basico LIMIT 1) emp ON true`
+      : `JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico`;
     const baseQuery = `
       FROM rfb_estabelecimentos e
       ${allJoins.join('\n      ')}
-      JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+      ${rfbEmpJoin}
       LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
       LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
       LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
