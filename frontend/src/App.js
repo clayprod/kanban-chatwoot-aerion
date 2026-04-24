@@ -1413,6 +1413,13 @@ function App() {
   const [rfbImportDialog, setRfbImportDialog] = useState(null); // null | { row, isDup }
   const [rfbImportDialogStage, setRfbImportDialogStage] = useState('1. Inbox (Novos)');
   const [rfbImportDialogLabels, setRfbImportDialogLabels] = useState([]);
+  const [rfbImportDialogSocio, setRfbImportDialogSocio] = useState('');
+  const [rfbImportDialogTel1, setRfbImportDialogTel1] = useState('');
+  const [rfbImportDialogTel2, setRfbImportDialogTel2] = useState('');
+  const [rfbImportDialogEmail, setRfbImportDialogEmail] = useState('');
+  const [rfbImportDialogRegimes, setRfbImportDialogRegimes] = useState({ simples: false, mei: false, presumido: false, real: false });
+  const [rfbSavedFilters, setRfbSavedFilters] = useState(() => { try { return JSON.parse(localStorage.getItem('rfb_saved_filters') || '[]'); } catch { return []; } });
+  const [rfbSaveFilterName, setRfbSaveFilterName] = useState('');
   const [chatwootLabels, setChatwootLabels] = useState([]);
   const [rfbReimportConfirm, setRfbReimportConfirm] = useState(false);
   const [rfbUpdateConfirm, setRfbUpdateConfirm] = useState(false);
@@ -5741,33 +5748,74 @@ function App() {
             const openImportDialog = (row, isDup) => {
               setRfbImportDialogStage(leadImportSettings.defaultStage);
               setRfbImportDialogLabels([]);
+              const socioList = (row.socios_nomes || '').split(' · ').filter(Boolean);
+              const adminEntry = socioList.find(s => /administr/i.test(s)) || socioList[0] || '';
+              setRfbImportDialogSocio(adminEntry.replace(/\s*\(.*\)\s*$/, '').trim());
+              const fmtDialogTel = (ddd, tel) => {
+                if (!ddd || !tel) return '';
+                const d = String(ddd).replace(/\D/g, '');
+                const t = String(tel).replace(/\D/g, '');
+                return d && t ? `+55${d}${t}` : '';
+              };
+              setRfbImportDialogTel1(fmtDialogTel(row.ddd1, row.telefone1));
+              setRfbImportDialogTel2(fmtDialogTel(row.ddd2, row.telefone2));
+              setRfbImportDialogEmail(row.correio_eletronico || '');
+              setRfbImportDialogRegimes({
+                simples: row.opcao_pelo_simples === 'S',
+                mei: row.opcao_pelo_mei === 'S',
+                presumido: false,
+                real: false,
+              });
               setRfbImportDialog({ row, isDup });
               if (chatwootLabels.length === 0) {
                 axios.get('/api/labels').then(r => setChatwootLabels(r.data || [])).catch(() => {});
               }
             };
 
+            const saveRfbFilter = () => {
+              const name = rfbSaveFilterName.trim();
+              if (!name) return;
+              const snapshot = { name, filters: rfbFilters, ops: rfbOps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, nome2: rfbNome2, nome2Op: rfbNome2Op, nomeLogic: rfbNomeLogic, socio2: rfbSocio2, socio2Op: rfbSocio2Op, socioLogic: rfbSocioLogic, endereco2: rfbEndereco2, endereco2Op: rfbEndereco2Op, enderecoLogic: rfbEnderecoLogic };
+              const updated = [...rfbSavedFilters, snapshot];
+              setRfbSavedFilters(updated);
+              localStorage.setItem('rfb_saved_filters', JSON.stringify(updated));
+              setRfbSaveFilterName('');
+            };
+
+            const applyRfbSavedFilter = (sf) => {
+              if (sf.filters) setRfbFilters(sf.filters);
+              if (sf.ops) setRfbOps(sf.ops);
+              if (sf.capitalRange) setRfbCapitalRange(sf.capitalRange);
+              if (sf.aberturaRange) setRfbAberturaRange(sf.aberturaRange);
+              if (sf.endereco != null) setRfbEndereco(sf.endereco);
+              if (sf.enderecoOp) setRfbEnderecoOp(sf.enderecoOp);
+              if (sf.simples != null) setRfbSimples(sf.simples);
+              if (sf.mei != null) setRfbMei(sf.mei);
+              if (sf.onlyMatriz != null) setRfbOnlyMatriz(sf.onlyMatriz);
+              if (sf.nome2 != null) setRfbNome2(sf.nome2);
+              if (sf.nome2Op) setRfbNome2Op(sf.nome2Op);
+              if (sf.nomeLogic) setRfbNomeLogic(sf.nomeLogic);
+              if (sf.socio2 != null) setRfbSocio2(sf.socio2);
+              if (sf.socio2Op) setRfbSocio2Op(sf.socio2Op);
+              if (sf.socioLogic) setRfbSocioLogic(sf.socioLogic);
+              if (sf.endereco2 != null) setRfbEndereco2(sf.endereco2);
+              if (sf.endereco2Op) setRfbEndereco2Op(sf.endereco2Op);
+              if (sf.enderecoLogic) setRfbEnderecoLogic(sf.enderecoLogic);
+            };
+
             const handleRfbImport = async (row, { stage, labels } = {}) => {
               const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
-              const nomeSocio = (row.primeiro_socio || '').trim();
-              const partes = nomeSocio ? nomeSocio.split(/\s+/) : [];
-              const primeiro_nome = nomeSocio ? partes[0] : (row.razao_social || '');
+              const socioName = rfbImportDialogSocio.trim();
+              const partes = socioName ? socioName.split(/\s+/) : [];
+              const primeiro_nome = socioName ? partes[0] : (row.razao_social || '');
               const sobrenome = partes.length > 1 ? partes.slice(1).join(' ') : '';
-              const fmtTel = (ddd, tel) => {
-                if (!ddd || !tel) return null;
-                const d = String(ddd).replace(/\D/g, '');
-                const t = String(tel).replace(/\D/g, '');
-                if (!d || !t) return null;
-                return `+55${d}${t}`;
-              };
               const lead = {
                 cnpj: cleanCNPJ,
                 razao_social: row.razao_social,
                 primeiro_nome,
                 sobrenome,
-                email: row.correio_eletronico,
-                ddd_telefone_1: fmtTel(row.ddd1, row.telefone1),
-                ddd_telefone_2: fmtTel(row.ddd2, row.telefone2),
+                email: rfbImportDialogEmail || null,
+                ddd_telefone_1: rfbImportDialogTel1 || null,
                 municipio: row.municipio_nome,
                 uf: row.uf,
                 nome_fantasia: row.nome_fantasia,
@@ -5777,9 +5825,9 @@ function App() {
                 descricao_situacao_cadastral: situacaoLabel(row.situacao_cadastral),
                 data_inicio_atividade: row.data_de_inicio_da_atividade,
                 descricao_porte: row.porte_da_empresa,
-                opcao_pelo_simples: row.opcao_pelo_simples === 'S',
-                opcao_pelo_mei: row.opcao_pelo_mei === 'S',
-                qsa: nomeSocio ? [{ nome: nomeSocio }] : [],
+                opcao_pelo_simples: rfbImportDialogRegimes.simples,
+                opcao_pelo_mei: rfbImportDialogRegimes.mei,
+                qsa: socioName ? [{ nome: socioName }] : [],
               };
               const isExisting = Boolean(leadExistingCNPJs[cleanCNPJ]);
               setRfbImportDialog(null);
@@ -6141,15 +6189,76 @@ function App() {
                   const toggleLabel = (title) => setRfbImportDialogLabels(prev =>
                     prev.includes(title) ? prev.filter(l => l !== title) : [...prev, title]
                   );
+                  const toggleRegime = (key) => setRfbImportDialogRegimes(prev => ({ ...prev, [key]: !prev[key] }));
+                  const REGIMES = [
+                    { key: 'simples', label: 'Simples Nacional' },
+                    { key: 'mei', label: 'MEI' },
+                    { key: 'presumido', label: 'Lucro Presumido' },
+                    { key: 'real', label: 'Lucro Real' },
+                  ];
                   return (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbImportDialog(null)}>
-                      <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                      <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4 overflow-y-auto max-h-[90vh]" onClick={e => e.stopPropagation()}>
                         {/* Header */}
                         <div>
                           <p className="text-xs text-muted uppercase tracking-wide mb-0.5">{isDup ? 'Atualizar contato' : 'Importar para o Chatwoot'}</p>
                           <p className="font-semibold text-ink text-base leading-tight">{row.razao_social}</p>
                           {row.nome_fantasia && <p className="text-sm text-muted">{row.nome_fantasia}</p>}
                           <p className="text-xs text-muted font-mono mt-1">{fmtCNPJ(row.cnpj)}</p>
+                        </div>
+
+                        {/* Sócio */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">Sócio (contato principal)</label>
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="Nome do sócio-administrador"
+                            value={rfbImportDialogSocio}
+                            onChange={e => setRfbImportDialogSocio(e.target.value)}
+                          />
+                        </div>
+
+                        {/* Telefone */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">Telefone</label>
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="+5511..."
+                            value={rfbImportDialogTel1}
+                            onChange={e => setRfbImportDialogTel1(e.target.value)}
+                          />
+                        </div>
+
+                        {/* E-mail */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">E-mail</label>
+                          <input
+                            type="email"
+                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="contato@empresa.com.br"
+                            value={rfbImportDialogEmail}
+                            onChange={e => setRfbImportDialogEmail(e.target.value)}
+                          />
+                        </div>
+
+                        {/* Regime Tributário */}
+                        <div>
+                          <label className="block text-xs font-medium text-muted mb-1.5">Regime Tributário</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {REGIMES.map(({ key, label }) => (
+                              <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  className="accent-primary"
+                                  checked={rfbImportDialogRegimes[key]}
+                                  onChange={() => toggleRegime(key)}
+                                />
+                                <span className="text-xs text-ink">{label}</span>
+                              </label>
+                            ))}
+                          </div>
                         </div>
 
                         {/* Estágio */}
@@ -6187,7 +6296,7 @@ function App() {
                         </div>
 
                         {/* Ações */}
-                        <div className="flex gap-2 justify-end pt-1">
+                        <div className="flex gap-2 justify-end pt-2 border-t border-border">
                           <button
                             onClick={() => setRfbImportDialog(null)}
                             className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink hover:border-primary/40 transition"
@@ -6596,6 +6705,48 @@ function App() {
                     >
                       Limpar filtros
                     </button>
+
+                    {/* Filtros salvos */}
+                    <div className="pt-2 border-t border-border">
+                      <p className="text-xs font-semibold text-muted mb-2">Filtros Salvos</p>
+                      {rfbSavedFilters.length > 0 && (
+                        <div className="space-y-1 mb-2">
+                          {rfbSavedFilters.map((sf, i) => (
+                            <div key={i} className="flex items-center gap-1">
+                              <button
+                                onClick={() => applyRfbSavedFilter(sf)}
+                                className="flex-1 text-left text-xs px-2 py-1 rounded-lg border border-border bg-cardAlt text-ink hover:border-primary/40 hover:text-primary transition truncate"
+                                title={sf.name}
+                              >{sf.name}</button>
+                              <button
+                                onClick={() => {
+                                  const updated = rfbSavedFilters.filter((_, j) => j !== i);
+                                  setRfbSavedFilters(updated);
+                                  localStorage.setItem('rfb_saved_filters', JSON.stringify(updated));
+                                }}
+                                className="text-muted hover:text-status-danger text-sm leading-none px-1 flex-shrink-0"
+                                title="Remover"
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          className="flex-1 min-w-0 rounded-lg border border-border bg-cardAlt px-2 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                          placeholder="Nome do filtro…"
+                          value={rfbSaveFilterName}
+                          onChange={e => setRfbSaveFilterName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveRfbFilter(); }}
+                        />
+                        <button
+                          onClick={saveRfbFilter}
+                          disabled={!rfbSaveFilterName.trim()}
+                          className="text-xs px-2 py-1.5 rounded-lg border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition disabled:opacity-40 flex-shrink-0"
+                        >Salvar</button>
+                      </div>
+                    </div>
                   </div>
 
                   {/* ── Painel de resultados ───────────────────────────── */}
