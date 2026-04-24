@@ -5362,8 +5362,7 @@ app.get('/api/rfb/search', async (req, res) => {
           params.push(pattern);
           const idx = params.length;
           const endSql = `SELECT DISTINCT cnpj_basico FROM rfb_estabelecimentos
-                          WHERE cnpj_ordem = '0001'
-                            AND (immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower($${idx}))
+                          WHERE (immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower($${idx}))
                                  OR immutable_unaccent(lower(bairro)) ILIKE immutable_unaccent(lower($${idx})))`;
           if (negated) {
             where.push(`e.cnpj_basico NOT IN (${endSql})`);
