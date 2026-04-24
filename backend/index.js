@@ -5301,29 +5301,23 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
+    // CNAE — MATERIALIZED CTE (mesmo padrão do nome/sócio).
+    // OR EXISTS(unnest secondary) no WHERE impede idx_rfb_est_cnae: planner prefere
+    // idx_rfb_est_uf_mun (~3-5M linhas SP+municipio) → timeout com LATERAL joins.
+    // CTE executa o CNAE com o índice uma única vez (~6.558 rows) e materializa a lista;
+    // a query principal JOIN nessa lista pequena via PK → filtros UF/municipio/situacao
+    // reduzem a ~50 linhas → LATERAL lookups triviais.
+    const cnaeCtes  = [];
+    const cnaeJoins = [];
     if (cnae.trim()) {
-      // CNAEs são sempre códigos completos de 7 dígitos — usa = (igualdade) para que o
-      // planner use idx_rfb_est_cnae. LIKE '4651602%' não usa índice B-tree com locale != C,
-      // causando bitmap scan de 20M linhas (UF=SP) em vez de index scan de ~400 linhas.
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
-      if (cnaeCodes.length === 1) {
-        params.push(cnaeCodes[0]);
-        const idx = params.length;
-        where.push(`(e.cnae_fiscal_principal = $${idx} OR EXISTS (
-          SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
-          WHERE trim(_sec) = $${idx}
-        ))`);
-      } else {
-        const clauses = cnaeCodes.map(code => {
-          params.push(code);
-          const idx = params.length;
-          return `e.cnae_fiscal_principal = $${idx} OR EXISTS (
-            SELECT 1 FROM unnest(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',')) _sec
-            WHERE trim(_sec) = $${idx}
-          )`;
-        });
-        where.push(`(${clauses.join(' OR ')})`);
-      }
+      const parts = cnaeCodes.map(code => {
+        params.push(code);
+        const i = params.length;
+        return `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
+      });
+      cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
+      cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
     }
 
     if (situacao.trim()) {
@@ -5479,12 +5473,12 @@ app.get('/api/rfb/search', async (req, res) => {
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
 
-    let allCtes  = [...nomeCtes, ...endCtes, ...socioCtes];
-    let allJoins = [...nomeJoins, ...endJoins, ...socioJoins];
+    let allCtes  = [...nomeCtes, ...cnaeCtes, ...endCtes, ...socioCtes];
+    let allJoins = [...nomeJoins, ...cnaeJoins, ...endJoins, ...socioJoins];
 
-    // Quando dois ou mais grupos de CTEs (nome, endereço, sócio) estão ativos,
+    // Quando dois ou mais grupos de CTEs (nome, CNAE, endereço, sócio) estão ativos,
     // pré-intersecta em _inter para minimizar o conjunto antes do JOIN final.
-    const multiGroupJoins = [...nomeJoins, ...endJoins, ...socioJoins];
+    const multiGroupJoins = [...nomeJoins, ...cnaeJoins, ...endJoins, ...socioJoins];
     if (multiGroupJoins.length > 1) {
       const aliasRe = /JOIN (\S+) ON/;
       const allAliases = multiGroupJoins.map(j => j.match(aliasRe)[1]);
