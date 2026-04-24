@@ -5281,12 +5281,17 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
+    // cnaeSecNarrow: condições de UF/municipio sem alias de tabela, usadas para
+    // estreitar o scan de cnae_fiscal_secundaria (evita seq scan de 70M linhas).
+    const cnaeSecNarrow = [];
+
     if (uf.trim()) {
       const ufSigla = uf.trim().toUpperCase();
       const _ufNumMap = { AC:'01',AL:'02',AP:'03',AM:'04',BA:'05',CE:'06',DF:'07',ES:'08',GO:'09',MA:'10',MT:'11',MS:'12',MG:'13',PA:'14',PB:'15',PR:'16',PE:'17',PI:'18',RJ:'19',RN:'20',RS:'21',RO:'22',RR:'23',SC:'24',SP:'25',SE:'26',TO:'27' };
       const ufCod = _ufNumMap[ufSigla] || ufSigla;
       params.push(ufSigla); params.push(ufCod);
       where.push(`e.uf IN ($${params.length - 1}, $${params.length})`);
+      cnaeSecNarrow.push(`uf IN ($${params.length - 1}, $${params.length})`);
     }
 
     if (municipio.trim()) {
@@ -5294,8 +5299,9 @@ app.get('/api/rfb/search', async (req, res) => {
         // Frontend envia o código numérico diretamente (ex: '7107' = SAO PAULO)
         params.push(municipio.trim());
         where.push(`e.municipio = $${params.length}`);
+        cnaeSecNarrow.push(`municipio = $${params.length}`);
       } else {
-        // Fallback: texto livre → busca por nome no rfb_municipios
+        // Fallback: texto livre → busca por nome no rfb_municipios (não trackeia cnaeSecNarrow)
         params.push(`%${municipio.trim()}%`);
         where.push(`e.municipio IN (SELECT codigo FROM rfb_municipios WHERE immutable_unaccent(lower(descricao)) ILIKE immutable_unaccent(lower($${params.length})))`);
       }
@@ -5311,14 +5317,16 @@ app.get('/api/rfb/search', async (req, res) => {
     const cnaeJoins = [];
     if (cnae.trim()) {
       const cnaeCodes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
-      // Cada código gera dois SELECTs: principal (idx_rfb_est_cnae, rápido) e secundário
-      // (seq scan mas executa UMA VEZ no CTE, não uma vez por linha outer como o OR EXISTS).
+      // Principal: usa idx_rfb_est_cnae (fast index scan).
+      // Secundário: seq scan mas com UF/municipio do cnaeSecNarrow (reduz de 70M → ~3M).
+      // Ambos executam UMA VEZ no CTE (não por linha outer).
+      const secExtra = cnaeSecNarrow.length > 0 ? ` AND ${cnaeSecNarrow.join(' AND ')}` : '';
       const parts = cnaeCodes.flatMap(code => {
         params.push(code);
         const i = params.length;
         return [
           `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
-          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE $${i} = ANY(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',')) AND cnpj_ordem = '0001'`,
+          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE $${i} = ANY(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',')) AND cnpj_ordem = '0001'${secExtra}`,
         ];
       });
       cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
