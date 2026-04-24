@@ -5342,16 +5342,19 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`emp.porte_da_empresa IN ($${params.length - 1}, $${params.length})`);
     }
 
-    // Endereço — MATERIALIZED CTE (igual ao nome) para que o PG intersecte dois conjuntos
-    // pequenos em vez de varrer o CTE de nome (300K entries) e filtrar por endereço depois.
-    // Ex: nome="importacao" (300K CTE) + endereço="bom retiro" (200K CTE) → hash join
-    // das duas listas → 561 entradas → filtros UF/município triviais → muito mais rápido.
+    // Endereço — estratégia dupla:
+    // • hasNarrowFilter (CNAE/nome/sócio presentes): WHERE EXISTS com idx_rfb_est_basico.
+    //   Com CNAE+SP → ~409 outer rows × 1-2 lookups each = <1s vs 32s do bitmap scan.
+    // • Sem filtros estreitos: MATERIALIZED CTE (igual ao comportamento anterior).
+    //   Endereço-only ainda faz bitmap scan, mas não há alternativa melhor sem filtros extras.
     const endCtes  = [];
     const endJoins = [];
     {
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {
-        const buildEndCte = (v, op) => {
+        const hasNarrowFilter = nomeCtes.length > 0 || socioCtes.length > 0 || cnae.trim() !== '';
+
+        const buildEndResult = (v, op) => {
           const negated = op === 'not_contains';
           let pattern;
           if (negated)              pattern = `%${v}%`;
@@ -5361,29 +5364,48 @@ app.get('/api/rfb/search', async (req, res) => {
           else                      pattern = `%${v}%`;
           params.push(pattern);
           const idx = params.length;
+          const ilikeSql = (alias) =>
+            `(immutable_unaccent(lower(${alias}.logradouro)) ILIKE immutable_unaccent(lower($${idx}))
+              OR immutable_unaccent(lower(${alias}.bairro)) ILIKE immutable_unaccent(lower($${idx})))`;
           const endSql = `SELECT DISTINCT cnpj_basico FROM rfb_estabelecimentos
-                          WHERE (immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower($${idx}))
-                                 OR immutable_unaccent(lower(bairro)) ILIKE immutable_unaccent(lower($${idx})))`;
+                          WHERE ${ilikeSql('rfb_estabelecimentos')}`;
           if (negated) {
             where.push(`e.cnpj_basico NOT IN (${endSql})`);
-            return null;
+            return { handled: true };
           }
-          return { sql: endSql };
+          return { handled: false, sql: endSql, ilikeSql };
         };
 
-        const r1 = e1 ? buildEndCte(e1, endereco_op)  : null;
-        const r2 = e2 ? buildEndCte(e2, endereco2_op) : null;
-        const positivos = [r1, r2].filter(Boolean);
-        if (positivos.length === 2 && endereco_logic === 'OR') {
-          const alias = '_end_or';
-          endCtes.push(`${alias} AS MATERIALIZED (${positivos[0].sql} UNION ${positivos[1].sql})`);
-          endJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
-        } else {
-          positivos.forEach((r, i) => {
-            const alias = `_end${i + 1}`;
-            endCtes.push(`${alias} AS MATERIALIZED (${r.sql})`);
+        const res1 = e1 ? buildEndResult(e1, endereco_op)  : null;
+        const res2 = e2 ? buildEndResult(e2, endereco2_op) : null;
+        const positivos = [res1, res2].filter(r => r && !r.handled);
+
+        if (hasNarrowFilter && positivos.length > 0) {
+          // EXISTS correlated — bom quando outer set já é estreito (CNAE/nome/sócio)
+          if (positivos.length === 2 && endereco_logic === 'OR') {
+            where.push(`EXISTS (SELECT 1 FROM rfb_estabelecimentos _e_end
+                        WHERE _e_end.cnpj_basico = e.cnpj_basico
+                          AND (${positivos[0].ilikeSql('_e_end')} OR ${positivos[1].ilikeSql('_e_end')}))`);
+          } else {
+            positivos.forEach((r, i) => {
+              where.push(`EXISTS (SELECT 1 FROM rfb_estabelecimentos _e_end${i + 1}
+                          WHERE _e_end${i + 1}.cnpj_basico = e.cnpj_basico
+                            AND ${r.ilikeSql(`_e_end${i + 1}`)})`);
+            });
+          }
+        } else if (positivos.length > 0) {
+          // MATERIALIZED CTE — fallback para busca apenas por endereço
+          if (positivos.length === 2 && endereco_logic === 'OR') {
+            const alias = '_end_or';
+            endCtes.push(`${alias} AS MATERIALIZED (${positivos[0].sql} UNION ${positivos[1].sql})`);
             endJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
-          });
+          } else {
+            positivos.forEach((r, i) => {
+              const alias = `_end${i + 1}`;
+              endCtes.push(`${alias} AS MATERIALIZED (${r.sql})`);
+              endJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
+            });
+          }
         }
       }
     }
@@ -5478,7 +5500,7 @@ app.get('/api/rfb/search', async (req, res) => {
     // ORDER BY na SQL usa e.cnpj_basico (chave primária = 0-copy index scan + early termination).
     // Os resultados são re-ordenados em JS pelo campo solicitado — evita full sort no PG para
     // buscas amplas (ex: "elg" → 28K matches → ORDER BY razao_social forçaria sort de 28K rows).
-    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0`;
+    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'`;
     const dataQuery = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
