@@ -1398,6 +1398,7 @@ function App() {
   const [rfbOrderBy, setRfbOrderBy] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.orderBy || 'razao_social'; } catch { return 'razao_social'; } });
   const [rfbLoading, setRfbLoading] = useState(false);
   const [rfbError, setRfbError] = useState(null);
+  const rfbCacheRef = useRef({ results: [], total: 0, key: null });
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
   const [rfbCnaes, setRfbCnaes] = useState([]);
   const [rfbExpanded, setRfbExpanded] = useState(null);
@@ -5848,48 +5849,95 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const RFB_CACHE_SIZE = 500;
+            const sortRfbResults = (arr, ob) => {
+              const r = [...arr];
+              const cap = v => parseFloat(String(v || 0).replace(/\./g, '').replace(',', '.')) || 0;
+              if (ob === 'razao_social')  return r.sort((a, b) => (a.razao_social  || '').localeCompare(b.razao_social  || '', 'pt-BR'));
+              if (ob === 'nome_fantasia') return r.sort((a, b) => (a.nome_fantasia || '').localeCompare(b.nome_fantasia || '', 'pt-BR'));
+              if (ob === 'uf')            return r.sort((a, b) => (a.uf            || '').localeCompare(b.uf            || '', 'pt-BR'));
+              if (ob === 'situacao')      return r.sort((a, b) => (a.situacao_cadastral || '').localeCompare(b.situacao_cadastral || '', 'pt-BR'));
+              if (ob === 'capital_desc')  return r.sort((a, b) => cap(b.capital_social) - cap(a.capital_social));
+              if (ob === 'capital_asc')   return r.sort((a, b) => cap(a.capital_social) - cap(b.capital_social));
+              if (ob === 'abertura_desc') return r.sort((a, b) => (b.data_de_inicio_da_atividade || '').localeCompare(a.data_de_inicio_da_atividade || ''));
+              if (ob === 'abertura_asc')  return r.sort((a, b) => (a.data_de_inicio_da_atividade || '').localeCompare(b.data_de_inicio_da_atividade || ''));
+              return r;
+            };
+            const buildFilterParams = () => {
+              const fp = new URLSearchParams();
+              if (rfbFilters.cnpj.trim()) fp.set('cnpj', rfbFilters.cnpj.trim());
+              if (rfbFilters.nome.trim()) { fp.set('nome', stripAccents(rfbFilters.nome.trim())); fp.set('nome_op', rfbOps.nome); }
+              if (rfbNome2.trim()) { fp.set('nome2', stripAccents(rfbNome2.trim())); fp.set('nome2_op', rfbNome2Op); }
+              if (rfbFilters.nome.trim() && rfbNome2.trim()) fp.set('nome_logic', rfbNomeLogic);
+              if (rfbFilters.socio.trim()) { fp.set('socio', stripAccents(rfbFilters.socio.trim())); fp.set('socio_op', rfbOps.socio); }
+              if (rfbSocio2.trim()) { fp.set('socio2', stripAccents(rfbSocio2.trim())); fp.set('socio2_op', rfbSocio2Op); }
+              if (rfbFilters.socio.trim() && rfbSocio2.trim()) fp.set('socio_logic', rfbSocioLogic);
+              if (rfbFilters.uf.trim()) fp.set('uf', rfbFilters.uf.trim());
+              if (rfbFilters.municipio.trim()) fp.set('municipio', rfbFilters.municipio.trim());
+              if (rfbFilters.cnae.length > 0) fp.set('cnae', rfbFilters.cnae.join(','));
+              if (rfbFilters.situacao.length > 0) fp.set('situacao', rfbFilters.situacao.join(','));
+              if (rfbFilters.porte.trim()) fp.set('porte', rfbFilters.porte.trim());
+              if (rfbCapitalRange[0] > 0) fp.set('capital_min', rfbCapitalRange[0]);
+              if (rfbCapitalRange[1] > 0) fp.set('capital_max', rfbCapitalRange[1]);
+              if (rfbAberturaRange[0] > 0) fp.set('abertura_min_anos', rfbAberturaRange[0]);
+              if (rfbAberturaRange[1] > 0) fp.set('abertura_max_anos', rfbAberturaRange[1]);
+              if (rfbEndereco.trim()) { fp.set('endereco', stripAccents(rfbEndereco.trim())); fp.set('endereco_op', rfbEnderecoOp); }
+              if (rfbEndereco2.trim()) { fp.set('endereco2', stripAccents(rfbEndereco2.trim())); fp.set('endereco2_op', rfbEndereco2Op); }
+              if (rfbEndereco.trim() && rfbEndereco2.trim()) fp.set('endereco_logic', rfbEnderecoLogic);
+              if (rfbSimples) fp.set('simples', rfbSimples);
+              if (rfbMei) fp.set('mei', rfbMei);
+              if (!rfbOnlyMatriz) fp.set('only_matriz', 'false');
+              return fp;
+            };
             const handleRfbSearch = async (pageOverride, pageSizeOverride, orderByOverride) => {
+              const pg = pageOverride     != null ? pageOverride     : rfbPage;
+              const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
+              const ob = orderByOverride  != null ? orderByOverride  : rfbOrderBy;
+              if (pg === 1) setRfbExpanded(null);
+
+              const fp = buildFilterParams();
+              const filterKey = fp.toString();
+              const cache = rfbCacheRef.current;
+              const start = (pg - 1) * ps;
+
+              // Serve from cache when filters unchanged and page is within cached batch
+              if (cache.key === filterKey && cache.results.length > 0 && start < cache.results.length) {
+                const sorted = sortRfbResults(cache.results, ob);
+                setRfbResults(sorted.slice(start, start + ps));
+                setRfbTotal(cache.total);
+                setRfbPage(pg);
+                return;
+              }
+
               setRfbLoading(true);
               setRfbError(null);
-              const pg = pageOverride != null ? pageOverride : rfbPage;
-              const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
-              const ob = orderByOverride != null ? orderByOverride : rfbOrderBy;
-              if (pg === 1) setRfbExpanded(null);
               try {
-                const params = new URLSearchParams();
-                if (rfbFilters.cnpj.trim()) params.set('cnpj', rfbFilters.cnpj.trim());
-                if (rfbFilters.nome.trim()) { params.set('nome', stripAccents(rfbFilters.nome.trim())); params.set('nome_op', rfbOps.nome); }
-                if (rfbNome2.trim()) { params.set('nome2', stripAccents(rfbNome2.trim())); params.set('nome2_op', rfbNome2Op); }
-                if (rfbFilters.nome.trim() && rfbNome2.trim()) params.set('nome_logic', rfbNomeLogic);
-                if (rfbFilters.socio.trim()) { params.set('socio', stripAccents(rfbFilters.socio.trim())); params.set('socio_op', rfbOps.socio); }
-                if (rfbSocio2.trim()) { params.set('socio2', stripAccents(rfbSocio2.trim())); params.set('socio2_op', rfbSocio2Op); }
-                if (rfbFilters.socio.trim() && rfbSocio2.trim()) params.set('socio_logic', rfbSocioLogic);
-                if (rfbFilters.uf.trim()) params.set('uf', rfbFilters.uf.trim());
-                if (rfbFilters.municipio.trim()) params.set('municipio', rfbFilters.municipio.trim());
-                if (rfbFilters.cnae.length > 0) params.set('cnae', rfbFilters.cnae.join(','));
-                if (rfbFilters.situacao.length > 0) params.set('situacao', rfbFilters.situacao.join(','));
-                if (rfbFilters.porte.trim()) params.set('porte', rfbFilters.porte.trim());
-                if (rfbCapitalRange[0] > 0) params.set('capital_min', rfbCapitalRange[0]);
-                if (rfbCapitalRange[1] > 0) params.set('capital_max', rfbCapitalRange[1]);
-                if (rfbAberturaRange[0] > 0) params.set('abertura_min_anos', rfbAberturaRange[0]);
-                if (rfbAberturaRange[1] > 0) params.set('abertura_max_anos', rfbAberturaRange[1]);
-                if (rfbEndereco.trim()) { params.set('endereco', stripAccents(rfbEndereco.trim())); params.set('endereco_op', rfbEnderecoOp); }
-                if (rfbEndereco2.trim()) { params.set('endereco2', stripAccents(rfbEndereco2.trim())); params.set('endereco2_op', rfbEndereco2Op); }
-                if (rfbEndereco.trim() && rfbEndereco2.trim()) params.set('endereco_logic', rfbEnderecoLogic);
-                if (rfbSimples) params.set('simples', rfbSimples);
-                if (rfbMei) params.set('mei', rfbMei);
-                if (!rfbOnlyMatriz) params.set('only_matriz', 'false');
-                params.set('page', pg);
-                params.set('page_size', ps);
-                params.set('order_by', ob);
-                // Passa total cacheado em paginações (page>1) para evitar re-executar count
-                if (pg > 1 && rfbTotal > 0) params.set('known_total', rfbTotal);
-                const res = await axios.get(`/api/rfb/search?${params}`);
-                setRfbResults(res.data.results || []);
-                setRfbTotal(res.data.total || 0);
-                setRfbPage(pg);
-                // Persistir busca
-                try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
+                const params = new URLSearchParams(fp);
+                if (cache.key === filterKey && start >= cache.results.length) {
+                  // Beyond cache — fetch specific page with server sort + known_total
+                  params.set('page', pg);
+                  params.set('page_size', ps);
+                  params.set('order_by', ob);
+                  if (rfbTotal > 0) params.set('known_total', rfbTotal);
+                  const res = await axios.get(`/api/rfb/search?${params}`);
+                  setRfbResults(res.data.results || []);
+                  setRfbTotal(res.data.total || rfbTotal);
+                  setRfbPage(pg);
+                } else {
+                  // New filters — fetch full cache batch
+                  params.set('page', 1);
+                  params.set('page_size', RFB_CACHE_SIZE);
+                  params.set('order_by', 'razao_social');
+                  const res = await axios.get(`/api/rfb/search?${params}`);
+                  const all   = res.data.results || [];
+                  const total = res.data.total   || 0;
+                  rfbCacheRef.current = { results: all, total, key: filterKey };
+                  const sorted = sortRfbResults(all, ob);
+                  setRfbResults(sorted.slice(start, start + ps));
+                  setRfbTotal(total);
+                  setRfbPage(pg);
+                  try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
+                }
               } catch (e) {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
@@ -5918,6 +5966,7 @@ function App() {
               setRfbPage(1);
               setRfbError(null);
               setLeadImportStatus(null);
+              rfbCacheRef.current = { results: [], total: 0, key: null };
               try { localStorage.removeItem('rfb_search'); } catch {}
             };
 
