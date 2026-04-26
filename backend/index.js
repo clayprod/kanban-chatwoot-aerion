@@ -5268,7 +5268,10 @@ app.get('/api/rfb/search', async (req, res) => {
       // então só ativa o branch MEI quando o termo é específico:
       // 3+ palavras OU 14+ chars. Pega buscas tipo "vilma dos santos messias",
       // ignora "joao silva".
-      const isSpecific = (v) => v.split(/\s+/).filter(Boolean).length >= 3 || v.length >= 14;
+      // Se mei='N' (usuário excluiu MEI), desabilita extensão — seria caro
+      // computar e descartar.
+      const allowMei = mei !== 'N';
+      const isSpecific = (v) => allowMei && (v.split(/\s+/).filter(Boolean).length >= 3 || v.length >= 14);
       const socioSql = (idx, includeMei) => includeMei
         ? `SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ILIKE immutable_unaccent(lower($${idx}))
            UNION
@@ -5479,13 +5482,14 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
-    // Simples Nacional / MEI
-    // Subquery em rfb_simples em vez de filtrar coluna de LEFT JOIN (s.*) —
-    // filtrar LEFT JOIN no WHERE impede otimização do planner.
-    if (simples === 'S') where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_simples = 'S')`);
-    if (simples === 'N') where.push(`e.cnpj_basico NOT IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_simples = 'S')`);
-    if (mei === 'S') where.push(`e.cnpj_basico IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_mei = 'S')`);
-    if (mei === 'N') where.push(`e.cnpj_basico NOT IN (SELECT cnpj_basico FROM rfb_simples WHERE opcao_pelo_mei = 'S')`);
+    // Simples Nacional / MEI — usa EXISTS/NOT EXISTS pra explorar idx_rfb_simples_basico
+    // e idx_rfb_simples_mei (parcial). NOT IN tem semântica perigosa com NULLs e o planner
+    // costuma escolher hash join cheio de 24M+ linhas → timeout. EXISTS roda 1 lookup
+    // por linha candidata (~50μs cada) e termina cedo.
+    if (simples === 'S') where.push(`EXISTS (SELECT 1 FROM rfb_simples sim_s WHERE sim_s.cnpj_basico = e.cnpj_basico AND sim_s.opcao_pelo_simples = 'S')`);
+    if (simples === 'N') where.push(`NOT EXISTS (SELECT 1 FROM rfb_simples sim_s WHERE sim_s.cnpj_basico = e.cnpj_basico AND sim_s.opcao_pelo_simples = 'S')`);
+    if (mei === 'S') where.push(`EXISTS (SELECT 1 FROM rfb_simples sim_m WHERE sim_m.cnpj_basico = e.cnpj_basico AND sim_m.opcao_pelo_mei = 'S')`);
+    if (mei === 'N') where.push(`NOT EXISTS (SELECT 1 FROM rfb_simples sim_m WHERE sim_m.cnpj_basico = e.cnpj_basico AND sim_m.opcao_pelo_mei = 'S')`);
 
     // Mostrar apenas matriz (cnpj_ordem = '0001') por padrão
     if (only_matriz !== 'false') where.push(`e.cnpj_ordem = '0001'`);
