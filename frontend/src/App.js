@@ -1374,7 +1374,7 @@ function App() {
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbEndereco, setRfbEndereco] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.endereco || ''; } catch { return ''; } });
   const [rfbEnderecoOp, setRfbEnderecoOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.enderecoOp || 'contains'; } catch { return 'contains'; } });
-  const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || ''; } catch { return ''; } });
+  const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || 'S'; } catch { return 'S'; } });
   const [rfbMei, setRfbMei] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.mei || ''; } catch { return ''; } });
   const [rfbOnlyMatriz, setRfbOnlyMatriz] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.onlyMatriz !== false; } catch { return true; } });
   const [rfbNome2, setRfbNome2] = useState('');
@@ -5959,7 +5959,7 @@ function App() {
               setRfbNome2(''); setRfbNome2Op('contains'); setRfbNomeLogic('AND'); setRfbNomeExpanded(false);
               setRfbSocio2(''); setRfbSocio2Op('contains'); setRfbSocioLogic('AND'); setRfbSocioExpanded(false);
               setRfbEndereco2(''); setRfbEndereco2Op('contains'); setRfbEnderecoLogic('AND'); setRfbEnderecoExpanded(false);
-              setRfbSimples('');
+              setRfbSimples('S');
               setRfbMei('');
               setRfbOnlyMatriz(true);
               setRfbFiliais({});
