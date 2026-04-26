@@ -1374,7 +1374,7 @@ function App() {
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbEndereco, setRfbEndereco] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.endereco || ''; } catch { return ''; } });
   const [rfbEnderecoOp, setRfbEnderecoOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.enderecoOp || 'contains'; } catch { return 'contains'; } });
-  const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples || 'S'; } catch { return 'S'; } });
+  const [rfbSimples, setRfbSimples] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.simples ?? ''; } catch { return ''; } });
   const [rfbMei, setRfbMei] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.mei || ''; } catch { return ''; } });
   const [rfbOnlyMatriz, setRfbOnlyMatriz] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.onlyMatriz !== false; } catch { return true; } });
   const [rfbNome2, setRfbNome2] = useState('');
@@ -5959,7 +5959,7 @@ function App() {
               setRfbNome2(''); setRfbNome2Op('contains'); setRfbNomeLogic('AND'); setRfbNomeExpanded(false);
               setRfbSocio2(''); setRfbSocio2Op('contains'); setRfbSocioLogic('AND'); setRfbSocioExpanded(false);
               setRfbEndereco2(''); setRfbEndereco2Op('contains'); setRfbEnderecoLogic('AND'); setRfbEnderecoExpanded(false);
-              setRfbSimples('S');
+              setRfbSimples('');
               setRfbMei('');
               setRfbOnlyMatriz(true);
               setRfbFiliais({});
@@ -6691,27 +6691,34 @@ function App() {
 
                     {/* Simples Nacional / MEI */}
                     {(() => {
-                      const cycle = (val, set) => set(val === '' ? 'S' : val === 'S' ? 'N' : '');
-                      const badge = (val) => val === 'S'
-                        ? 'bg-status-success/10 text-status-success border-status-success/30'
-                        : val === 'N'
-                        ? 'bg-status-danger/10 text-status-danger border-status-danger/30'
-                        : 'bg-cardAlt text-muted border-border';
-                      const label = (val, name) => val === 'S' ? `${name}: Sim` : val === 'N' ? `${name}: Não` : name;
+                      const TriState = ({ label, value, set }) => {
+                        const opts = [
+                          { v: '',  txt: 'Qualquer', cls: 'bg-cardAlt text-muted border-border' },
+                          { v: 'S', txt: 'Sim',      cls: 'bg-status-success/15 text-status-success border-status-success/40' },
+                          { v: 'N', txt: 'Não',      cls: 'bg-status-danger/15 text-status-danger border-status-danger/40' },
+                        ];
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-ink w-14 flex-shrink-0">{label}</span>
+                            <div className="flex rounded-lg border border-border overflow-hidden">
+                              {opts.map(o => (
+                                <button
+                                  key={o.v}
+                                  type="button"
+                                  onClick={() => set(o.v)}
+                                  className={`text-xs px-2.5 py-1 transition border-r border-border last:border-r-0 ${value === o.v ? o.cls + ' font-medium' : 'text-muted hover:bg-cardAlt'}`}
+                                >{o.txt}</button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      };
                       return (
                         <div>
-                          <label className="block text-xs text-muted mb-1.5">Regime Tributário <span className="text-muted/60">(clique para alternar)</span></label>
-                          <div className="flex flex-wrap gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => cycle(rfbSimples, setRfbSimples)}
-                              className={`text-xs px-2.5 py-1 rounded-full border font-medium transition ${badge(rfbSimples)}`}
-                            >{label(rfbSimples, 'Simples')}</button>
-                            <button
-                              type="button"
-                              onClick={() => cycle(rfbMei, setRfbMei)}
-                              className={`text-xs px-2.5 py-1 rounded-full border font-medium transition ${badge(rfbMei)}`}
-                            >{label(rfbMei, 'MEI')}</button>
+                          <label className="block text-xs text-muted mb-1.5">Regime Tributário</label>
+                          <div className="space-y-1.5">
+                            <TriState label="Simples" value={rfbSimples} set={setRfbSimples} />
+                            <TriState label="MEI"     value={rfbMei}     set={setRfbMei} />
                           </div>
                         </div>
                       );
