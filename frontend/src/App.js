@@ -6690,29 +6690,32 @@ function App() {
                     })()}
 
                     {/* Simples Nacional / MEI */}
-                    <div>
-                      <label className="block text-xs text-muted mb-1.5">Regime Tributário</label>
-                      <div className="space-y-1.5">
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            className="accent-primary"
-                            checked={rfbSimples === 'S'}
-                            onChange={e => setRfbSimples(e.target.checked ? 'S' : '')}
-                          />
-                          <span className="text-xs text-ink">Simples Nacional</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            className="accent-primary"
-                            checked={rfbMei === 'S'}
-                            onChange={e => setRfbMei(e.target.checked ? 'S' : '')}
-                          />
-                          <span className="text-xs text-ink">MEI</span>
-                        </label>
-                      </div>
-                    </div>
+                    {(() => {
+                      const cycle = (val, set) => set(val === '' ? 'S' : val === 'S' ? 'N' : '');
+                      const badge = (val) => val === 'S'
+                        ? 'bg-status-success/10 text-status-success border-status-success/30'
+                        : val === 'N'
+                        ? 'bg-status-danger/10 text-status-danger border-status-danger/30'
+                        : 'bg-cardAlt text-muted border-border';
+                      const label = (val, name) => val === 'S' ? `${name}: Sim` : val === 'N' ? `${name}: Não` : name;
+                      return (
+                        <div>
+                          <label className="block text-xs text-muted mb-1.5">Regime Tributário <span className="text-muted/60">(clique para alternar)</span></label>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => cycle(rfbSimples, setRfbSimples)}
+                              className={`text-xs px-2.5 py-1 rounded-full border font-medium transition ${badge(rfbSimples)}`}
+                            >{label(rfbSimples, 'Simples')}</button>
+                            <button
+                              type="button"
+                              onClick={() => cycle(rfbMei, setRfbMei)}
+                              className={`text-xs px-2.5 py-1 rounded-full border font-medium transition ${badge(rfbMei)}`}
+                            >{label(rfbMei, 'MEI')}</button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Capital Social slider */}
                     <div>
