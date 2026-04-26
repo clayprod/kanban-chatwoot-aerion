@@ -4713,6 +4713,7 @@ function startRFBImport({ force = false, staging = false, append = false } = {})
     // invalidate caches so new data is reflected
     _rfbMunicipiosCache = null;
     _rfbCnaesCache = null;
+    _rfbNaturezasCache = null;
     console.log('[rfb_import] finished with code', code);
   });
 
@@ -4860,6 +4861,7 @@ const createRFBTables = async () => {
 // Cache em memória para listas de referência
 let _rfbMunicipiosCache = null;
 let _rfbCnaesCache = null;
+let _rfbNaturezasCache = null;
 
 // GET /api/rfb/status
 app.get('/api/rfb/status', async (req, res) => {
@@ -4933,6 +4935,19 @@ app.get('/api/rfb/cnaes', async (req, res) => {
       _rfbCnaesCache = r.rows;
     }
     res.json(_rfbCnaesCache);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rfb/naturezas
+app.get('/api/rfb/naturezas', async (req, res) => {
+  try {
+    if (!_rfbNaturezasCache) {
+      const r = await pool.query('SELECT codigo, descricao FROM rfb_natureza ORDER BY codigo');
+      _rfbNaturezasCache = r.rows;
+    }
+    res.json(_rfbNaturezasCache);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5135,7 +5150,7 @@ app.get('/api/rfb/search', async (req, res) => {
       nome2 = '', nome2_op = 'contains', nome_logic = 'AND',
       socio = '', socio_op = 'contains',
       socio2 = '', socio2_op = 'contains', socio_logic = 'AND',
-      uf = '', municipio = '', cnae = '', situacao = '', porte = '',
+      uf = '', municipio = '', cnae = '', situacao = '', porte = '', natureza = '',
       endereco = '', endereco_op = 'contains',
       endereco2 = '', endereco2_op = 'contains', endereco_logic = 'AND',
       simples = '', mei = '',
@@ -5351,6 +5366,13 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`emp.porte_da_empresa IN ($${params.length - 1}, $${params.length})`);
     }
 
+    if (natureza.trim()) {
+      const nats = natureza.split(',').map(s => s.trim()).filter(Boolean);
+      const start = params.length + 1;
+      nats.forEach(n => params.push(n));
+      where.push(`emp.natureza_juridica IN (${nats.map((_, i) => `$${start + i}`).join(', ')})`);
+    }
+
     // Endereço — estratégia dupla:
     // • hasNarrowFilter (CNAE/nome/sócio): JOIN LATERAL que força nested loop.
     //   O planner convertia WHERE EXISTS em hash semi-join + seq scan de 67M linhas.
@@ -5516,6 +5538,7 @@ app.get('/api/rfb/search', async (req, res) => {
       LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
       LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
       LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
+      LEFT JOIN rfb_natureza nat ON emp.natureza_juridica = nat.codigo
       ${whereClause}
     `;
 
@@ -5559,6 +5582,7 @@ app.get('/api/rfb/search', async (req, res) => {
             ELSE emp.porte_da_empresa
           END AS porte_da_empresa,
           emp.natureza_juridica,
+          COALESCE(nat.descricao, emp.natureza_juridica) AS natureza_juridica_descricao,
           s.opcao_pelo_simples, s.opcao_pelo_mei,
           (SELECT string_agg(
              s2.nome_do_socio || COALESCE(' (' || q2.descricao || ')', ''),

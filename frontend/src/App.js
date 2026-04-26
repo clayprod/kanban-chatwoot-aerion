@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '' }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); return { ..._rfbDef, ...saved, situacao, cnae }; } catch { return _rfbDef; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '', natureza: [] }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); const nat = saved.natureza; const natureza = Array.isArray(nat) ? nat : (nat ? [nat] : []); return { ..._rfbDef, ...saved, situacao, cnae, natureza }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -1401,9 +1401,11 @@ function App() {
   const rfbCacheRef = useRef({ results: [], total: 0, key: null });
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
   const [rfbCnaes, setRfbCnaes] = useState([]);
+  const [rfbNaturezas, setRfbNaturezas] = useState([]);
   const [rfbExpanded, setRfbExpanded] = useState(null);
   const [rfbCnaeInput, setRfbCnaeInput] = useState('');
   const [rfbCnaeDropdownOpen, setRfbCnaeDropdownOpen] = useState(false);
+  const [rfbNatInput, setRfbNatInput] = useState('');
   const [rfbMunicipioInput, setRfbMunicipioInput] = useState('');
   const [rfbMunicipioDropdownOpen, setRfbMunicipioDropdownOpen] = useState(false);
   const [rfbImportProgress, setRfbImportProgress] = useState(null); // null | { status, message, file, percent, records, error }
@@ -1547,6 +1549,7 @@ function App() {
     axios.get('/api/rfb/import-progress').then(r => setRfbImportProgress(r.data)).catch(() => {});
     if (rfbMunicipios.length === 0) axios.get('/api/rfb/municipios').then(r => setRfbMunicipios(r.data || [])).catch(() => {});
     if (rfbCnaes.length === 0) axios.get('/api/rfb/cnaes').then(r => setRfbCnaes(r.data || [])).catch(() => {});
+    if (rfbNaturezas.length === 0) axios.get('/api/rfb/naturezas').then(r => setRfbNaturezas(r.data || [])).catch(() => {});
     axios.get('/api/leads/existing-cnpjs').then(r => setLeadExistingCNPJs(r.data || {})).catch(() => {});
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -5877,6 +5880,7 @@ function App() {
               if (rfbFilters.cnae.length > 0) fp.set('cnae', rfbFilters.cnae.join(','));
               if (rfbFilters.situacao.length > 0) fp.set('situacao', rfbFilters.situacao.join(','));
               if (rfbFilters.porte.trim()) fp.set('porte', rfbFilters.porte.trim());
+              if (rfbFilters.natureza.length > 0) fp.set('natureza', rfbFilters.natureza.join(','));
               if (rfbCapitalRange[0] > 0) fp.set('capital_min', rfbCapitalRange[0]);
               if (rfbCapitalRange[1] > 0) fp.set('capital_max', rfbCapitalRange[1]);
               if (rfbAberturaRange[0] > 0) fp.set('abertura_min_anos', rfbAberturaRange[0]);
@@ -5946,7 +5950,7 @@ function App() {
             };
 
             const handleClear = () => {
-              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '' };
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '', natureza: [] };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
@@ -5961,6 +5965,7 @@ function App() {
               setRfbFiliais({});
               setRfbCnaeInput('');
               setRfbMunicipioInput('');
+              setRfbNatInput('');
               setRfbResults([]);
               setRfbTotal(0);
               setRfbPage(1);
@@ -6640,6 +6645,50 @@ function App() {
                       </select>
                     </div>
 
+                    {/* Natureza Jurídica */}
+                    {(() => {
+                      const natQuery = rfbNatInput.trim().toLowerCase();
+                      const filteredNats = natQuery.length >= 1
+                        ? rfbNaturezas.filter(n => !rfbFilters.natureza.includes(n.codigo) && (n.codigo.includes(natQuery) || n.descricao.toLowerCase().includes(natQuery))).slice(0, 20)
+                        : [];
+                      return (
+                        <div>
+                          <label className="block text-xs text-muted mb-1">Natureza Jurídica</label>
+                          {rfbFilters.natureza.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-1.5">
+                              {rfbFilters.natureza.map(cod => {
+                                const nat = rfbNaturezas.find(n => n.codigo === cod);
+                                return (
+                                  <span key={cod} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-xs max-w-[200px]">
+                                    <span className="truncate">{nat ? `${nat.codigo} — ${nat.descricao}` : cod}</span>
+                                    <button onClick={() => setRfbFilters(p => ({ ...p, natureza: p.natureza.filter(c => c !== cod) }))} className="flex-shrink-0 hover:text-red-500">×</button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="relative">
+                            <input
+                              type="text"
+                              className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                              placeholder="Buscar natureza..."
+                              value={rfbNatInput}
+                              onChange={e => setRfbNatInput(e.target.value)}
+                            />
+                            {filteredNats.length > 0 && (
+                              <div className="absolute z-30 mt-1 w-full rounded-lg border border-border bg-card shadow-lg max-h-40 overflow-y-auto">
+                                {filteredNats.map(n => (
+                                  <div key={n.codigo} className="px-2.5 py-1.5 text-xs text-ink hover:bg-cardAlt cursor-pointer" onClick={() => { setRfbFilters(p => ({ ...p, natureza: [...p.natureza, n.codigo] })); setRfbNatInput(''); }}>
+                                    <span className="font-mono text-muted mr-1">{n.codigo}</span>{n.descricao}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Simples Nacional / MEI */}
                     <div>
                       <label className="block text-xs text-muted mb-1.5">Regime Tributário</label>
@@ -6873,6 +6922,7 @@ function App() {
                                 <p className="font-semibold text-muted uppercase tracking-wide mb-1">Empresa</p>
                                 {row.capital_social && <p className="text-ink">Capital: {fmtCapital(row.capital_social)}</p>}
                                 {row.porte_da_empresa && <p className="text-muted">Porte: {row.porte_da_empresa}</p>}
+                                {row.natureza_juridica_descricao && <p className="text-muted">Natureza: <span className="font-mono">{row.natureza_juridica}</span> — {row.natureza_juridica_descricao}</p>}
                                 {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {fmtDate(row.data_de_inicio_da_atividade)}{calcAge(row.data_de_inicio_da_atividade) ? ` · ${calcAge(row.data_de_inicio_da_atividade)}` : ''}</p>}
                                 <div className="flex gap-2 mt-1.5 flex-wrap">
                                   {row.opcao_pelo_mei === 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">MEI</span>}
