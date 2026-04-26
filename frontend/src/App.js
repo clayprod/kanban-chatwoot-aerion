@@ -5993,7 +5993,6 @@ function App() {
             const filteredCnaesNot = cnaeNotQuery.length >= 1
               ? rfbCnaes.filter(c => !rfbFilters.cnaeNot.includes(c.codigo) && (c.codigo.includes(cnaeNotQuery) || c.descricao.toLowerCase().includes(cnaeNotQuery))).slice(0, 30)
               : [];
-            const cnaeLabel = (codigo) => rfbCnaes.find(c => c.codigo === codigo)?.descricao || codigo;
 
             // Município dropdown
             const munQuery = rfbMunicipioInput.trim().toUpperCase();
