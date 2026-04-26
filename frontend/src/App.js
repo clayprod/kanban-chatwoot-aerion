@@ -5951,6 +5951,10 @@ function App() {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
                 setRfbError(status === 504 ? 'Tempo limite excedido — busca muito ampla ou índice ainda sendo criado.' : msg);
+                // Limpa resultados antigos pra não confundir com a busca que falhou
+                setRfbResults([]);
+                setRfbTotal(0);
+                rfbCacheRef.current = { results: [], total: 0, key: null };
               } finally { setRfbLoading(false); }
             };
 
