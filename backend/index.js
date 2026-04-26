@@ -5150,7 +5150,8 @@ app.get('/api/rfb/search', async (req, res) => {
       nome2 = '', nome2_op = 'contains', nome_logic = 'AND',
       socio = '', socio_op = 'contains',
       socio2 = '', socio2_op = 'contains', socio_logic = 'AND',
-      uf = '', municipio = '', cnae = '', situacao = '', porte = '', natureza = '',
+      uf = '', municipio = '', cnae = '', cnae_op = 'contains', cnae_only_principal = 'false',
+      situacao = '', porte = '', natureza = '',
       endereco = '', endereco_op = 'contains',
       endereco2 = '', endereco2_op = 'contains', endereco_logic = 'AND',
       simples = '', mei = '',
@@ -5350,16 +5351,23 @@ app.get('/api/rfb/search', async (req, res) => {
       // cnaeSecNarrow estreita o scan do secundário para UF+municipio quando disponíveis
       // (sem narrow: seq scan de 70M linhas ~55s; com SP+municipio: ~1-2M linhas <2s).
       const secNarrow = cnaeSecNarrow.length > 0 ? ' AND ' + cnaeSecNarrow.join(' AND ') : '';
+      const onlyPrincipal = cnae_only_principal === 'true';
       const parts = cnaeCodes.flatMap(code => {
         params.push(code);
         const i = params.length;
-        return [
-          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`,
-          `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`,
-        ];
+        const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
+        const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`;
+        return onlyPrincipal ? [principal] : [principal, secundario];
       });
-      cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
-      cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
+      const subquery = parts.join('\n  UNION\n  ');
+      if (cnae_op === 'not_contains') {
+        // Negativo: NOT IN aplicado depois dos filtros positivos (mesmo padrão do sócio negativo).
+        // Não usa CTE/JOIN — só WHERE direto.
+        where.push(`e.cnpj_basico NOT IN (${subquery})`);
+      } else {
+        cnaeCtes.push(`_cnae_f AS MATERIALIZED (${subquery})`);
+        cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
+      }
     }
 
     if (situacao.trim()) {
@@ -5395,8 +5403,9 @@ app.get('/api/rfb/search', async (req, res) => {
     const endCtes  = [];
     const endJoins = [];
     const lateralEndJoins = [];
-    // hasNarrowFilter usado tanto para endereço LATERAL quanto para rfb_empresas LATERAL
-    const hasNarrowFilter = nomeCtes.length > 0 || socioCtes.length > 0 || cnae.trim() !== '';
+    // hasNarrowFilter usado tanto para endereço LATERAL quanto para rfb_empresas LATERAL.
+    // CNAE só conta como narrow no modo positivo (contains) — NOT IN não reduz o set o suficiente.
+    const hasNarrowFilter = nomeCtes.length > 0 || socioCtes.length > 0 || (cnae.trim() !== '' && cnae_op !== 'not_contains');
     {
       const e1 = endereco.trim(), e2 = endereco2.trim();
       if (e1 || e2) {

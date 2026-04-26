@@ -1405,6 +1405,8 @@ function App() {
   const [rfbExpanded, setRfbExpanded] = useState(null);
   const [rfbCnaeInput, setRfbCnaeInput] = useState('');
   const [rfbCnaeDropdownOpen, setRfbCnaeDropdownOpen] = useState(false);
+  const [rfbCnaeOp, setRfbCnaeOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.cnaeOp || 'contains'; } catch { return 'contains'; } });
+  const [rfbCnaeOnlyPrincipal, setRfbCnaeOnlyPrincipal] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return !!s.cnaeOnlyPrincipal; } catch { return false; } });
   const [rfbNatInput, setRfbNatInput] = useState('');
   const [rfbMunicipioInput, setRfbMunicipioInput] = useState('');
   const [rfbMunicipioDropdownOpen, setRfbMunicipioDropdownOpen] = useState(false);
@@ -5777,7 +5779,7 @@ function App() {
             const saveRfbFilter = () => {
               const name = rfbSaveFilterName.trim();
               if (!name) return;
-              const snapshot = { name, filters: rfbFilters, ops: rfbOps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, nome2: rfbNome2, nome2Op: rfbNome2Op, nomeLogic: rfbNomeLogic, socio2: rfbSocio2, socio2Op: rfbSocio2Op, socioLogic: rfbSocioLogic, endereco2: rfbEndereco2, endereco2Op: rfbEndereco2Op, enderecoLogic: rfbEnderecoLogic };
+              const snapshot = { name, filters: rfbFilters, ops: rfbOps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, nome2: rfbNome2, nome2Op: rfbNome2Op, nomeLogic: rfbNomeLogic, socio2: rfbSocio2, socio2Op: rfbSocio2Op, socioLogic: rfbSocioLogic, endereco2: rfbEndereco2, endereco2Op: rfbEndereco2Op, enderecoLogic: rfbEnderecoLogic, cnaeOp: rfbCnaeOp, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal };
               const updated = [...rfbSavedFilters, snapshot];
               setRfbSavedFilters(updated);
               localStorage.setItem('rfb_saved_filters', JSON.stringify(updated));
@@ -5877,7 +5879,11 @@ function App() {
               if (rfbFilters.socio.trim() && rfbSocio2.trim()) fp.set('socio_logic', rfbSocioLogic);
               if (rfbFilters.uf.trim()) fp.set('uf', rfbFilters.uf.trim());
               if (rfbFilters.municipio.trim()) fp.set('municipio', rfbFilters.municipio.trim());
-              if (rfbFilters.cnae.length > 0) fp.set('cnae', rfbFilters.cnae.join(','));
+              if (rfbFilters.cnae.length > 0) {
+                fp.set('cnae', rfbFilters.cnae.join(','));
+                if (rfbCnaeOp !== 'contains') fp.set('cnae_op', rfbCnaeOp);
+                if (rfbCnaeOnlyPrincipal) fp.set('cnae_only_principal', 'true');
+              }
               if (rfbFilters.situacao.length > 0) fp.set('situacao', rfbFilters.situacao.join(','));
               if (rfbFilters.porte.trim()) fp.set('porte', rfbFilters.porte.trim());
               if (rfbFilters.natureza.length > 0) fp.set('natureza', rfbFilters.natureza.join(','));
@@ -5940,7 +5946,7 @@ function App() {
                   setRfbResults(sorted.slice(start, start + ps));
                   setRfbTotal(total);
                   setRfbPage(pg);
-                  try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz })); } catch {}
+                  try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, cnaeOp: rfbCnaeOp, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal })); } catch {}
                 }
               } catch (e) {
                 const status = e.response?.status;
@@ -5964,6 +5970,8 @@ function App() {
               setRfbOnlyMatriz(true);
               setRfbFiliais({});
               setRfbCnaeInput('');
+              setRfbCnaeOp('contains');
+              setRfbCnaeOnlyPrincipal(false);
               setRfbMunicipioInput('');
               setRfbNatInput('');
               setRfbResults([]);
@@ -6573,7 +6581,32 @@ function App() {
 
                     {/* CNAE */}
                     <div>
-                      <label className="block text-xs text-muted mb-1">CNAE</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-muted">CNAE</label>
+                        <div className="flex gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setRfbCnaeOp('contains')}
+                            title="Contém"
+                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbCnaeOp === 'contains' ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                          >∋</button>
+                          <button
+                            type="button"
+                            onClick={() => setRfbCnaeOp('not_contains')}
+                            title="Não contém"
+                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbCnaeOp === 'not_contains' ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
+                          >∌</button>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-xs text-muted mb-1.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          className="accent-primary"
+                          checked={rfbCnaeOnlyPrincipal}
+                          onChange={e => setRfbCnaeOnlyPrincipal(e.target.checked)}
+                        />
+                        <span>Apenas CNAE principal</span>
+                      </label>
                       {rfbFilters.cnae.length > 0 && (
                         <div className="flex flex-wrap gap-1 mb-1.5">
                           {rfbFilters.cnae.map(cod => (
