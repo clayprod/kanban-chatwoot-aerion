@@ -1368,7 +1368,7 @@ function App() {
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '', natureza: [] }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); const nat = saved.natureza; const natureza = Array.isArray(nat) ? nat : (nat ? [nat] : []); return { ..._rfbDef, ...saved, situacao, cnae, natureza }; } catch { return _rfbDef; } });
+  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], cnaeNot: [], situacao: ['2'], porte: '', natureza: [] }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); const cnn = saved.cnaeNot; const cnaeNot = Array.isArray(cnn) ? cnn : []; const nat = saved.natureza; const natureza = Array.isArray(nat) ? nat : (nat ? [nat] : []); return { ..._rfbDef, ...saved, situacao, cnae, cnaeNot, natureza }; } catch { return _rfbDef; } });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -1404,8 +1404,9 @@ function App() {
   const [rfbNaturezas, setRfbNaturezas] = useState([]);
   const [rfbExpanded, setRfbExpanded] = useState(null);
   const [rfbCnaeInput, setRfbCnaeInput] = useState('');
+  const [rfbCnaeNotInput, setRfbCnaeNotInput] = useState('');
   const [rfbCnaeDropdownOpen, setRfbCnaeDropdownOpen] = useState(false);
-  const [rfbCnaeOp, setRfbCnaeOp] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.cnaeOp || 'contains'; } catch { return 'contains'; } });
+  const [rfbCnaeNotDropdownOpen, setRfbCnaeNotDropdownOpen] = useState(false);
   const [rfbCnaeOnlyPrincipal, setRfbCnaeOnlyPrincipal] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return !!s.cnaeOnlyPrincipal; } catch { return false; } });
   const [rfbNatInput, setRfbNatInput] = useState('');
   const [rfbMunicipioInput, setRfbMunicipioInput] = useState('');
@@ -5779,7 +5780,7 @@ function App() {
             const saveRfbFilter = () => {
               const name = rfbSaveFilterName.trim();
               if (!name) return;
-              const snapshot = { name, filters: rfbFilters, ops: rfbOps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, nome2: rfbNome2, nome2Op: rfbNome2Op, nomeLogic: rfbNomeLogic, socio2: rfbSocio2, socio2Op: rfbSocio2Op, socioLogic: rfbSocioLogic, endereco2: rfbEndereco2, endereco2Op: rfbEndereco2Op, enderecoLogic: rfbEnderecoLogic, cnaeOp: rfbCnaeOp, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal };
+              const snapshot = { name, filters: rfbFilters, ops: rfbOps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, nome2: rfbNome2, nome2Op: rfbNome2Op, nomeLogic: rfbNomeLogic, socio2: rfbSocio2, socio2Op: rfbSocio2Op, socioLogic: rfbSocioLogic, endereco2: rfbEndereco2, endereco2Op: rfbEndereco2Op, enderecoLogic: rfbEnderecoLogic, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal };
               const updated = [...rfbSavedFilters, snapshot];
               setRfbSavedFilters(updated);
               localStorage.setItem('rfb_saved_filters', JSON.stringify(updated));
@@ -5879,11 +5880,9 @@ function App() {
               if (rfbFilters.socio.trim() && rfbSocio2.trim()) fp.set('socio_logic', rfbSocioLogic);
               if (rfbFilters.uf.trim()) fp.set('uf', rfbFilters.uf.trim());
               if (rfbFilters.municipio.trim()) fp.set('municipio', rfbFilters.municipio.trim());
-              if (rfbFilters.cnae.length > 0) {
-                fp.set('cnae', rfbFilters.cnae.join(','));
-                if (rfbCnaeOp !== 'contains') fp.set('cnae_op', rfbCnaeOp);
-                if (rfbCnaeOnlyPrincipal) fp.set('cnae_only_principal', 'true');
-              }
+              if (rfbFilters.cnae.length > 0) fp.set('cnae', rfbFilters.cnae.join(','));
+              if (rfbFilters.cnaeNot.length > 0) fp.set('cnae_not', rfbFilters.cnaeNot.join(','));
+              if ((rfbFilters.cnae.length > 0 || rfbFilters.cnaeNot.length > 0) && rfbCnaeOnlyPrincipal) fp.set('cnae_only_principal', 'true');
               if (rfbFilters.situacao.length > 0) fp.set('situacao', rfbFilters.situacao.join(','));
               if (rfbFilters.porte.trim()) fp.set('porte', rfbFilters.porte.trim());
               if (rfbFilters.natureza.length > 0) fp.set('natureza', rfbFilters.natureza.join(','));
@@ -5946,7 +5945,7 @@ function App() {
                   setRfbResults(sorted.slice(start, start + ps));
                   setRfbTotal(total);
                   setRfbPage(pg);
-                  try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, cnaeOp: rfbCnaeOp, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal })); } catch {}
+                  try { localStorage.setItem('rfb_search', JSON.stringify({ filters: rfbFilters, ops: rfbOps, orderBy: ob, pageSize: ps, capitalRange: rfbCapitalRange, aberturaRange: rfbAberturaRange, endereco: rfbEndereco, enderecoOp: rfbEnderecoOp, simples: rfbSimples, mei: rfbMei, onlyMatriz: rfbOnlyMatriz, cnaeOnlyPrincipal: rfbCnaeOnlyPrincipal })); } catch {}
                 }
               } catch (e) {
                 const status = e.response?.status;
@@ -5956,7 +5955,7 @@ function App() {
             };
 
             const handleClear = () => {
-              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], situacao: ['2'], porte: '', natureza: [] };
+              const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], cnaeNot: [], situacao: ['2'], porte: '', natureza: [] };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
               setRfbCapitalRange([0, 0]);
@@ -5970,7 +5969,7 @@ function App() {
               setRfbOnlyMatriz(true);
               setRfbFiliais({});
               setRfbCnaeInput('');
-              setRfbCnaeOp('contains');
+              setRfbCnaeNotInput('');
               setRfbCnaeOnlyPrincipal(false);
               setRfbMunicipioInput('');
               setRfbNatInput('');
@@ -5985,10 +5984,14 @@ function App() {
 
             const totalPages = Math.ceil(rfbTotal / rfbPageSize);
 
-            // CNAE dropdown
+            // CNAE dropdown — separado para "contém" (cnae) e "não contém" (cnaeNot)
             const cnaeQuery = rfbCnaeInput.trim().toLowerCase();
+            const cnaeNotQuery = rfbCnaeNotInput.trim().toLowerCase();
             const filteredCnaes = cnaeQuery.length >= 1
               ? rfbCnaes.filter(c => !rfbFilters.cnae.includes(c.codigo) && (c.codigo.includes(cnaeQuery) || c.descricao.toLowerCase().includes(cnaeQuery))).slice(0, 30)
+              : [];
+            const filteredCnaesNot = cnaeNotQuery.length >= 1
+              ? rfbCnaes.filter(c => !rfbFilters.cnaeNot.includes(c.codigo) && (c.codigo.includes(cnaeNotQuery) || c.descricao.toLowerCase().includes(cnaeNotQuery))).slice(0, 30)
               : [];
             const cnaeLabel = (codigo) => rfbCnaes.find(c => c.codigo === codigo)?.descricao || codigo;
 
@@ -6581,23 +6584,7 @@ function App() {
 
                     {/* CNAE */}
                     <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-muted">CNAE</label>
-                        <div className="flex gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => setRfbCnaeOp('contains')}
-                            title="Contém"
-                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbCnaeOp === 'contains' ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
-                          >∋</button>
-                          <button
-                            type="button"
-                            onClick={() => setRfbCnaeOp('not_contains')}
-                            title="Não contém"
-                            className={`px-1.5 py-0.5 text-xs rounded border transition ${rfbCnaeOp === 'not_contains' ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink'}`}
-                          >∌</button>
-                        </div>
-                      </div>
+                      <label className="block text-xs text-muted mb-1">CNAE</label>
                       <label className="flex items-center gap-1.5 text-xs text-muted mb-1.5 cursor-pointer select-none">
                         <input
                           type="checkbox"
@@ -6605,42 +6592,93 @@ function App() {
                           checked={rfbCnaeOnlyPrincipal}
                           onChange={e => setRfbCnaeOnlyPrincipal(e.target.checked)}
                         />
-                        <span>Apenas CNAE principal</span>
+                        <span>Apenas CNAE principal (mais rápido)</span>
                       </label>
-                      {rfbFilters.cnae.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mb-1.5">
-                          {rfbFilters.cnae.map(cod => (
-                            <span key={cod} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full px-2 py-0.5 max-w-full">
-                              <span className="font-mono flex-shrink-0">{cod}</span>
-                              <button onClick={() => setRfbFilters(p => ({ ...p, cnae: p.cnae.filter(c => c !== cod) }))} className="hover:text-status-danger flex-shrink-0 leading-none">×</button>
-                            </span>
-                          ))}
+
+                      {/* Contém */}
+                      <div className="mb-2">
+                        <div className="flex items-center gap-1 mb-1">
+                          <span className="text-xs font-medium text-status-success">∋ Contém</span>
+                          <span className="text-xs text-muted/70">— qualquer um</span>
                         </div>
-                      )}
-                      <div className="relative">
-                        <input
-                          type="text"
-                          className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
-                          placeholder="Código ou atividade..."
-                          value={rfbCnaeInput}
-                          onChange={e => { setRfbCnaeInput(e.target.value); setRfbCnaeDropdownOpen(true); }}
-                          onFocus={() => setRfbCnaeDropdownOpen(true)}
-                          onBlur={() => setTimeout(() => setRfbCnaeDropdownOpen(false), 200)}
-                        />
-                        {rfbCnaeDropdownOpen && filteredCnaes.length > 0 && (
-                          <div className="absolute z-30 left-0 mt-1 min-w-full w-max max-w-xs max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-card">
-                            {filteredCnaes.map(c => (
-                              <button
-                                key={c.codigo}
-                                onMouseDown={e => { e.preventDefault(); setRfbFilters(p => ({ ...p, cnae: p.cnae.includes(c.codigo) ? p.cnae : [...p.cnae, c.codigo] })); setRfbCnaeInput(''); setRfbCnaeDropdownOpen(false); }}
-                                className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-cardAlt border-b border-border/50 last:border-0 flex gap-2"
-                              >
-                                <span className="font-mono text-muted flex-shrink-0">{c.codigo}</span>
-                                <span>{cnaeLabel(c.codigo) !== c.codigo ? c.descricao : c.descricao}</span>
-                              </button>
+                        {rfbFilters.cnae.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-1.5">
+                            {rfbFilters.cnae.map(cod => (
+                              <span key={cod} className="inline-flex items-center gap-1 text-xs bg-status-success/10 text-status-success border border-status-success/30 rounded-full px-2 py-0.5">
+                                <span className="font-mono flex-shrink-0">{cod}</span>
+                                <button onClick={() => setRfbFilters(p => ({ ...p, cnae: p.cnae.filter(c => c !== cod) }))} className="hover:text-status-danger flex-shrink-0 leading-none">×</button>
+                              </span>
                             ))}
                           </div>
                         )}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="Adicionar CNAE para incluir..."
+                            value={rfbCnaeInput}
+                            onChange={e => { setRfbCnaeInput(e.target.value); setRfbCnaeDropdownOpen(true); }}
+                            onFocus={() => setRfbCnaeDropdownOpen(true)}
+                            onBlur={() => setTimeout(() => setRfbCnaeDropdownOpen(false), 200)}
+                          />
+                          {rfbCnaeDropdownOpen && filteredCnaes.length > 0 && (
+                            <div className="absolute z-30 left-0 mt-1 min-w-full w-max max-w-xs max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-card">
+                              {filteredCnaes.map(c => (
+                                <button
+                                  key={c.codigo}
+                                  onMouseDown={e => { e.preventDefault(); setRfbFilters(p => ({ ...p, cnae: p.cnae.includes(c.codigo) ? p.cnae : [...p.cnae, c.codigo] })); setRfbCnaeInput(''); setRfbCnaeDropdownOpen(false); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-cardAlt border-b border-border/50 last:border-0 flex gap-2"
+                                >
+                                  <span className="font-mono text-muted flex-shrink-0">{c.codigo}</span>
+                                  <span>{c.descricao}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Não contém */}
+                      <div>
+                        <div className="flex items-center gap-1 mb-1">
+                          <span className="text-xs font-medium text-status-danger">∌ Não contém</span>
+                          <span className="text-xs text-muted/70">— nenhum</span>
+                        </div>
+                        {rfbFilters.cnaeNot.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-1.5">
+                            {rfbFilters.cnaeNot.map(cod => (
+                              <span key={cod} className="inline-flex items-center gap-1 text-xs bg-status-danger/10 text-status-danger border border-status-danger/30 rounded-full px-2 py-0.5">
+                                <span className="font-mono flex-shrink-0">{cod}</span>
+                                <button onClick={() => setRfbFilters(p => ({ ...p, cnaeNot: p.cnaeNot.filter(c => c !== cod) }))} className="hover:text-status-danger flex-shrink-0 leading-none">×</button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            className="w-full rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            placeholder="Adicionar CNAE para excluir..."
+                            value={rfbCnaeNotInput}
+                            onChange={e => { setRfbCnaeNotInput(e.target.value); setRfbCnaeNotDropdownOpen(true); }}
+                            onFocus={() => setRfbCnaeNotDropdownOpen(true)}
+                            onBlur={() => setTimeout(() => setRfbCnaeNotDropdownOpen(false), 200)}
+                          />
+                          {rfbCnaeNotDropdownOpen && filteredCnaesNot.length > 0 && (
+                            <div className="absolute z-30 left-0 mt-1 min-w-full w-max max-w-xs max-h-48 overflow-y-auto rounded-lg border border-border bg-card shadow-card">
+                              {filteredCnaesNot.map(c => (
+                                <button
+                                  key={c.codigo}
+                                  onMouseDown={e => { e.preventDefault(); setRfbFilters(p => ({ ...p, cnaeNot: p.cnaeNot.includes(c.codigo) ? p.cnaeNot : [...p.cnaeNot, c.codigo] })); setRfbCnaeNotInput(''); setRfbCnaeNotDropdownOpen(false); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-cardAlt border-b border-border/50 last:border-0 flex gap-2"
+                                >
+                                  <span className="font-mono text-muted flex-shrink-0">{c.codigo}</span>
+                                  <span>{c.descricao}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -6722,40 +6760,31 @@ function App() {
                       );
                     })()}
 
-                    {/* Simples Nacional / MEI */}
-                    {(() => {
-                      const TriState = ({ label, value, set }) => {
-                        const opts = [
-                          { v: '',  txt: 'Qualquer', cls: 'bg-cardAlt text-muted border-border' },
-                          { v: 'S', txt: 'Sim',      cls: 'bg-status-success/15 text-status-success border-status-success/40' },
-                          { v: 'N', txt: 'Não',      cls: 'bg-status-danger/15 text-status-danger border-status-danger/40' },
-                        ];
-                        return (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-ink w-14 flex-shrink-0">{label}</span>
-                            <div className="flex rounded-lg border border-border overflow-hidden">
-                              {opts.map(o => (
-                                <button
-                                  key={o.v}
-                                  type="button"
-                                  onClick={() => set(o.v)}
-                                  className={`text-xs px-2.5 py-1 transition border-r border-border last:border-r-0 ${value === o.v ? o.cls + ' font-medium' : 'text-muted hover:bg-cardAlt'}`}
-                                >{o.txt}</button>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      };
-                      return (
-                        <div>
-                          <label className="block text-xs text-muted mb-1.5">Regime Tributário</label>
-                          <div className="space-y-1.5">
-                            <TriState label="Simples" value={rfbSimples} set={setRfbSimples} />
-                            <TriState label="MEI"     value={rfbMei}     set={setRfbMei} />
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    {/* Regime tributário — checkboxes "incluir esta categoria".
+                        Marcado (padrão) = traz na busca. Desmarcado = exclui. */}
+                    <div>
+                      <label className="block text-xs text-muted mb-1.5">Trazer na busca</label>
+                      <div className="space-y-1.5">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-primary"
+                            checked={rfbSimples !== 'N'}
+                            onChange={e => setRfbSimples(e.target.checked ? '' : 'N')}
+                          />
+                          <span className="text-xs text-ink">Simples Nacional</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="accent-primary"
+                            checked={rfbMei !== 'N'}
+                            onChange={e => setRfbMei(e.target.checked ? '' : 'N')}
+                          />
+                          <span className="text-xs text-ink">MEI</span>
+                        </label>
+                      </div>
+                    </div>
 
                     {/* Capital Social slider */}
                     <div>
