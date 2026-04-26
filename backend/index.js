@@ -5260,8 +5260,21 @@ app.get('/api/rfb/search', async (req, res) => {
     const socioCtes  = [];
     const socioJoins = [];
     {
-      const socioSql = (idx) =>
-        `SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ILIKE immutable_unaccent(lower($${idx}))`;
+      // MEI não tem registro em rfb_socios — o nome do empreendedor vai pra
+      // razao_social no formato "CNPJ_BASICO NOME". UNION com rfb_empresas
+      // (filtrado por opcao_pelo_mei='S') traz esses casos. Mas trigram em
+      // razao_social é caro pra termos genéricos ("joao silva" → 13s),
+      // então só ativa o branch MEI quando o termo é específico:
+      // 3+ palavras OU 14+ chars. Pega buscas tipo "vilma dos santos messias",
+      // ignora "joao silva".
+      const isSpecific = (v) => v.split(/\s+/).filter(Boolean).length >= 3 || v.length >= 14;
+      const socioSql = (idx, includeMei) => includeMei
+        ? `SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ILIKE immutable_unaccent(lower($${idx}))
+           UNION
+           SELECT emp.cnpj_basico FROM rfb_empresas emp
+           WHERE immutable_unaccent(lower(emp.razao_social)) ILIKE immutable_unaccent(lower($${idx}))
+             AND EXISTS (SELECT 1 FROM rfb_simples sim WHERE sim.cnpj_basico = emp.cnpj_basico AND sim.opcao_pelo_mei = 'S')`
+        : `SELECT cnpj_basico FROM rfb_socios WHERE immutable_unaccent(lower(nome_do_socio)) ILIKE immutable_unaccent(lower($${idx}))`;
       const mkPattern = (v, op) => {
         if (op === 'starts') return `${v}%`;
         if (op === 'ends')   return `%${v}`;
@@ -5270,26 +5283,26 @@ app.get('/api/rfb/search', async (req, res) => {
       };
       const s1 = socio.trim(), s2 = socio2.trim();
       if (s1 || s2) {
-        // Negativos → WHERE
+        // Negativos → WHERE (sem extensão MEI: NOT IN com MEI excluiria empresas válidas)
         if (s1 && socio_op === 'not_contains') {
           params.push(`%${s1}%`);
-          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length)})`);
+          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length, false)})`);
         }
         if (s2 && socio2_op === 'not_contains') {
           params.push(`%${s2}%`);
-          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length)})`);
+          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length, false)})`);
         }
         // Positivos → CTE + JOIN
         const pos = [];
-        if (s1 && socio_op !== 'not_contains') { params.push(mkPattern(s1, socio_op)); pos.push({ idx: params.length }); }
-        if (s2 && socio2_op !== 'not_contains') { params.push(mkPattern(s2, socio2_op)); pos.push({ idx: params.length }); }
+        if (s1 && socio_op !== 'not_contains') { params.push(mkPattern(s1, socio_op)); pos.push({ idx: params.length, mei: isSpecific(s1) }); }
+        if (s2 && socio2_op !== 'not_contains') { params.push(mkPattern(s2, socio2_op)); pos.push({ idx: params.length, mei: isSpecific(s2) }); }
         if (pos.length === 2 && socio_logic === 'OR') {
-          socioCtes.push(`_socio_or AS MATERIALIZED (${socioSql(pos[0].idx)} UNION ${socioSql(pos[1].idx)})`);
+          socioCtes.push(`_socio_or AS MATERIALIZED (${socioSql(pos[0].idx, pos[0].mei)} UNION ${socioSql(pos[1].idx, pos[1].mei)})`);
           socioJoins.push(`JOIN _socio_or ON _socio_or.cnpj_basico = e.cnpj_basico`);
         } else {
           pos.forEach((p, i) => {
             const alias = `_socio${i + 1}`;
-            socioCtes.push(`${alias} AS MATERIALIZED (${socioSql(p.idx)})`);
+            socioCtes.push(`${alias} AS MATERIALIZED (${socioSql(p.idx, p.mei)})`);
             socioJoins.push(`JOIN ${alias} ON ${alias}.cnpj_basico = e.cnpj_basico`);
           });
         }
