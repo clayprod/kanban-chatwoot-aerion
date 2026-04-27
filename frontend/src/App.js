@@ -49,6 +49,15 @@ const customerColumns = [
   '25. Em Recompra',
   '26. Inativo',
 ];
+const STAGE_GROUPS = [
+  { id: 'topo',     label: 'Topo',            color: '#3B82F6', range: [1, 5] },
+  { id: 'meio',     label: 'Meio',            color: '#8B5CF6', range: [6, 8] },
+  { id: 'fundo',    label: 'Fundo',           color: '#F59E0B', range: [9, 12] },
+  { id: 'outros',   label: 'Outros',          color: '#6B7280', range: [13, 17] },
+  { id: 'recompra', label: 'Recompra/Upsell', color: '#10B981', range: [18, 26] },
+];
+const groupForStageNum = (n) => STAGE_GROUPS.find(g => n >= g.range[0] && n <= g.range[1]);
+const colorForGroupLabel = (label) => (STAGE_GROUPS.find(g => g.label === label) || {}).color || '#6B7280';
 const licitacaoColumns = [
   '1. Monitoramento de PCA',
   '2. Mapeamento de Áreas',
@@ -534,6 +543,28 @@ const buildHistorySeries = (historyRows) => {
     data: periods.map(period => ({
       x: period,
       y: counts.get(`${stage}|${period}`) || 0,
+    })),
+  }));
+};
+
+const buildGroupedHistorySeries = (historyRows) => {
+  if (!Array.isArray(historyRows) || historyRows.length === 0) {
+    return [];
+  }
+  const periods = Array.from(new Set(historyRows.map(row => row.period_start))).sort();
+  const groupCounts = new Map();
+  historyRows.forEach(row => {
+    const num = getStageNumber(row.stage);
+    const grp = groupForStageNum(num);
+    if (!grp) return;
+    const key = `${grp.id}|${row.period_start}`;
+    groupCounts.set(key, (groupCounts.get(key) || 0) + (Number(row.count) || 0));
+  });
+  return STAGE_GROUPS.map(g => ({
+    id: g.label,
+    data: periods.map(period => ({
+      x: period,
+      y: groupCounts.get(`${g.id}|${period}`) || 0,
     })),
   }));
 };
@@ -1254,42 +1285,6 @@ const LicitacaoColumn = ({ title, opportunities, onOpen, onEdit }) => {
   );
 };
 
-const FunnelChart = ({ data, maxValue, valueFormatter, barClassName }) => {
-  if (!Array.isArray(data) || data.length === 0) {
-    return <div className="text-xs text-muted">Sem dados para exibir.</div>;
-  }
-  const safeMax = Math.max(1, maxValue || 1);
-  return (
-    <div className="funnel-chart">
-      {data.map((item) => {
-        const percent = Math.max(0.06, Math.min(1, item.value / safeMax));
-        const showValueInside = percent >= 0.72;
-        return (
-          <div key={item.stage} className="funnel-row">
-            <div className="funnel-label">
-              <span className="funnel-step">{item.stageNumber}</span>
-              <span className="funnel-text">{item.stageLabel}</span>
-            </div>
-            <div className="funnel-bar-wrap">
-              <div
-                className={`funnel-bar ${barClassName} ${showValueInside ? 'funnel-bar-with-value' : ''}`}
-                style={{ width: `${percent * 100}%` }}
-              >
-                {showValueInside && (
-                  <span className="funnel-value funnel-value-inside">{valueFormatter(item.value)}</span>
-                )}
-              </div>
-              {!showValueInside && (
-                <span className="funnel-value">{valueFormatter(item.value)}</span>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
 function App() {
   const [contacts, setContacts] = useState([]);
   const [licitacaoOpportunities, setLicitacaoOpportunities] = useState([]);
@@ -1463,6 +1458,7 @@ function App() {
   const [boardScrollMetrics, setBoardScrollMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
   const boardScrollRef = useRef(null);
   const boardScrollbarRef = useRef(null);
+  const groupBarRef = useRef(null);
   const isSyncingRef = useRef(false);
   const dragScrollRafRef = useRef(null);
   const dragPointerXRef = useRef(null);
@@ -3174,14 +3170,27 @@ function App() {
       .sort((a, b) => a.stageNumber - b.stageNumber);
   }, [overviewData.byStage]);
 
-  const maxStageCount = useMemo(
-    () => Math.max(1, ...stageFunnelData.map(item => item.count)),
-    [stageFunnelData]
-  );
-  const maxStageValue = useMemo(
-    () => Math.max(1, ...stageFunnelData.map(item => item.totalValue)),
-    [stageFunnelData]
-  );
+  const stageGroupData = useMemo(() => {
+    return STAGE_GROUPS.map(g => {
+      const items = stageFunnelData.filter(s => {
+        const n = parseInt(s.stageNumber, 10);
+        return n >= g.range[0] && n <= g.range[1];
+      });
+      return {
+        group: g.label,
+        color: g.color,
+        count: items.reduce((a, s) => a + (s.count || 0), 0),
+        totalValue: items.reduce((a, s) => a + (s.totalValue || 0), 0),
+        detalhes: items.map(s => ({
+          stage: s.stage,
+          stageNumber: s.stageNumber,
+          stageLabel: s.stageLabel,
+          count: s.count,
+          totalValue: s.totalValue,
+        })),
+      };
+    });
+  }, [stageFunnelData]);
 
   const labelCountData = useMemo(() => sortByValueAsc(
     overviewData.byLabel.map(item => ({
@@ -3248,7 +3257,7 @@ function App() {
     }))
   ), [overviewData.byProbability]);
 
-  const historySeries = useMemo(() => buildHistorySeries(overviewData.history), [overviewData.history]);
+  const historySeries = useMemo(() => buildGroupedHistorySeries(overviewData.history), [overviewData.history]);
 
   const moveContactToStage = (contactId, targetStage) => {
     const previousContacts = contacts;
@@ -3551,6 +3560,9 @@ function App() {
     }
     isSyncingRef.current = true;
     boardScrollRef.current.scrollLeft = boardScrollbarRef.current.scrollLeft;
+    if (groupBarRef.current) {
+      groupBarRef.current.scrollLeft = boardScrollbarRef.current.scrollLeft;
+    }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
@@ -3562,6 +3574,9 @@ function App() {
     }
     isSyncingRef.current = true;
     boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
+    if (groupBarRef.current) {
+      groupBarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
+    }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
@@ -3905,6 +3920,25 @@ function App() {
                 </div>
               </div>
 
+          <div ref={groupBarRef} className="overflow-x-hidden mb-1">
+            <div className="flex gap-4">
+              {activeColumns.map((column, i) => {
+                const n = getStageNumber(column);
+                const g = groupForStageNum(n) || { id: 'outros', label: 'Outros', color: '#6B7280' };
+                const prev = i > 0 ? (groupForStageNum(getStageNumber(activeColumns[i - 1])) || null) : null;
+                const isFirstOfGroup = !prev || prev.id !== g.id;
+                return (
+                  <div
+                    key={column}
+                    className="w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 h-7 flex items-center justify-center text-xs font-semibold rounded-md"
+                    style={{ background: `${g.color}22`, color: g.color, border: `1px solid ${g.color}55` }}
+                  >
+                    {isFirstOfGroup ? g.label : ''}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
           {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
             <div className="kanban-scrollbar scrollbar-theme" ref={boardScrollbarRef} onScroll={handleTopScroll}>
               <div style={{ width: boardScrollMetrics.scrollWidth }} />
@@ -5424,35 +5458,73 @@ function App() {
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className="rounded-2xl border border-border bg-card p-5">
                       <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold">Quantidade por etapa</h3>
+                        <h3 className="text-sm font-semibold">Quantidade por grupo</h3>
                       </div>
-                      <div className="funnel-container">
-                        <FunnelChart
-                          data={stageFunnelData.map(item => ({
-                            stage: item.stage,
-                            stageNumber: item.stageNumber,
-                            stageLabel: item.stageLabel,
-                            value: item.count,
-                          }))}
-                          maxValue={maxStageCount}
-                          valueFormatter={value => formatCompactNumber(value)}
-                          barClassName="funnel-bar-count"
+                      <div className="h-64">
+                        <ResponsiveBar
+                          data={stageGroupData}
+                          keys={['count']}
+                          indexBy="group"
+                          margin={{ top: 20, right: 20, bottom: 40, left: 60 }}
+                          padding={0.35}
+                          colors={({ data }) => data.color}
+                          enableLabel={true}
+                          label={d => formatCompactNumber(d.value) || d.value}
+                          labelTextColor="#ffffff"
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
+                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
+                          theme={chartTheme}
+                          tooltip={({ data }) => (
+                            <div className="rounded-lg border border-border bg-card p-3 shadow-lg text-xs">
+                              <div className="font-semibold mb-2" style={{ color: data.color }}>{data.group}</div>
+                              <div className="text-muted mb-1">Total: <span className="font-semibold text-ink">{formatCompactNumber(data.count) || data.count}</span></div>
+                              {data.detalhes.length > 0 && (
+                                <div className="border-t border-border pt-2 mt-1 space-y-0.5">
+                                  {data.detalhes.map(d => (
+                                    <div key={d.stage} className="flex justify-between gap-3">
+                                      <span className="text-muted">{d.stageNumber}. {d.stageLabel}</span>
+                                      <span className="font-medium text-ink">{d.count}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         />
                       </div>
                     </div>
                     <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Oportunidade por etapa</h3>
-                      <div className="funnel-container">
-                        <FunnelChart
-                          data={stageFunnelData.map(item => ({
-                            stage: item.stage,
-                            stageNumber: item.stageNumber,
-                            stageLabel: item.stageLabel,
-                            value: item.totalValue,
-                          }))}
-                          maxValue={maxStageValue}
-                          valueFormatter={value => formatCompactCurrency(value) || 'R$ 0,00'}
-                          barClassName="funnel-bar-value"
+                      <h3 className="text-sm font-semibold">Oportunidade por grupo</h3>
+                      <div className="h-64">
+                        <ResponsiveBar
+                          data={stageGroupData}
+                          keys={['totalValue']}
+                          indexBy="group"
+                          margin={{ top: 20, right: 20, bottom: 40, left: 70 }}
+                          padding={0.35}
+                          colors={({ data }) => data.color}
+                          enableLabel={true}
+                          label={d => formatCompactCurrency(d.value) || 'R$ 0'}
+                          labelTextColor="#ffffff"
+                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactCurrency(value) || value }}
+                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
+                          theme={chartTheme}
+                          tooltip={({ data }) => (
+                            <div className="rounded-lg border border-border bg-card p-3 shadow-lg text-xs">
+                              <div className="font-semibold mb-2" style={{ color: data.color }}>{data.group}</div>
+                              <div className="text-muted mb-1">Total: <span className="font-semibold text-ink">{formatCompactCurrency(data.totalValue) || 'R$ 0'}</span></div>
+                              {data.detalhes.length > 0 && (
+                                <div className="border-t border-border pt-2 mt-1 space-y-0.5">
+                                  {data.detalhes.map(d => (
+                                    <div key={d.stage} className="flex justify-between gap-3">
+                                      <span className="text-muted">{d.stageNumber}. {d.stageLabel}</span>
+                                      <span className="font-medium text-ink">{formatCompactCurrency(d.totalValue) || 'R$ 0'}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         />
                       </div>
                     </div>
@@ -5645,7 +5717,7 @@ function App() {
 
                   <div className="rounded-2xl border border-border bg-card p-5">
                     <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold">Evolucao por quantidade (por etapa)</h3>
+                      <h3 className="text-sm font-semibold">Evolução por quantidade (por grupo)</h3>
                       <select
                         value={historyGranularity}
                         onChange={(event) => setHistoryGranularity(event.target.value)}
@@ -5664,7 +5736,7 @@ function App() {
                         yScale={{ type: 'linear', min: 0, max: 'auto' }}
                         axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
                         axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                        colors={{ scheme: 'category10' }}
+                        colors={({ id }) => colorForGroupLabel(id)}
                         pointSize={4}
                         pointBorderWidth={1}
                         useMesh
