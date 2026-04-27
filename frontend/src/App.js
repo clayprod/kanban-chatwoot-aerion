@@ -6410,7 +6410,9 @@ function App() {
                       {rfbShowFilters ? 'Ocultar filtros' : 'Mostrar filtros'}
                     </button>
                     {rfbResults.length > 0 && (
-                      <span className="text-xs text-muted">{rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}</span>
+                      <span className="text-xs text-muted">
+                        {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
+                      </span>
                     )}
                   </div>
 
@@ -6927,11 +6929,22 @@ function App() {
                       <div className="rounded-2xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">{rfbError}</div>
                     )}
 
+                    {/* 10K limit warning */}
+                    {rfbTotal >= 10001 && rfbResults.length > 0 && (
+                      <div className="rounded-2xl border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning flex items-start gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        <div>
+                          <div className="font-medium">Mais de 10.000 resultados</div>
+                          <div className="text-xs opacity-90 mt-0.5">A busca foi limitada. Adicione filtros (CNAE, sócio, capital, abertura, endereço…) para refinar e ver resultados mais relevantes.</div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Results header */}
                     {rfbTotal > 0 && (
                       <div className="flex flex-wrap items-center gap-3 text-sm">
                         <span className="text-muted">
-                          Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbTotal)}</span> de <span className="font-semibold text-ink">{rfbTotal.toLocaleString('pt-BR')}</span> resultados
+                          Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbTotal)}</span> de <span className="font-semibold text-ink">{rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')}</span> resultados
                         </span>
                         <div className="ml-auto flex items-center gap-2">
                           <select
