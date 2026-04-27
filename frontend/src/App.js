@@ -1441,7 +1441,7 @@ function App() {
   const [agentFilter, setAgentFilter] = useState('all');
   const [labelFilter, setLabelFilter] = useState('all');
   const [sortOption, setSortOption] = useState('opportunity-desc');
-  const [historyGranularity, setHistoryGranularity] = useState('day');
+  const [historyGranularity, setHistoryGranularity] = useState('week');
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewData, setOverviewData] = useState({
     summary: null,
