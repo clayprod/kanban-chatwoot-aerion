@@ -3920,23 +3920,33 @@ function App() {
                 </div>
               </div>
 
-          <div ref={groupBarRef} className="overflow-x-hidden mb-1">
-            <div className="flex gap-4">
-              {activeColumns.map((column, i) => {
-                const n = getStageNumber(column);
-                const g = groupForStageNum(n) || { id: 'outros', label: 'Outros', color: '#6B7280' };
-                const prev = i > 0 ? (groupForStageNum(getStageNumber(activeColumns[i - 1])) || null) : null;
-                const isFirstOfGroup = !prev || prev.id !== g.id;
-                return (
+          <div ref={groupBarRef} className="kanban-group-bar mt-4 mb-2">
+            <div className="kanban-group-bar-track">
+              {(() => {
+                const spans = [];
+                activeColumns.forEach((column) => {
+                  const g = groupForStageNum(getStageNumber(column)) || { id: 'outros', label: 'Outros', color: '#6B7280' };
+                  const last = spans[spans.length - 1];
+                  if (last && last.id === g.id) {
+                    last.colCount += 1;
+                  } else {
+                    spans.push({ id: g.id, label: g.label, color: g.color, colCount: 1 });
+                  }
+                });
+                return spans.map((s) => (
                   <div
-                    key={column}
-                    className="w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 h-7 flex items-center justify-center text-xs font-semibold rounded-md"
-                    style={{ background: `${g.color}22`, color: g.color, border: `1px solid ${g.color}55` }}
+                    key={s.id}
+                    className="kanban-group-span"
+                    style={{
+                      width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * 16px)`,
+                      background: `${s.color}1f`,
+                      borderColor: `${s.color}55`,
+                    }}
                   >
-                    {isFirstOfGroup ? g.label : ''}
+                    <span className="kanban-group-label" style={{ color: s.color }}>{s.label}</span>
                   </div>
-                );
-              })}
+                ));
+              })()}
             </div>
           </div>
           {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
@@ -5731,44 +5741,67 @@ function App() {
                     <div className="h-80">
                       <ResponsiveLine
                         data={historySeries}
-                        margin={{ top: 20, right: 40, bottom: 70, left: 40 }}
+                        margin={{ top: 20, right: 40, bottom: 70, left: 50 }}
                         xScale={{ type: 'point' }}
-                        yScale={{ type: 'linear', min: 0, max: 'auto' }}
+                        yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
+                        curve="monotoneX"
                         axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
-                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
+                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
                         colors={({ id }) => colorForGroupLabel(id)}
-                        pointSize={4}
-                        pointBorderWidth={1}
+                        enableArea
+                        areaOpacity={0.55}
+                        enableGridX={false}
+                        lineWidth={2}
+                        pointSize={6}
+                        pointBorderWidth={1.5}
+                        pointBorderColor={{ from: 'serieColor' }}
+                        pointColor={isDarkMode ? '#0f172a' : '#ffffff'}
                         useMesh
-                        tooltip={({ point }) => (
-                          <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card">
-                            <div className="font-semibold">{point.serieId}</div>
-                            <div className="mt-1 text-muted">Data: {formatHistoryTooltipDate(point.data.x)}</div>
-                            <div className="text-muted">Quantidade: {formatCompactNumber(point.data.y)}</div>
-                          </div>
-                        )}
+                        crosshairType="x"
+                        sliceTooltip={({ slice }) => {
+                          const total = slice.points.reduce((a, p) => a + (p.data.y || 0), 0);
+                          return (
+                            <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card min-w-[160px]">
+                              <div className="font-semibold mb-1">{formatHistoryTooltipDate(slice.points[0].data.x)}</div>
+                              <div className="space-y-0.5">
+                                {[...slice.points].reverse().map(point => (
+                                  <div key={point.id} className="flex items-center justify-between gap-3">
+                                    <span className="flex items-center gap-1.5">
+                                      <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
+                                      <span>{point.serieId}</span>
+                                    </span>
+                                    <span className="font-medium">{formatCompactNumber(point.data.y) || point.data.y}</span>
+                                  </div>
+                                ))}
+                                <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
+                                  <span>Total</span>
+                                  <span>{formatCompactNumber(total) || total}</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }}
+                        enableSlices="x"
                         legends={[
                           {
                             anchor: 'bottom',
                             direction: 'row',
-                            justify: true,
+                            justify: false,
                             translateX: 0,
                             translateY: 58,
                             itemsSpacing: 12,
                             itemDirection: 'left-to-right',
                             itemWidth: 120,
                             itemHeight: 18,
-                            itemOpacity: 0.8,
+                            itemOpacity: 0.85,
                             itemTextColor: isDarkMode ? '#ffffff' : '#1f2937',
-                            symbolSize: 10,
-                            symbolShape: 'circle',
+                            symbolSize: 12,
+                            symbolShape: 'square',
                             textColor: isDarkMode ? '#f8fafc' : '#1f2937',
                             effects: [
                               {
                                 on: 'hover',
-                                style: {
-                                  itemOpacity: 1,
-                                },
+                                style: { itemOpacity: 1 },
                               },
                             ],
                           },
