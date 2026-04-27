@@ -4044,6 +4044,23 @@ const createCNPJCacheTable = async () => {
 
 const normalizeCNPJ = (value) => String(value || '').replace(/[^\d]/g, '').slice(-14).padStart(14, '0');
 
+// E.164 com prefixo BR — Chatwoot só renderiza phone_number com +.
+// Se já tem +, preserva. Senão, infere prefixo Brasil baseado no comprimento.
+const normalizeBRPhone = (raw) => {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (s.startsWith('+')) {
+    const digits = s.slice(1).replace(/\D/g, '');
+    return digits.length >= 8 ? ('+' + digits).slice(0, 20) : null;
+  }
+  const d = s.replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length >= 12 && d.startsWith('55')) return ('+' + d).slice(0, 20);
+  if (d.length === 10 || d.length === 11) return ('+55' + d).slice(0, 20);
+  return ('+' + d).slice(0, 20);
+};
+
 const normalizeCNPJData = (raw) => {
   if (!raw) return null;
 
@@ -4326,7 +4343,7 @@ app.post('/api/leads/import', async (req, res) => {
       const name = fullName.slice(0, 255);
       const email = (lead.email || '').toLowerCase().trim().slice(0, 255) || null;
       const rawPhone = lead.ddd_telefone_1 || lead.ddd_telefone_2 || '';
-      const phone = rawPhone ? rawPhone.replace(/\s/g, '').slice(0, 20) : null;
+      const phone = normalizeBRPhone(rawPhone);
       const location = [lead.municipio, lead.uf].filter(Boolean).join(', ');
 
       const existByCNPJ = await pool.query(
