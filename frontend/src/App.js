@@ -525,28 +525,6 @@ const getStageNumber = (stage) => {
   return Number.isNaN(num) ? 999 : num;
 };
 
-const buildHistorySeries = (historyRows) => {
-  if (!Array.isArray(historyRows) || historyRows.length === 0) {
-    return [];
-  }
-  const periods = Array.from(new Set(historyRows.map(row => row.period_start))).sort();
-  const stages = Array.from(new Set(historyRows.map(row => row.stage)))
-    .sort((a, b) => getStageNumber(a) - getStageNumber(b));
-
-  const counts = new Map();
-  historyRows.forEach(row => {
-    counts.set(`${row.stage}|${row.period_start}`, Number(row.count) || 0);
-  });
-
-  return stages.map(stage => ({
-    id: stage,
-    data: periods.map(period => ({
-      x: period,
-      y: counts.get(`${stage}|${period}`) || 0,
-    })),
-  }));
-};
-
 const buildGroupedHistorySeries = (historyRows) => {
   if (!Array.isArray(historyRows) || historyRows.length === 0) {
     return [];
