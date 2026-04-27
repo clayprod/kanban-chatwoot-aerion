@@ -257,6 +257,47 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   overflow-x: hidden;
 }
 
+:root { --kanban-col-w: 280px; }
+@media (min-width: 640px) { :root { --kanban-col-w: 300px; } }
+@media (min-width: 1024px) { :root { --kanban-col-w: 320px; } }
+
+.kanban-group-bar {
+  overflow-x: hidden;
+}
+
+.kanban-group-bar-track {
+  display: flex;
+  gap: 16px;
+  width: max-content;
+}
+
+.kanban-group-span {
+  flex-shrink: 0;
+  height: 32px;
+  border-radius: 10px;
+  border-width: 1px;
+  border-style: solid;
+  display: flex;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.kanban-group-label {
+  position: sticky;
+  left: 16px;
+  right: 16px;
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
 .funnel-container {
   margin-top: 12px;
 }
