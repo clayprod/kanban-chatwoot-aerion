@@ -5346,36 +5346,45 @@ app.get('/api/rfb/search', async (req, res) => {
     // a query principal JOIN nessa lista pequena via PK → filtros UF/municipio/situacao
     // reduzem a ~50 linhas → LATERAL lookups triviais.
     // CNAE — listas independentes para "contém" (cnae) e "não contém" (cnae_not).
-    // Principal: usa idx_rfb_est_cnae (fast index scan).
-    // Secundário: usa idx_rfb_est_cnae_sec_arr (GIN, 302 MB — criado 2026-04-24).
-    // cnaeSecNarrow estreita o scan do secundário para UF+municipio quando disponíveis
-    // (sem narrow: seq scan de 70M linhas ~55s; com SP+municipio: ~1-2M linhas <2s).
-    // cnae_only_principal=true pula o ramo do secundário (mais rápido).
+    // Positivo: MATERIALIZED CTE + JOIN.
+    //   Principal: usa idx_rfb_est_cnae (fast index scan).
+    //   Secundário: usa idx_rfb_est_cnae_sec_arr (GIN, 302 MB — criado 2026-04-24).
+    //   cnaeSecNarrow estreita o scan do secundário para UF+municipio (sem narrow:
+    //   seq scan de 70M linhas ~55s; com SP+municipio: ~1-2M linhas <2s).
+    // Negativo: NOT EXISTS correlato (NOT IN com UNION causava timeout consistente).
+    // cnae_only_principal=true pula o ramo do secundário em ambos os lados.
     const cnaeCtes  = [];
     const cnaeJoins = [];
     {
       const onlyPrincipal = cnae_only_principal === 'true';
       const secNarrow = cnaeSecNarrow.length > 0 ? ' AND ' + cnaeSecNarrow.join(' AND ') : '';
-      const buildSub = (codes) => codes.flatMap(code => {
-        params.push(code);
-        const i = params.length;
-        const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
-        const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`;
-        return onlyPrincipal ? [principal] : [principal, secundario];
-      }).join('\n  UNION\n  ');
 
       if (cnae.trim()) {
         const codes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
         if (codes.length > 0) {
-          cnaeCtes.push(`_cnae_f AS MATERIALIZED (${buildSub(codes)})`);
+          const parts = codes.flatMap(code => {
+            params.push(code);
+            const i = params.length;
+            const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
+            const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`;
+            return onlyPrincipal ? [principal] : [principal, secundario];
+          });
+          cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
           cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
         }
       }
       if (cnae_not.trim()) {
         const codes = cnae_not.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
         if (codes.length > 0) {
-          // NOT IN aplicado depois dos filtros positivos (mesmo padrão do sócio negativo).
-          where.push(`e.cnpj_basico NOT IN (${buildSub(codes)})`);
+          // NOT EXISTS correlato com array ANY/&& — usa idx_rfb_est_basico (PK)
+          // pra correlação por cnpj_basico, evitando o hash join cheio do NOT IN.
+          const start = params.length + 1;
+          codes.forEach(c => params.push(c));
+          const arrParam = `ARRAY[${codes.map((_, i) => `$${start + i}`).join(', ')}]`;
+          const principalCond = `x.cnae_fiscal_principal = ANY(${arrParam})`;
+          const secundarioCond = `string_to_array(NULLIF(TRIM(x.cnae_fiscal_secundaria), ''), ',') && ${arrParam}`;
+          const cnaeCond = onlyPrincipal ? principalCond : `(${principalCond} OR ${secundarioCond})`;
+          where.push(`NOT EXISTS (SELECT 1 FROM rfb_estabelecimentos x WHERE x.cnpj_basico = e.cnpj_basico AND x.cnpj_ordem = '0001' AND ${cnaeCond})`);
         }
       }
     }
