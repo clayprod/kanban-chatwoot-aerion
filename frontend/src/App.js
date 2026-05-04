@@ -58,7 +58,7 @@ const STAGE_GROUPS = [
 ];
 const groupForStageNum = (n) => STAGE_GROUPS.find(g => n >= g.range[0] && n <= g.range[1]);
 const colorForGroupLabel = (label) => (STAGE_GROUPS.find(g => g.label === label) || {}).color || '#6B7280';
-const licitacaoColumns = [
+const licitaçãoColumns = [
   '1. Monitoramento de PCA',
   '2. Mapeamento de Áreas',
   '3. Apoio ao ETP / TR',
@@ -84,38 +84,179 @@ const processBlueprint = {
   ],
   map: [
     { title: 'Metas 2026', id: 'metas-2026' },
-    { title: 'Visao geral', id: 'visao-geral' },
+    { title: 'Visão geral', id: 'visao-geral' },
+    { title: 'Treinamento de produtos', id: 'treinamento-produtos' },
+    { title: 'ICPs Aerion (Autel)', id: 'icps-aerion' },
+    { title: 'Boards do Funil Aerion', id: 'boards-funil-aerion' },
     { title: 'Pipeline ponta a ponta', id: 'pipeline' },
-    { title: 'Checklist minimo', id: 'checklist' },
-    { title: 'Prospecao (SDR)', id: 'prospeccao' },
-    { title: 'Qualificacao', id: 'qualificacao' },
+    { title: 'Checklist mínimo', id: 'checklist' },
+    { title: 'Venda consultiva (BANT+U)', id: 'venda-consultiva' },
+    { title: 'Playbook operacional', id: 'playbook-operacional' },
+    { title: 'Prospecção (SDR)', id: 'prospeccao' },
+    { title: 'Qualificação', id: 'qualificacao' },
     { title: 'Vendas diretas (AE)', id: 'vendas-diretas' },
-    { title: 'Gestao de canais', id: 'canais' },
+    { title: 'Gestão de canais', id: 'canais' },
     { title: 'Licitações públicas', id: 'licitacoes' },
     { title: 'Customer Success', id: 'customer-success' },
     { title: 'Rituais comerciais', id: 'rituais' },
     { title: 'Ferramentas e registros', id: 'ferramentas' },
     { title: 'ERP Sankhya', id: 'erp-sankhya' },
-    { title: 'Documentacao complementar', id: 'documentacao' },
+    { title: 'Documentação complementar', id: 'documentacao' },
   ],
   pillars: [
     {
       title: 'Especializacao com clareza',
-      text: 'Separar prospeccao, fechamento e pos-venda mesmo em time enxuto, mantendo a responsabilidade de cada etapa.'
+      text: 'Separar prospecção, fechamento e pós-venda mesmo em time enxuto, mantendo a responsabilidade de cada etapa.'
     },
     {
       title: 'Processo previsivel e replicavel',
-      text: 'Etapas, criterios e registros padronizados para facilitar onboarding e manter a consistencia.'
+      text: 'Etapas, critérios e registros padronizados para facilitar onboarding e manter a consistencia.'
     },
     {
       title: 'Volume com qualidade',
-      text: 'Cadencia estruturada e qualificacao rigorosa para concentrar esforco em oportunidades aderentes.'
+      text: 'Cadencia estruturada e qualificação rigorosa para concentrar esforco em oportunidades aderentes.'
     },
   ],
   overview: [
-    'Todo lead precisa ter historico completo no CRM antes de avançar.',
-    'BANT+U e ICP direcionam quem avanca e quem entra em nurturing.',
-    'Handoff para CS acontece somente com contexto, riscos e proximos passos claros.'
+    'Todo lead precisa ter histórico completo no CRM antes de avançar.',
+    'BANT+U e ICP direcionam quem avança e quem entra em nurturing.',
+    'Handoff para CS acontece somente com contexto, riscos e próximos passos claros.'
+  ],
+  glossary: [
+    { term: 'ICP', meaning: 'Perfil de cliente ideal com maior chance de fechamento, adoção e expansão.' },
+    { term: 'SQL', meaning: 'Lead qualificado para vendas, com dor valida, proximo passo e potencial real de compra.' },
+    { term: 'BANT+U', meaning: 'Framework de qualificação: Budget, Authority, Need, Timeline e Use Case.' },
+    { term: 'Nurture', meaning: 'Lead sem timing agora, mas com fit potencial para retomada futura com gatilho claro.' },
+    { term: 'Handoff', meaning: 'Transferencia estruturada de contexto entre SDR, AE e CS sem perda de informação critica.' },
+    { term: 'QBR', meaning: 'Revisao trimestral de resultados para ajustar plano de acao, risco e oportunidades de expansão.' }
+  ],
+  funnelGuide: [
+    {
+      tab: 'Overview',
+      use: 'Acompanhar saude geral: volume, valor e distribuicao por etapa.',
+      routine: 'Uso diario pelo lider para priorizacao e remocao de bloqueios.'
+    },
+    {
+      tab: 'Board',
+      use: 'Executar o funil no dia a dia: mover cards, registrar histórico e definir próximos passos.',
+      routine: 'Uso continuo por SDR/AE/CS com disciplina de registro a cada contato.'
+    },
+    {
+      tab: 'Busca Lead B2B',
+      use: 'Expandir base de prospecção com contas aderentes aos ICPs priorizados.',
+      routine: 'Uso semanal para alimentar topo de funil com qualidade.'
+    },
+    {
+      tab: 'Licitações',
+      use: 'Gerir editais, checklist técnico e prazos de disputa com rastreabilidade.',
+      routine: 'Uso por oportunidade ativa em licitação, com revisão por marco.'
+    },
+    {
+      tab: 'Processo',
+      use: 'Consultar playbook, critérios de passagem e abordagem consultiva padrao.',
+      routine: 'Uso para onboarding, calibracao de time e auditoria de execução.'
+    }
+  ],
+  icps: [
+    {
+      id: 'icp-1',
+      name: 'ICP 1 - Construcao e Topografia Urbana',
+      sector: 'Construtoras medias/grandes e empresas de topografia e geodesia.',
+      profile: 'Faturamento R$ 50M-R$ 500M e 5-20 obras simultaneas.',
+      decisionMaker: 'Diretor de Operações e Gerente de Engenharia.',
+      pains: 'Atraso de cronograma e custo alto de topografia terceirizada.',
+      products: 'Autel EVO Lite Enterprise e EVO Max 4T (RTK).',
+      ticket: 'R$ 80k-R$ 120k',
+      fitSignals: ['Obra com multa por atraso.', 'Topografia contratada com recorrencia.', 'Necessidade de RTK e mapeamento recorrente.'],
+      redFlags: ['Projeto sem dono definido.', 'Sem dor financeira clara.', 'Apenas cotacao para comparar preco.']
+    },
+    {
+      id: 'icp-2',
+      name: 'ICP 2 - Inspecao Industrial e Energia',
+      sector: 'Concessionarias, parques solares/eolicos e empresas de inspeção.',
+      profile: 'Faturamento acima de R$ 100M e mais de 500 ativos criticos.',
+      decisionMaker: 'Gerente de Manutencao e Diretor de Engenharia.',
+      pains: 'Inspecao cara com helicoptero, risco operacional e downtime não planejado.',
+      products: 'Autel Alpha (BVLOS) e EVO Max 4T (zoom 10x + termica).',
+      ticket: 'R$ 150k-R$ 300k',
+      fitSignals: ['Meta formal de redução de downtime.', 'Ativos distribuidos em area extensa.', 'Pressao por seguranca do time de campo.'],
+      redFlags: ['Sem baseline de custo atual.', 'Operacao sem padrao de inspeção.', 'Sem patrocinio da engenharia.']
+    },
+    {
+      id: 'icp-3',
+      name: 'ICP 3 - Seguranca Publica e Defesa Civil',
+      sector: 'PM, PC, PRF, orgaos de Defesa Civil e empresas de seguranca privada.',
+      profile: 'Atendimento acima de 500 mil habitantes e mais de 1000 agentes.',
+      decisionMaker: 'Comandante/Secretario e Coordenador de Operações.',
+      pains: 'Cobertura grande com efetivo limitado e alto custo de aeronaves tripuladas.',
+      products: 'Autel Alpha (visao noturna e alcance de 20 km).',
+      ticket: 'R$ 200k-R$ 400k',
+      fitSignals: ['Operações noturnas recorrentes.', 'Historico de missão sem cobertura suficiente.', 'Programa de modernizacao em andamento.'],
+      redFlags: ['Sem janela orcamentaria aberta.', 'Demanda sem uso operacional definido.', 'Processo sem patrocinador institucional.']
+    },
+    {
+      id: 'icp-4',
+      name: 'ICP 4 - Resgate, Emergencias e Meio Ambiente',
+      sector: 'Corpo de Bombeiros, Defesa Civil e ONGs ambientais.',
+      profile: 'Area de atuacao acima de 50.000 km2 e mais de 5.000 chamados/ano.',
+      decisionMaker: 'Comandante Geral e Coordenador de Operações.',
+      pains: 'Acesso dificil a areas remotas e janela curta para busca e resposta.',
+      products: 'Autel Alpha (termica e autonomia) e EVO Max 4T.',
+      ticket: 'R$ 180k-R$ 350k',
+      fitSignals: ['Ocorrencias com janela critica de resposta.', 'Demanda por busca em mata/serra.', 'Dor explicita com cobertura de area.'],
+      redFlags: ['Projeto sem protocolo operacional.', 'Sem time para adoção e treinamento.', 'Foco apenas em equipamento, sem missão clara.']
+    }
+  ],
+  boards: [
+    {
+      name: 'Board SDR - Prospeccao e Qualificacao',
+      purpose: 'Garantir velocidade de contato e qualidade da qualificação inicial.',
+      usage: [
+        'Entrada: novo lead com origem, segmento e dono definidos.',
+        'Movimentar etapa somente com ultimo contato registrado e proximo passo datado.',
+        'Sair para AE apenas com BANT+U mínimo validado e resumo da dor.'
+      ]
+    },
+    {
+      name: 'Board AE - Discovery, Proposta e Fechamento',
+      purpose: 'Transformar SQL em proposta aderente e fechamento com risco controlado.',
+      usage: [
+        'Entrada: SQL com contexto de ICP, dor, impacto e autoridade.',
+        'Cada etapa exige evidencias: diagnostico, critérios de sucesso e plano de decisão.',
+        'Fechado-ganho somente apos confirmacao de escopo, condicoes e handoff para CS.'
+      ]
+    },
+    {
+      name: 'Board CS - Onboarding, Retencao e Expansao',
+      purpose: 'Acelerar adoção, reduzir risco e criar trilha de upsell/recompra.',
+      usage: [
+        'Entrada: handoff completo com objetivo de negocio e riscos mapeados.',
+        'Onboarding com marcos de 30, 60 e 90 dias e dono por atividade.',
+        'Upsell/Recompra somente com valor comprovado e janela de decisão definida.'
+      ]
+    }
+  ],
+  marketAdvantages: [
+    'Proposta de melhor custo-beneficio: preco mais competitivo com tecnologia equivalente para os casos de uso prioritarios.',
+    'Maior flexibilidade comercial para montar condicoes por projeto, parceiro e janela de compra.',
+    'SDK aberto para integradores e equipes técnicas criarem solucoes sob medida com menor dependencia.',
+    'Produto com menor saturacao de concorrentes diretos em parte dos segmentos de alto valor.',
+    'Canal curto: Aerion como importador direto para revendas, reduzindo camadas e acelerando decisões.',
+    'Posicionamento em licitações: não entramos diretamente; registramos a oportunidade para proteger o parceiro.',
+    'Nao ofertamos servico final: atuamos junto de prestadores e integradores, sem concorrer com eles.',
+    'Suporte técnico e pós-venda feitos pela Aerion, com garantia de 1 ano.',
+    'Entrega técnica com treinamento operacional para acelerar adoção e reduzir risco de implantacao.'
+  ],
+  competitorContext: [
+    'Em alguns fabricantes, o canal passa por distribuidores master e subdistribuidores, alongando prazos e margens.',
+    'Politicas de preco mais engessadas podem aumentar concorrência entre parceiros da mesma marca.',
+    'Mudancas de linha sem previsibilidade podem elevar risco de suporte e manutenção no medio prazo.'
+  ],
+  marketWeaknesses: [
+    'Ainda não temos linhas com LiDAR no portfólio atual.',
+    'Ainda não temos linhas dedicadas com IR no portfólio atual.',
+    'Ainda não temos drones agrícolas no portfólio atual.',
+    'Ainda não temos câmera multiespectral no portfólio atual.'
   ],
   pipelineSteps: [
     {
@@ -136,10 +277,10 @@ const processBlueprint = {
     },
     {
       title: 'Discovery e demo',
-      text: 'Aprofundar diagnostico, mapear use case e definir criterios de sucesso.'
+      text: 'Aprofundar diagnostico, mapear use case e definir critérios de sucesso.'
     },
     {
-      title: 'Proposta e negociacao',
+      title: 'Proposta e negociação',
       text: 'Formalizar escopo, registrar condicoes e acompanhar objeções.'
     },
     {
@@ -159,12 +300,14 @@ const processBlueprint = {
       title: 'Prospeccao (SDR)',
       owner: 'SDR',
       objective: 'Transformar leads frios em SQLs prontos para AE.',
-      inputs: 'Inbound, outbound e eventos.',
-      outputs: 'Reunioes qualificadas e contexto registrado.',
+      inputs: 'Leads inbound/outbound com ICP inicial, canal e dono definidos no Funil Aerion.',
+      outputs: 'SQL agendado com notas completas de contexto, dor, urgencia e próximos passos.',
       actions: [
-        'Cadencia multicanal com registro de tentativas.',
-        'Classificacao por ICP e sinais de interesse.',
-        'Descartar ou nutrir quando nao houver fit.'
+        'Cadencia multicanal de 10 dias com registro de cada tentativa e resposta.',
+        'Abertura consultiva com foco em problema operacional, não em catalogo.',
+        'Classificacao por ICP + fit (alto/medio/baixo) antes da ligacao de qualificação.',
+        'Checkpoint de qualidade: sem proximo passo agendado, não avança etapa.',
+        'Saida padrao: SQL, nurture com gatilho de retomada, ou descarte com motivo.'
       ]
     },
     {
@@ -172,12 +315,14 @@ const processBlueprint = {
       title: 'Qualificacao de leads',
       owner: 'SDR/AE',
       objective: 'Garantir aderencia antes da demo.',
-      inputs: 'Lead com historico e interacoes recentes.',
-      outputs: 'Diagnostico documentado e decisao de avancar.',
+      inputs: 'Lead contatado com dor inicial declarada e janela de conversa ativa.',
+      outputs: 'Diagnostico BANT+U completo, score de prioridade e decisão de avançar/nurture.',
       actions: [
-        'Aplicar BANT+U e validar decisor.',
-        'Documentar dores, urgencia e concorrentes.',
-        'Definir proximos passos e risco principal.'
+        'Aplicar BANT+U com perguntas calibradas (como/o que) e busca do não.',
+        'Usar mirroring e labeling para aprofundar causa-raiz e impacto.',
+        'Quantificar custo da inação e critérios de sucesso esperados pelo cliente.',
+        'Mapear com clareza quem decide, quem influencia e quem pode bloquear.',
+        'Concluir com resumo de alinhamento e convite de agendamento em formato isso ou aquilo.'
       ]
     },
     {
@@ -185,25 +330,29 @@ const processBlueprint = {
       title: 'Vendas diretas (AE)',
       owner: 'AE',
       objective: 'Converter SQL em cliente ativo.',
-      inputs: 'SQL com contexto completo e agenda confirmada.',
-      outputs: 'Proposta validada e handoff aprovado.',
+      inputs: 'SQL com resumo diagnostico, stakeholders mapeados e objetivo de negocio.',
+      outputs: 'Proposta defendida por valor, plano de decisão fechado e handoff aceito.',
       actions: [
-        'Discovery estruturado e demo orientada a valor.',
-        'Proposta com escopo, criterios e dependencias.',
-        'Negociacao com registro de objeções.'
+        'Discovery em duas camadas: operação atual e impacto executivo.',
+        'Demo ancorada em casos de uso do ICP, com roteiro por dor critica.',
+        'Proposta com ROI esperado, riscos, premissas e responsabilidades.',
+        'Negociacao consultiva: objeção vira diagnostico de risco e não disputa de preco.',
+        'Comite interno antes do fechamento para reduzir retrabalho e ruptura no onboarding.'
       ]
     },
     {
       id: 'canais',
-      title: 'Gestao de canais',
+      title: 'Gestão de canais',
       owner: 'Channel Manager',
       objective: 'Ativar parceiros e manter pipeline recorrente.',
-      inputs: 'Parceiros com ICP e capacidade validada.',
-      outputs: 'Parceiros ativos com planos de acao.',
+      inputs: 'Parceiros com potencial de cobertura regional e capacidade comercial minima.',
+      outputs: 'Parceiros ativos com metas, plano de execução e revisão trimestral.',
       actions: [
-        'Pre-qualificacao e onboarding rapido.',
-        'Playbooks e check-ins regulares.',
-        'Registro de performance e oportunidades.'
+        'Pre-qualificar carteira, maturidade e capacidade técnica do parceiro.',
+        'Onboarding de 30 dias com metas de pipeline e rituais definidos.',
+        'Playbook de abordagem por ICP com acompanhamento de execução.',
+        'QBR trimestral com pipeline, conversão e plano de recuperacao quando abaixo da meta.',
+        'Classificar parceiros em acelerar, manter ou recuperar.'
       ]
     },
     {
@@ -211,12 +360,14 @@ const processBlueprint = {
       title: 'Licitações públicas',
       owner: 'AE/Backoffice',
       objective: 'Competir de forma organizada e dentro do compliance.',
-      inputs: 'Editais e requisitos mapeados.',
-      outputs: 'Propostas formais e rastreabilidade completa.',
+      inputs: 'Edital, anexos técnicos, prazos oficiais e matriz documental.',
+      outputs: 'Proposta protocolada com rastreabilidade, risco e plano de disputa.',
       actions: [
-        'Checklist de documentos e prazos.',
-        'Revisao tecnica e juridica quando aplicavel.',
-        'Atualizacao do status no CRM.'
+        'Go/no-go inicial por aderencia técnica, margem e risco juridico.',
+        'Checklist de habilitação, atestados e responsaveis por documento.',
+        'Revisao técnica com engenharia e juridico antes de protocolar.',
+        'Plano de disputa com tese de preco, diferencial e limites de desconto.',
+        'Registro estruturado no Funil Aerion para reaproveitar inteligencia no proximo edital.'
       ]
     },
     {
@@ -224,12 +375,14 @@ const processBlueprint = {
       title: 'Customer Success',
       owner: 'CS',
       objective: 'Ativar, reter e expandir clientes.',
-      inputs: 'Handoff completo do AE.',
-      outputs: 'Plano de sucesso e rotina de acompanhamento.',
+      inputs: 'Handoff com escopo, objetivo de negocio, stakeholders e riscos.',
+      outputs: 'Adocao comprovada, saude da conta e tese de expansão validada.',
       actions: [
-        'Onboarding com metas e indicadores de sucesso.',
-        'Check-ins periodicos e registro de riscos.',
-        'Plano de upsell e recompra quando houver fit.'
+        'Onboarding com marcos de valor em 30-60-90 dias e critérios de aceite.',
+        'Governanca de check-ins com registro de risco, bloqueio e acao corretiva.',
+        'Plano de sucesso com KPI operacional e sponsor executivo.',
+        'Mapeamento de gatilhos de upsell/recompra por maturidade de uso.',
+        'QBR com narrativa de resultado: antes/depois e próximos ganhos potenciais.'
       ]
     },
   ],
@@ -242,12 +395,12 @@ const processBlueprint = {
     {
       title: 'Revisao de pipeline',
       cadence: 'Semanal',
-      focus: 'Qualidade das oportunidades e proximos passos.'
+      focus: 'Qualidade das oportunidades e próximos passos.'
     },
     {
       title: 'Comite de propostas',
       cadence: 'Semanal',
-      focus: 'Escopo, riscos e aprovacoes internas.'
+      focus: 'Escopo, riscos e aprovações internas.'
     },
     {
       title: 'Revisao de canais',
@@ -261,23 +414,187 @@ const processBlueprint = {
     },
   ],
   tools: [
-    { name: 'Chatwoot', purpose: 'Registro principal do contato e historico.' },
-    { name: 'Trello', purpose: 'Pipeline e etapas visuais para time enxuto.' },
-    { name: 'Google Sheets', purpose: 'Consolidacao e visao operacional.' },
-    { name: 'n8n', purpose: 'Automacao de sincronizacoes e alertas.' },
+    { name: 'Chatwoot', purpose: 'Registro principal do contato e histórico.' },
+    { name: 'Funil Aerion', purpose: 'Gestão completa dos boards SDR, AE e CS, com critérios de passagem e histórico de ponta a ponta.' },
     { name: 'Email/WhatsApp/LinkedIn', purpose: 'Canais de cadencia e follow-up.' },
     { name: 'ERP Sankhya', purpose: 'Fluxo administrativo apos fechamento.' },
+  ],
+  consultiveSales: {
+    opening: [
+      'Bom dia [Nome], aqui e [Seu Nome] da Aerion Technologies. Recebi seu contato via [fonte].',
+      'Nos somos especializados em solucoes com drones para [segmento do cliente].',
+      'Imagino que agora seja um momento terrivel para conversarmos, não e?'
+    ],
+    bantu: [
+      {
+        key: 'B - Budget',
+        prompts: [
+          'Como voces costumam avaliar investimentos em tecnologia?',
+          'Existe budget definido ou depende de aprovacao caso a caso?',
+          'O que precisaria acontecer para esse investimento ser aprovado?'
+        ]
+      },
+      {
+        key: 'A - Authority',
+        prompts: [
+          'Imagino que essa decisão não seja tomada sozinho. Como funciona a aprovacao ai?',
+          'O que o decisor principal mais valoriza nesse tipo de projeto?',
+          'Seria absurdo envolvermos [decisor] na proxima conversa?'
+        ]
+      },
+      {
+        key: 'N - Need',
+        prompts: [
+          'Como voces executam esse processo hoje?',
+          'O que mais frustra no modelo atual?',
+          'Se isso continuar por 6 meses, qual impacto operacional e financeiro voce espera?'
+        ]
+      },
+      {
+        key: 'T - Timeline',
+        prompts: [
+          'O que acontece se voces não resolverem isso nos próximos 3 meses?',
+          'Qual e o custo da inação para a operação?',
+          'Qual timeline ideal para implantar sem comprometer a rotina?'
+        ]
+      },
+      {
+        key: 'U - Use Case',
+        prompts: [
+          'O uso principal e pulverizacao, inspeção, mapeamento ou resposta emergencial?',
+          'Qual area, volume e frequencia de operação?',
+          'Qual resultado mínimo faria essa iniciativa ser considerada um sucesso?'
+        ]
+      }
+    ],
+    close: [
+      'Resumo: voces precisam [X], hoje enfrentam [Y], e isso custa [Z]. Acertei?',
+      'Parece justo eu conectar voce ao especialista da Aerion nesse segmento?',
+      'Para demo técnica focada no seu caso, funciona melhor amanha 14h ou quinta 10h?'
+    ]
+  },
+  objections: [
+    {
+      objection: '"Ja usamos DJI e estamos acostumados com a marca."',
+      answer: 'Perfeito, manter continuidade e importante. Em varios projetos, a Aerion entrega tecnologia equivalente com melhor custo-beneficio, mais flexibilidade comercial e canal mais curto para suporte e decisão.'
+    },
+    {
+      objection: '"Tenho receio de ficar sem suporte ou manutenção."',
+      answer: 'Faz sentido. Todo o suporte técnico e pós-venda fica conosco, com garantia de 1 ano e entrega técnica com treinamento de operação para sua equipe.'
+    },
+    {
+      objection: '"Nao quero que meu fornecedor concorra comigo em licitação."',
+      answer: 'Esse ponto e central para nos: não entramos direto em licitação. Registramos a oportunidade para o parceiro e apoiamos a estrategia técnica/comercial.'
+    },
+    {
+      objection: '"Voce tambem presta servico? Pode competir com meu integrador."',
+      answer: 'Nao ofertamos servico final. Precisamos de prestadores e integradores para entrega da solucao, entao nosso modelo e colaborativo, não competitivo.'
+    },
+    {
+      objection: '"Preciso de customizacao técnica."',
+      answer: 'Temos SDK aberto para desenvolvimento com integradores e time técnico, o que reduz lock-in e acelera adaptações por caso de uso.'
+    }
+  ],
+  productTraining: [
+    {
+      product: 'Autel EVO Lite Enterprise (640T/6K)',
+      summary: 'Drone compacto para inspeções ágeis, segurança e mapeamento leve; até 40 min de voo e opção térmica 640x512.',
+      equivalent: 'Equivalência de categoria: DJI Mavic 3 Enterprise / Mavic 3 Thermal.',
+      useWhen: 'Quando o cliente prioriza mobilidade, resposta rápida e menor custo de entrada.'
+    },
+    {
+      product: 'Autel EVO Max V2 (4T/4N)',
+      summary: 'Plataforma robusta com sensores triplos, câmera térmica 640x512, zoom óptico na versão 4T e foco em ambientes complexos.',
+      equivalent: 'Equivalência de categoria: DJI Matrice 30T.',
+      useWhen: 'Quando a operação exige anti-interferência, alta precisão e versatilidade de sensores.'
+    },
+    {
+      product: 'Autel Alpha',
+      summary: 'Drone industrial IP55 com zoom óptico 35x, térmicas duplas, laser e alcance estendido para operações críticas.',
+      equivalent: 'Equivalência de categoria: DJI Matrice 350 RTK (com payload térmico/zoom equivalente).',
+      useWhen: 'Quando a missão exige robustez máxima, longo alcance e observação detalhada.'
+    },
+    {
+      product: 'EVO Nest + Autel Mapper',
+      summary: 'Ecossistema para operação remota automatizada (dock) e processamento 2D/3D com deep learning.',
+      equivalent: 'Equivalência de categoria: DJI Dock + DJI Terra.',
+      useWhen: 'Quando a meta é escala operacional com missões recorrentes e padronização de dados.'
+    }
+  ],
+  playbook: [
+    {
+      title: 'Playbook Diario (SDR/AE/CS)',
+      items: [
+        '08:30-09:00: revisar cards sem proximo passo e definir prioridade do dia.',
+        '09:00-11:30: executar contatos e registrar resultado no card em tempo real.',
+        '11:30-12:00: ajustar etapas com base em evidencia (não por percepção).',
+        '14:00-17:00: follow-ups, reunioes e atualizacao de risco por oportunidade.',
+        '17:00-17:30: limpar pendencias e preparar handoffs do dia seguinte.'
+      ]
+    },
+    {
+      title: 'Playbook de Passagem entre Boards',
+      items: [
+        'SDR -> AE: BANT+U mínimo completo, dor principal, impacto e decisor mapeado.',
+        'AE -> CS: escopo fechado, condicoes comerciais, riscos e plano de 30-60-90 dias.',
+        'CS -> AE (expansão): valor comprovado, gatilho de crescimento e sponsor ativo.',
+        'Toda passagem exige dono, data e proximo marco registrado no Funil Aerion.'
+      ]
+    },
+    {
+      title: 'Playbook de Qualidade de Execucao',
+      items: [
+        'Card sem histórico atualizado em 48h entra em alerta de execução.',
+        'Negociacao sem critério de decisão explicito não avança para fechamento.',
+        'Conta em risco sem plano corretivo em 72h sobe para revisão com lideranca.',
+        'Toda perda deve registrar motivo raiz e aprendizado acionavel.'
+      ]
+    }
   ],
   erp: [
     'Abrir cadastro do cliente com dados completos e validados.',
     'Registrar oportunidade ganha e documentos necessarios.',
     'Garantir que o CS tenha acesso a contratos e escopo.'
   ],
+  erpDeepDive: [
+    {
+      title: '1) Cadastro e validação de parceiro/cliente',
+      items: [
+        'Conferir CNPJ, IE/IM, endereco fiscal, contatos e condicao de contribuinte.',
+        'Definir tabela de preco, condicao de pagamento e regras comerciais padrao.',
+        'Registrar observações de compliance e documentos para auditoria.'
+      ]
+    },
+    {
+      title: '2) Pedido de venda e aprovações internas',
+      items: [
+        'Criar pedido com itens, impostos, frete, prazos e centro de resultado.',
+        'Aplicar politica de desconto e alcada de aprovacao quando necessario.',
+        'Vincular numero da oportunidade do Funil Aerion no histórico do pedido.'
+      ]
+    },
+    {
+      title: '3) Faturamento e documentos fiscais',
+      items: [
+        'Gerar NF-e conforme CFOP, CST/CSOSN, base de calculo e aliquotas aplicaveis.',
+        'Validar dados de transporte, volumes e regras de expedicao.',
+        'Acompanhar rejeicoes de SEFAZ e registrar tratativas no card da oportunidade.'
+      ]
+    },
+    {
+      title: '4) Pos-venda administrativo e conciliacao',
+      items: [
+        'Confirmar titulo financeiro, vencimentos, recebimento e eventuais renegociações.',
+        'Atualizar status de entrega e comprovantes para handoff completo ao CS.',
+        'Fechar ciclo com licoes aprendidas comerciais e fiscais para reduzir retrabalho.'
+      ]
+    }
+  ],
   documentation: [
-    'Scripts de prospeccao e discovery por segmento.',
+    'Scripts de prospecção e discovery por segmento.',
     'Modelos de email e proposta.',
     'Checklist de onboarding e health check.',
-    'Playbooks de canais e licitacoes.'
+    'Playbooks de canais e licitações.'
   ],
   // Motor de Receita 2026
   revenueEngine: {
@@ -646,8 +963,8 @@ const createEmptyOpportunityForm = () => ({
   links_edital: '',
   intermediario_id: '',
   modelo_intermediacao: '',
-  comissao_percentual: '',
-  comissao_valor_previsto: '',
+  comissão_percentual: '',
+  comissão_valor_previsto: '',
   valor_revenda_previsto: '',
   comentario_inicial: '',
   linked_contacts: [],
@@ -683,7 +1000,7 @@ const CardPreview = ({ contact }) => {
         )}
         {(cityLabel || estadoLabel) && (
           <p className="text-xs text-muted mt-2 truncate">
-            {cityLabel || 'Cidade nao informada'}{estadoLabel ? `, ${estadoLabel}` : ''}
+            {cityLabel || 'Cidade não informada'}{estadoLabel ? `, ${estadoLabel}` : ''}
           </p>
         )}
         {formattedOpportunity && (
@@ -924,7 +1241,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
         )}
         {(cityLabel || estadoLabel) && (
           <p className="text-xs text-muted mt-2 truncate">
-            {cityLabel || 'Cidade nao informada'}{estadoLabel ? `, ${estadoLabel}` : ''}
+            {cityLabel || 'Cidade não informada'}{estadoLabel ? `, ${estadoLabel}` : ''}
           </p>
         )}
         {formattedOpportunity && (
@@ -1105,7 +1422,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       : opportunity.prazo_status === 'sem_data'
         ? 'Sem prazo'
         : 'No prazo';
-  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'nao_atendido'
+  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'não_atendido'
     ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
     : opportunity.status === 'ganho'
       ? 'border border-status-success/30 bg-status-success/10 text-status-success'
@@ -1224,7 +1541,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
 };
 
 const LicitacaoColumn = ({ title, opportunities, onOpen, onEdit }) => {
-  const { setNodeRef, isOver } = useDroppable({ id: `licitacao-column:${title}` });
+  const { setNodeRef, isOver } = useDroppable({ id: `licitação-column:${title}` });
   const totalValue = opportunities.reduce((sum, item) => sum + (parseCurrency(item.valor_oportunidade) || 0), 0);
   return (
     <div
@@ -1263,11 +1580,721 @@ const LicitacaoColumn = ({ title, opportunities, onOpen, onEdit }) => {
   );
 };
 
+// ===================== PCA — Plano Anual de Contratações =====================
+
+const formatPcaCurrency = (v) => {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
+};
+
+const formatPcaDate = (v) => {
+  if (!v) return '—';
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('pt-BR');
+  } catch { return '—'; }
+};
+
+const PcaChips = ({ items, onRemove, accent }) => (
+  <div className="flex flex-wrap gap-1.5">
+    {(items || []).map((t, i) => (
+      <span
+        key={`${t}-${i}`}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${
+          accent === 'pos' ? 'bg-primary/10 text-primary' : 'bg-rose-500/10 text-rose-600'
+        }`}
+      >
+        {t}
+        <button
+          type="button"
+          className="opacity-70 hover:opacity-100"
+          onClick={() => onRemove(i)}
+          aria-label={`remover ${t}`}
+        >×</button>
+      </span>
+    ))}
+  </div>
+);
+
+function PcaExplorer({ onPromoted, onSwitchToBoard }) {
+  const [q, setQ] = useState('');
+  const [usarIa, setUsarIa] = useState(true);
+  const [positivos, setPositivos] = useState([]);
+  const [negativos, setNegativos] = useState([]);
+  const [fonteIa, setFonteIa] = useState(null);
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [filtros, setFiltros] = useState({
+    valor_min: '', valor_max: '', mes_previsto: '',
+    orgao_cnpj: '', unidade_codigo: '',
+    ano_pca: String(new Date().getFullYear()),
+  });
+  const [showFilters, setShowFilters] = useState(false);
+  const [editTerms, setEditTerms] = useState(false);
+  const [posDraft, setPosDraft] = useState('');
+  const [negDraft, setNegDraft] = useState('');
+  const [busy, setBusy] = useState({});
+  const [saveDialog, setSaveDialog] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [selecionados, setSelecionados] = useState({});
+  const [lastPromoted, setLastPromoted] = useState(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState(null);
+  const [resetting, setResetting] = useState(false);
+
+  const filtrosAtivos = Object.entries(filtros).filter(([k, v]) => v && !(k === 'ano_pca' && v === String(new Date().getFullYear()))).length;
+
+  // Auto-dismiss do toast de promoção
+  useEffect(() => {
+    if (!lastPromoted) return;
+    const id = setTimeout(() => setLastPromoted(null), 8000);
+    return () => clearTimeout(id);
+  }, [lastPromoted]);
+
+  const resetarPca = async () => {
+    if (!window.confirm('Vai apagar TODOS os PCAs do banco (planos, itens e signals). Watchlists ficam preservadas. Continuar?')) return;
+    setResetting(true);
+    try {
+      await axios.post('/api/licitações/pca/reset');
+      await fetchBootstrapStatus();
+      setItems([]);
+      setTotal(0);
+      alert('Banco PCA resetado.');
+    } catch (e) {
+      alert(`Falhou: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const fetchBootstrapStatus = useCallback(async () => {
+    try {
+      const r = await axios.get('/api/licitações/pca/bootstrap/status');
+      setBootstrapStatus(r.data);
+      return r.data;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Carrega status ao montar; se estiver rodando, faz polling a cada 5s.
+  useEffect(() => {
+    fetchBootstrapStatus();
+    const id = setInterval(() => {
+      fetchBootstrapStatus().then(s => {
+        if (s && !s.running) {
+          // continua um polling lento mas não para totalmente — útil pra refletir cron diário
+        }
+      });
+    }, 5000);
+    return () => clearInterval(id);
+  }, [fetchBootstrapStatus]);
+
+  const rodarBootstrap = async () => {
+    if (bootstrapStatus?.running) return;
+    if (!window.confirm(`Vai baixar todos os PCAs publicados/atualizados em ${filtros.ano_pca || new Date().getFullYear()} (12 janelas mensais). Pode levar vários minutos. Continuar?`)) return;
+    try {
+      await axios.post('/api/licitações/pca/bootstrap', { ano: Number(filtros.ano_pca) || new Date().getFullYear() });
+      fetchBootstrapStatus();
+    } catch (e) {
+      if (e.response?.status === 409) {
+        alert('Já existe um bootstrap em andamento.');
+        fetchBootstrapStatus();
+      } else {
+        setError(`Bootstrap falhou: ${e.response?.data?.error || e.message}`);
+      }
+    }
+  };
+
+  const runSearch = async (overridePositivos, overrideNegativos) => {
+    if (!q.trim() && !overridePositivos?.length) {
+      setError('Digite uma palavra-chave para buscar.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const params = {
+        q: q.trim(),
+        usar_ia: overridePositivos ? 'false' : (usarIa ? 'true' : 'false'),
+        ano_pca: filtros.ano_pca || undefined,
+        valor_min: filtros.valor_min || undefined,
+        valor_max: filtros.valor_max || undefined,
+        mes_previsto: filtros.mes_previsto || undefined,
+        orgao_cnpj: filtros.orgao_cnpj || undefined,
+        unidade_codigo: filtros.unidade_codigo || undefined,
+        tam: 50,
+      };
+      if (overridePositivos) {
+        params.positivos_override = JSON.stringify(overridePositivos);
+        params.negativos_override = JSON.stringify(overrideNegativos || []);
+      }
+      const r = await axios.get('/api/licitações/pca/search', { params });
+      setPositivos(r.data.positivos || []);
+      setNegativos(r.data.negativos || []);
+      setFonteIa(r.data.fonte_ia || null);
+      setItems(r.data.items || []);
+      setTotal(r.data.total || 0);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refazerComEditados = () => runSearch(positivos, negativos);
+
+  const toggleItem = (key, itemId) => {
+    setSelecionados(prev => {
+      const set = new Set(prev[key] || []);
+      if (set.has(itemId)) set.delete(itemId);
+      else set.add(itemId);
+      return { ...prev, [key]: set };
+    });
+  };
+  const setAllForCt = (key, itemIds, mode) => {
+    setSelecionados(prev => ({
+      ...prev,
+      [key]: new Set(mode === 'all' ? itemIds : []),
+    }));
+  };
+
+  const promoverContratacao = async (ct) => {
+    const set = selecionados[ct.key];
+    const itemIds = set ? Array.from(set) : [];
+    if (!itemIds.length) return;
+    setBusy(prev => ({ ...prev, [ct.key]: true }));
+    try {
+      const r = await axios.post('/api/licitações/pca/contratações/promote', {
+        plano_id: ct.plano_id,
+        item_ids: itemIds,
+        titulo: ct.contratacao_nome || (ct.contratacao_id ? `Contratação ${ct.contratacao_id}` : null),
+      });
+      onPromoted && onPromoted();
+      setSelecionados(prev => ({ ...prev, [ct.key]: new Set() }));
+      setLastPromoted({
+        titulo: r.data?.titulo || ct.contratacao_nome || `Contratação ${ct.contratacao_id || ''}`,
+        itens: itemIds.length,
+        opportunityId: r.data?.id,
+        pncpUrl: ct.pncp_url,
+      });
+    } catch (e) {
+      alert(`Erro ao promover: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [ct.key]: false }));
+    }
+  };
+
+  const salvarWatchlist = async () => {
+    try {
+      await axios.post('/api/licitações/pca/watchlist', {
+        nome: saveName || q,
+        palavras_chave: q ? [q] : positivos.slice(0, 1),
+        termos_negativos: negativos,
+        usar_ia: usarIa,
+        valor_mínimo: filtros.valor_min ? Number(filtros.valor_min) : null,
+        valor_maximo: filtros.valor_max ? Number(filtros.valor_max) : null,
+      });
+      setSaveDialog(false);
+      setSaveName('');
+      alert('Watchlist salva. Sinais serão gerados no próximo sync (07:45 UTC).');
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    }
+  };
+
+  // Lista plana de Futuras Contratações (uma por card).
+  // Itens sem futura_contratacao_id viram cards "solo" (key inclui o item_id pra não fundir não-relacionados).
+  const contrataçõesPlanas = useMemo(() => {
+    const m = new Map();
+    for (const it of items) {
+      const ctTag = it.futura_contratacao_id || `__solo_${it.item_id}__`;
+      const key = `${it.orgao_cnpj}:${it.codigo_unidade}:${ctTag}`;
+      if (!m.has(key)) {
+        const pncpUrl = it.id_pca_pncp
+          ? `https://pncp.gov.br/app/pca/${it.id_pca_pncp}`
+          : `https://pncp.gov.br/app/pca/${it.orgao_cnpj}/${it.ano_pca}`;
+        m.set(key, {
+          key,
+          plano_id: it.plano_id,
+          id_pca_pncp: it.id_pca_pncp,
+          pncp_url: pncpUrl,
+          orgao_cnpj: it.orgao_cnpj,
+          orgao_razao: it.orgao_razao_social,
+          codigo_unidade: it.codigo_unidade,
+          unidade_nome: it.unidade_nome,
+          ano_pca: it.ano_pca,
+          contratacao_id: it.futura_contratacao_id,
+          contratacao_nome: it.futura_contratacao_nome,
+          itens: [],
+          valor_total: 0,
+          max_score: 0,
+        });
+      }
+      const ct = m.get(key);
+      ct.itens.push(it);
+      ct.valor_total += Number(it.valor_total) || 0;
+      const s = Number(it.score) || 0;
+      if (s > ct.max_score) ct.max_score = s;
+    }
+    return Array.from(m.values()).sort((a, b) => b.max_score - a.max_score);
+  }, [items]);
+
+  return (
+    <div className="mt-6 space-y-4">
+      {/* SEARCH BAR — uma linha, sem ruído */}
+      <div className="rounded-2xl border border-border bg-card p-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            placeholder='Buscar PCAs — ex: "drone", "raio-x", "veículo blindado"...'
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && runSearch()}
+            className="h-10 flex-1 min-w-[260px] rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+          />
+          <button
+            type="button"
+            onClick={() => runSearch()}
+            disabled={loading}
+            className="h-10 rounded-xl bg-primary text-white px-5 text-sm font-semibold disabled:opacity-50"
+          >
+            {loading ? 'Buscando...' : 'Buscar'}
+          </button>
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted ml-1">
+            <input type="checkbox" checked={usarIa} onChange={e => setUsarIa(e.target.checked)} />
+            IA
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowFilters(v => !v)}
+            className={`h-10 rounded-xl border px-3 text-xs font-semibold ${showFilters || filtrosAtivos > 0 ? 'border-primary text-primary bg-primary/5' : 'border-border text-muted bg-card'}`}
+          >
+            Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''} {showFilters ? '▴' : '▾'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSaveDialog(true)}
+            disabled={!q.trim() && !positivos.length}
+            className="h-10 rounded-xl border border-border bg-card px-3 text-xs font-semibold text-ink disabled:opacity-50"
+          >
+            Salvar watchlist
+          </button>
+        </div>
+
+        {/* CHIPS — embaixo da busca, discretos, edit on demand */}
+        {(positivos.length > 0 || negativos.length > 0) && (
+          <div className="mt-3 pt-3 border-t border-border space-y-2">
+            <div className="flex items-start gap-2 text-xs">
+              <span className="text-muted shrink-0 mt-0.5">+ {positivos.length}</span>
+              <PcaChips items={positivos} onRemove={(i) => setPositivos(positivos.filter((_, idx) => idx !== i))} accent="pos" />
+            </div>
+            {negativos.length > 0 && (
+              <div className="flex items-start gap-2 text-xs">
+                <span className="text-muted shrink-0 mt-0.5">− {negativos.length}</span>
+                <PcaChips items={negativos} onRemove={(i) => setNegativos(negativos.filter((_, idx) => idx !== i))} accent="neg" />
+              </div>
+            )}
+            <div className="flex items-center gap-3 text-xs pt-1">
+              {fonteIa && <span className="text-muted">via {fonteIa}</span>}
+              <button type="button" onClick={() => setEditTerms(v => !v)} className="text-primary hover:underline">
+                {editTerms ? 'Fechar edição' : 'Editar termos'}
+              </button>
+              <button type="button" onClick={refazerComEditados} className="text-primary hover:underline">
+                Refazer busca
+              </button>
+            </div>
+            {editTerms && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <input
+                  value={posDraft}
+                  onChange={e => setPosDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && posDraft.trim()) {
+                      setPositivos([...positivos, posDraft.trim()]);
+                      setPosDraft('');
+                    }
+                  }}
+                  placeholder="+ termo positivo (Enter)"
+                  className="h-7 flex-1 min-w-[180px] rounded-md border border-border bg-cardAlt px-2 text-xs"
+                />
+                <input
+                  value={negDraft}
+                  onChange={e => setNegDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && negDraft.trim()) {
+                      setNegativos([...negativos, negDraft.trim()]);
+                      setNegDraft('');
+                    }
+                  }}
+                  placeholder="− termo negativo (Enter)"
+                  className="h-7 flex-1 min-w-[180px] rounded-md border border-border bg-cardAlt px-2 text-xs"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* FILTROS — colapsados por padrão */}
+        {showFilters && (
+          <div className="mt-3 pt-3 border-t border-border grid gap-2 md:grid-cols-3 lg:grid-cols-6">
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Ano PCA"
+              value={filtros.ano_pca} onChange={e => setFiltros({ ...filtros, ano_pca: e.target.value })} />
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Valor mín (R$)"
+              value={filtros.valor_min} onChange={e => setFiltros({ ...filtros, valor_min: e.target.value })} />
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Valor máx (R$)"
+              value={filtros.valor_max} onChange={e => setFiltros({ ...filtros, valor_max: e.target.value })} />
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Mês previsto (1-12)"
+              value={filtros.mes_previsto} onChange={e => setFiltros({ ...filtros, mes_previsto: e.target.value })} />
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="CNPJ órgão"
+              value={filtros.orgao_cnpj} onChange={e => setFiltros({ ...filtros, orgao_cnpj: e.target.value })} />
+            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="UASG (código unidade)"
+              value={filtros.unidade_codigo} onChange={e => setFiltros({ ...filtros, unidade_codigo: e.target.value })} />
+          </div>
+        )}
+      </div>
+
+      {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
+
+      {/* RESUMO + STATUS DO BANCO */}
+      <div className="flex items-center justify-between text-xs text-muted">
+        <div>
+          {!loading && contrataçõesPlanas.length > 0 && (
+            <span>{contrataçõesPlanas.length} contratação(ões) · {total} item(ns) · ordenado por relevância</span>
+          )}
+        </div>
+        {bootstrapStatus?.total_planos_db > 0 && (
+          <div>Banco: {bootstrapStatus.total_planos_db.toLocaleString('pt-BR')} planos · {bootstrapStatus.total_itens_db.toLocaleString('pt-BR')} itens</div>
+        )}
+      </div>
+
+      {/* LISTA PLANA DE CONTRATAÇÕES */}
+      <div className="space-y-2">
+        {contrataçõesPlanas.map(ct => {
+          const allItemIds = ct.itens.map(i => i.item_id);
+          const sel = selecionados[ct.key] || new Set();
+          const selectedCount = sel.size;
+          const valorSelecionado = ct.itens
+            .filter(i => sel.has(i.item_id))
+            .reduce((acc, i) => acc + (Number(i.valor_total) || 0), 0);
+          const titulo = ct.contratacao_nome
+            || (ct.contratacao_id ? `Contratação ${ct.contratacao_id}` : ct.itens[0]?.descricao || 'Item PCA');
+          return (
+            <details key={ct.key} className="rounded-2xl border border-border bg-card overflow-hidden hover:border-primary/40 transition-colors">
+              <summary className="cursor-pointer flex items-start gap-3 p-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/15 text-primary text-[10px] font-semibold uppercase tracking-wide">
+                      {ct.orgao_razao || ct.orgao_cnpj}
+                    </span>
+                    <span className="text-[10px] text-muted">Cód. Unidade {ct.codigo_unidade}</span>
+                    <span className="text-[10px] text-muted">PCA {ct.ano_pca}</span>
+                    {ct.contratacao_id && <span className="text-[10px] text-muted">· {ct.contratacao_id}</span>}
+                    <a
+                      href={ct.pncp_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[10px] font-semibold text-primary hover:underline ml-auto"
+                      title="Abrir PCA no PNCP"
+                    >
+                      ver no PNCP ↗
+                    </a>
+                  </div>
+                  <div className="text-sm font-semibold text-ink truncate">{titulo}</div>
+                  <div className="mt-1 flex items-center gap-3 text-xs text-muted">
+                    <span>{ct.itens.length} item(ns)</span>
+                    <span>{formatPcaCurrency(ct.valor_total)}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
+                      Score {ct.max_score.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); promoverContratacao(ct); }}
+                  disabled={busy[ct.key] || selectedCount === 0}
+                  className="h-9 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-40 shrink-0"
+                  title={selectedCount === 0 ? 'Selecione itens primeiro' : `Promover ${selectedCount} de ${ct.itens.length} (${formatPcaCurrency(valorSelecionado)})`}
+                >
+                  {busy[ct.key] ? '...' : `Promover ${selectedCount > 0 ? `(${selectedCount}/${ct.itens.length})` : ''}`}
+                </button>
+              </summary>
+              <div className="border-t border-border bg-cardAlt/30 p-3">
+                <div className="flex items-center gap-3 text-xs mb-2">
+                  <button type="button" onClick={() => setAllForCt(ct.key, allItemIds, 'all')}
+                    className="text-primary hover:underline">Selecionar todos ({ct.itens.length})</button>
+                  <span className="text-muted">·</span>
+                  <button type="button" onClick={() => setAllForCt(ct.key, allItemIds, 'none')}
+                    className="text-muted hover:underline">Limpar</button>
+                  {selectedCount > 0 && (
+                    <span className="ml-auto text-muted">
+                      {selectedCount} selecionado(s) · {formatPcaCurrency(valorSelecionado)}
+                    </span>
+                  )}
+                </div>
+                <div className="divide-y divide-border">
+                  {ct.itens.map(item => {
+                    const checked = sel.has(item.item_id);
+                    return (
+                      <label key={item.item_id} className={`py-2 flex items-start gap-3 cursor-pointer rounded-md px-2 -mx-2 transition-colors ${checked ? 'bg-primary/15 ring-1 ring-primary/30' : 'hover:bg-primary/5'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleItem(ct.key, item.item_id)}
+                          className="mt-1"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-ink">{item.descricao}</div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+                            <span>{item.quantidade ?? '—'} {item.unidade_medida || ''}</span>
+                            <span>{formatPcaCurrency(item.valor_total)}</span>
+                            {item.mes_previsto && <span>mês {item.mes_previsto}/{ct.ano_pca}</span>}
+                            {item.classificacao_nome && <span className="truncate max-w-[200px]">{item.classificacao_nome}</span>}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </details>
+          );
+        })}
+        {!loading && items.length === 0 && (
+          <div className="rounded-2xl border border-dashed border-border bg-card p-6 text-center space-y-3">
+            {bootstrapStatus?.running ? (
+              <>
+                <p className="text-sm text-ink font-semibold">
+                  Bootstrap em andamento no servidor — mês {bootstrapStatus.mes_atual ?? '?'}/12 ({bootstrapStatus.ano})
+                </p>
+                <p className="text-xs text-muted">
+                  Já gravados: {bootstrapStatus.planos_upserted} planos / {bootstrapStatus.itens_upserted} itens nessa execução.
+                  Total no banco agora: {bootstrapStatus.total_planos_db} planos / {bootstrapStatus.total_itens_db} itens.
+                </p>
+                <p className="text-xs text-muted">
+                  Pode fechar a aba — o processo continua. Esta tela atualiza sozinha a cada 5s.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted">
+                  Nenhum item bate com a busca atual. {bootstrapStatus?.total_planos_db
+                    ? <>Banco tem {bootstrapStatus.total_planos_db} planos / {bootstrapStatus.total_itens_db} itens — refine a busca.</>
+                    : 'As tabelas pca_planos/pca_itens estão vazias.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={rodarBootstrap}
+                  className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold"
+                >
+                  {bootstrapStatus?.total_planos_db
+                    ? `Continuar bootstrap (${filtros.ano_pca || new Date().getFullYear()})`
+                    : `Carregar PCAs do PNCP (${filtros.ano_pca || new Date().getFullYear()})`}
+                </button>
+                {bootstrapStatus?.total_planos_db > 0 && (
+                  <p className="text-[11px] text-muted">
+                    Bootstrap é idempotente (re-rodar não duplica). PNCP às vezes faz timeout — clicar "Continuar" preenche o que faltou.
+                  </p>
+                )}
+                {bootstrapStatus?.finishedAt && !bootstrapStatus.error && (
+                  <p className="text-xs text-muted">
+                    Último bootstrap: {bootstrapStatus.planos_upserted} planos / {bootstrapStatus.itens_upserted} itens em {new Date(bootstrapStatus.finishedAt).toLocaleString('pt-BR')}.
+                  </p>
+                )}
+                {bootstrapStatus?.error && (
+                  <p className="text-xs text-rose-600">Erro no último bootstrap: {bootstrapStatus.error}</p>
+                )}
+                {bootstrapStatus?.total_planos_db > 0 && (
+                  <div className="text-[11px] text-muted pt-2">
+                    <button type="button" onClick={resetarPca} disabled={resetting}
+                      className="underline hover:text-rose-600 disabled:opacity-50">
+                      {resetting ? 'Resetando...' : 'Resetar dados PCA do banco'}
+                    </button>
+                    <span className="ml-2">(usar antes de re-carregar se o bootstrap antigo veio bugado)</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* TOAST de promoção */}
+      {lastPromoted && (
+        <div className="fixed bottom-4 right-4 z-50 rounded-2xl border border-primary/40 bg-card shadow-xl p-4 max-w-sm animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-ink">✓ Promovido para o Board</div>
+              <div className="mt-1 text-xs text-muted truncate">
+                {lastPromoted.titulo}
+              </div>
+              <div className="text-xs text-muted">
+                {lastPromoted.itens} item(ns) · coluna 1. Monitoramento de PCA
+              </div>
+              <div className="mt-2 flex items-center gap-3 flex-wrap">
+                {onSwitchToBoard && (
+                  <button type="button" onClick={() => { onSwitchToBoard(); setLastPromoted(null); }}
+                    className="text-xs font-semibold text-primary hover:underline">
+                    Ver no Board ↗
+                  </button>
+                )}
+                {lastPromoted.pncpUrl && (
+                  <a href={lastPromoted.pncpUrl} target="_blank" rel="noopener noreferrer"
+                    className="text-xs font-semibold text-primary hover:underline">
+                    Ver no PNCP ↗
+                  </a>
+                )}
+                <button type="button" onClick={() => setLastPromoted(null)}
+                  className="text-xs text-muted hover:underline ml-auto">
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card rounded-2xl border border-border p-4 w-full max-w-md space-y-3">
+            <h3 className="text-base font-semibold text-ink">Salvar watchlist</h3>
+            <input
+              className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+              placeholder="Nome (ex: Drones / RPA)"
+              value={saveName}
+              onChange={e => setSaveName(e.target.value)}
+            />
+            <div className="text-xs text-muted">
+              Termos: <strong>{(q ? [q] : positivos.slice(0, 1)).join(', ') || '—'}</strong>
+              {negativos.length > 0 && <> · negativos: {negativos.slice(0, 4).join(', ')}{negativos.length > 4 ? '…' : ''}</>}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setSaveDialog(false)} className="h-9 rounded-xl border border-border px-3 text-sm">Cancelar</button>
+              <button type="button" onClick={salvarWatchlist} className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold">Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PcaSignalsPanel({ onPromoted }) {
+  const [signals, setSignals] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('novo');
+  const [busy, setBusy] = useState({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await axios.get('/api/licitações/pca/signals', { params: { status: statusFilter } });
+      setSignals(r.data || []);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (id, kind) => {
+    setBusy(prev => ({ ...prev, [id]: true }));
+    try {
+      if (kind === 'promote') {
+        await axios.post(`/api/licitações/pca/signals/${id}/promote`);
+        onPromoted && onPromoted();
+      } else if (kind === 'dismiss') {
+        await axios.post(`/api/licitações/pca/signals/${id}/dismiss`);
+      } else if (kind === 'seen') {
+        await axios.post(`/api/licitações/pca/signals/${id}/seen`);
+      }
+      load();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  return (
+    <div className="mt-6 space-y-4">
+      <div className="flex items-center gap-2">
+        {['novo', 'visto', 'promovido', 'descartado'].map(s => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setStatusFilter(s)}
+            className={`h-8 rounded-full px-3 text-xs font-semibold ${statusFilter === s ? 'bg-primary/10 text-primary' : 'border border-border text-muted'}`}
+          >
+            {s}
+          </button>
+        ))}
+        <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
+          Atualizar
+        </button>
+      </div>
+
+      {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
+
+      {loading ? (
+        <div className="text-sm text-muted">Carregando...</div>
+      ) : signals.length === 0 ? (
+        <div className="text-sm text-muted py-6 text-center">Nenhum signal {statusFilter}.</div>
+      ) : (
+        <div className="rounded-2xl border border-border bg-card divide-y divide-border">
+          {signals.map(s => (
+            <div key={s.id} className="p-3 flex items-start gap-3">
+              <div className="flex-1">
+                <div className="text-sm text-ink">{s.descricao}</div>
+                <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
+                  <span>{s.orgao_razao_social || s.orgao_cnpj}</span>
+                  <span>UASG {s.codigo_unidade}</span>
+                  <span>PCA {s.ano_pca}</span>
+                  <span>Mês {s.mes_previsto ?? '—'}</span>
+                  <span>{formatPcaCurrency(s.valor_total)}</span>
+                  <span>Score {Number(s.score || 0).toFixed(2)}</span>
+                  <span>· {formatPcaDate(s.criado_em)}</span>
+                </div>
+              </div>
+              {statusFilter === 'novo' && (
+                <div className="flex gap-2">
+                  <button type="button" disabled={busy[s.id]}
+                    onClick={() => act(s.id, 'promote')}
+                    className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
+                  <button type="button" disabled={busy[s.id]}
+                    onClick={() => act(s.id, 'seen')}
+                    className="h-8 rounded-lg border border-border px-3 text-xs">Visto</button>
+                  <button type="button" disabled={busy[s.id]}
+                    onClick={() => act(s.id, 'dismiss')}
+                    className="h-8 rounded-lg border border-border px-3 text-xs">Dispensar</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===================== /PCA =====================
+
 function App() {
   const [contacts, setContacts] = useState([]);
-  const [licitacaoOpportunities, setLicitacaoOpportunities] = useState([]);
-  const [licitacaoLoading, setLicitacaoLoading] = useState(false);
-  const [licitacaoSearch, setLicitacaoSearch] = useState('');
+  const [licitaçãoOpportunities, setLicitacaoOpportunities] = useState([]);
+  const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
+  const [licitaçãoSearch, setLicitacaoSearch] = useState('');
+  const [licitaçãoSubview, setLicitacaoSubview] = useState('board'); // 'board' | 'pca' | 'sinais'
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [selectedCommercialRequirements, setSelectedCommercialRequirements] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
@@ -1310,7 +2337,7 @@ function App() {
     q: '',
     tipos_documento: 'edital',
     status: 'recebendo_proposta',
-    modalidade_licitacao_id: '',
+    modalidade_licitação_id: '',
     tipo_id: '',
     modo_disputa_id: '',
     uf: '',
@@ -1406,6 +2433,9 @@ function App() {
 
   const [activeTab, setActiveTab] = useState('leads');
   const [activeView, setActiveView] = useState('Board');
+  const [processCurrentStep, setProcessCurrentStep] = useState(0);
+  const [processMaxUnlockedStep, setProcessMaxUnlockedStep] = useState(0);
+  const [processCompletedSteps, setProcessCompletedSteps] = useState({});
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const stored = getCookieValue('theme');
     return stored === 'dark';
@@ -1423,7 +2453,7 @@ function App() {
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewData, setOverviewData] = useState({
     summary: null,
-    licitacaoSummary: null,
+    licitaçãoSummary: null,
     byStage: [],
     byLabel: [],
     byState: [],
@@ -1566,13 +2596,13 @@ function App() {
     return () => clearInterval(id);
   }, [rfbImportProgress?.status, activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadLicitacoes = useCallback(async () => {
+  const loadLicitações = useCallback(async () => {
     setLicitacaoLoading(true);
     try {
-      const opportunitiesResponse = await axios.get('/api/licitacoes/opportunities');
+      const opportunitiesResponse = await axios.get('/api/licitações/opportunities');
       setLicitacaoOpportunities(opportunitiesResponse.data || []);
     } catch (error) {
-      console.error('Error loading licitacoes:', error);
+      console.error('Error loading licitações:', error);
     } finally {
       setLicitacaoLoading(false);
     }
@@ -1582,8 +2612,8 @@ function App() {
     if (!authStatus.authenticated) {
       return;
     }
-    loadLicitacoes();
-  }, [authStatus.authenticated, loadLicitacoes]);
+    loadLicitações();
+  }, [authStatus.authenticated, loadLicitações]);
 
   // Carregar modalidades para a busca do PNCP quando a aba Licitações estiver ativa
   const [pncpFiltersLoaded, setPncpFiltersLoaded] = useState(false);
@@ -1598,9 +2628,9 @@ function App() {
       try {
         console.log('[PNCP Filters] Carregando opções de filtros...');
         const [modalidadesResult, modosResult, tiposResult] = await Promise.allSettled([
-          axios.get('/api/licitacoes/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitacoes/pncp/modos-disputa', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitacoes/pncp/tipos-instrumentos', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitações/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitações/pncp/modos-disputa', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitações/pncp/tipos-instrumentos', { params: { tamanhoPagina: 200 } }),
         ]);
 
         let loadedCount = 0;
@@ -1661,15 +2691,15 @@ function App() {
         const orgaoQuery = String(orgaoLookupQuery || newOpportunityForm.orgao_nome || '').trim();
         const [orgaoResult, catalogResult, modalidadeResult] = await Promise.allSettled([
           orgaoQuery.length >= 2
-            ? axios.get('/api/licitacoes/pncp/orgaos', {
+            ? axios.get('/api/licitações/pncp/orgaos', {
                 params: {
                   q: orgaoQuery,
                   tamanhoPagina: 100,
                 },
               })
             : Promise.resolve({ data: [] }),
-          axios.get('/api/licitacoes/pncp/catalogos', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitacoes/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitações/pncp/catalogos', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitações/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
         ]);
 
         if (cancelled) {
@@ -1688,7 +2718,7 @@ function App() {
         const orgaoCnpjDigits = String(newOpportunityForm.orgao_cnpj || '').replace(/\D/g, '');
         if (orgaoCnpjDigits) {
           // Tentar PNCP primeiro
-          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
+          const unitsResponse = await axios.get(`/api/licitações/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           const pncpUnits = Array.isArray(unitsResponse.data) ? unitsResponse.data : [];
@@ -1700,7 +2730,7 @@ function App() {
             } else {
               // Fallback para Compras.gov se PNCP não retornar unidades
               try {
-                const comprasResponse = await axios.get('/api/licitacoes/compras/uasgs', {
+                const comprasResponse = await axios.get('/api/licitações/compras/uasgs', {
                   params: { cnpj: orgaoCnpjDigits },
                 });
                 const comprasUnits = Array.isArray(comprasResponse.data) ? comprasResponse.data.map(u => ({
@@ -1720,7 +2750,7 @@ function App() {
           const uasgQuery = String(uasgLookupQuery || '').trim();
           if (uasgQuery.length >= 2) {
             try {
-              const searchResponse = await axios.get('/api/licitacoes/pncp/search', {
+              const searchResponse = await axios.get('/api/licitações/pncp/search', {
                 params: {
                   q: uasgQuery,
                   pagina: 1,
@@ -1817,7 +2847,7 @@ function App() {
     const timer = setTimeout(async () => {
       setPncpOrgaoLookupLoading(true);
       try {
-        const response = await axios.get('/api/licitacoes/pncp/orgaos', {
+        const response = await axios.get('/api/licitações/pncp/orgaos', {
           params: {
             q: query,
             tamanhoPagina: 100,
@@ -1856,7 +2886,7 @@ function App() {
       setPncpUasgLookupLoading(true);
       try {
         if (cnpj) {
-          const response = await axios.get(`/api/licitacoes/pncp/orgaos/${cnpj}/unidades`, {
+          const response = await axios.get(`/api/licitações/pncp/orgaos/${cnpj}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           if (!cancelled) {
@@ -1872,7 +2902,7 @@ function App() {
           return;
         }
 
-        const response = await axios.get('/api/licitacoes/pncp/search', {
+        const response = await axios.get('/api/licitações/pncp/search', {
           params: {
             q: uasgQuery,
             pagina: 1,
@@ -1946,7 +2976,7 @@ function App() {
     const observer = new ResizeObserver(updateMetrics);
     observer.observe(boardScrollRef.current);
     return () => observer.disconnect();
-  }, [activeTab, activeView, contacts.length, licitacaoOpportunities.length]);
+  }, [activeTab, activeView, contacts.length, licitaçãoOpportunities.length]);
 
   useEffect(() => {
     if (activeView !== 'Overview' || !authStatus.authenticated) {
@@ -1964,12 +2994,12 @@ function App() {
       axios.get('/api/overview/by-customer-type'),
       axios.get('/api/overview/by-probability'),
       axios.get('/api/overview/history', { params: { granularity: historyGranularity, range } }),
-      axios.get('/api/licitacoes/overview/summary'),
+      axios.get('/api/licitações/overview/summary'),
     ])
-      .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history, licitacaoSummary]) => {
+      .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history, licitaçãoSummary]) => {
         setOverviewData({
           summary: summary.data,
-          licitacaoSummary: licitacaoSummary.data,
+          licitaçãoSummary: licitaçãoSummary.data,
           byStage: byStage.data,
           byLabel: byLabel.data,
           byState: byState.data,
@@ -1987,6 +3017,15 @@ function App() {
         setOverviewLoading(false);
       });
   }, [activeView, historyGranularity, authStatus.authenticated]);
+
+  useEffect(() => {
+    if (activeView !== 'Processo') {
+      return;
+    }
+    setProcessCurrentStep(0);
+    setProcessMaxUnlockedStep(0);
+    setProcessCompletedSteps({});
+  }, [activeView]);
 
   const filteredContacts = contacts.filter(contact => {
     const search = searchQuery.trim().toLowerCase();
@@ -2105,7 +3144,7 @@ function App() {
     const paths = new Set();
     const ids = new Set();
 
-    licitacaoOpportunities.forEach(opportunity => {
+    licitaçãoOpportunities.forEach(opportunity => {
       const metadata = opportunity?.metadados || {};
       const controlCandidates = [
         opportunity?.numero_compra,
@@ -2136,7 +3175,7 @@ function App() {
     });
 
     return { controls, paths, ids };
-  }, [licitacaoOpportunities]);
+  }, [licitaçãoOpportunities]);
 
   const visiblePncpResults = useMemo(() => {
     return (pncpSearchResults.items || []).filter(item => {
@@ -2216,8 +3255,8 @@ function App() {
     : null;
 
   const filteredLicitacaoOpportunities = useMemo(() => {
-    const search = normalizeText(licitacaoSearch);
-    const list = licitacaoOpportunities.filter(item => {
+    const search = normalizeText(licitaçãoSearch);
+    const list = licitaçãoOpportunities.filter(item => {
       if (!search) {
         return true;
       }
@@ -2243,7 +3282,7 @@ function App() {
       }
       return String(a.titulo || '').localeCompare(String(b.titulo || ''), 'pt-BR', { sensitivity: 'base' });
     });
-  }, [licitacaoOpportunities, licitacaoSearch]);
+  }, [licitaçãoOpportunities, licitaçãoSearch]);
 
   const getOpportunitiesForColumn = (columnName) => {
     return filteredLicitacaoOpportunities.filter(item => item.fase === columnName);
@@ -2253,16 +3292,16 @@ function App() {
     if (!targetStage) {
       return;
     }
-    const previous = licitacaoOpportunities;
+    const previous = licitaçãoOpportunities;
     setLicitacaoOpportunities(prev => prev.map(item => (
       String(item.id) === String(opportunityId)
         ? { ...item, fase: targetStage }
         : item
     )));
     try {
-      await axios.put(`/api/licitacoes/opportunities/${opportunityId}`, { fase: targetStage });
+      await axios.put(`/api/licitações/opportunities/${opportunityId}`, { fase: targetStage });
     } catch (error) {
-      console.error('Error moving licitacao opportunity:', error);
+      console.error('Error moving licitação opportunity:', error);
       setLicitacaoOpportunities(previous);
     }
   };
@@ -2289,11 +3328,11 @@ function App() {
         valor_oportunidade: newOpportunityForm.valor_oportunidade
           ? parseCurrency(newOpportunityForm.valor_oportunidade)
           : null,
-        comissao_percentual: newOpportunityForm.comissao_percentual
-          ? Number(String(newOpportunityForm.comissao_percentual).replace(',', '.'))
+        comissão_percentual: newOpportunityForm.comissão_percentual
+          ? Number(String(newOpportunityForm.comissão_percentual).replace(',', '.'))
           : null,
-        comissao_valor_previsto: newOpportunityForm.comissao_valor_previsto
-          ? Number(String(newOpportunityForm.comissao_valor_previsto).replace(',', '.'))
+        comissão_valor_previsto: newOpportunityForm.comissão_valor_previsto
+          ? Number(String(newOpportunityForm.comissão_valor_previsto).replace(',', '.'))
           : null,
         valor_revenda_previsto: newOpportunityForm.valor_revenda_previsto
           ? Number(String(newOpportunityForm.valor_revenda_previsto).replace(',', '.'))
@@ -2308,7 +3347,7 @@ function App() {
         },
         linked_contacts: linkedContacts,
       };
-      const response = await axios.post('/api/licitacoes/opportunities', payload);
+      const response = await axios.post('/api/licitações/opportunities', payload);
       const created = response.data;
 
       for (const item of newOpportunityItemsDraft) {
@@ -2318,7 +3357,7 @@ function App() {
 
         let createdItem;
         try {
-          const createdItemResponse = await axios.post(`/api/licitacoes/opportunities/${created.id}/items`, {
+          const createdItemResponse = await axios.post(`/api/licitações/opportunities/${created.id}/items`, {
             numero_item: item.numero_item,
             descricao: item.descricao,
             modelo_produto: item.modelo_produto,
@@ -2339,7 +3378,7 @@ function App() {
             continue;
           }
           try {
-            await axios.post(`/api/licitacoes/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
+            await axios.post(`/api/licitações/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
               requisito: req.requisito,
               status: req.status,
               observacao: req.observacao,
@@ -2352,7 +3391,7 @@ function App() {
       }
 
       if (String(newOpportunityForm.comentario_inicial || '').trim()) {
-        await axios.post(`/api/licitacoes/opportunities/${created.id}/comments`, {
+        await axios.post(`/api/licitações/opportunities/${created.id}/comments`, {
           content: newOpportunityForm.comentario_inicial,
         });
       }
@@ -2368,7 +3407,7 @@ function App() {
       setExpandedDraftChecklist({});
       setChecklistModalItemId(null);
     } catch (error) {
-      console.error('Error creating licitacao opportunity:', error);
+      console.error('Error creating licitação opportunity:', error);
     }
   };
 
@@ -2502,12 +3541,12 @@ function App() {
   const runPncpSearch = async (page = 1) => {
     setPncpSearchLoading(true);
     try {
-      const response = await axios.get('/api/licitacoes/pncp/search', {
+      const response = await axios.get('/api/licitações/pncp/search', {
         params: {
           q: pncpSearchFilters.q,
           tipos_documento: pncpSearchFilters.tipos_documento,
           status: pncpSearchFilters.status,
-          modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id || undefined,
+          modalidade_licitação_id: pncpSearchFilters.modalidade_licitação_id || undefined,
           tipo_id: pncpSearchFilters.tipo_id || undefined,
           modo_disputa_id: pncpSearchFilters.modo_disputa_id || undefined,
           uf: pncpSearchFilters.uf || undefined,
@@ -2592,7 +3631,7 @@ function App() {
     const allItems = [];
 
     for (let page = 1; page <= maxPages; page += 1) {
-      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
+      const response = await axios.get(`/api/licitações/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
         params: {
           pagina: page,
           tamanhoPagina: pageSize,
@@ -2688,10 +3727,10 @@ function App() {
     setSelectedOpportunity(opportunity);
     try {
       const [requirementsResponse, contactsResponse, itemsResponse, commentsResponse] = await Promise.all([
-        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/requirements`),
-        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/contacts`),
-        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items`),
-        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/comments`),
+        axios.get(`/api/licitações/opportunities/${opportunity.id}/requirements`),
+        axios.get(`/api/licitações/opportunities/${opportunity.id}/contacts`),
+        axios.get(`/api/licitações/opportunities/${opportunity.id}/items`),
+        axios.get(`/api/licitações/opportunities/${opportunity.id}/comments`),
       ]);
       const requirements = Array.isArray(requirementsResponse.data) ? requirementsResponse.data : [];
       setSelectedCommercialRequirements(requirements.filter(item => item.tipo === 'comercial'));
@@ -2706,12 +3745,12 @@ function App() {
 
       const requirementsByItem = {};
       await Promise.all(items.map(async (item) => {
-        const itemRequirementsResponse = await axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items/${item.id}/requirements`);
+        const itemRequirementsResponse = await axios.get(`/api/licitações/opportunities/${opportunity.id}/items/${item.id}/requirements`);
         requirementsByItem[item.id] = Array.isArray(itemRequirementsResponse.data) ? itemRequirementsResponse.data : [];
       }));
       setItemRequirementsMap(requirementsByItem);
     } catch (error) {
-      console.error('Error loading licitacao details:', error);
+      console.error('Error loading licitação details:', error);
       setSelectedCommercialRequirements([]);
       setSelectedItems([]);
       setItemRequirementsMap({});
@@ -2728,7 +3767,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/comments`, {
+      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/comments`, {
         content: newCommentText.trim(),
         author: 'Admin',
       });
@@ -2744,7 +3783,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/comments/${commentId}`);
+      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/comments/${commentId}`);
       setSelectedComments(prev => prev.filter(comment => comment.id !== commentId));
     } catch (error) {
       console.error('Error deleting comment:', error);
@@ -2760,11 +3799,11 @@ function App() {
     setSelectedOpportunity(next);
     setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? { ...item, ...changes } : item)));
     try {
-      const response = await axios.put(`/api/licitacoes/opportunities/${id}`, changes);
+      const response = await axios.put(`/api/licitações/opportunities/${id}`, changes);
       setSelectedOpportunity(response.data);
       setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? response.data : item)));
     } catch (error) {
-      console.error('Error updating licitacao opportunity:', error);
+      console.error('Error updating licitação opportunity:', error);
     }
   }, [selectedOpportunity]);
 
@@ -2793,7 +3832,7 @@ function App() {
 
     const opportunityId = selectedOpportunity.id;
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${opportunityId}`);
+      await axios.delete(`/api/licitações/opportunities/${opportunityId}`);
       setLicitacaoOpportunities(prev => prev.filter(item => String(item.id) !== String(opportunityId)));
       setSelectedOpportunity(null);
       setSelectedCommercialRequirements([]);
@@ -2803,7 +3842,7 @@ function App() {
       setSelectedComments([]);
       setContactLinkQuery('');
     } catch (error) {
-      console.error('Error deleting licitacao opportunity:', error);
+      console.error('Error deleting licitação opportunity:', error);
     }
   };
 
@@ -2827,7 +3866,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements`, {
+      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/requirements`, {
         tipo: 'comercial',
         titulo: newRequirementForm.titulo,
       });
@@ -2844,7 +3883,7 @@ function App() {
     }
     try {
       const response = await axios.put(
-        `/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`,
+        `/api/licitações/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`,
         changes
       );
       setSelectedCommercialRequirements(prev => prev.map(item => (item.id === requirementId ? response.data : item)));
@@ -2858,7 +3897,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`);
+      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`);
       setSelectedCommercialRequirements(prev => prev.filter(item => item.id !== requirementId));
     } catch (error) {
       console.error('Error deleting requirement:', error);
@@ -2875,7 +3914,7 @@ function App() {
       const custoTotalItem = quantidade !== null && valorReferencia !== null
         ? Number((quantidade * valorReferencia).toFixed(2))
         : null;
-      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items`, {
+      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/items`, {
         ...newItemForm,
         quantidade,
         valor_referencia: valorReferencia,
@@ -2893,7 +3932,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`, changes);
+      const response = await axios.put(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}`, changes);
       setSelectedItems(prev => prev.map(item => (item.id === itemId ? response.data : item)));
     } catch (error) {
       console.error('Error updating item:', error);
@@ -2963,7 +4002,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`);
+      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}`);
       setSelectedItems(prev => prev.filter(item => item.id !== itemId));
       setItemRequirementsMap(prev => {
         const next = { ...prev };
@@ -2994,7 +4033,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements`, {
+      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements`, {
         requisito: form.requisito,
         status: form.status || 'verificar',
         observacao: form.observacao || null,
@@ -3019,7 +4058,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`, changes);
+      const response = await axios.put(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`, changes);
       setItemRequirementsMap(prev => ({
         ...prev,
         [itemId]: (prev[itemId] || []).map(item => (item.id === requirementId ? response.data : item)),
@@ -3060,7 +4099,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`);
+      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`);
       setItemRequirementsMap(prev => ({
         ...prev,
         [itemId]: (prev[itemId] || []).filter(item => item.id !== requirementId),
@@ -3101,12 +4140,12 @@ function App() {
       return;
     }
     try {
-      await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts`, {
+      await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts`, {
         contact_id: Number(resolvedId),
         papel: contactLinkForm.papel,
         observacao: contactLinkForm.observacao,
       });
-      const contactsResponse = await axios.get(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts`);
+      const contactsResponse = await axios.get(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts`);
       setSelectedLinkedContacts(contactsResponse.data || []);
       setContactLinkForm({ contact_id: '', papel: '', observacao: '' });
       setContactLinkQuery('');
@@ -3120,7 +4159,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts/${linkId}`);
+      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts/${linkId}`);
       setSelectedLinkedContacts(prev => prev.filter(link => String(link.id) !== String(linkId)));
     } catch (error) {
       console.error('Error unlinking contact:', error);
@@ -3453,12 +4492,12 @@ function App() {
       if (activeId.startsWith('opp:')) {
         const opportunityId = activeId.replace('opp:', '');
         const overId = String(over.id);
-        const overContainer = overId.startsWith('licitacao-column:')
-          ? overId.replace('licitacao-column:', '')
+        const overContainer = overId.startsWith('licitação-column:')
+          ? overId.replace('licitação-column:', '')
           : over.data?.current?.columnId
-            || licitacaoOpportunities.find(item => `opp:${item.id}` === overId)?.fase;
+            || licitaçãoOpportunities.find(item => `opp:${item.id}` === overId)?.fase;
 
-        const activeOpportunity = licitacaoOpportunities.find(item => String(item.id) === String(opportunityId));
+        const activeOpportunity = licitaçãoOpportunities.find(item => String(item.id) === String(opportunityId));
         if (activeOpportunity && overContainer && activeOpportunity.fase !== overContainer) {
           moveOpportunityToStage(opportunityId, overContainer);
         }
@@ -3570,6 +4609,72 @@ function App() {
 
   const isAuthLoading = !authStatus.checked;
   const showLogin = authStatus.checked && !authStatus.authenticated;
+  const processIndexById = useMemo(
+    () => Object.fromEntries(processBlueprint.map.map((item, index) => [item.id, index])),
+    []
+  );
+
+  const ProcessSection = ({ id, children }) => {
+    const index = processIndexById[id] ?? 0;
+    const step = processBlueprint.map[index];
+    const isUnlocked = index <= processMaxUnlockedStep;
+    const isActive = processCurrentStep === index;
+    const isCompleted = Boolean(processCompletedSteps[id]);
+
+    return (
+      <div id={id} className={`rounded-2xl border ${isActive ? 'border-primary/40' : 'border-border'} bg-cardAlt p-5`}>
+        <button
+          type="button"
+          onClick={() => {
+            if (!isUnlocked) return;
+            setProcessCurrentStep(index);
+          }}
+          className={`w-full flex items-center justify-between text-left ${isUnlocked ? '' : 'cursor-not-allowed opacity-60'}`}
+        >
+          <div>
+            <p className="text-xs font-semibold text-muted">Etapa {index + 1}</p>
+            <h3 className="mt-1 text-lg font-semibold text-ink">{step?.title || id}</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            {isCompleted && <span className="rounded-full bg-primary/15 px-2 py-1 text-[11px] font-semibold text-primary">Concluída</span>}
+            {!isUnlocked && <span className="rounded-full bg-card px-2 py-1 text-[11px] text-muted">Bloqueada</span>}
+            <span className="text-muted text-sm">{isActive ? '▾' : '▸'}</span>
+          </div>
+        </button>
+
+        {isActive && (
+          <div className="mt-4">
+            {children}
+            <div className="mt-5 flex items-center justify-end gap-2">
+              {index > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setProcessCurrentStep(index - 1)}
+                  className="h-9 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-ink"
+                >
+                  Etapa anterior
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setProcessCompletedSteps(prev => ({ ...prev, [id]: true }));
+                  const nextIndex = Math.min(index + 1, processBlueprint.map.length - 1);
+                  setProcessMaxUnlockedStep(prev => Math.max(prev, nextIndex));
+                  if (nextIndex !== index) {
+                    setProcessCurrentStep(nextIndex);
+                  }
+                }}
+                className="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-white"
+              >
+                {index === processBlueprint.map.length - 1 ? 'Concluir onboarding' : 'Concluir e avançar'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
       <DndContext
@@ -3697,7 +4802,7 @@ function App() {
                   </div>
                 )}
                 <div className="mt-6 rounded-2xl border border-border bg-cardAlt px-4 py-3 text-xs text-muted">
-                  Acesso exclusivo para equipe Aerion. Caso nao consiga entrar, confirme suas credenciais.
+                  Acesso exclusivo para equipe Aerion. Caso não consiga entrar, confirme suas credenciais.
                 </div>
               </div>
             </div>
@@ -3855,7 +4960,7 @@ function App() {
                     <input
                       type="text"
                       placeholder="Buscar órgão, UASG, edital, SEI..."
-                      value={licitacaoSearch}
+                      value={licitaçãoSearch}
                       onChange={(event) => setLicitacaoSearch(event.target.value)}
                       className="h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
@@ -3972,7 +5077,7 @@ function App() {
                 {String(activeDragId).startsWith('opp:') ? (
                   <div className="kanban-card is-overlay rounded-[14px] border border-border bg-card p-3.5 shadow-card">
                     <h4 className="text-sm font-semibold text-ink truncate">
-                      {licitacaoOpportunities.find(item => `opp:${item.id}` === String(activeDragId))?.titulo || 'Oportunidade'}
+                      {licitaçãoOpportunities.find(item => `opp:${item.id}` === String(activeDragId))?.titulo || 'Oportunidade'}
                     </h4>
                   </div>
                 ) : (
@@ -3986,6 +5091,25 @@ function App() {
 
           {activeView === 'Licitações' && (
             <>
+              <div className="mt-4 inline-flex items-center rounded-full border border-border bg-card p-1">
+                {[
+                  { key: 'board', label: 'Board' },
+                  { key: 'pca', label: 'PCA' },
+                  { key: 'sinais', label: 'Sinais PCA' },
+                ].map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setLicitacaoSubview(opt.key)}
+                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${licitaçãoSubview === opt.key ? 'bg-primary/10 text-primary' : 'text-muted'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {licitaçãoSubview === 'board' && (
+              <>
               {/* PNCP Search - Busca de Editais/Licitações */}
               <div className="mt-6 rounded-2xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between mb-3">
@@ -4035,8 +5159,8 @@ function App() {
                         <option value="todos">Todos os Status</option>
                       </select>
                       <select
-                        value={pncpSearchFilters.modalidade_licitacao_id}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))}
+                        value={pncpSearchFilters.modalidade_licitação_id}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitação_id: event.target.value }))}
                         className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                       >
                         <option value="">Todas Modalidades</option>
@@ -4482,7 +5606,7 @@ function App() {
                     <div className="mt-4 grid gap-3 md:grid-cols-4">
                       <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Título da oportunidade" value={newOpportunityForm.titulo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, titulo: event.target.value }))} />
                       <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.fase} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, fase: event.target.value }))}>
-                        {licitacaoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
+                        {licitaçãoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                       </select>
                       <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
                         <option value="ativo">Ativo</option>
@@ -4491,7 +5615,7 @@ function App() {
                         <option value="suspenso">Suspenso</option>
                         <option value="cancelado">Cancelado</option>
                         <option value="fracassado">Fracassado</option>
-                        <option value="nao_atendido">Não atendido</option>
+                        <option value="não_atendido">Não atendido</option>
                         <option value="arquivado">Arquivado</option>
                       </select>
                       <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
@@ -4741,7 +5865,7 @@ function App() {
                                 <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs md:col-span-2" placeholder="Requisito técnico" value={reqForm.requisito || ''} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, requisito: event.target.value } }))} />
                                 <select className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" value={reqForm.status || 'verificar'} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, status: event.target.value } }))}>
                                   <option value="ok">OK</option>
-                                  <option value="nao_ok">Não OK</option>
+                                  <option value="não_ok">Não OK</option>
                                   <option value="verificar">Verificar</option>
                                 </select>
                                 <button type="button" className="h-7 rounded-lg border border-border px-2 text-xs font-semibold" onClick={() => addDraftItemRequirement(item.id)}>Adicionar requisito</button>
@@ -4878,7 +6002,7 @@ function App() {
                 </div>
               )}
 
-              {licitacaoLoading && (
+              {licitaçãoLoading && (
                 <div className="mt-4 text-sm text-muted">Carregando licitações...</div>
               )}
 
@@ -4893,7 +6017,7 @@ function App() {
                 ref={boardScrollRef}
                 onScroll={handleBoardScroll}
               >
-                {licitacaoColumns.map(column => (
+                {licitaçãoColumns.map(column => (
                   <LicitacaoColumn
                     key={column}
                     title={column}
@@ -4956,7 +6080,7 @@ function App() {
                         <div>
                           <label className="block text-[11px] text-muted mb-1">Fase</label>
                           <select className="h-9 w-full rounded-lg border border-border bg-card px-3 text-sm" value={selectedOpportunity.fase || ''} onChange={(event) => updateSelectedOpportunity({ fase: event.target.value })}>
-                            {licitacaoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
+                            {licitaçãoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                           </select>
                         </div>
                         <div>
@@ -4968,7 +6092,7 @@ function App() {
                             <option value="suspenso">Suspenso</option>
                             <option value="cancelado">Cancelado</option>
                             <option value="fracassado">Fracassado</option>
-                            <option value="nao_atendido">Não atendido</option>
+                            <option value="não_atendido">Não atendido</option>
                             <option value="arquivado">Arquivado</option>
                           </select>
                         </div>
@@ -5036,11 +6160,11 @@ function App() {
                         </div>
                         <div className="mt-3 space-y-2 max-h-64 overflow-y-auto pr-1 scrollbar-theme">
                           {selectedCommercialRequirements.map(requirement => (
-                            <div key={requirement.id} className={`rounded-xl border p-2 space-y-2 ${requirement.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : requirement.status === 'nao_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`}>
+                            <div key={requirement.id} className={`rounded-xl border p-2 space-y-2 ${requirement.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : requirement.status === 'não_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`}>
                               <div className="flex items-center gap-2">
                                 <div className="h-7 rounded-lg border border-border bg-cardAlt px-1 flex items-center gap-1">
                                   <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'ok' ? 'bg-status-success text-white' : 'text-muted hover:bg-status-success/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'ok' })} title="Concluído">OK</button>
-                                  <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'nao_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'nao_ok' })} title="Problema">X</button>
+                                  <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'não_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'não_ok' })} title="Problema">X</button>
                                   <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'pendente' ? 'bg-status-warning text-white' : 'text-muted hover:bg-status-warning/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'pendente' })} title="Pendente">?</button>
                                 </div>
                                 <input className="h-7 flex-1 rounded-lg border border-border bg-cardAlt px-2 text-xs" value={requirement.titulo} onChange={(event) => updateRequirement(requirement.id, { titulo: event.target.value })} />
@@ -5240,11 +6364,11 @@ function App() {
 
                                     <div className="space-y-1 max-h-48 overflow-y-auto pr-1 scrollbar-theme">
                                       {itemRequirements.map((req, index) => (
-                                        <div key={req.id} className={`rounded-lg border p-2 flex items-center gap-2 ${req.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : req.status === 'nao_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`} onClick={(e) => e.stopPropagation()}>
+                                        <div key={req.id} className={`rounded-lg border p-2 flex items-center gap-2 ${req.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : req.status === 'não_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`} onClick={(e) => e.stopPropagation()}>
                                           <span className="w-5 text-center text-[10px] font-semibold text-muted">{index + 1}</span>
                                           <div className="h-6 rounded border border-border bg-cardAlt px-0.5 flex items-center gap-0.5">
                                             <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'ok' ? 'bg-status-success text-white' : 'text-muted hover:bg-status-success/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'ok' })}>OK</button>
-                                            <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'nao_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'nao_ok' })}>X</button>
+                                            <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'não_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'não_ok' })}>X</button>
                                             <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning text-white' : 'text-muted hover:bg-status-warning/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'verificar' })}>?</button>
                                           </div>
                                           <input className="h-6 flex-1 rounded border border-border bg-cardAlt px-2 text-[11px]" value={req.requisito || ''} onChange={(event) => updateItemRequirement(item.id, req.id, { requisito: event.target.value })} />
@@ -5378,7 +6502,7 @@ function App() {
                                 <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs md:col-span-2" value={req.requisito || ''} onChange={(event) => updateItemRequirement(checklistModalItemId, req.id, { requisito: event.target.value })} />
                                 <div className="h-8 rounded-lg border border-border bg-card px-1 flex items-center gap-1">
                                   <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'ok' ? 'bg-status-success/15 text-status-success' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'ok' })}>OK</button>
-                                  <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'nao_ok' ? 'bg-status-danger/15 text-status-danger' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'nao_ok' })}>Não OK</button>
+                                  <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'não_ok' ? 'bg-status-danger/15 text-status-danger' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'não_ok' })}>Não OK</button>
                                   <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning/15 text-status-warning' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'verificar' })}>Verificar</button>
                                 </div>
                                 <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Observação" value={req.observacao || ''} onChange={(event) => updateItemRequirement(checklistModalItemId, req.id, { observacao: event.target.value })} />
@@ -5395,6 +6519,19 @@ function App() {
                     )}
                   </div>
                 </div>
+              )}
+              </>
+              )}
+
+              {licitaçãoSubview === 'pca' && (
+                <PcaExplorer
+                  onPromoted={() => loadLicitações()}
+                  onSwitchToBoard={() => setLicitacaoSubview('board')}
+                />
+              )}
+
+              {licitaçãoSubview === 'sinais' && (
+                <PcaSignalsPanel onPromoted={() => loadLicitações()} />
               )}
             </>
           )}
@@ -5423,16 +6560,16 @@ function App() {
                 <div className="rounded-2xl border border-border bg-card p-5">
                   <p className="text-xs text-muted">Oportunidade total (Licitações)</p>
                   <p className="text-2xl font-semibold mt-2">
-                    {formatCurrency(overviewData.licitacaoSummary?.total_value) || 'R$ 0,00'}
+                    {formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00'}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-border bg-card p-5">
                   <p className="text-xs text-muted">Oportunidades licitatórias</p>
                   <p className="text-2xl font-semibold mt-2">
-                    {overviewData.licitacaoSummary?.opportunities_count ?? 0}
+                    {overviewData.licitaçãoSummary?.opportunities_count ?? 0}
                   </p>
                   <p className="mt-2 text-xs text-muted">
-                    Vencendo em 48h: {overviewData.licitacaoSummary?.due_48h ?? 0} | Atrasadas: {overviewData.licitacaoSummary?.overdue_count ?? 0}
+                    Vencendo em 48h: {overviewData.licitaçãoSummary?.due_48h ?? 0} | Atrasadas: {overviewData.licitaçãoSummary?.overdue_count ?? 0}
                   </p>
                 </div>
               </div>
@@ -7344,8 +8481,8 @@ function App() {
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Playbook comercial</p>
                     <h2 className="mt-2 text-2xl md:text-3xl font-semibold">Processo completo de vendas</h2>
                     <p className="mt-3 text-sm text-muted">
-                      Estrutura consolidada para prospeccao, qualificacao, fechamento e pos-venda.
-                      Conteudo organizado para apoiar a execucao diaria do time.
+                      Estrutura consolidada para prospecção, qualificação, fechamento e pós-venda.
+                      Conteúdo organizado para apoiar a execução diária do time.
                     </p>
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-center">
@@ -7361,20 +8498,30 @@ function App() {
 
               <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
                 <aside className="rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-24 h-fit">
-                  <p className="text-xs font-semibold text-muted">Mapa do processo</p>
+                  <p className="text-xs font-semibold text-muted">Onboarding do processo</p>
                   <nav className="mt-4 flex flex-col gap-2">
-                    {processBlueprint.map.map(item => (
-                      <a
+                    {processBlueprint.map.map((item, index) => {
+                      const isUnlocked = index <= processMaxUnlockedStep;
+                      const isActive = index === processCurrentStep;
+                      const isDone = Boolean(processCompletedSteps[item.id]);
+                      return (
+                      <button
                         key={item.id}
-                        href={`#${item.id}`}
-                        className="rounded-xl px-3 py-2 text-sm font-semibold text-ink hover:bg-cardAlt"
+                        type="button"
+                        onClick={() => {
+                          if (!isUnlocked) return;
+                          setProcessCurrentStep(index);
+                        }}
+                        className={`rounded-xl px-3 py-2 text-left text-sm font-semibold transition ${isActive ? 'bg-primary/10 text-primary' : 'text-ink'} ${isUnlocked ? 'hover:bg-cardAlt' : 'opacity-50 cursor-not-allowed'}`}
                       >
+                        <span className="mr-2 text-xs text-muted">{String(index + 1).padStart(2, '0')}</span>
                         {item.title}
-                      </a>
-                    ))}
+                        {isDone && <span className="ml-2 text-[11px] text-primary">OK</span>}
+                      </button>
+                    )})}
                   </nav>
                   <div className="mt-6 rounded-2xl border border-border bg-cardAlt p-4">
-                    <p className="text-xs font-semibold text-muted">Links rapidos</p>
+                    <p className="text-xs font-semibold text-muted">Links rápidos</p>
                     <div className="mt-3 flex flex-col gap-2 text-sm">
                       <a
                         href="https://chatwoot.tenryu.com.br/app/accounts/2"
@@ -7390,7 +8537,7 @@ function App() {
 
                 <main className="rounded-2xl border border-border bg-card p-6 lg:p-8 space-y-8">
                   {/* Seção Metas 2026 */}
-                  <section id="metas-2026" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="metas-2026">
                     <p className="text-xs font-semibold text-muted">Motor de Receita</p>
                     <h3 className="mt-2 text-lg font-semibold text-ink">Metas 2026 - Modelo Alto Volume</h3>
 
@@ -7482,9 +8629,9 @@ function App() {
                       <p className="text-3xl font-bold text-primary">R$ 6.2M</p>
                       <p className="text-sm text-muted">207 vendas | Ticket médio R$ 30k</p>
                     </div>
-                  </section>
+                  </ProcessSection>
 
-                  <section id="visao-geral" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="visao-geral">
                     <p className="text-xs font-semibold text-muted">Visao geral</p>
                     <h3 className="mt-2 text-lg font-semibold text-ink">Principios que guiam o processo</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -7503,9 +8650,136 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
 
-                  <section id="pipeline" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="treinamento-produtos">
+                    <p className="text-xs font-semibold text-muted">Treinamento de produtos</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Linha Autel e equivalência por categoria DJI</h3>
+                    <p className="mt-2 text-xs text-muted">
+                      Referência comercial para comparação por categoria de uso e faixa técnica, sem substituir validação em prova de conceito.
+                    </p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.productTraining.map(item => (
+                        <div key={item.product} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{item.product}</p>
+                          <p className="mt-2 text-xs text-muted">{item.summary}</p>
+                          <p className="mt-2 text-xs font-semibold text-primary">{item.equivalent}</p>
+                          <p className="mt-1 text-xs text-muted">Quando posicionar: {item.useWhen}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </ProcessSection>
+
+                  <ProcessSection id="icps-aerion">
+                    <p className="text-xs font-semibold text-muted">ICPs Aerion</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Resumo dos 4 ICPs Autel</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.icps.map(icp => (
+                        <div key={icp.id} className="rounded-xl border border-border bg-card px-4 py-4">
+                          <h4 className="text-sm font-semibold text-ink">{icp.name}</h4>
+                          <p className="mt-2 text-xs text-muted">Setor: {icp.sector}</p>
+                          <p className="mt-1 text-xs text-muted">Porte: {icp.profile}</p>
+                          <p className="mt-1 text-xs text-muted">Decisor: {icp.decisionMaker}</p>
+                          <p className="mt-1 text-xs text-muted">Dores: {icp.pains}</p>
+                          <p className="mt-1 text-xs text-muted">Produtos: {icp.products}</p>
+                          <p className="mt-1 text-xs font-semibold text-primary">Ticket medio: {icp.ticket}</p>
+                          <div className="mt-3">
+                            <p className="text-xs font-semibold text-ink">Sinais de fit</p>
+                            {icp.fitSignals.map(signal => (
+                              <div key={signal} className="mt-1 flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                <span>{signal}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-3">
+                            <p className="text-xs font-semibold text-ink">Red flags</p>
+                            {icp.redFlags.map(flag => (
+                              <div key={flag} className="mt-1 flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-status-danger" />
+                                <span>{flag}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ProcessSection>
+
+                  <ProcessSection id="boards-funil-aerion">
+                    <p className="text-xs font-semibold text-muted">Funil Aerion</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Como usar os boards e as abas</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      {processBlueprint.boards.map(board => (
+                        <div key={board.name} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{board.name}</p>
+                          <p className="mt-2 text-xs text-muted">{board.purpose}</p>
+                          <div className="mt-3 space-y-1.5">
+                            {board.usage.map(item => (
+                              <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-secondary" />
+                                <span>{item}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-5 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Guia rápido das abas do sistema</p>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {processBlueprint.funnelGuide.map(item => (
+                          <div key={item.tab} className="rounded-lg border border-border bg-cardAlt px-3 py-2">
+                            <p className="text-xs font-semibold text-primary">{item.tab}</p>
+                            <p className="mt-1 text-xs text-muted">{item.use}</p>
+                            <p className="mt-1 text-xs text-muted">Rotina: {item.routine}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Sumário de nomenclaturas</p>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {processBlueprint.glossary.map(item => (
+                          <div key={item.term} className="rounded-lg border border-border bg-cardAlt px-3 py-2">
+                            <p className="text-xs font-semibold text-primary">{item.term}</p>
+                            <p className="mt-1 text-xs text-muted">{item.meaning}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Vantagens competitivas da Aerion</p>
+                      <div className="mt-3 grid gap-2">
+                        {processBlueprint.marketAdvantages.map(item => (
+                          <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-xs font-semibold text-ink">Contexto de concorrência (narrativa consultiva)</p>
+                      <div className="mt-2 grid gap-2">
+                        {processBlueprint.competitorContext.map(item => (
+                          <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-secondary" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-xs font-semibold text-ink">Principais fraquezas atuais</p>
+                      <div className="mt-2 grid gap-2">
+                        {processBlueprint.marketWeaknesses.map(item => (
+                          <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-status-danger" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </ProcessSection>
+
+                  <ProcessSection id="pipeline">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-xs font-semibold text-muted">Pipeline</p>
@@ -7526,11 +8800,11 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
 
-                  <section id="checklist" className="rounded-2xl border border-border bg-cardAlt p-5">
-                    <p className="text-xs font-semibold text-muted">Checklist minimo</p>
-                    <h3 className="mt-2 text-base font-semibold text-ink">Obrigatorio antes de avancar</h3>
+                  <ProcessSection id="checklist">
+                    <p className="text-xs font-semibold text-muted">Checklist mínimo</p>
+                    <h3 className="mt-2 text-base font-semibold text-ink">Obrigatorio antes de avançar</h3>
                     <div className="mt-4 grid gap-2 md:grid-cols-2">
                       {processBlueprint.checklist.map(item => (
                         <div key={item} className="flex items-start gap-2 text-sm text-ink">
@@ -7539,10 +8813,80 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
+
+                  <ProcessSection id="venda-consultiva">
+                    <p className="text-xs font-semibold text-muted">Abordagem consultiva</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Script BANT+U com técnicas de Chris Voss</h3>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Abertura (30 segundos)</p>
+                      <div className="mt-2 space-y-1.5">
+                        {processBlueprint.consultiveSales.opening.map(line => (
+                          <p key={line} className="text-xs text-muted">{line}</p>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.consultiveSales.bantu.map(block => (
+                        <div key={block.key} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{block.key}</p>
+                          <div className="mt-2 space-y-1.5">
+                            {block.prompts.map(prompt => (
+                              <div key={prompt} className="flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                <span>{prompt}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Fechamento e agendamento</p>
+                      <div className="mt-2 space-y-1.5">
+                        {processBlueprint.consultiveSales.close.map(line => (
+                          <div key={line} className="flex items-start gap-2 text-xs text-muted">
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-secondary" />
+                            <span>{line}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                      <p className="text-sm font-semibold text-ink">Objeções comuns e respostas consultivas</p>
+                      <div className="mt-3 grid gap-3">
+                        {processBlueprint.objections.map(item => (
+                          <div key={item.objection} className="rounded-lg border border-border bg-cardAlt px-3 py-3">
+                            <p className="text-xs font-semibold text-ink">{item.objection}</p>
+                            <p className="mt-1 text-xs text-muted">{item.answer}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </ProcessSection>
+
+                  <ProcessSection id="playbook-operacional">
+                    <p className="text-xs font-semibold text-muted">Playbook</p>
+                    <h3 className="mt-2 text-lg font-semibold text-ink">Guia operacional do Funil Aerion</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      {processBlueprint.playbook.map(block => (
+                        <div key={block.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{block.title}</p>
+                          <div className="mt-2 space-y-1.5">
+                            {block.items.map(item => (
+                              <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                <span>{item}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ProcessSection>
 
                   {processBlueprint.streams.map(stream => (
-                    <section key={stream.id} id={stream.id} className="rounded-2xl border border-border bg-cardAlt p-5">
+                    <ProcessSection key={stream.id} id={stream.id}>
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="max-w-2xl">
                           <p className="text-xs font-semibold text-muted">{stream.owner}</p>
@@ -7561,10 +8905,10 @@ function App() {
                           </div>
                         ))}
                       </div>
-                    </section>
+                    </ProcessSection>
                   ))}
 
-                  <section id="rituais" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="rituais">
                     <h3 className="text-lg font-semibold">Rituais comerciais</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.rituals.map(ritual => (
@@ -7577,9 +8921,9 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
 
-                  <section id="ferramentas" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="ferramentas">
                     <h3 className="text-lg font-semibold">Ferramentas e registros</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.tools.map(tool => (
@@ -7589,9 +8933,9 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
 
-                  <section id="erp-sankhya" className="rounded-2xl border border-border bg-cardAlt p-5">
+                  <ProcessSection id="erp-sankhya">
                     <h3 className="text-lg font-semibold">ERP Sankhya</h3>
                     <div className="mt-4 space-y-2">
                       {processBlueprint.erp.map(item => (
@@ -7601,10 +8945,36 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {processBlueprint.erpDeepDive.map(block => (
+                        <div key={block.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                          <p className="text-sm font-semibold text-ink">{block.title}</p>
+                          <div className="mt-2 space-y-1.5">
+                            {block.items.map(item => (
+                              <div key={item} className="flex items-start gap-2 text-xs text-muted">
+                                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-secondary" />
+                                <span>{item}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-3">
+                      <p className="text-xs text-muted">Referência oficial Sankhya:</p>
+                      <a
+                        href="https://ajuda.sankhya.com.br/hc/pt-br/categories/360003333814-Documenta%C3%A7%C3%A3o-de-Telas-Manual"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 inline-block text-sm font-semibold text-primary hover:underline"
+                      >
+                        Documentação de Telas (Manual)
+                      </a>
+                    </div>
+                  </ProcessSection>
 
-                  <section id="documentacao" className="rounded-2xl border border-border bg-cardAlt p-5">
-                    <h3 className="text-lg font-semibold">Documentacao complementar</h3>
+                  <ProcessSection id="documentacao">
+                    <h3 className="text-lg font-semibold">Documentação complementar</h3>
                     <div className="mt-4 grid gap-2 md:grid-cols-2">
                       {processBlueprint.documentation.map(item => (
                         <div key={item} className="flex items-start gap-2 text-sm text-ink">
@@ -7613,7 +8983,7 @@ function App() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </ProcessSection>
                 </main>
               </div>
             </div>

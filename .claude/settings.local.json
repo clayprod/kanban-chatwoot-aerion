@@ -65,7 +65,32 @@
       "Bash(PGPASSWORD=36b27c2d33aa50e9a56d psql:*)",
       "Read(//c/tmp/**)",
       "Bash(node diag_tenryu.js)",
-      "Bash(timeout 60 node *)"
+      "Bash(timeout 60 node *)",
+      "WebFetch(domain:funil-aerion.tenryu.com.br)",
+      "Bash(git -C /c/kanban-dashboard add frontend/src/App.js)",
+      "Bash(git -C /c/kanban-dashboard commit -m ' *)",
+      "Bash(git -C /c/kanban-dashboard push origin main)",
+      "Bash(git -C /c/kanban-dashboard add backend/index.js)",
+      "Bash(apt-get install *)",
+      "Bash(winget install *)",
+      "PowerShell($env:PATH -split \";\" | Where-Object { $_ -match \"ssh\" })",
+      "Bash($SSHPASS *)",
+      "PowerShell(Get-Command *)",
+      "Bash(git -C C:/kanban-dashboard add frontend/src/App.js frontend/src/App.css)",
+      "Bash(git -C C:/kanban-dashboard commit -m ' *)",
+      "Bash(git -C C:/kanban-dashboard push origin main)",
+      "Bash(git -C C:/kanban-dashboard add frontend/src/App.js)",
+      "Bash(git -C C:/kanban-dashboard status)",
+      "Bash(git -C C:/kanban-dashboard log origin/main..HEAD --oneline)",
+      "Bash(git -C C:/kanban-dashboard log -5 --oneline)",
+      "Bash(git -C C:/kanban-dashboard diff .claude/settings.local.json)",
+      "Bash(git -C C:/kanban-dashboard add backend/index.js)",
+      "Bash(awk 'NR==3987,/^          \\\\\\)\\\\}$/' C:/kanban-dashboard/frontend/src/App.js)",
+      "Bash(awk 'NR>=3987 && NR<=4100 {print NR\": \"$0}' C:/kanban-dashboard/frontend/src/App.js)",
+      "Bash(npx eslint *)",
+      "Bash(curl -s \"https://pncp.gov.br/api/consulta/v1/pca/atualizacao?dataInicio=20260101&dataFim=20260105&pagina=1&tamanhoPagina=10\" -H \"Accept: application/json\")",
+      "Read(//tmp/**)",
+      "Bash(break)"
     ]
   }
 }

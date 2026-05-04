@@ -140,16 +140,16 @@ A Aerion adota o modelo de **especialização de funções** proposto no livro "
 
 Em 2026, com 4 pessoas multi-chapéu, usamos versão ADAPTADA que mantém princípios mas simplifica execução:
 
-### CRM: 2 Boards Trello
+### CRM: Boards do Funil Aerion
 - **Board 1: Pipeline de Vendas** (10 listas) - SDR + AE
 - **Board 2: Clientes e Pós-Venda** (8 listas) - CS + Recompra
 - **Labels:** 9 estratégicas (vertical, tipo, tier, prioridade)
 - **Custom Fields:** 5-6 essenciais
 
-### Planilhas: 2 Google Sheets
+### Registro Operacional no Funil Aerion
 - **Planilha 1: Leads e Pipeline** (12 colunas)
 - **Planilha 2: Revendas Ativas** (15 colunas com fórmulas)
-- **Sincronização:** n8n automatiza Trello → Sheets
+- **Sincronização:** Funil Aerion automatiza distribuicao e atualizacao de leads entre boards
 
 ### Processo de Canais Simplificado:
 1. **Pré-qualificação ICP** (5 min) - Score 700+
@@ -169,6 +169,221 @@ Em 2026, com 4 pessoas multi-chapéu, usamos versão ADAPTADA que mantém princ�
 - Conteúdo acionável
 - Exemplos reais
 - Checklists inclusos
+
+---
+
+## 1.4 Sumario de Nomenclaturas (Funil Aerion)
+
+| Termo | Significado operacional |
+|---|---|
+| **ICP** | Perfil de cliente ideal com maior chance de fechamento, adocao e expansao. |
+| **SQL** | Lead qualificado para vendas, com dor valida, decisor mapeado e proximo passo. |
+| **BANT+U** | Budget, Authority, Need, Timeline e Use Case para qualificar com profundidade. |
+| **Nurture** | Lead com fit potencial, mas sem timing, orcamento ou prioridade imediata. |
+| **Handoff** | Transferencia formal de contexto entre SDR, AE e CS sem perda de informacao. |
+| **QBR** | Revisao trimestral para ajustar risco, adocao e oportunidades de expansao. |
+
+## 1.5 Guia de Uso do Funil Aerion (Abas e Boards)
+
+### Abas do sistema
+
+1. **Overview**
+   - Visao executiva de volume, valor e distribuicao por etapa.
+   - Uso diario do lider para priorizacao de gargalos.
+
+2. **Board**
+   - Execucao operacional do funil: mover cards, registrar historico, definir proximo passo.
+   - Regra: nenhum card avanca sem evidencias da etapa atual.
+
+3. **Busca Lead B2B**
+   - Alimenta topo de funil com contas aderentes aos ICPs prioritarios.
+   - Uso semanal para manter cadencia de entrada.
+
+4. **Licitacoes**
+   - Controle de editais, prazos, documentos e riscos de disputa.
+   - Uso por marco de oportunidade para nao perder prazo critico.
+
+5. **Processo**
+   - Playbook oficial: criterios de passagem, scripts e padrao de venda consultiva.
+   - Uso para onboarding, calibracao e auditoria de qualidade.
+
+### Boards do Funil Aerion
+
+- **Board SDR (Prospeccao e Qualificacao)**
+  - Entrada: lead com origem, segmento e responsavel definidos.
+  - Saida: SQL apenas com BANT+U minimo e resumo de dor documentado.
+
+- **Board AE (Discovery, Proposta e Fechamento)**
+  - Entrada: SQL com contexto e stakeholders mapeados.
+  - Saida: fechado-ganho com escopo aprovado e handoff aceito.
+
+- **Board CS (Onboarding, Retencao e Expansao)**
+  - Entrada: handoff completo com objetivos e riscos.
+  - Saida: conta ativa com prova de valor e plano de expansao.
+
+## 1.6 ICPs Aerion (4 Verticais Autel)
+
+### ICP 1 - Construcao e Topografia Urbana
+- **Setor:** Construtoras medias/grandes, topografia e geodesia
+- **Porte:** R$ 50M-R$ 500M; 5-20 obras simultaneas
+- **Decisor:** Diretor de Operacoes, Gerente de Engenharia
+- **Dores:** Atraso de cronograma e custo de topografia terceirizada
+- **Produtos:** EVO Lite Enterprise, EVO Max 4T (RTK)
+- **Ticket medio:** R$ 80k-R$ 120k
+
+### ICP 2 - Inspecao Industrial e Energia
+- **Setor:** Concessionarias, parques solares/eolicos, inspecao
+- **Porte:** > R$ 100M; > 500 ativos criticos
+- **Decisor:** Gerente de Manutencao, Diretor de Engenharia
+- **Dores:** Custo de inspecao (helicoptero), risco e downtime
+- **Produtos:** Autel Alpha (BVLOS), EVO Max 4T
+- **Ticket medio:** R$ 150k-R$ 300k
+
+### ICP 3 - Seguranca Publica e Defesa Civil
+- **Setor:** PM, PC, PRF, Defesa Civil e seguranca privada
+- **Porte:** > 500 mil habitantes atendidos; > 1000 agentes
+- **Decisor:** Comandante/Secretario, Coordenador de Operacoes
+- **Dores:** Cobertura ampla com efetivo limitado; custo de aeronave tripulada
+- **Produtos:** Autel Alpha (visao noturna, alcance 20km)
+- **Ticket medio:** R$ 200k-R$ 400k
+
+### ICP 4 - Resgate, Emergencias e Meio Ambiente
+- **Setor:** Bombeiros, Defesa Civil, ONGs ambientais
+- **Porte:** > 50.000 km2 de atuacao; > 5.000 chamados/ano
+- **Decisor:** Comandante Geral, Coordenador de Operacoes
+- **Dores:** Acesso remoto e tempo critico de resposta
+- **Produtos:** Autel Alpha (termica, autonomia), EVO Max 4T
+- **Ticket medio:** R$ 180k-R$ 350k
+
+## 1.7 Script de Qualificacao BANT+U (Venda Consultiva)
+
+### Abertura (30 segundos) - Tecnica Chris Voss
+
+"Bom dia [Nome], aqui e [Seu Nome] da Aerion Technologies. Recebi seu contato atraves de [fonte]. Nos somos especializados em solucoes de drones para [segmento]."
+
+"Imagino que agora e um momento terrivel para conversarmos, nao e?"
+
+**Por que funciona:** busca o "nao", reduz resistencia e aumenta controle percebido do cliente.
+
+### B - Budget (Perguntas calibradas)
+- "Como voces avaliam investimentos em tecnologia hoje?"
+- "Existe budget definido ou aprovacao caso a caso?"
+- "O que precisaria acontecer para aprovar esse investimento?"
+
+### A - Authority (Labeling + processo decisorio)
+- "Imagino que essa decisao nao seja tomada sozinho. Como funciona a aprovacao ai?"
+- "O que o decisor principal mais valoriza nesse tipo de projeto?"
+- "Seria absurdo envolver [decisor] na proxima conversa?"
+
+### N - Need (SPIN + impacto)
+- "Como voces executam esse processo hoje?"
+- "O que mais frustra no modelo atual?"
+- "Se isso continuar por 6 meses, qual impacto operacional e financeiro?"
+
+### T - Timeline (Urgencia real)
+- "O que acontece se isso nao for resolvido nos proximos 3 meses?"
+- "Qual e o custo da inacao?"
+- "Qual timeline ideal de implementacao para voces?"
+
+### U - Use Case (Aderencia tecnica)
+- "O uso principal sera pulverizacao, inspecao, mapeamento ou resposta emergencial?"
+- "Qual area/volume/frequencia da operacao?"
+- "Qual resultado minimo faria o projeto ser considerado sucesso?"
+
+### Fechamento e agendamento
+- "Parece justo eu conectar voce ao especialista da Aerion nesse segmento?"
+- "Funciona melhor amanha 14h ou quinta 10h?"
+
+## 1.8 Playbook Operacional do Funil Aerion
+
+### Playbook diario (SDR/AE/CS)
+
+1. **08:30-09:00** - Revisar cards sem proximo passo e priorizar o dia.
+2. **09:00-11:30** - Executar contatos e registrar historico em tempo real.
+3. **11:30-12:00** - Atualizar etapas com base em evidencia (nao por percepcao).
+4. **14:00-17:00** - Conduzir follow-ups, demos e negociacoes com checkpoint de risco.
+5. **17:00-17:30** - Fechar pendencias e preparar handoffs do dia seguinte.
+
+### Playbook de passagem entre boards
+
+- **SDR -> AE:** BANT+U minimo, dor principal, impacto e decisor documentados.
+- **AE -> CS:** Escopo fechado, condicoes comerciais, riscos e plano 30-60-90.
+- **CS -> AE (expansao):** Valor comprovado, gatilho de crescimento e sponsor ativo.
+- **Regra geral:** Toda passagem exige dono, data e proximo marco no Funil Aerion.
+
+### Playbook de qualidade de execucao
+
+- Card sem atualizacao em 48h entra em alerta de execucao.
+- Negociacao sem criterio de decisao explicito nao avanca para fechamento.
+- Conta em risco sem plano corretivo em 72h sobe para revisao da lideranca.
+- Toda perda registra motivo-raiz e aprendizado acionavel.
+
+## 1.9 Vantagens competitivas, limites e respostas a objecoes
+
+### Vantagens competitivas da Aerion
+
+- Melhor custo-beneficio com tecnologia equivalente para os casos de uso prioritarios.
+- Mais flexibilidade comercial para projeto, parceiro e condicoes de pagamento.
+- SDK aberto para integradores e customizacao tecnica.
+- Canal curto: Aerion como importador direto para revendas.
+- Nao entramos diretamente em licitacao; registramos a oportunidade para o parceiro.
+- Nao ofertamos servico final, entao nao competimos com prestadores/integradores.
+- Entrega tecnica com treinamento de operacao.
+- Suporte tecnico e pos-venda conosco, com garantia de 1 ano.
+
+### Contexto competitivo (narrativa consultiva)
+
+- Em alguns fabricantes, o canal passa por distribuidores master e subdistribuidores, aumentando camadas comerciais.
+- Politicas de preco mais rigidas podem elevar concorrencia interna entre parceiros da mesma marca.
+- Mudancas de linha sem previsibilidade podem elevar risco de manutencao no medio prazo.
+
+### Principais fraquezas atuais (transparencia comercial)
+
+- Ainda nao temos linhas com LiDAR no portifolio.
+- Ainda nao temos linhas dedicadas com IR no portifolio.
+- Ainda nao temos drones agricolas no portifolio.
+- Ainda nao temos camera multiespectral no portifolio.
+
+### Objecoes comuns e respostas recomendadas
+
+1. **"Ja usamos DJI e estamos acostumados com a marca."**
+   - Resposta: "Perfeito, continuidade e importante. Em varios projetos, entregamos tecnologia equivalente com melhor custo-beneficio, maior flexibilidade comercial e canal de suporte mais curto."
+
+2. **"Tenho receio de ficar sem suporte e manutencao."**
+   - Resposta: "Faz sentido. O suporte tecnico e pos-venda ficam conosco, com garantia de 1 ano, entrega tecnica e treinamento de operacao para sua equipe."
+
+3. **"Nao quero que meu fornecedor concorra comigo em licitacao."**
+   - Resposta: "Estamos alinhados: nao entramos direto em licitacao. Registramos a oportunidade para o parceiro e apoiamos a estrategia tecnica/comercial."
+
+4. **"Vocês prestam servico? Vao concorrer com meu integrador?"**
+   - Resposta: "Nao ofertamos servico final. Dependemos de prestadores e integradores para entregar a solucao, entao o modelo e colaborativo."
+
+5. **"Preciso de customizacao e integracao."**
+   - Resposta: "Temos SDK aberto para acelerar customizacoes com integradores e times tecnicos, reduzindo lock-in e risco de implantacao."
+
+## 1.10 Treinamento rápido de produtos (Autel x categoria DJI)
+
+> Comparativo por **categoria de uso** e faixa técnica equivalente, para apoio comercial.
+
+1. **EVO Lite Enterprise (640T/6K)**
+   - Faixa técnica: compacto enterprise, 40 min, opção térmica 640x512.
+   - Equivalência de categoria: **DJI Mavic 3 Enterprise / Mavic 3 Thermal**.
+   - Quando posicionar: operações ágeis com mobilidade e menor custo de entrada.
+
+2. **EVO Max V2 (4T/4N)**
+   - Faixa técnica: sensores triplos, térmica 640x512, zoom óptico na versão 4T.
+   - Equivalência de categoria: **DJI Matrice 30T**.
+   - Quando posicionar: inspeção, energia e segurança com exigência de robustez e anti-interferência.
+
+3. **Autel Alpha**
+   - Faixa técnica: IP55, zoom óptico 35x, térmicas duplas, laser, alcance estendido.
+   - Equivalência de categoria: **DJI Matrice 350 RTK** (com payload térmico/zoom equivalente).
+   - Quando posicionar: operações críticas com alto requisito de alcance e resiliência.
+
+4. **EVO Nest + Autel Mapper**
+   - Faixa técnica: operação remota automatizada + processamento 2D/3D com deep learning.
+   - Equivalência de categoria: **DJI Dock + DJI Terra**.
+   - Quando posicionar: programas recorrentes e escala operacional com padronização de dados.
 
 ---
 
@@ -199,11 +414,11 @@ FONTES DE LEADS (100%)
 
      ↓ (Todos convergem)
 
-[GOOGLE SHEETS - Leads Master]
+[FUNIL AERION - Entrada de Leads]
      ↓
-[n8n - Round Robin]
+[Funil Aerion - Round Robin]
      ↓
-[TRELLO - Board 1: Pipeline SDR/AE]
+[FUNIL AERION - Board SDR/AE]
      ↓
 [Qualificação BANT+U]
      ↓
@@ -303,16 +518,16 @@ flowchart TD
     Outbound --> ColdCall[Cold Calls 15%]
     Outbound --> LinkedInNav[LinkedIn Navigator 10%]
     
-    Website --> Sheets[Google Sheets - Leads Master]
-    Instagram --> Sheets
-    LinkedInIn --> Sheets
-    ColdCall --> Sheets
-    LinkedInNav --> Sheets
-    Eventos --> Sheets
+    Website --> Registro[Funil Aerion - Entrada de Leads]
+    Instagram --> Registro
+    LinkedInIn --> Registro
+    ColdCall --> Registro
+    LinkedInNav --> Registro
+    Eventos --> Registro
     
-    Sheets --> N8N[n8n - Round Robin]
-    N8N --> Trello[Trello - Board Pipeline SDR/AE]
-    Trello --> Qualifica[Qualificação BANT+U]
+    Registro --> Roteador[Funil Aerion - Distribuicao]
+    Roteador --> Funil Aerion[Funil Aerion - Board Pipeline SDR/AE]
+    Funil Aerion --> Qualifica[Qualificação BANT+U]
     
     Qualifica --> Decisao1{Qualifica 4/5 BANT?}
     Decisao1 -->|Não| Descarta[DESCARTA - Registra no CRM]
@@ -354,16 +569,16 @@ flowchart TD
     Outbound --> ColdCall[Cold Calls 15%]
     Outbound --> LinkedInNav[LinkedIn Navigator 10%]
     
-    Website --> Sheets[Google Sheets - Leads Master]
-    Instagram --> Sheets
-    LinkedInIn --> Sheets
-    ColdCall --> Sheets
-    LinkedInNav --> Sheets
-    Eventos --> Sheets
+    Website --> Registro[Funil Aerion - Entrada de Leads]
+    Instagram --> Registro
+    LinkedInIn --> Registro
+    ColdCall --> Registro
+    LinkedInNav --> Registro
+    Eventos --> Registro
     
-    Sheets --> N8N[n8n - Round Robin]
-    N8N --> Trello[Trello - Board Pipeline SDR/AE]
-    Trello --> Qualifica[Qualificação BANT+U]
+    Registro --> Roteador[Funil Aerion - Distribuicao]
+    Roteador --> Funil Aerion[Funil Aerion - Board Pipeline SDR/AE]
+    Funil Aerion --> Qualifica[Qualificação BANT+U]
     
     Qualifica --> Decisao1{Qualifica 4/5 BANT?}
     Decisao1 -->|Não| Descarta[DESCARTA - Registra no CRM]
@@ -525,7 +740,7 @@ flowchart TD
 ### 2.5 Ferramentas e Templates
 
 **Ferramentas Utilizadas:**
-- CRM (Trello + Google Sheets)
+- CRM (Funil Aerion + Funil Aerion)
 - Google Voice ou CallTrackingMetrics
 - **Sejda PDF Editor** (conferência e correção de documentos)
 - LinkedIn Sales Navigator
@@ -661,15 +876,15 @@ flowchart TD
 ## 2.3 PROCESSO ESPECÍFICO - INBOUND (65%)
 
 **O que muda: Primeira abordagem e SLA de resposta**  
-**O que é igual: Planilha, Trello, qualificação, fechamento**
+**O que é igual: Planilha, Funil Aerion, qualificação, fechamento**
 
 ### 2.3.1 FORMULÁRIO WEBSITE (40%)
 
 **Entrada Diferenciada:**
 
 1. **Recebimento automático**
-   - Webhook → Google Sheets (coluna "Canal": Formulário Website)
-   - n8n cria card no Trello (label: Inbound - Website)
+   - Webhook → Funil Aerion (coluna "Canal": Formulário Website)
+   - Funil Aerion cria card no Funil Aerion (label: Inbound - Website)
    - Notificação SMS + Email ao SDR
 
 2. **SLA de Resposta: < 5 minutos**
@@ -680,10 +895,10 @@ flowchart TD
 3. **Primeira Chamada (10-15 min)**
    - "Vi que você preencheu formulário sobre [X]"
    - Qualificação BANT simplificada
-   - → Move card no Trello para "Em Qualificação"
+   - → Move card no Funil Aerion para "Em Qualificação"
 
 **Convergência para Processo Unificado:**
-- Card criado no mesmo Board Trello
+- Card criado no mesmo Board Funil Aerion
 - Mesma lista "Em Qualificação"
 - Segue processo padrão de qualificação BANT+U
 - Mesmas listas de progresso (SQL → Demo → Proposta)
@@ -697,17 +912,17 @@ flowchart TD
    - Coleta manual de dados
 
 2. **Registro no Sistema**
-   - SDR cria lead manualmente no Google Sheets
+   - SDR cria lead manualmente no Funil Aerion
    - Coluna "Canal": Instagram
-   - n8n cria card no Trello (label: Inbound - Instagram)
+   - Funil Aerion cria card no Funil Aerion (label: Inbound - Instagram)
 
 3. **Primeira Ligação (24h)**
    - "Vi sua mensagem no Instagram sobre [X]"
    - Qualificação BANT
-   - → Move card no Trello para "Em Qualificação"
+   - → Move card no Funil Aerion para "Em Qualificação"
 
 **Convergência para Processo Unificado:**
-- Mesmo Trello board
+- Mesmo Funil Aerion board
 - Mesmas listas de progresso
 - Mesmo processo de qualificação
 
@@ -720,13 +935,13 @@ flowchart TD
    - Mensagem direta → Responder
 
 2. **Registro no Sistema**
-   - SDR cria lead no Google Sheets
+   - SDR cria lead no Funil Aerion
    - Coluna "Canal": LinkedIn Inbound
-   - n8n cria card no Trello (label: Inbound - LinkedIn)
+   - Funil Aerion cria card no Funil Aerion (label: Inbound - LinkedIn)
 
 3. **Agendamento via LinkedIn**
    - Após 2-3 trocas, agendar call
-   - → Card no Trello "Agendado"
+   - → Card no Funil Aerion "Agendado"
 
 **Convergência para Processo Unificado:**
 - Mesmo board, mesmas listas
@@ -744,14 +959,14 @@ flowchart TD
 ## 2.4 PROCESSO ESPECÍFICO - OUTBOUND (25%)
 
 **O que muda: Pesquisa inicial e cadência de contato**  
-**O que é igual: Planilha, Trello, qualificação, fechamento**
+**O que é igual: Planilha, Funil Aerion, qualificação, fechamento**
 
 ### 2.4.1 COLD CALLS (15%)
 
 **Entrada Diferenciada:**
 
 1. **Upload de Lista**
-   - SDR/Head importa lista no Google Sheets
+   - SDR/Head importa lista no Funil Aerion
    - Coluna "Canal": Cold Calls
    - Coluna "Status": A Contatar
 
@@ -759,8 +974,8 @@ flowchart TD
    - LinkedIn, website, notícias
    - Registra insights na planilha
 
-3. **n8n Distribui Leads**
-   - Cria cards no Trello (label: Outbound - Cold Calls)
+3. **Funil Aerion Distribui Leads**
+   - Cria cards no Funil Aerion (label: Outbound - Cold Calls)
    - Lista "Inbox - Outbound"
 
 4. **Cadência Outbound (15 dias - DIFERENTE)**
@@ -783,7 +998,7 @@ flowchart TD
 1. **Busca e Conexão**
    - SDR busca no Sales Navigator
    - Envia conexão personalizada
-   - Registra no Google Sheets: "LinkedIn Navigator"
+   - Registra no Funil Aerion: "LinkedIn Navigator"
 
 2. **Pós-Conexão (10 dias)**
    - Dia 1: Agradecimento
@@ -791,8 +1006,8 @@ flowchart TD
    - Dia 7: Value-add
    - Dia 10: Agendamento
 
-3. **n8n cria card ao agendar**
-   - Trello (label: Outbound - LinkedIn Nav)
+3. **Funil Aerion cria card ao agendar**
+   - Funil Aerion (label: Outbound - LinkedIn Nav)
    - Lista "Agendado"
 
 **Convergência:**
@@ -808,11 +1023,11 @@ flowchart TD
 
 1. **Captura no Evento**
    - Google Forms com QR Code
-   - Respostas → Google Sheets (coluna "Canal": Evento [Nome])
+   - Respostas → Funil Aerion (coluna "Canal": Evento [Nome])
 
 2. **Classificação Imediata**
    - Hot/Warm/Cold no próprio formulário
-   - n8n cria cards no Trello (label: Eventos)
+   - Funil Aerion cria cards no Funil Aerion (label: Eventos)
 
 3. **Follow-up Pós-Evento (diferenciado)**
    - Dia 1: Email todos + Ligação Hot
@@ -1682,7 +1897,7 @@ Proposta Campanha → Aprovação Aerion → Execução → Comprovantes → Aba
 
 **Controle Integrado:**
 - Planilha 6 (Revendas): Colunas VPC com fórmulas automáticas
-- Trello: Checklist VPC em cards de clientes Gold
+- Funil Aerion: Checklist VPC em cards de clientes Gold
 - Dashboard: Métricas de utilização e ROI
 
 Detalhado no documento "Processo VPC - Verba de Publicidade Cooperada".
@@ -2000,7 +2215,7 @@ PROCESSO DE LICITAÇÕES + LOBBY
 - [ ] Certificados de conformidade
 - [ ] Declaração de Origem
 
-### 6.4 Board Trello para Licitações
+### 6.4 Board Funil Aerion para Licitações
 
 **Board 4: Pipeline Licitações e Governo**
 
@@ -2041,13 +2256,13 @@ PROCESSO DE LICITAÇÕES + LOBBY
 
 ### 6.5 Integração com CRM e Automações
 
-**Workflows n8n Específicos:**
+**Workflows Funil Aerion Específicos:**
 - **Workflow 7:** Alertas de prazo de edital
 - **Workflow 8:** Sincronização com Google Calendar
 - **Workflow 9:** Notificações de mudança de fase
 - **Workflow 10:** Criação automática de cards para novos editais
 
-**Google Sheets de Apoio:**
+**Funil Aerion de Apoio:**
 - **Editais Master** - Base de dados de todos os editais
 - **Stakeholders Governo** - Mapeamento de contatos
 - **Histórico Licitações** - Resultados e análises
@@ -2333,18 +2548,18 @@ Cada pessoa responde rapidamente:
 
 ### 9.1 Sistema de Gestão de Leads e CRM
 
-**Sistema Integrado:** Google Sheets + Trello + n8n (Automação)
+**Sistema Integrado:** Funil Aerion (plataforma unica)
 
 **Arquitetura do Sistema:**
-- **Google Sheets**: Base de dados central (5 planilhas especializadas)
-- **Trello**: CRM visual com 3 boards especializados
-- **n8n**: Automação local para integração e workflows
+- **Funil Aerion**: Base de dados central (5 planilhas especializadas)
+- **Funil Aerion**: CRM visual com 3 boards especializados
+- **Funil Aerion**: Automação local para integração e workflows
 
 **📋 Documentação Completa:**
 - **Sistema-Gestao-Leads-CRM.md**: Arquitetura completa e fluxos
-- **CRM Documentacao/Templates/Templates-Trello-Boards.md**: Estruturas detalhadas dos boards
-- **Workflows-n8n-Automacao.md**: 6 workflows de automação
-- **Setup-n8n-Local.md**: Instalação e configuração
+- **CRM Documentacao/Templates/Templates-Funil Aerion-Boards.md**: Estruturas detalhadas dos boards
+- **Workflows-Funil Aerion-Automacao.md**: 6 workflows de automação
+- **Setup-Funil Aerion-Local.md**: Instalação e configuração
 - **CRM Documentacao/Templates/Templates-Google-Sheets.md**: 5 planilhas com fórmulas
 
 **Estrutura do Sistema:**
@@ -2387,10 +2602,10 @@ Listas:
 9. 😴 Inativo
 
 **Integração com Scripts de Vendas:**
-- Qualificação BANT+U registrada diretamente no Trello
+- Qualificação BANT+U registrada diretamente no Funil Aerion
 - Histórico de chamadas e interações nos cards
-- Passagem automática entre boards via n8n
-- Métricas em tempo real no Google Sheets
+- Passagem automática entre boards via Funil Aerion
+- Métricas em tempo real no Funil Aerion
 
 ### 9.2 Comunicação
 
@@ -2480,7 +2695,7 @@ Dashboards:
 O Sankhya ERP é o sistema principal para processamento de vendas após o fechamento no CRM. O fluxo ideal é:
 
 ```
-CRM (Trello) → Sankhya → Faturamento (Gestor)
+CRM (Funil Aerion) → Sankhya → Faturamento (Gestor)
      ↓           ↓            ↓
   Ganho      Cadastro/      NF emitida
   confirmado   Pedido       Logística
@@ -2490,6 +2705,31 @@ CRM (Trello) → Sankhya → Faturamento (Gestor)
 - **Vendedor:** Consulta estoque, cadastra cliente, gera orçamento, converte em pedido
 - **Administrativo:** Apoio técnico, validação de dados
 - **Gestor:** Faturamento, aprovações especiais
+
+### 10.1.1 Detalhamento prático por macroetapa no Sankhya
+
+1. **Cadastro e governança de dados mestres**
+   - Validar CNPJ/IE/IM, endereço fiscal e contatos por perfil (comercial, financeiro e técnico).
+   - Definir tabela de preços, condição de pagamento, limite de crédito e regras de desconto.
+   - Registrar observações de compliance para reduzir retrabalho em faturamento e auditoria.
+
+2. **Orçamento/Pedido com trilha de aprovação**
+   - Estruturar itens, impostos, frete, prazo de entrega e centro de resultado.
+   - Aplicar alçadas de desconto e aprovações internas quando fora da política padrão.
+   - Vincular o ID da oportunidade do Funil Aerion no histórico para rastreabilidade ponta a ponta.
+
+3. **Faturamento e documento fiscal**
+   - Conferir CFOP, CST/CSOSN, base de cálculo e alíquotas antes da emissão.
+   - Validar dados logísticos (transportadora, volumes e observações da nota).
+   - Tratar rejeições da SEFAZ com registro da causa e ação corretiva no processo comercial.
+
+4. **Pós-venda administrativo e conciliação**
+   - Confirmar títulos financeiros, vencimentos, recebimento e eventuais renegociações.
+   - Atualizar status de entrega e comprovantes para handoff completo ao CS.
+   - Fechar ciclo com lições aprendidas fiscais/comerciais para aumentar previsibilidade.
+
+**Referência oficial Sankhya (manual de telas):**
+- https://ajuda.sankhya.com.br/hc/pt-br/categories/360003333814-Documenta%C3%A7%C3%A3o-de-Telas-Manual
 
 ### 10.2 Consulta de Disponibilidade de Estoque
 
@@ -2673,9 +2913,9 @@ CRM (Trello) → Sankhya → Faturamento (Gestor)
 
 ### 10.7 Integração CRM ↔ ERP
 
-**O que fica no Trello vs Sankhya:**
+**O que fica no Funil Aerion vs Sankhya:**
 
-| Informação | Trello | Sankhya |
+| Informação | Funil Aerion | Sankhya |
 |------------|--------|---------|
 | **Pipeline de vendas** | ✅ | ❌ |
 | **Histórico de contatos** | ✅ | ❌ |
@@ -2686,14 +2926,14 @@ CRM (Trello) → Sankhya → Faturamento (Gestor)
 | **Notas fiscais** | ❌ | ✅ |
 
 **Campos que devem ser sincronizados:**
-- Número do pedido: Sankhya → Trello
-- Status de entrega: Sankhya → Trello (mensal)
-- Dados atualizados do cliente: Sankhya → Trello
+- Número do pedido: Sankhya → Funil Aerion
+- Status de entrega: Sankhya → Funil Aerion (mensal)
+- Dados atualizados do cliente: Sankhya → Funil Aerion
 
 **Workflow ideal:**
-1. **Ganho no Trello:** AE marca como "Fechado-Ganho"
+1. **Ganho no Funil Aerion:** AE marca como "Fechado-Ganho"
 2. **Cadastro/Pedido Sankhya:** AE executa procedimentos 10.3 e 10.5
-3. **Atualizar Trello:** AE adiciona número do pedido no card
+3. **Atualizar Funil Aerion:** AE adiciona número do pedido no card
 4. **Handoff para CS:** CS assume acompanhamento
 
 ### 10.8 Checklist Pós-Fechamento (Vendedor)
@@ -2707,7 +2947,7 @@ Checklist prático para vendedor executar após ganhar venda:
 
 **Próximos passos (24-48h):**
 - [ ] Converter orçamento em pedido (10.5)
-- [ ] Atualizar card Trello com número do pedido
+- [ ] Atualizar card Funil Aerion com número do pedido
 - [ ] Notificar logística sobre pedido
 - [ ] Enviar confirmação para cliente com número do pedido
 
