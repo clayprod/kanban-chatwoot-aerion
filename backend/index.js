@@ -4912,6 +4912,34 @@ app.post('/api/licitacoes/pca/signals/:id/seen', async (req, res) => {
   }
 });
 
+app.put('/api/licitacoes/pca/signals/:id/status', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const signalId = toIntOrNull(req.params.id);
+    const nextStatus = String(req.body?.status || '').trim().toLowerCase();
+    const allowed = new Set(['novo', 'visto', 'descartado']);
+
+    if (!signalId) return res.status(400).json({ error: 'id inválido' });
+    if (!allowed.has(nextStatus)) return res.status(400).json({ error: 'status inválido' });
+
+    const { rows } = await pool.query(
+      `
+        UPDATE ${PCA_SIGNALS_TABLE}
+           SET status = $1
+         WHERE id = $2
+           AND account_id = $3
+         RETURNING id, status
+      `,
+      [nextStatus, signalId, accountId]
+    );
+
+    if (!rows[0]) return res.status(404).json({ error: 'signal não encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar status do signal', details: error.message });
+  }
+});
+
 app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
