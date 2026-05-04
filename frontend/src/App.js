@@ -1518,11 +1518,11 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       </div>
       <div className="mt-2 space-y-1 text-[11px]">
         <div className="flex justify-between">
-          <span className="text-muted">Sessão:</span>
+          <span className="text-muted">Proposta início:</span>
           <span className={statusColors[sessaoStatus]}>{sessaoDate || 'não definida'}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-muted">Proposta:</span>
+          <span className="text-muted">Proposta fim:</span>
           <span className={statusColors[propostaStatus]}>{propostaDate || 'não definida'}</span>
         </div>
       </div>
@@ -2233,6 +2233,9 @@ function PcaSignalsPanel({ onPromoted }) {
         await axios.post(`/api/licitacoes/pca/signals/${id}/dismiss`);
       } else if (kind === 'seen') {
         await axios.post(`/api/licitacoes/pca/signals/${id}/seen`);
+      } else if (kind === 'to_novo' || kind === 'to_visto' || kind === 'to_descartado') {
+        const status = kind.replace('to_', '');
+        await axios.put(`/api/licitacoes/pca/signals/${id}/status`, { status });
       }
       load();
     } catch (e) {
@@ -2282,19 +2285,139 @@ function PcaSignalsPanel({ onPromoted }) {
                   <span>· {formatPcaDate(s.criado_em)}</span>
                 </div>
               </div>
-              {statusFilter === 'novo' && (
-                <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap justify-end">
+                {statusFilter !== 'promovido' && (
+                  <>
+                    {s.status !== 'novo' && (
+                      <button type="button" disabled={busy[s.id]}
+                        onClick={() => act(s.id, 'to_novo')}
+                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
+                    )}
+                    {s.status !== 'visto' && (
+                      <button type="button" disabled={busy[s.id]}
+                        onClick={() => act(s.id, 'to_visto')}
+                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
+                    )}
+                    {s.status !== 'descartado' && (
+                      <button type="button" disabled={busy[s.id]}
+                        onClick={() => act(s.id, 'to_descartado')}
+                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
+                    )}
+                  </>
+                )}
+                {statusFilter === 'novo' && (
                   <button type="button" disabled={busy[s.id]}
                     onClick={() => act(s.id, 'promote')}
                     className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
-                  <button type="button" disabled={busy[s.id]}
-                    onClick={() => act(s.id, 'seen')}
-                    className="h-8 rounded-lg border border-border px-3 text-xs">Visto</button>
-                  <button type="button" disabled={busy[s.id]}
-                    onClick={() => act(s.id, 'dismiss')}
-                    className="h-8 rounded-lg border border-border px-3 text-xs">Dispensar</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PcaWatchlistsPanel() {
+  const [watchlists, setWatchlists] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState({});
+
+  const loadWatchlists = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await axios.get('/api/licitacoes/pca/watchlist');
+      setWatchlists(r.data || []);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWatchlists();
+  }, [loadWatchlists]);
+
+  const toggleAtivo = async (row) => {
+    setBusy(prev => ({ ...prev, [row.id]: true }));
+    try {
+      await axios.put(`/api/licitacoes/pca/watchlist/${row.id}`, { ativo: !row.ativo });
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  const removeWatchlist = async (row) => {
+    if (!window.confirm(`Excluir watchlist "${row.nome}"?`)) return;
+    setBusy(prev => ({ ...prev, [row.id]: true }));
+    try {
+      await axios.delete(`/api/licitacoes/pca/watchlist/${row.id}`);
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  return (
+    <div className="mt-6 space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted">Watchlists salvas geram sinais no próximo sync.</p>
+        <button type="button" onClick={loadWatchlists} className="h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
+          Atualizar
+        </button>
+      </div>
+
+      {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
+
+      {loading ? (
+        <div className="text-sm text-muted">Carregando...</div>
+      ) : watchlists.length === 0 ? (
+        <div className="text-sm text-muted py-6 text-center">Nenhuma watchlist salva.</div>
+      ) : (
+        <div className="rounded-2xl border border-border bg-card divide-y divide-border">
+          {watchlists.map(w => (
+            <div key={w.id} className="p-3 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-ink">{w.nome}</div>
+                <div className="mt-1 text-xs text-muted flex flex-wrap gap-2">
+                  <span>Status: {w.ativo ? 'Ativa' : 'Inativa'}</span>
+                  <span>IA: {w.usar_ia ? 'Sim' : 'Não'}</span>
+                  <span>Criada: {formatPcaDate(w.criado_em)}</span>
                 </div>
-              )}
+                <div className="mt-2 text-xs text-muted">
+                  <strong>Positivos:</strong> {(w.palavras_chave || []).join(', ') || '—'}
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  <strong>Negativos:</strong> {(w.termos_negativos || []).join(', ') || '—'}
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={busy[w.id]}
+                  onClick={() => toggleAtivo(w)}
+                  className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50"
+                >
+                  {w.ativo ? 'Desativar' : 'Ativar'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy[w.id]}
+                  onClick={() => removeWatchlist(w)}
+                  className="h-8 rounded-lg border border-rose-300 px-3 text-xs font-semibold text-rose-600 disabled:opacity-50"
+                >
+                  Excluir
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -2310,7 +2433,7 @@ function App() {
   const [licitaçãoOpportunities, setLicitacaoOpportunities] = useState([]);
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
-  const [licitaçãoSubview, setLicitacaoSubview] = useState('board'); // 'board' | 'pca' | 'sinais'
+  const [licitaçãoSubview, setLicitacaoSubview] = useState('board'); // 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [selectedCommercialRequirements, setSelectedCommercialRequirements] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
@@ -3675,8 +3798,34 @@ function App() {
   const importPncpLicitacao = async (item) => {
     setPncpImportingId(item.id);
     try {
-      const dataSessao = item.data_sessao || item.data_inicio_vigencia || item.data_fim_vigencia;
-      const prazoProposta = item.data_envio_proposta_limite || item.data_fim_vigencia;
+      const pickPncpDate = (source, keys = []) => {
+        for (const key of keys) {
+          const value = source?.[key];
+          if (value) return value;
+        }
+        return null;
+      };
+
+      const propostaInicio = pickPncpDate(item, [
+        'data_inicio_proposta',
+        'dataInicioProposta',
+        'data_inicio_recebimento_proposta',
+        'dataInicioRecebimentoProposta',
+        'data_abertura_proposta',
+        'dataAberturaProposta',
+        'data_sessao',
+      ]) || item.data_publicacao;
+
+      const propostaFim = pickPncpDate(item, [
+        'data_fim_proposta',
+        'dataFimProposta',
+        'data_envio_proposta_limite',
+        'dataEnvioPropostaLimite',
+        'data_fim_recebimento_proposta',
+        'dataFimRecebimentoProposta',
+        'data_encerramento_proposta',
+        'dataEncerramentoProposta',
+      ]) || item.data_fim_vigencia;
       // Mapear situação PNCP para status da oportunidade
       const pncpSituacaoNome = (item.situacao?.nome || '').toLowerCase();
       const statusFromPncp = pncpSituacaoNome.includes('suspens') ? 'suspenso'
@@ -3709,8 +3858,8 @@ function App() {
         numero_edital: item.numero_sequencial || '',
         numero_compra: item.numero_controle_pncp || '',
         data_publicacao: toDateInputValue(item.data_publicacao),
-        data_sessao: toDateTimeLocalValue(dataSessao),
-        data_envio_proposta_limite: toDateTimeLocalValue(prazoProposta),
+        data_sessao: toDateTimeLocalValue(propostaInicio),
+        data_envio_proposta_limite: toDateTimeLocalValue(propostaFim),
         data_assinatura_ata_limite: toDateTimeLocalValue(item.data_assinatura_ata_limite),
         data_entrega_limite: toDateTimeLocalValue(item.data_entrega_limite || item.data_fim_vigencia),
         valor_oportunidade: toPtBrDecimalInput(estimatedValue),
@@ -5110,8 +5259,10 @@ function App() {
               <div className="mt-4 inline-flex items-center rounded-full border border-border bg-card p-1">
                 {[
                   { key: 'board', label: 'Board' },
+                  { key: 'editais', label: 'Busca Editais' },
                   { key: 'pca', label: 'PCA' },
                   { key: 'sinais', label: 'Sinais PCA' },
+                  { key: 'watchlists', label: 'Watchlists PCA' },
                 ].map(opt => (
                   <button
                     key={opt.key}
@@ -5124,7 +5275,9 @@ function App() {
                 ))}
               </div>
 
-              {licitaçãoSubview === 'board' && (
+              {(licitaçãoSubview === 'board' || licitaçãoSubview === 'editais') && (
+              <>
+              {licitaçãoSubview === 'editais' && (
               <>
               {/* PNCP Search - Busca de Editais/Licitações */}
               <div className="mt-6 rounded-2xl border border-border bg-card p-4">
@@ -5589,7 +5742,11 @@ function App() {
                   </>
                 )}
               </div>
+              </>
+              )}
 
+              {licitaçãoSubview === 'board' && (
+              <>
               {showNewOpportunityForm && (
                 <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
                   <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5">
@@ -5776,11 +5933,11 @@ function App() {
                           <input type="date" className="h-9 w-full rounded-lg border border-border bg-card px-3 text-sm" value={newOpportunityForm.data_publicacao} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, data_publicacao: event.target.value }))} />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-muted mb-1">Data/Hora da Sessão</label>
+                          <label className="block text-[11px] text-muted mb-1">Data/Hora início da proposta</label>
                           <input type="datetime-local" className="h-9 w-full rounded-lg border border-border bg-card px-3 text-sm" value={newOpportunityForm.data_sessao} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, data_sessao: event.target.value }))} />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-semibold text-status-danger mb-1">Prazo Envio Proposta</label>
+                          <label className="block text-[11px] font-semibold text-status-danger mb-1">Data/Hora fim da proposta</label>
                           <input type="datetime-local" className="h-9 w-full rounded-lg border border-status-danger/30 bg-card px-3 text-sm" value={newOpportunityForm.data_envio_proposta_limite} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, data_envio_proposta_limite: event.target.value }))} />
                         </div>
                         <div>
@@ -6142,11 +6299,11 @@ function App() {
                           <input type="date" className="h-9 w-full rounded-lg border border-border bg-card px-3 text-sm" value={selectedOpportunity.data_publicacao ? String(selectedOpportunity.data_publicacao).slice(0, 10) : ''} onChange={(event) => updateSelectedOpportunity({ data_publicacao: event.target.value || null })} />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-muted mb-1">Data/Hora da Sessão</label>
+                          <label className="block text-[11px] text-muted mb-1">Data/Hora início da proposta</label>
                           <input type="datetime-local" className="h-9 w-full rounded-lg border border-border bg-card px-3 text-sm" value={selectedOpportunity.data_sessao ? new Date(selectedOpportunity.data_sessao).toISOString().slice(0, 16) : ''} onChange={(event) => updateSelectedOpportunity({ data_sessao: event.target.value || null })} />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-semibold text-status-danger mb-1">Prazo Envio Proposta</label>
+                          <label className="block text-[11px] font-semibold text-status-danger mb-1">Data/Hora fim da proposta</label>
                           <input type="datetime-local" className="h-9 w-full rounded-lg border border-status-danger/30 bg-card px-3 text-sm" value={selectedOpportunity.data_envio_proposta_limite ? new Date(selectedOpportunity.data_envio_proposta_limite).toISOString().slice(0, 16) : ''} onChange={(event) => updateSelectedOpportunity({ data_envio_proposta_limite: event.target.value || null })} />
                         </div>
                         <div>
@@ -6538,6 +6695,8 @@ function App() {
               )}
               </>
               )}
+              </>
+              )}
 
               {licitaçãoSubview === 'pca' && (
                 <PcaExplorer
@@ -6548,6 +6707,10 @@ function App() {
 
               {licitaçãoSubview === 'sinais' && (
                 <PcaSignalsPanel onPromoted={() => loadLicitações()} />
+              )}
+
+              {licitaçãoSubview === 'watchlists' && (
+                <PcaWatchlistsPanel />
               )}
             </>
           )}
