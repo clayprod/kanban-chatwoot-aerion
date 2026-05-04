@@ -2275,7 +2275,7 @@ function PcaSignalsPanel({ onPromoted }) {
           </button>
         ))}
         <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
-          Atualizar
+          Atualizar lista
         </button>
       </div>
 
