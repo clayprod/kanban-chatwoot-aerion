@@ -1612,7 +1612,8 @@ const formatPcaDate = (v) => {
 const groupPcaSignalsByWatchlist = (signals) => {
   const groups = new Map();
   for (const s of (signals || [])) {
-    const key = s.watchlist_id ? `watchlist_${s.watchlist_id}` : '__sem_watchlist__';
+    if (!s.watchlist_id) continue;
+    const key = `watchlist_${s.watchlist_id}`;
     if (!groups.has(key)) {
       groups.set(key, {
         key,
@@ -2291,7 +2292,7 @@ function PcaSignalsPanel({ onPromoted }) {
           </button>
         ))}
         <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
-          Atualizar sinais
+          Atualizar sinais agora
         </button>
       </div>
 
@@ -2305,7 +2306,7 @@ function PcaSignalsPanel({ onPromoted }) {
         <div className="space-y-3">
           {groupPcaSignalsByWatchlist(signals).map(group => (
             <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
-              <div className="px-3 py-2 border-b border-border bg-cardAlt/70 text-xs font-semibold text-ink">
+              <div className="px-3 py-2 border-b border-border bg-primary/10 text-xs font-semibold text-primary">
                 {group.title} ({group.items.length})
               </div>
               <div className="divide-y divide-border">

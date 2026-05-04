@@ -4670,7 +4670,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
         LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
-        WHERE s.account_id = $1 AND s.status = $2
+        WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
         ORDER BY i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
         LIMIT 500
       `, params
@@ -4689,7 +4689,7 @@ app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
       `
         SELECT status, COUNT(*)::int AS total
         FROM ${PCA_SIGNALS_TABLE}
-        WHERE account_id = $1
+        WHERE account_id = $1 AND watchlist_id IS NOT NULL
         GROUP BY status
       `,
       [accountId]
@@ -4728,6 +4728,29 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
     );
     return rows[0] || null;
   }
+
+  const { rows: existingOppRows } = await pool.query(
+    `
+      SELECT *
+      FROM ${LICITACAO_TABLE}
+      WHERE account_id = $1
+        AND origem_oportunidade = 'pca_pncp'
+        AND metadados->>'pca_item_id' = $2
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [accountId, String(sig.item_id)]
+  );
+  if (existingOppRows[0]) {
+    await pool.query(
+      `UPDATE ${PCA_SIGNALS_TABLE}
+          SET status = 'promovido', promovido_para_opportunity_id = $1
+        WHERE id = $2`,
+      [existingOppRows[0].id, signalId]
+    );
+    return existingOppRows[0];
+  }
+
   const titulo = (sig.descricao || 'PCA').slice(0, 200);
   const metadados = {
     pca_plano_id: sig.plano_id,
@@ -5050,11 +5073,26 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
 app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await pool.query(
-      `DELETE FROM ${PCA_WATCHLIST_TABLE} WHERE id = $1 AND account_id = $2`,
-      [toIntOrNull(req.params.id), accountId]
-    );
-    res.json({ ok: true });
+    const watchlistId = toIntOrNull(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM ${PCA_SIGNALS_TABLE} WHERE watchlist_id = $1 AND account_id = $2`,
+        [watchlistId, accountId]
+      );
+      await client.query(
+        `DELETE FROM ${PCA_WATCHLIST_TABLE} WHERE id = $1 AND account_id = $2`,
+        [watchlistId, accountId]
+      );
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     res.status(500).json({ error: 'Erro ao remover watchlist', details: error.message });
   }
