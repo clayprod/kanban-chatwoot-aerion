@@ -1659,7 +1659,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
     if (!window.confirm('Vai apagar TODOS os PCAs do banco (planos, itens e signals). Watchlists ficam preservadas. Continuar?')) return;
     setResetting(true);
     try {
-      await axios.post('/api/licitações/pca/reset');
+      await axios.post('/api/licitacoes/pca/reset');
       await fetchBootstrapStatus();
       setItems([]);
       setTotal(0);
@@ -1673,7 +1673,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
 
   const fetchBootstrapStatus = useCallback(async () => {
     try {
-      const r = await axios.get('/api/licitações/pca/bootstrap/status');
+      const r = await axios.get('/api/licitacoes/pca/bootstrap/status');
       setBootstrapStatus(r.data);
       return r.data;
     } catch {
@@ -1698,7 +1698,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
     if (bootstrapStatus?.running) return;
     if (!window.confirm(`Vai baixar todos os PCAs publicados/atualizados em ${filtros.ano_pca || new Date().getFullYear()} (12 janelas mensais). Pode levar vários minutos. Continuar?`)) return;
     try {
-      await axios.post('/api/licitações/pca/bootstrap', { ano: Number(filtros.ano_pca) || new Date().getFullYear() });
+      await axios.post('/api/licitacoes/pca/bootstrap', { ano: Number(filtros.ano_pca) || new Date().getFullYear() });
       fetchBootstrapStatus();
     } catch (e) {
       if (e.response?.status === 409) {
@@ -1733,7 +1733,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
         params.positivos_override = JSON.stringify(overridePositivos);
         params.negativos_override = JSON.stringify(overrideNegativos || []);
       }
-      const r = await axios.get('/api/licitações/pca/search', { params });
+      const r = await axios.get('/api/licitacoes/pca/search', { params });
       setPositivos(r.data.positivos || []);
       setNegativos(r.data.negativos || []);
       setFonteIa(r.data.fonte_ia || null);
@@ -1769,7 +1769,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
     if (!itemIds.length) return;
     setBusy(prev => ({ ...prev, [ct.key]: true }));
     try {
-      const r = await axios.post('/api/licitações/pca/contratações/promote', {
+      const r = await axios.post('/api/licitacoes/pca/contratacoes/promote', {
         plano_id: ct.plano_id,
         item_ids: itemIds,
         titulo: ct.contratacao_nome || (ct.contratacao_id ? `Contratação ${ct.contratacao_id}` : null),
@@ -1791,7 +1791,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
 
   const salvarWatchlist = async () => {
     try {
-      await axios.post('/api/licitações/pca/watchlist', {
+      await axios.post('/api/licitacoes/pca/watchlist', {
         nome: saveName || q,
         palavras_chave: q ? [q] : positivos.slice(0, 1),
         termos_negativos: negativos,
@@ -2196,7 +2196,7 @@ function PcaSignalsPanel({ onPromoted }) {
     setLoading(true);
     setError(null);
     try {
-      const r = await axios.get('/api/licitações/pca/signals', { params: { status: statusFilter } });
+      const r = await axios.get('/api/licitacoes/pca/signals', { params: { status: statusFilter } });
       setSignals(r.data || []);
     } catch (e) {
       setError(e.response?.data?.error || e.message);
@@ -2211,12 +2211,12 @@ function PcaSignalsPanel({ onPromoted }) {
     setBusy(prev => ({ ...prev, [id]: true }));
     try {
       if (kind === 'promote') {
-        await axios.post(`/api/licitações/pca/signals/${id}/promote`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/promote`);
         onPromoted && onPromoted();
       } else if (kind === 'dismiss') {
-        await axios.post(`/api/licitações/pca/signals/${id}/dismiss`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/dismiss`);
       } else if (kind === 'seen') {
-        await axios.post(`/api/licitações/pca/signals/${id}/seen`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/seen`);
       }
       load();
     } catch (e) {
@@ -2599,7 +2599,7 @@ function App() {
   const loadLicitações = useCallback(async () => {
     setLicitacaoLoading(true);
     try {
-      const opportunitiesResponse = await axios.get('/api/licitações/opportunities');
+      const opportunitiesResponse = await axios.get('/api/licitacoes/opportunities');
       setLicitacaoOpportunities(opportunitiesResponse.data || []);
     } catch (error) {
       console.error('Error loading licitações:', error);
@@ -2628,9 +2628,9 @@ function App() {
       try {
         console.log('[PNCP Filters] Carregando opções de filtros...');
         const [modalidadesResult, modosResult, tiposResult] = await Promise.allSettled([
-          axios.get('/api/licitações/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitações/pncp/modos-disputa', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitações/pncp/tipos-instrumentos', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitacoes/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitacoes/pncp/modos-disputa', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitacoes/pncp/tipos-instrumentos', { params: { tamanhoPagina: 200 } }),
         ]);
 
         let loadedCount = 0;
@@ -2691,15 +2691,15 @@ function App() {
         const orgaoQuery = String(orgaoLookupQuery || newOpportunityForm.orgao_nome || '').trim();
         const [orgaoResult, catalogResult, modalidadeResult] = await Promise.allSettled([
           orgaoQuery.length >= 2
-            ? axios.get('/api/licitações/pncp/orgaos', {
+            ? axios.get('/api/licitacoes/pncp/orgaos', {
                 params: {
                   q: orgaoQuery,
                   tamanhoPagina: 100,
                 },
               })
             : Promise.resolve({ data: [] }),
-          axios.get('/api/licitações/pncp/catalogos', { params: { tamanhoPagina: 200 } }),
-          axios.get('/api/licitações/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitacoes/pncp/catalogos', { params: { tamanhoPagina: 200 } }),
+          axios.get('/api/licitacoes/pncp/modalidades', { params: { tamanhoPagina: 200 } }),
         ]);
 
         if (cancelled) {
@@ -2718,7 +2718,7 @@ function App() {
         const orgaoCnpjDigits = String(newOpportunityForm.orgao_cnpj || '').replace(/\D/g, '');
         if (orgaoCnpjDigits) {
           // Tentar PNCP primeiro
-          const unitsResponse = await axios.get(`/api/licitações/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
+          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           const pncpUnits = Array.isArray(unitsResponse.data) ? unitsResponse.data : [];
@@ -2730,7 +2730,7 @@ function App() {
             } else {
               // Fallback para Compras.gov se PNCP não retornar unidades
               try {
-                const comprasResponse = await axios.get('/api/licitações/compras/uasgs', {
+                const comprasResponse = await axios.get('/api/licitacoes/compras/uasgs', {
                   params: { cnpj: orgaoCnpjDigits },
                 });
                 const comprasUnits = Array.isArray(comprasResponse.data) ? comprasResponse.data.map(u => ({
@@ -2750,7 +2750,7 @@ function App() {
           const uasgQuery = String(uasgLookupQuery || '').trim();
           if (uasgQuery.length >= 2) {
             try {
-              const searchResponse = await axios.get('/api/licitações/pncp/search', {
+              const searchResponse = await axios.get('/api/licitacoes/pncp/search', {
                 params: {
                   q: uasgQuery,
                   pagina: 1,
@@ -2847,7 +2847,7 @@ function App() {
     const timer = setTimeout(async () => {
       setPncpOrgaoLookupLoading(true);
       try {
-        const response = await axios.get('/api/licitações/pncp/orgaos', {
+        const response = await axios.get('/api/licitacoes/pncp/orgaos', {
           params: {
             q: query,
             tamanhoPagina: 100,
@@ -2886,7 +2886,7 @@ function App() {
       setPncpUasgLookupLoading(true);
       try {
         if (cnpj) {
-          const response = await axios.get(`/api/licitações/pncp/orgaos/${cnpj}/unidades`, {
+          const response = await axios.get(`/api/licitacoes/pncp/orgaos/${cnpj}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           if (!cancelled) {
@@ -2902,7 +2902,7 @@ function App() {
           return;
         }
 
-        const response = await axios.get('/api/licitações/pncp/search', {
+        const response = await axios.get('/api/licitacoes/pncp/search', {
           params: {
             q: uasgQuery,
             pagina: 1,
@@ -2994,7 +2994,7 @@ function App() {
       axios.get('/api/overview/by-customer-type'),
       axios.get('/api/overview/by-probability'),
       axios.get('/api/overview/history', { params: { granularity: historyGranularity, range } }),
-      axios.get('/api/licitações/overview/summary'),
+      axios.get('/api/licitacoes/overview/summary'),
     ])
       .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history, licitaçãoSummary]) => {
         setOverviewData({
@@ -3299,7 +3299,7 @@ function App() {
         : item
     )));
     try {
-      await axios.put(`/api/licitações/opportunities/${opportunityId}`, { fase: targetStage });
+      await axios.put(`/api/licitacoes/opportunities/${opportunityId}`, { fase: targetStage });
     } catch (error) {
       console.error('Error moving licitação opportunity:', error);
       setLicitacaoOpportunities(previous);
@@ -3347,7 +3347,7 @@ function App() {
         },
         linked_contacts: linkedContacts,
       };
-      const response = await axios.post('/api/licitações/opportunities', payload);
+      const response = await axios.post('/api/licitacoes/opportunities', payload);
       const created = response.data;
 
       for (const item of newOpportunityItemsDraft) {
@@ -3357,7 +3357,7 @@ function App() {
 
         let createdItem;
         try {
-          const createdItemResponse = await axios.post(`/api/licitações/opportunities/${created.id}/items`, {
+          const createdItemResponse = await axios.post(`/api/licitacoes/opportunities/${created.id}/items`, {
             numero_item: item.numero_item,
             descricao: item.descricao,
             modelo_produto: item.modelo_produto,
@@ -3378,7 +3378,7 @@ function App() {
             continue;
           }
           try {
-            await axios.post(`/api/licitações/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
+            await axios.post(`/api/licitacoes/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
               requisito: req.requisito,
               status: req.status,
               observacao: req.observacao,
@@ -3391,7 +3391,7 @@ function App() {
       }
 
       if (String(newOpportunityForm.comentario_inicial || '').trim()) {
-        await axios.post(`/api/licitações/opportunities/${created.id}/comments`, {
+        await axios.post(`/api/licitacoes/opportunities/${created.id}/comments`, {
           content: newOpportunityForm.comentario_inicial,
         });
       }
@@ -3541,7 +3541,7 @@ function App() {
   const runPncpSearch = async (page = 1) => {
     setPncpSearchLoading(true);
     try {
-      const response = await axios.get('/api/licitações/pncp/search', {
+      const response = await axios.get('/api/licitacoes/pncp/search', {
         params: {
           q: pncpSearchFilters.q,
           tipos_documento: pncpSearchFilters.tipos_documento,
@@ -3631,7 +3631,7 @@ function App() {
     const allItems = [];
 
     for (let page = 1; page <= maxPages; page += 1) {
-      const response = await axios.get(`/api/licitações/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
+      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
         params: {
           pagina: page,
           tamanhoPagina: pageSize,
@@ -3727,10 +3727,10 @@ function App() {
     setSelectedOpportunity(opportunity);
     try {
       const [requirementsResponse, contactsResponse, itemsResponse, commentsResponse] = await Promise.all([
-        axios.get(`/api/licitações/opportunities/${opportunity.id}/requirements`),
-        axios.get(`/api/licitações/opportunities/${opportunity.id}/contacts`),
-        axios.get(`/api/licitações/opportunities/${opportunity.id}/items`),
-        axios.get(`/api/licitações/opportunities/${opportunity.id}/comments`),
+        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/requirements`),
+        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/contacts`),
+        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items`),
+        axios.get(`/api/licitacoes/opportunities/${opportunity.id}/comments`),
       ]);
       const requirements = Array.isArray(requirementsResponse.data) ? requirementsResponse.data : [];
       setSelectedCommercialRequirements(requirements.filter(item => item.tipo === 'comercial'));
@@ -3745,7 +3745,7 @@ function App() {
 
       const requirementsByItem = {};
       await Promise.all(items.map(async (item) => {
-        const itemRequirementsResponse = await axios.get(`/api/licitações/opportunities/${opportunity.id}/items/${item.id}/requirements`);
+        const itemRequirementsResponse = await axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items/${item.id}/requirements`);
         requirementsByItem[item.id] = Array.isArray(itemRequirementsResponse.data) ? itemRequirementsResponse.data : [];
       }));
       setItemRequirementsMap(requirementsByItem);
@@ -3767,7 +3767,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/comments`, {
+      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/comments`, {
         content: newCommentText.trim(),
         author: 'Admin',
       });
@@ -3783,7 +3783,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/comments/${commentId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/comments/${commentId}`);
       setSelectedComments(prev => prev.filter(comment => comment.id !== commentId));
     } catch (error) {
       console.error('Error deleting comment:', error);
@@ -3799,7 +3799,7 @@ function App() {
     setSelectedOpportunity(next);
     setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? { ...item, ...changes } : item)));
     try {
-      const response = await axios.put(`/api/licitações/opportunities/${id}`, changes);
+      const response = await axios.put(`/api/licitacoes/opportunities/${id}`, changes);
       setSelectedOpportunity(response.data);
       setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? response.data : item)));
     } catch (error) {
@@ -3832,7 +3832,7 @@ function App() {
 
     const opportunityId = selectedOpportunity.id;
     try {
-      await axios.delete(`/api/licitações/opportunities/${opportunityId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${opportunityId}`);
       setLicitacaoOpportunities(prev => prev.filter(item => String(item.id) !== String(opportunityId)));
       setSelectedOpportunity(null);
       setSelectedCommercialRequirements([]);
@@ -3866,7 +3866,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/requirements`, {
+      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements`, {
         tipo: 'comercial',
         titulo: newRequirementForm.titulo,
       });
@@ -3883,7 +3883,7 @@ function App() {
     }
     try {
       const response = await axios.put(
-        `/api/licitações/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`,
+        `/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`,
         changes
       );
       setSelectedCommercialRequirements(prev => prev.map(item => (item.id === requirementId ? response.data : item)));
@@ -3897,7 +3897,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/requirements/${requirementId}`);
       setSelectedCommercialRequirements(prev => prev.filter(item => item.id !== requirementId));
     } catch (error) {
       console.error('Error deleting requirement:', error);
@@ -3914,7 +3914,7 @@ function App() {
       const custoTotalItem = quantidade !== null && valorReferencia !== null
         ? Number((quantidade * valorReferencia).toFixed(2))
         : null;
-      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/items`, {
+      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items`, {
         ...newItemForm,
         quantidade,
         valor_referencia: valorReferencia,
@@ -3932,7 +3932,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.put(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}`, changes);
+      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`, changes);
       setSelectedItems(prev => prev.map(item => (item.id === itemId ? response.data : item)));
     } catch (error) {
       console.error('Error updating item:', error);
@@ -4002,7 +4002,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`);
       setSelectedItems(prev => prev.filter(item => item.id !== itemId));
       setItemRequirementsMap(prev => {
         const next = { ...prev };
@@ -4033,7 +4033,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements`, {
+      const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements`, {
         requisito: form.requisito,
         status: form.status || 'verificar',
         observacao: form.observacao || null,
@@ -4058,7 +4058,7 @@ function App() {
       return;
     }
     try {
-      const response = await axios.put(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`, changes);
+      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`, changes);
       setItemRequirementsMap(prev => ({
         ...prev,
         [itemId]: (prev[itemId] || []).map(item => (item.id === requirementId ? response.data : item)),
@@ -4099,7 +4099,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`);
       setItemRequirementsMap(prev => ({
         ...prev,
         [itemId]: (prev[itemId] || []).filter(item => item.id !== requirementId),
@@ -4140,12 +4140,12 @@ function App() {
       return;
     }
     try {
-      await axios.post(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts`, {
+      await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts`, {
         contact_id: Number(resolvedId),
         papel: contactLinkForm.papel,
         observacao: contactLinkForm.observacao,
       });
-      const contactsResponse = await axios.get(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts`);
+      const contactsResponse = await axios.get(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts`);
       setSelectedLinkedContacts(contactsResponse.data || []);
       setContactLinkForm({ contact_id: '', papel: '', observacao: '' });
       setContactLinkQuery('');
@@ -4159,7 +4159,7 @@ function App() {
       return;
     }
     try {
-      await axios.delete(`/api/licitações/opportunities/${selectedOpportunity.id}/contacts/${linkId}`);
+      await axios.delete(`/api/licitacoes/opportunities/${selectedOpportunity.id}/contacts/${linkId}`);
       setSelectedLinkedContacts(prev => prev.filter(link => String(link.id) !== String(linkId)));
     } catch (error) {
       console.error('Error unlinking contact:', error);
