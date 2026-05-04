@@ -2286,46 +2286,64 @@ function PcaSignalsPanel({ onPromoted }) {
       ) : signals.length === 0 ? (
         <div className="text-sm text-muted py-6 text-center">Nenhum signal {statusFilter}.</div>
       ) : (
-        <div className="rounded-2xl border border-border bg-card divide-y divide-border">
-          {signals.map(s => (
-            <div key={s.id} className="p-3 flex items-start gap-3">
-              <div className="flex-1">
-                <div className="text-sm text-ink">{s.descricao}</div>
-                <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
-                  <span>{s.orgao_razao_social || s.orgao_cnpj}</span>
-                  <span>UASG {s.codigo_unidade}</span>
-                  <span>PCA {s.ano_pca}</span>
-                  <span>Mês {s.mes_previsto ?? '—'}</span>
-                  <span>{formatPcaCurrency(s.valor_total)}</span>
-                  <span>Score {Number(s.score || 0).toFixed(2)}</span>
-                  <span>· {formatPcaDate(s.criado_em)}</span>
-                </div>
+        <div className="space-y-3">
+          {groupedSignals.map(group => (
+            <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
+              <div className="px-3 py-2 border-b border-border bg-cardAlt/70 text-xs font-semibold text-ink">
+                {group.title} ({group.items.length})
               </div>
-              <div className="flex gap-2 flex-wrap justify-end">
-                {statusFilter !== 'promovido' && (
-                  <>
-                    {s.status !== 'novo' && (
-                      <button type="button" disabled={busy[s.id]}
-                        onClick={() => act(s.id, 'to_novo')}
-                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
-                    )}
-                    {s.status !== 'visto' && (
-                      <button type="button" disabled={busy[s.id]}
-                        onClick={() => act(s.id, 'to_visto')}
-                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
-                    )}
-                    {s.status !== 'descartado' && (
-                      <button type="button" disabled={busy[s.id]}
-                        onClick={() => act(s.id, 'to_descartado')}
-                        className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
-                    )}
-                  </>
-                )}
-                {statusFilter === 'novo' && (
-                  <button type="button" disabled={busy[s.id]}
-                    onClick={() => act(s.id, 'promote')}
-                    className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
-                )}
+              <div className="divide-y divide-border">
+                {group.items.map(s => (
+                  <div key={s.id} className="p-3 flex items-start gap-3">
+                    <div className="flex-1">
+                      <div className="text-sm text-ink">{s.descricao}</div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
+                        <span>{s.orgao_razao_social || s.orgao_cnpj}</span>
+                        <span>UASG {s.codigo_unidade}</span>
+                        <span>PCA {s.ano_pca}</span>
+                        <span>Mês {s.mes_previsto ?? '—'}</span>
+                        <span>{formatPcaCurrency(s.valor_total)}</span>
+                        <span>Score {Number(s.score || 0).toFixed(2)}</span>
+                        <span>· {formatPcaDate(s.criado_em)}</span>
+                        <a
+                          href={`https://pncp.gov.br/app/pca/${s.orgao_cnpj}/${s.ano_pca}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-semibold text-primary hover:underline"
+                          title="Abrir PCA no PNCP"
+                        >
+                          ver no PNCP ↗
+                        </a>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 flex-wrap justify-end">
+                      {statusFilter !== 'promovido' && (
+                        <>
+                          {s.status !== 'novo' && (
+                            <button type="button" disabled={busy[s.id]}
+                              onClick={() => act(s.id, 'to_novo')}
+                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
+                          )}
+                          {s.status !== 'visto' && (
+                            <button type="button" disabled={busy[s.id]}
+                              onClick={() => act(s.id, 'to_visto')}
+                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
+                          )}
+                          {s.status !== 'descartado' && (
+                            <button type="button" disabled={busy[s.id]}
+                              onClick={() => act(s.id, 'to_descartado')}
+                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
+                          )}
+                        </>
+                      )}
+                      {statusFilter === 'novo' && (
+                        <button type="button" disabled={busy[s.id]}
+                          onClick={() => act(s.id, 'promote')}
+                          className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ))}
@@ -2369,6 +2387,22 @@ function PcaWatchlistsPanel() {
       setBusy(prev => ({ ...prev, [row.id]: false }));
     }
   };
+
+  const groupedSignals = useMemo(() => {
+    const groups = new Map();
+    for (const s of signals) {
+      const key = s.watchlist_id ? `watchlist_${s.watchlist_id}` : '__sem_watchlist__';
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          title: s.watchlist_nome || (s.watchlist_id ? `Watchlist #${s.watchlist_id}` : 'Sem watchlist'),
+          items: [],
+        });
+      }
+      groups.get(key).items.push(s);
+    }
+    return Array.from(groups.values());
+  }, [signals]);
 
   const removeWatchlist = async (row) => {
     if (!window.confirm(`Excluir watchlist "${row.nome}"?`)) return;
