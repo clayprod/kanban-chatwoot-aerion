@@ -2207,6 +2207,21 @@ function PcaSignalsPanel({ onPromoted }) {
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('novo');
   const [busy, setBusy] = useState({});
+  const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const r = await axios.get('/api/licitacoes/pca/signals/stats');
+      setStatusCounts({
+        novo: Number(r.data?.novo) || 0,
+        visto: Number(r.data?.visto) || 0,
+        promovido: Number(r.data?.promovido) || 0,
+        descartado: Number(r.data?.descartado) || 0,
+      });
+    } catch {
+      setStatusCounts({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2214,12 +2229,13 @@ function PcaSignalsPanel({ onPromoted }) {
     try {
       const r = await axios.get('/api/licitacoes/pca/signals', { params: { status: statusFilter } });
       setSignals(r.data || []);
+      loadCounts();
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, loadCounts]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -2255,7 +2271,7 @@ function PcaSignalsPanel({ onPromoted }) {
             onClick={() => setStatusFilter(s)}
             className={`h-8 rounded-full px-3 text-xs font-semibold ${statusFilter === s ? 'bg-primary/10 text-primary' : 'border border-border text-muted'}`}
           >
-            {s}
+            {s} ({statusCounts[s] || 0})
           </button>
         ))}
         <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">

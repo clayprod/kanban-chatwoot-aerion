@@ -4670,7 +4670,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
         WHERE s.account_id = $1 AND s.status = $2
-        ORDER BY s.criado_em DESC
+        ORDER BY i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
         LIMIT 500
       `, params
     );
@@ -4678,6 +4678,32 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
   } catch (error) {
     console.error('Error listing PCA signals:', error);
     res.status(500).json({ error: 'Erro ao listar signals' });
+  }
+});
+
+app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const { rows } = await pool.query(
+      `
+        SELECT status, COUNT(*)::int AS total
+        FROM ${PCA_SIGNALS_TABLE}
+        WHERE account_id = $1
+        GROUP BY status
+      `,
+      [accountId]
+    );
+
+    const base = { novo: 0, visto: 0, promovido: 0, descartado: 0 };
+    for (const row of rows) {
+      if (Object.prototype.hasOwnProperty.call(base, row.status)) {
+        base[row.status] = Number(row.total) || 0;
+      }
+    }
+    res.json(base);
+  } catch (error) {
+    console.error('Error counting PCA signals:', error);
+    res.status(500).json({ error: 'Erro ao contar signals' });
   }
 });
 
