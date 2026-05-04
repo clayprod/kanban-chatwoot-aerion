@@ -587,10 +587,12 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS futura_contratacao_id TEXT;`);
   await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS futura_contratacao_nome TEXT;`);
   await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS codigo_item_catalogo TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS chave_estavel TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_plano ON ${PCA_ITENS_TABLE} (plano_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_descricao_tsv ON ${PCA_ITENS_TABLE} USING GIN (descricao_tsv);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_mes ON ${PCA_ITENS_TABLE} (mes_previsto);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_futura ON ${PCA_ITENS_TABLE} (futura_contratacao_id);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_pca_itens_plano_chave ON ${PCA_ITENS_TABLE} (plano_id, chave_estavel) WHERE chave_estavel IS NOT NULL;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${PCA_WATCHLIST_TABLE} (
@@ -4138,6 +4140,29 @@ const toDateOrNull = (v) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 };
 
+const normalizeItemKeyPart = (v) => String(v || '')
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, ' ')
+  .slice(0, 240);
+
+const buildPcaItemStableKey = (item) => {
+  const byCodigo = normalizeItemKeyPart(pickFirst(item, ['codigoItem', 'codigoItemCatalogo']));
+  if (byCodigo) return `cod:${byCodigo}`;
+
+  const byFutura = normalizeItemKeyPart(pickFirst(item, [
+    'grupoContratacaoCodigo', 'identificadorFuturaContratacao', 'futuraContratacaoId',
+  ]));
+  const numero = normalizeItemKeyPart(pickFirst(item, ['numeroItem', 'numero']));
+  const descricao = normalizeItemKeyPart(pickFirst(item, ['descricao', 'descricaoItem', 'descricaoServico']));
+
+  if (byFutura || numero || descricao) {
+    return `grp:${byFutura}|num:${numero}|desc:${descricao}`;
+  }
+
+  return null;
+};
+
 // Upsert de um plano PCA do PNCP. Aceita nomes de campos variados
 // (a API ainda evolui; persistimos payload_raw como fonte canônica).
 const upsertPcaPlano = async (planoRaw) => {
@@ -4211,22 +4236,39 @@ const upsertPcaPlano = async (planoRaw) => {
   const planoId = rows[0]?.id;
   if (!planoId) return { plano: null, itensInseridos: 0 };
 
-  // Estratégia simples: substituir todos os itens (idempotente).
-  await pool.query(`DELETE FROM ${PCA_ITENS_TABLE} WHERE plano_id = $1`, [planoId]);
-
   const itens = Array.isArray(itensRaw) ? itensRaw : [];
   let inseridos = 0;
   for (const item of itens) {
     const descricao = pickFirst(item, ['descricao', 'descricaoItem', 'descricaoServico']);
     if (!descricao) continue;
+    const chaveEstavel = buildPcaItemStableKey(item);
     await pool.query(
       `
         INSERT INTO ${PCA_ITENS_TABLE}
           (plano_id, numero_item, descricao, classificacao_codigo, classificacao_nome,
            categoria_item, quantidade, unidade_medida, valor_unitario, valor_total,
            mes_previsto, data_estimada_inicio, data_estimada_conclusao,
-           futura_contratacao_id, futura_contratacao_nome, codigo_item_catalogo, payload_raw)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)
+           futura_contratacao_id, futura_contratacao_nome, codigo_item_catalogo, chave_estavel, payload_raw)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
+        ON CONFLICT (plano_id, chave_estavel)
+        WHERE chave_estavel IS NOT NULL
+        DO UPDATE SET
+          numero_item = EXCLUDED.numero_item,
+          descricao = EXCLUDED.descricao,
+          classificacao_codigo = EXCLUDED.classificacao_codigo,
+          classificacao_nome = EXCLUDED.classificacao_nome,
+          categoria_item = EXCLUDED.categoria_item,
+          quantidade = EXCLUDED.quantidade,
+          unidade_medida = EXCLUDED.unidade_medida,
+          valor_unitario = EXCLUDED.valor_unitario,
+          valor_total = EXCLUDED.valor_total,
+          mes_previsto = EXCLUDED.mes_previsto,
+          data_estimada_inicio = EXCLUDED.data_estimada_inicio,
+          data_estimada_conclusao = EXCLUDED.data_estimada_conclusao,
+          futura_contratacao_id = EXCLUDED.futura_contratacao_id,
+          futura_contratacao_nome = EXCLUDED.futura_contratacao_nome,
+          codigo_item_catalogo = EXCLUDED.codigo_item_catalogo,
+          payload_raw = EXCLUDED.payload_raw
       `,
       [
         planoId,
@@ -4254,6 +4296,7 @@ const upsertPcaPlano = async (planoRaw) => {
         pickFirst(item, ['grupoContratacaoCodigo', 'identificadorFuturaContratacao', 'futuraContratacaoId']),
         pickFirst(item, ['grupoContratacaoNome', 'nomeFuturaContratacao', 'futuraContratacaoNome']),
         pickFirst(item, ['codigoItem', 'codigoItemCatalogo']),
+        chaveEstavel,
         JSON.stringify(item),
       ]
     );
