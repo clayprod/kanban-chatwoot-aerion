@@ -1609,6 +1609,22 @@ const formatPcaDate = (v) => {
   } catch { return '—'; }
 };
 
+const groupPcaSignalsByWatchlist = (signals) => {
+  const groups = new Map();
+  for (const s of (signals || [])) {
+    const key = s.watchlist_id ? `watchlist_${s.watchlist_id}` : '__sem_watchlist__';
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        title: s.watchlist_nome || (s.watchlist_id ? `Watchlist #${s.watchlist_id}` : 'Sem watchlist'),
+        items: [],
+      });
+    }
+    groups.get(key).items.push(s);
+  }
+  return Array.from(groups.values());
+};
+
 const PcaChips = ({ items, onRemove, accent }) => (
   <div className="flex flex-wrap gap-1.5">
     {(items || []).map((t, i) => (
@@ -2287,7 +2303,7 @@ function PcaSignalsPanel({ onPromoted }) {
         <div className="text-sm text-muted py-6 text-center">Nenhum signal {statusFilter}.</div>
       ) : (
         <div className="space-y-3">
-          {groupedSignals.map(group => (
+          {groupPcaSignalsByWatchlist(signals).map(group => (
             <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
               <div className="px-3 py-2 border-b border-border bg-cardAlt/70 text-xs font-semibold text-ink">
                 {group.title} ({group.items.length})
@@ -2387,22 +2403,6 @@ function PcaWatchlistsPanel() {
       setBusy(prev => ({ ...prev, [row.id]: false }));
     }
   };
-
-  const groupedSignals = useMemo(() => {
-    const groups = new Map();
-    for (const s of signals) {
-      const key = s.watchlist_id ? `watchlist_${s.watchlist_id}` : '__sem_watchlist__';
-      if (!groups.has(key)) {
-        groups.set(key, {
-          key,
-          title: s.watchlist_nome || (s.watchlist_id ? `Watchlist #${s.watchlist_id}` : 'Sem watchlist'),
-          items: [],
-        });
-      }
-      groups.get(key).items.push(s);
-    }
-    return Array.from(groups.values());
-  }, [signals]);
 
   const removeWatchlist = async (row) => {
     if (!window.confirm(`Excluir watchlist "${row.nome}"?`)) return;
