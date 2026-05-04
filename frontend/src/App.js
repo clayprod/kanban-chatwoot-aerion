@@ -1618,12 +1618,42 @@ const groupPcaSignalsByWatchlist = (signals) => {
       groups.set(key, {
         key,
         title: s.watchlist_nome || (s.watchlist_id ? `Watchlist #${s.watchlist_id}` : 'Sem watchlist'),
-        items: [],
+        plans: new Map(),
+        itemsCount: 0,
       });
     }
-    groups.get(key).items.push(s);
+    const group = groups.get(key);
+    const planKey = `plano_${s.plano_id || `${s.orgao_cnpj}:${s.codigo_unidade}:${s.ano_pca}`}`;
+    if (!group.plans.has(planKey)) {
+      group.plans.set(planKey, {
+        key: planKey,
+        plano_id: s.plano_id,
+        id_pca_pncp: s.id_pca_pncp,
+        orgao_cnpj: s.orgao_cnpj,
+        orgao_razao: s.orgao_razao_social,
+        codigo_unidade: s.codigo_unidade,
+        unidade_nome: s.unidade_nome,
+        ano_pca: s.ano_pca,
+        pncp_url: `https://pncp.gov.br/app/pca/${s.orgao_cnpj}/${s.ano_pca}`,
+        items: [],
+        valor_total: 0,
+        max_score: 0,
+      });
+    }
+    const plan = group.plans.get(planKey);
+    plan.items.push(s);
+    plan.valor_total += Number(s.valor_total) || 0;
+    plan.max_score = Math.max(plan.max_score, Number(s.score) || 0);
+    group.itemsCount += 1;
   }
-  return Array.from(groups.values());
+  return Array.from(groups.values()).map(group => ({
+    ...group,
+    plans: Array.from(group.plans.values()).sort((a, b) => {
+      const byValorTotal = b.valor_total - a.valor_total;
+      if (byValorTotal !== 0) return byValorTotal;
+      return b.max_score - a.max_score;
+    }),
+  }));
 };
 
 const PcaChips = ({ items, onRemove, accent }) => (
@@ -2262,6 +2292,8 @@ function PcaSignalsPanel({ onPromoted }) {
       if (kind === 'promote') {
         await axios.post(`/api/licitacoes/pca/signals/${id}/promote`);
         onPromoted && onPromoted();
+      } else if (kind === 'unpromote') {
+        await axios.post(`/api/licitacoes/pca/signals/${id}/unpromote`);
       } else if (kind === 'dismiss') {
         await axios.post(`/api/licitacoes/pca/signals/${id}/dismiss`);
       } else if (kind === 'seen') {
@@ -2307,57 +2339,84 @@ function PcaSignalsPanel({ onPromoted }) {
           {groupPcaSignalsByWatchlist(signals).map(group => (
             <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
               <div className="px-3 py-2 border-b border-border bg-primary/10 text-xs font-semibold text-primary">
-                {group.title} ({group.items.length})
+                {group.title} ({group.itemsCount})
               </div>
-              <div className="divide-y divide-border">
-                {group.items.map(s => (
-                  <div key={s.id} className="p-3 flex items-start gap-3">
-                    <div className="flex-1">
-                      <div className="text-sm text-ink">{s.descricao}</div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
-                        <span>{s.orgao_razao_social || s.orgao_cnpj}</span>
-                        <span>UASG {s.codigo_unidade}</span>
-                        <span>PCA {s.ano_pca}</span>
-                        <span>Mês {s.mes_previsto ?? '—'}</span>
-                        <span>{formatPcaCurrency(s.valor_total)}</span>
-                        <span>Score {Number(s.score || 0).toFixed(2)}</span>
-                        <span>· {formatPcaDate(s.criado_em)}</span>
-                        <a
-                          href={`https://pncp.gov.br/app/pca/${s.orgao_cnpj}/${s.ano_pca}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-primary hover:underline"
-                          title="Abrir PCA no PNCP"
-                        >
-                          ver no PNCP ↗
-                        </a>
+              <div className="space-y-3 p-3 bg-cardAlt/40">
+                {group.plans.map(plan => (
+                  <div key={plan.key} className="rounded-xl border border-border bg-card overflow-hidden">
+                    <div className="px-3 py-2 border-b border-border flex flex-wrap items-center gap-2">
+                      <div className="flex-1 min-w-[240px]">
+                        <div className="text-sm font-semibold text-ink">
+                          {plan.orgao_razao || plan.orgao_cnpj} · PCA {plan.ano_pca}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
+                          <span>UASG {plan.codigo_unidade}</span>
+                          {plan.unidade_nome && <span>{plan.unidade_nome}</span>}
+                          <span>{plan.items.length} item{plan.items.length !== 1 ? 's' : ''}</span>
+                          <span>Total {formatPcaCurrency(plan.valor_total)}</span>
+                          <span>Score máx. {Number(plan.max_score || 0).toFixed(2)}</span>
+                        </div>
                       </div>
+                      <a
+                        href={plan.pncp_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="h-8 inline-flex items-center rounded-lg border border-border px-3 text-xs font-semibold text-primary hover:bg-primary/5"
+                        title="Abrir PCA no PNCP"
+                      >
+                        ver PCA no PNCP ↗
+                      </a>
                     </div>
-                    <div className="flex gap-2 flex-wrap justify-end">
-                      {statusFilter !== 'promovido' && (
-                        <>
-                          {s.status !== 'novo' && (
-                            <button type="button" disabled={busy[s.id]}
-                              onClick={() => act(s.id, 'to_novo')}
-                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
-                          )}
-                          {s.status !== 'visto' && (
-                            <button type="button" disabled={busy[s.id]}
-                              onClick={() => act(s.id, 'to_visto')}
-                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
-                          )}
-                          {s.status !== 'descartado' && (
-                            <button type="button" disabled={busy[s.id]}
-                              onClick={() => act(s.id, 'to_descartado')}
-                              className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
-                          )}
-                        </>
-                      )}
-                      {statusFilter === 'novo' && (
-                        <button type="button" disabled={busy[s.id]}
-                          onClick={() => act(s.id, 'promote')}
-                          className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
-                      )}
+                    <div className="divide-y divide-border">
+                      {plan.items.map(s => (
+                        <div key={s.id} className="p-3 flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-ink">{s.descricao}</div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
+                              <span>Item {s.numero_item || '—'}</span>
+                              {s.futura_contratacao_id && <span>Contratação {s.futura_contratacao_id}</span>}
+                              {s.futura_contratacao_nome && <span>{s.futura_contratacao_nome}</span>}
+                              <span>Mês {s.mes_previsto ?? '—'}</span>
+                              <span>Qtd. {formatPcaQuantity(s.quantidade)}</span>
+                              {s.unidade_medida && <span>{s.unidade_medida}</span>}
+                              <span>{formatPcaCurrency(s.valor_total)}</span>
+                              <span>Score {Number(s.score || 0).toFixed(2)}</span>
+                              <span>· {formatPcaDate(s.criado_em)}</span>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 flex-wrap justify-end">
+                            {statusFilter !== 'promovido' && (
+                              <>
+                                {s.status !== 'novo' && (
+                                  <button type="button" disabled={busy[s.id]}
+                                    onClick={() => act(s.id, 'to_novo')}
+                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
+                                )}
+                                {s.status !== 'visto' && (
+                                  <button type="button" disabled={busy[s.id]}
+                                    onClick={() => act(s.id, 'to_visto')}
+                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
+                                )}
+                                {s.status !== 'descartado' && (
+                                  <button type="button" disabled={busy[s.id]}
+                                    onClick={() => act(s.id, 'to_descartado')}
+                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
+                                )}
+                              </>
+                            )}
+                            {statusFilter === 'novo' && (
+                              <button type="button" disabled={busy[s.id]}
+                                onClick={() => act(s.id, 'promote')}
+                                className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
+                            )}
+                            {statusFilter === 'promovido' && (
+                              <button type="button" disabled={busy[s.id]}
+                                onClick={() => act(s.id, 'unpromote')}
+                                className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50">Despromover</button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
