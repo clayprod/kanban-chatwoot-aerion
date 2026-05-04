@@ -840,6 +840,16 @@ const HEALTH_CONTEXT_TERMS = [
   'ambulancia', 'uti', 'medic', 'hospital', 'desfibrilador', 'oxigenio', 'monitor multiparametro', 'ventilador', 'socorro', 'emergencia'
 ];
 
+const STRONG_NEGATIVE_HINTS = [
+  'servico de', 'prestacao de servico', 'assistencia tecnica', 'atendimento tecnico', 'help desk', 'service desk',
+  'suporte tecnico', 'suporte emocional', 'suporte psicologico', 'suporte hospitalar', 'ambulancia', 'uti movel'
+];
+
+const POSITIVE_EVIDENCE_HINTS = [
+  'material', 'equipamento', 'dispositivo', 'componente', 'peca', 'fixacao', 'vesa', 'braco articulado',
+  'ergonomia', 'nr17', 'catalogo', 'codigo item', 'unidade'
+];
+
 const GENERIC_BROAD_TERMS = new Set([
   'edital', 'editais', 'licitacao', 'licitacoes', 'contratacao', 'contratacoes', 'aquisicao', 'aquisicoes',
   'compra', 'compras', 'objeto', 'fornecimento', 'servico', 'servicos', 'material', 'materiais', 'item', 'itens'
@@ -1013,7 +1023,11 @@ const buildFallbackNegativeTerms = (query = '') => {
   const negatives = [];
 
   if (normalizedQuery.includes('suporte') && normalizedQuery.includes('monitor')) {
-    negatives.push('suporte hospitalar', 'suporte emocional', 'servico de suporte', 'ambulancia', 'uti movel');
+    negatives.push(
+      'suporte hospitalar', 'suporte emocional', 'servico de suporte',
+      'suporte tecnico', 'atendimento tecnico', 'assistencia tecnica',
+      'help desk', 'service desk', 'ambulancia', 'uti movel'
+    );
   }
 
   if (normalizedQuery.includes('drone')) {
@@ -1533,11 +1547,14 @@ const pickHighPrecisionPositiveTerms = (original, terms = []) => {
 
 const pickNegativeTerms = (original, terms = []) => {
   const normalizedOriginal = normalizeSearchText(original);
-  const sanitized = sanitizeAiTerms(terms, { removeGeneric: false });
   const profile = detectContextProfile(original);
+  const aiSanitized = sanitizeAiTerms(terms, { removeGeneric: false });
+  const profileNegatives = sanitizeAiTerms(profile?.negativeBoost || [], { removeGeneric: false });
+  const fallbackNegatives = sanitizeAiTerms(buildFallbackNegativeTerms(original), { removeGeneric: false });
+  const prioritizedPool = mergeUniqueTerms(profileNegatives, fallbackNegatives, aiSanitized);
   const negatives = [];
 
-  for (const term of sanitized) {
+  for (const term of prioritizedPool) {
     const normalized = normalizeSearchText(term);
     if (!normalized || normalized === normalizedOriginal) {
       continue;
@@ -1554,19 +1571,8 @@ const pickNegativeTerms = (original, terms = []) => {
     }
 
     negatives.push(term);
-    if (negatives.length >= 8) {
+    if (negatives.length >= 10) {
       break;
-    }
-  }
-
-  const fallback = sanitizeAiTerms(buildFallbackNegativeTerms(original), { removeGeneric: false });
-  for (const term of fallback) {
-    if (negatives.length >= 8) {
-      break;
-    }
-    const normalized = normalizeSearchText(term);
-    if (!negatives.some(item => normalizeSearchText(item) === normalized)) {
-      negatives.push(term);
     }
   }
 
@@ -1619,6 +1625,19 @@ const shouldExcludeByNegativeTerms = (item, query, positiveTerms = [], negativeT
     return containsTermStrict(text, term);
   });
   const tokenMatches = queryTokens.filter(token => textTokens.has(token)).length;
+
+  const hasStrongNegativeSignal = negativeTerms.some(term => {
+    const normalized = normalizeSearchText(term);
+    return STRONG_NEGATIVE_HINTS.some(hint => normalized.includes(hint));
+  }) || STRONG_NEGATIVE_HINTS.some(hint => containsTermStrict(text, hint));
+
+  const hasPositiveEvidence = hasExactQuery
+    || hasPositiveMatch
+    || POSITIVE_EVIDENCE_HINTS.some(hint => containsTermStrict(text, hint));
+
+  if (hasStrongNegativeSignal && !hasPositiveEvidence) {
+    return true;
+  }
 
   return !hasExactQuery && !hasPositiveMatch && tokenMatches < Math.min(2, Math.max(1, queryTokens.length));
 };
@@ -4764,11 +4783,10 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
       || futuraNome
       || (futuraId ? `Contratação ${futuraId}` : (iRows[0].descricao || 'PCA').slice(0, 200))
     ).slice(0, 200);
-    // URL pública do PCA no PNCP. Usa idPcaPncp se disponível (formato canônico),
-    // senão cai no padrão /app/pca/{cnpj}/{ano}.
-    const pncpPcaUrl = plano.id_pca_pncp
-      ? `https://pncp.gov.br/app/pca/${plano.id_pca_pncp}`
-      : `https://pncp.gov.br/app/pca/${plano.orgao_cnpj}/${plano.ano_pca}`;
+    // URL pública canônica do PCA no PNCP.
+    // Alguns ids retornados pela API vêm em formatos variantes (ex.: com sufixos),
+    // então fixamos no padrão estável /app/pca/{cnpj}/{ano}.
+    const pncpPcaUrl = `https://pncp.gov.br/app/pca/${plano.orgao_cnpj}/${plano.ano_pca}`;
     const linksPayload = { pncp: pncpPcaUrl };
     const metadados = {
       pca_plano_id: plano.id,

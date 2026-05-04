@@ -1589,6 +1589,17 @@ const formatPcaCurrency = (v) => {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
 };
 
+const formatPcaQuantity = (v) => {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  const isIntegerLike = Math.abs(n - Math.trunc(n)) < 1e-9;
+  return n.toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: isIntegerLike ? 0 : 3,
+  });
+};
+
 const formatPcaDate = (v) => {
   if (!v) return '—';
   try {
@@ -1815,9 +1826,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
       const ctTag = it.futura_contratacao_id || `__solo_${it.item_id}__`;
       const key = `${it.orgao_cnpj}:${it.codigo_unidade}:${ctTag}`;
       if (!m.has(key)) {
-        const pncpUrl = it.id_pca_pncp
-          ? `https://pncp.gov.br/app/pca/${it.id_pca_pncp}`
-          : `https://pncp.gov.br/app/pca/${it.orgao_cnpj}/${it.ano_pca}`;
+        const pncpUrl = `https://pncp.gov.br/app/pca/${it.orgao_cnpj}/${it.ano_pca}`;
         m.set(key, {
           key,
           plano_id: it.plano_id,
@@ -1832,16 +1841,22 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
           contratacao_nome: it.futura_contratacao_nome,
           itens: [],
           valor_total: 0,
+          quantidade_total: 0,
           max_score: 0,
         });
       }
       const ct = m.get(key);
       ct.itens.push(it);
       ct.valor_total += Number(it.valor_total) || 0;
+      ct.quantidade_total += Number(it.quantidade) || 0;
       const s = Number(it.score) || 0;
       if (s > ct.max_score) ct.max_score = s;
     }
-    return Array.from(m.values()).sort((a, b) => b.max_score - a.max_score);
+    return Array.from(m.values()).sort((a, b) => {
+      const byValorTotal = b.valor_total - a.valor_total;
+      if (byValorTotal !== 0) return byValorTotal;
+      return b.max_score - a.max_score;
+    });
   }, [items]);
 
   return (
@@ -1964,7 +1979,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
       <div className="flex items-center justify-between text-xs text-muted">
         <div>
           {!loading && contrataçõesPlanas.length > 0 && (
-            <span>{contrataçõesPlanas.length} contratação(ões) · {total} item(ns) · ordenado por relevância</span>
+            <span>{contrataçõesPlanas.length} contratação(ões) · {total} item(ns) · ordenado por maior valor</span>
           )}
         </div>
         {bootstrapStatus?.total_planos_db > 0 && (
@@ -2008,6 +2023,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                   <div className="text-sm font-semibold text-ink truncate">{titulo}</div>
                   <div className="mt-1 flex items-center gap-3 text-xs text-muted">
                     <span>{ct.itens.length} item(ns)</span>
+                    <span>{formatPcaQuantity(ct.quantidade_total)} unidade(s)</span>
                     <span>{formatPcaCurrency(ct.valor_total)}</span>
                     <span className="inline-flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
@@ -2025,7 +2041,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                   {busy[ct.key] ? '...' : `Promover ${selectedCount > 0 ? `(${selectedCount}/${ct.itens.length})` : ''}`}
                 </button>
               </summary>
-              <div className="border-t border-border bg-cardAlt/30 p-3">
+              <div className="border-t border-border bg-slate-800/70 p-3">
                 <div className="flex items-center gap-3 text-xs mb-2">
                   <button type="button" onClick={() => setAllForCt(ct.key, allItemIds, 'all')}
                     className="text-primary hover:underline">Selecionar todos ({ct.itens.length})</button>
@@ -2052,7 +2068,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-ink">{item.descricao}</div>
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
-                            <span>{item.quantidade ?? '—'} {item.unidade_medida || ''}</span>
+                            <span>{formatPcaQuantity(item.quantidade)} {item.unidade_medida || ''}</span>
                             <span>{formatPcaCurrency(item.valor_total)}</span>
                             {item.mes_previsto && <span>mês {item.mes_previsto}/{ct.ano_pca}</span>}
                             {item.classificacao_nome && <span className="truncate max-w-[200px]">{item.classificacao_nome}</span>}
