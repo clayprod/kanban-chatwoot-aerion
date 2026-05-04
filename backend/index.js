@@ -4665,10 +4665,11 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
       `
         SELECT s.*, i.descricao, i.valor_total, i.mes_previsto, i.numero_item,
                p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
-               p.responsaveis, p.contatos
+               p.responsaveis, p.contatos, w.nome AS watchlist_nome
         FROM ${PCA_SIGNALS_TABLE} s
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
+        LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
         WHERE s.account_id = $1 AND s.status = $2
         ORDER BY i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
         LIMIT 500
