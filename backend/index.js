@@ -4664,14 +4664,16 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
     const { rows } = await pool.query(
       `
         SELECT s.*, i.descricao, i.valor_total, i.mes_previsto, i.numero_item,
-               p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
+               i.quantidade, i.unidade_medida, i.futura_contratacao_id, i.futura_contratacao_nome,
+               p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
                p.responsaveis, p.contatos, w.nome AS watchlist_nome
         FROM ${PCA_SIGNALS_TABLE} s
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
         LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
         WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
-        ORDER BY i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
+        ORDER BY w.nome ASC NULLS LAST, p.orgao_razao_social ASC NULLS LAST, p.ano_pca DESC,
+                 p.id ASC, i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
         LIMIT 500
       `, params
     );
@@ -4711,7 +4713,8 @@ app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
 const promotePcaSignalToOpportunity = async (signalId, accountId) => {
   const { rows: sigRows } = await pool.query(
     `
-      SELECT s.*, i.descricao, i.valor_total, i.numero_item, i.mes_previsto,
+      SELECT s.*, i.descricao, i.valor_total, i.valor_unitario, i.quantidade, i.unidade_medida,
+             i.numero_item, i.mes_previsto,
              p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome,
              p.ano_pca, p.data_publicacao, p.contatos, p.responsaveis
       FROM ${PCA_SIGNALS_TABLE} s
@@ -4735,26 +4738,60 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
       FROM ${LICITACAO_TABLE}
       WHERE account_id = $1
         AND origem_oportunidade = 'pca_pncp'
-        AND metadados->>'pca_item_id' = $2
+        AND metadados->>'pca_plano_id' = $2
       ORDER BY id DESC
       LIMIT 1
     `,
-    [accountId, String(sig.item_id)]
+    [accountId, String(sig.plano_id)]
   );
   if (existingOppRows[0]) {
+    const opp = existingOppRows[0];
+    const metadados = opp.metadados || {};
+    const itemIds = new Set([
+      ...(Array.isArray(metadados.pca_item_ids) ? metadados.pca_item_ids.map(String) : []),
+      ...(metadados.pca_item_id ? [String(metadados.pca_item_id)] : []),
+    ]);
+
+    if (!itemIds.has(String(sig.item_id))) {
+      await pool.query(
+        `
+          INSERT INTO ${LICITACAO_ITEMS_TABLE}
+            (opportunity_id, numero_item, descricao, quantidade, unidade,
+             valor_referencia, custo_total_item)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `,
+        [opp.id, sig.numero_item, sig.descricao, sig.quantidade, sig.unidade_medida,
+         sig.valor_unitario, sig.valor_total]
+      );
+      itemIds.add(String(sig.item_id));
+      await pool.query(
+        `
+          UPDATE ${LICITACAO_TABLE}
+             SET valor_oportunidade = COALESCE(valor_oportunidade, 0) + COALESCE($1::numeric, 0),
+                 metadados = $2::jsonb,
+                 updated_at = NOW()
+           WHERE id = $3
+        `,
+        [sig.valor_total, JSON.stringify({
+          ...metadados,
+          pca_item_ids: Array.from(itemIds),
+        }), opp.id]
+      );
+    }
     await pool.query(
       `UPDATE ${PCA_SIGNALS_TABLE}
           SET status = 'promovido', promovido_para_opportunity_id = $1
         WHERE id = $2`,
-      [existingOppRows[0].id, signalId]
+      [opp.id, signalId]
     );
-    return existingOppRows[0];
+    return opp;
   }
 
   const titulo = (sig.descricao || 'PCA').slice(0, 200);
   const metadados = {
     pca_plano_id: sig.plano_id,
     pca_item_id: sig.item_id,
+    pca_item_ids: [sig.item_id],
     pca_signal_id: sig.id,
     pca_ano: sig.ano_pca,
     pca_mes_previsto: sig.mes_previsto,
@@ -4776,6 +4813,16 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
   );
   const opp = oppRows[0];
   await pool.query(
+    `
+      INSERT INTO ${LICITACAO_ITEMS_TABLE}
+        (opportunity_id, numero_item, descricao, quantidade, unidade,
+         valor_referencia, custo_total_item)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `,
+    [opp.id, sig.numero_item, sig.descricao, sig.quantidade, sig.unidade_medida,
+     sig.valor_unitario, sig.valor_total]
+  );
+  await pool.query(
     `UPDATE ${PCA_SIGNALS_TABLE}
        SET status = 'promovido', promovido_para_opportunity_id = $1
      WHERE id = $2`,
@@ -4793,6 +4840,32 @@ app.post('/api/licitacoes/pca/signals/:id/promote', async (req, res) => {
   } catch (error) {
     console.error('Error promoting PCA signal:', error);
     res.status(500).json({ error: 'Erro ao promover signal', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pca/signals/:id/unpromote', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const signalId = toIntOrNull(req.params.id);
+    if (!signalId) return res.status(400).json({ error: 'id inválido' });
+
+    const { rows } = await pool.query(
+      `
+        UPDATE ${PCA_SIGNALS_TABLE}
+           SET status = 'visto', promovido_para_opportunity_id = NULL
+         WHERE id = $1
+           AND account_id = $2
+           AND status = 'promovido'
+         RETURNING id, status
+      `,
+      [signalId, accountId]
+    );
+
+    if (!rows[0]) return res.status(404).json({ error: 'signal promovido não encontrado' });
+    res.json({ ...rows[0], note: 'O card já criado no board não foi removido.' });
+  } catch (error) {
+    console.error('Error unpromoting PCA signal:', error);
+    res.status(500).json({ error: 'Erro ao despromover signal', details: error.message });
   }
 });
 
