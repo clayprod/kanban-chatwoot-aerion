@@ -195,6 +195,11 @@ const LICITACAO_INTERMEDIARIOS_TABLE = 'licitacao_intermediarios';
 const LICITACAO_WATCHLIST_TABLE = 'licitacao_watchlist';
 const LICITACAO_SIGNALS_TABLE = 'licitacao_signals';
 const LICITACAO_COMMENTS_TABLE = 'licitacao_comments';
+const PCA_PLANOS_TABLE = 'pca_planos';
+const PCA_ITENS_TABLE = 'pca_itens';
+const PCA_WATCHLIST_TABLE = 'pca_watchlist';
+const PCA_SIGNALS_TABLE = 'pca_signals';
+const PCA_SYNC_STATE_TABLE = 'pca_sync_state';
 const LICITACAO_FASES = [
   '1. Monitoramento de PCA',
   '2. Mapeamento de Áreas',
@@ -526,6 +531,112 @@ const createLicitacaoTables = async () => {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_licitacao_item_requirements_item ON ${LICITACAO_ITEM_REQUIREMENTS_TABLE} (item_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_licitacao_contacts_contact ON ${LICITACAO_CONTACTS_TABLE} (contact_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_licitacao_comments_opportunity ON ${LICITACAO_COMMENTS_TABLE} (opportunity_id);`);
+
+  // ===== PCA (Plano Anual de Contratações) =====
+  // Inventário público compartilhado (sem account_id em pca_planos / pca_itens).
+  // Scoping por account fica em pca_watchlist e pca_signals.
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PCA_PLANOS_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      orgao_cnpj TEXT NOT NULL,
+      orgao_razao_social TEXT,
+      codigo_unidade TEXT NOT NULL,
+      unidade_nome TEXT,
+      ano_pca INTEGER NOT NULL,
+      data_publicacao DATE,
+      data_atualizacao TIMESTAMP,
+      valor_total_estimado NUMERIC(16,2),
+      quantidade_itens INTEGER,
+      responsaveis JSONB NOT NULL DEFAULT '[]'::jsonb,
+      contatos JSONB NOT NULL DEFAULT '[]'::jsonb,
+      payload_raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+      atualizado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (orgao_cnpj, codigo_unidade, ano_pca)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_planos_ano ON ${PCA_PLANOS_TABLE} (ano_pca);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_planos_orgao ON ${PCA_PLANOS_TABLE} (orgao_cnpj);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PCA_ITENS_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      plano_id BIGINT NOT NULL REFERENCES ${PCA_PLANOS_TABLE}(id) ON DELETE CASCADE,
+      numero_item TEXT,
+      descricao TEXT NOT NULL,
+      classificacao_codigo TEXT,
+      classificacao_nome TEXT,
+      categoria_item TEXT,
+      quantidade NUMERIC(16,3),
+      unidade_medida TEXT,
+      valor_unitario NUMERIC(16,4),
+      valor_total NUMERIC(16,2),
+      mes_previsto INTEGER,
+      data_estimada_inicio DATE,
+      data_estimada_conclusao DATE,
+      payload_raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+      descricao_tsv tsvector
+        GENERATED ALWAYS AS (
+          to_tsvector('portuguese', immutable_unaccent(coalesce(descricao,'')))
+        ) STORED
+    );
+  `);
+  await pool.query(`ALTER TABLE ${PCA_PLANOS_TABLE} ADD COLUMN IF NOT EXISTS id_pca_pncp TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS futura_contratacao_id TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS futura_contratacao_nome TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS codigo_item_catalogo TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_plano ON ${PCA_ITENS_TABLE} (plano_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_descricao_tsv ON ${PCA_ITENS_TABLE} USING GIN (descricao_tsv);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_mes ON ${PCA_ITENS_TABLE} (mes_previsto);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_itens_futura ON ${PCA_ITENS_TABLE} (futura_contratacao_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PCA_WATCHLIST_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      palavras_chave TEXT[] NOT NULL DEFAULT '{}',
+      termos_negativos TEXT[] NOT NULL DEFAULT '{}',
+      usar_ia BOOLEAN NOT NULL DEFAULT TRUE,
+      valor_minimo NUMERIC(16,2),
+      valor_maximo NUMERIC(16,2),
+      orgao_filtros JSONB NOT NULL DEFAULT '[]'::jsonb,
+      uasg_filtros JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ativo BOOLEAN NOT NULL DEFAULT TRUE,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account ON ${PCA_WATCHLIST_TABLE} (account_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PCA_SIGNALS_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      plano_id BIGINT NOT NULL REFERENCES ${PCA_PLANOS_TABLE}(id) ON DELETE CASCADE,
+      item_id BIGINT NOT NULL REFERENCES ${PCA_ITENS_TABLE}(id) ON DELETE CASCADE,
+      watchlist_id BIGINT REFERENCES ${PCA_WATCHLIST_TABLE}(id) ON DELETE SET NULL,
+      score NUMERIC(6,3),
+      termos_matched TEXT[] NOT NULL DEFAULT '{}',
+      termos_excluidos TEXT[] NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'novo',
+      promovido_para_opportunity_id BIGINT REFERENCES ${LICITACAO_TABLE}(id) ON DELETE SET NULL,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (account_id, item_id, watchlist_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_signals_account_status ON ${PCA_SIGNALS_TABLE} (account_id, status);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PCA_SYNC_STATE_TABLE} (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      ultimo_sync TIMESTAMP,
+      ultimo_data_fim DATE,
+      bootstrap_concluido BOOLEAN NOT NULL DEFAULT FALSE
+    );
+  `);
+  await pool.query(`INSERT INTO ${PCA_SYNC_STATE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING;`);
 };
 
 const getPrazoStatusSql = (alias = '') => `
@@ -3955,6 +4066,929 @@ app.post('/api/licitacoes/compras/sync', async (req, res) => {
   }
 });
 
+// ============ PCA — Plano Anual de Contratações (PNCP) ============
+
+const pickFirst = (obj, keys) => {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return null;
+};
+
+const normalizeForTsQuery = (term) => {
+  if (!term) return '';
+  const cleaned = String(term)
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  const tokens = cleaned.split(' ').filter(Boolean);
+  if (!tokens.length) return '';
+  return tokens.map(t => `${t}:*`).join(' & ');
+};
+
+const buildTsQuery = (terms) => {
+  const parts = (terms || []).map(normalizeForTsQuery).filter(Boolean);
+  if (!parts.length) return '';
+  return parts.map(p => `(${p})`).join(' | ');
+};
+
+const parseAtoOuArray = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { const j = JSON.parse(raw); return Array.isArray(j) ? j : [j]; }
+    catch { return raw.split(',').map(s => s.trim()).filter(Boolean); }
+  }
+  if (typeof raw === 'object') return [raw];
+  return [];
+};
+
+const toIntOrNull = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+const toDateOrNull = (v) => {
+  if (!v) return null;
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
+
+// Upsert de um plano PCA do PNCP. Aceita nomes de campos variados
+// (a API ainda evolui; persistimos payload_raw como fonte canônica).
+const upsertPcaPlano = async (planoRaw) => {
+  const orgaoCnpj = String(pickFirst(planoRaw, [
+    'orgaoEntidadeCnpj', 'cnpjOrgao', 'orgaoCnpj',
+  ]) || '').replace(/\D/g, '');
+  const codigoUnidade = String(pickFirst(planoRaw, [
+    'codigoUnidade', 'unidadeCodigo', 'codigoUnidadeOrgao', 'codigoUasg',
+  ]) || '');
+  const anoPca = toIntOrNull(pickFirst(planoRaw, ['anoPca', 'ano']));
+  if (!orgaoCnpj || !codigoUnidade || !anoPca) {
+    return { plano: null, itensInseridos: 0 };
+  }
+  const orgaoRazao = pickFirst(planoRaw, [
+    'orgaoEntidadeRazaoSocial', 'razaoSocialOrgao', 'orgaoNome', 'nomeOrgao',
+  ]);
+  const unidadeNome = pickFirst(planoRaw, [
+    'unidadeNome', 'nomeUnidade', 'unidadeOrgaoNome',
+  ]);
+  const dataPublicacao = toDateOrNull(pickFirst(planoRaw, [
+    'dataPublicacaoPNCP', 'dataPublicacaoPncp', 'dataPublicacao',
+  ]));
+  const dataAtualizacao = pickFirst(planoRaw, [
+    'dataAtualizacaoGlobalPCA', 'dataAtualizacaoPNCP', 'dataAtualizacaoPncp', 'dataAtualizacao',
+  ]) || null;
+  const idPcaPncp = pickFirst(planoRaw, ['idPcaPncp', 'idPCAPncp', 'idPncp']);
+  const responsaveis = pickFirst(planoRaw, ['responsaveis', 'responsavel']) || [];
+  const contatos = pickFirst(planoRaw, ['contatos', 'contato']) || [];
+  const itensRaw = pickFirst(planoRaw, ['itens', 'itensPca', 'planosItens']) || [];
+  const quantidadeItens = Array.isArray(itensRaw) ? itensRaw.length : null;
+  // valor_total não vem no plano — soma dos itens (quando disponível).
+  const valorTotal = Array.isArray(itensRaw)
+    ? itensRaw.reduce((acc, it) => {
+        const v = toNullableNumber(pickFirst(it, [
+          'valorTotal', 'valorTotalEstimado', 'valorOrcamentoExercicio',
+        ]));
+        return v ? acc + Number(v) : acc;
+      }, 0) || null
+    : null;
+
+  const { rows } = await pool.query(
+    `
+      INSERT INTO ${PCA_PLANOS_TABLE}
+        (orgao_cnpj, orgao_razao_social, codigo_unidade, unidade_nome, ano_pca,
+         data_publicacao, data_atualizacao, valor_total_estimado, quantidade_itens,
+         responsaveis, contatos, id_pca_pncp, payload_raw, atualizado_em)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb, NOW())
+      ON CONFLICT (orgao_cnpj, codigo_unidade, ano_pca) DO UPDATE SET
+        orgao_razao_social = EXCLUDED.orgao_razao_social,
+        unidade_nome = EXCLUDED.unidade_nome,
+        data_publicacao = EXCLUDED.data_publicacao,
+        data_atualizacao = EXCLUDED.data_atualizacao,
+        valor_total_estimado = EXCLUDED.valor_total_estimado,
+        quantidade_itens = EXCLUDED.quantidade_itens,
+        responsaveis = EXCLUDED.responsaveis,
+        contatos = EXCLUDED.contatos,
+        id_pca_pncp = EXCLUDED.id_pca_pncp,
+        payload_raw = EXCLUDED.payload_raw,
+        atualizado_em = NOW()
+      RETURNING id
+    `,
+    [
+      orgaoCnpj, orgaoRazao, codigoUnidade, unidadeNome, anoPca,
+      dataPublicacao, dataAtualizacao, valorTotal, quantidadeItens,
+      JSON.stringify(Array.isArray(responsaveis) ? responsaveis : [responsaveis]),
+      JSON.stringify(Array.isArray(contatos) ? contatos : [contatos]),
+      idPcaPncp,
+      JSON.stringify(planoRaw),
+    ]
+  );
+  const planoId = rows[0]?.id;
+  if (!planoId) return { plano: null, itensInseridos: 0 };
+
+  // Estratégia simples: substituir todos os itens (idempotente).
+  await pool.query(`DELETE FROM ${PCA_ITENS_TABLE} WHERE plano_id = $1`, [planoId]);
+
+  const itens = Array.isArray(itensRaw) ? itensRaw : [];
+  let inseridos = 0;
+  for (const item of itens) {
+    const descricao = pickFirst(item, ['descricao', 'descricaoItem', 'descricaoServico']);
+    if (!descricao) continue;
+    await pool.query(
+      `
+        INSERT INTO ${PCA_ITENS_TABLE}
+          (plano_id, numero_item, descricao, classificacao_codigo, classificacao_nome,
+           categoria_item, quantidade, unidade_medida, valor_unitario, valor_total,
+           mes_previsto, data_estimada_inicio, data_estimada_conclusao,
+           futura_contratacao_id, futura_contratacao_nome, codigo_item_catalogo, payload_raw)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)
+      `,
+      [
+        planoId,
+        pickFirst(item, ['numeroItem', 'numero']),
+        descricao,
+        pickFirst(item, ['classificacaoSuperiorCodigo', 'classificacaoCatalogoCodigo', 'codigoClassificacao']),
+        pickFirst(item, ['classificacaoSuperiorNome', 'nomeClassificacaoCatalogo', 'classificacaoCatalogoNome']),
+        pickFirst(item, ['categoriaItemPcaNome', 'categoriaItemPca', 'categoriaItem', 'categoria']),
+        toNullableNumber(pickFirst(item, ['quantidadeEstimada', 'quantidade'])),
+        pickFirst(item, ['unidadeFornecimento', 'unidadeMedida', 'unidade']),
+        toNullableNumber(pickFirst(item, ['valorUnitarioEstimado', 'valorUnitario'])),
+        toNullableNumber(pickFirst(item, ['valorTotal', 'valorTotalEstimado', 'valorOrcamentoExercicio'])),
+        // mes_previsto: derivar de dataDesejada (mês 1-12).
+        (() => {
+          const explicit = toIntOrNull(pickFirst(item, ['mesPrevistoContratacao', 'mesContratacao', 'mesPrevisto']));
+          if (explicit) return explicit;
+          const d = pickFirst(item, ['dataDesejada', 'dataInicioEstimada']);
+          if (!d) return null;
+          const m = parseInt(String(d).slice(5, 7), 10);
+          return Number.isFinite(m) ? m : null;
+        })(),
+        toDateOrNull(pickFirst(item, ['dataDesejada', 'dataInicioEstimada', 'dataEstimadaInicio'])),
+        toDateOrNull(pickFirst(item, ['dataEstimadaConclusao', 'dataFimEstimada'])),
+        // Identificador da Futura Contratação (CSV) = grupoContratacaoCodigo (JSON)
+        pickFirst(item, ['grupoContratacaoCodigo', 'identificadorFuturaContratacao', 'futuraContratacaoId']),
+        pickFirst(item, ['grupoContratacaoNome', 'nomeFuturaContratacao', 'futuraContratacaoNome']),
+        pickFirst(item, ['codigoItem', 'codigoItemCatalogo']),
+        JSON.stringify(item),
+      ]
+    );
+    inseridos += 1;
+  }
+
+  return { plano: planoId, itensInseridos: inseridos };
+};
+
+// Match: roda tsquery sobre pca_itens com positivos/negativos + filtros opcionais.
+const matchPcaItens = async ({
+  positivos = [],
+  negativos = [],
+  filtros = {},
+  pagina = 1,
+  tam = 50,
+  termoOriginal = '',
+}) => {
+  const tsPos = buildTsQuery(positivos);
+  if (!tsPos) {
+    return { items: [], total: 0 };
+  }
+  const tsNeg = buildTsQuery(negativos);
+  const params = [tsPos, tsNeg];
+  let where = `i.descricao_tsv @@ to_tsquery('portuguese', $1)
+    AND ($2 = '' OR NOT (i.descricao_tsv @@ to_tsquery('portuguese', $2)))`;
+
+  if (filtros.ano_pca) { params.push(toIntOrNull(filtros.ano_pca)); where += ` AND p.ano_pca = $${params.length}`; }
+  if (filtros.valor_min) { params.push(toNullableNumber(filtros.valor_min)); where += ` AND i.valor_total >= $${params.length}`; }
+  if (filtros.valor_max) { params.push(toNullableNumber(filtros.valor_max)); where += ` AND i.valor_total <= $${params.length}`; }
+  if (filtros.mes_previsto) { params.push(toIntOrNull(filtros.mes_previsto)); where += ` AND i.mes_previsto = $${params.length}`; }
+  if (filtros.orgao_cnpj) { params.push(String(filtros.orgao_cnpj).replace(/\D/g, '')); where += ` AND p.orgao_cnpj = $${params.length}`; }
+  if (filtros.unidade_codigo) { params.push(String(filtros.unidade_codigo)); where += ` AND p.codigo_unidade = $${params.length}`; }
+
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
+  const offset = Math.max(0, (toIntOrNull(pagina) || 1) - 1) * (toIntOrNull(tam) || 50);
+  params.push(toIntOrNull(tam) || 50, offset);
+
+  const boostExpr = termoOriginal
+    ? `(CASE WHEN immutable_unaccent(lower(i.descricao)) ILIKE immutable_unaccent(lower($${params.length + 1}))
+              THEN 0.5 ELSE 0 END)`
+    : '0';
+  if (termoOriginal) params.push(`%${termoOriginal}%`);
+
+  const sql = `
+    SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
+           i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
+           i.futura_contratacao_id, i.futura_contratacao_nome, i.codigo_item_catalogo,
+           i.classificacao_nome, i.data_estimada_inicio,
+           p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
+           p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
+           p.data_atualizacao, p.responsaveis, p.contatos,
+           (ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) AS score
+    FROM ${PCA_ITENS_TABLE} i
+    JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
+    WHERE ${where}
+    ORDER BY score DESC, i.id ASC
+    LIMIT $${limitIdx} OFFSET $${offsetIdx}
+  `;
+
+  const countSql = `
+    SELECT COUNT(*)::int AS total
+    FROM ${PCA_ITENS_TABLE} i
+    JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
+    WHERE ${where}
+  `;
+  const countParams = params.slice(0, params.length - (termoOriginal ? 3 : 2));
+
+  const [rowsResult, countResult] = await Promise.all([
+    pool.query(sql, params),
+    pool.query(countSql, countParams),
+  ]);
+
+  return { items: rowsResult.rows, total: countResult.rows[0]?.total || 0 };
+};
+
+// fetchPncpConsulta com retry (PNCP costuma timeoutar; sem retry o sync inteiro morre na 1ª falha).
+const fetchPncpPcaPagina = async ({ dataInicio, dataFim, pagina, tamanhoPagina = 500 }, maxRetries = 4) => {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await fetchPncpConsulta('/v1/pca/atualizacao', { dataInicio, dataFim, pagina, tamanhoPagina });
+    } catch (e) {
+      lastErr = e;
+      const wait = Math.min(2000 * attempt, 15000);
+      console.warn(`[pca] retry ${attempt}/${maxRetries} dataInicio=${dataInicio} pagina=${pagina}: ${e.message} — aguardando ${wait}ms`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+};
+
+// Daily sync: pega delta entre o último cursor e hoje.
+// onProgress(diffPlanos, diffItens) chamado após cada página upsertada (uso pelo bootstrap pra atualizar UI live).
+const runPcaDailySync = async (opts = {}, onProgress = null) => {
+  const { rows: stateRows } = await pool.query(
+    `SELECT * FROM ${PCA_SYNC_STATE_TABLE} WHERE id = 1`
+  );
+  const state = stateRows[0] || {};
+  const today = new Date();
+  const yyyymmdd = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}${m}${day}`;
+  };
+  const cursorDate = state.ultimo_data_fim
+    ? new Date(state.ultimo_data_fim.getTime() - 24 * 60 * 60 * 1000)
+    : new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const dataInicio = opts.dataInicio || yyyymmdd(cursorDate);
+  const dataFim = opts.dataFim || yyyymmdd(today);
+
+  let pagina = 1;
+  let totalPaginas = 1;
+  let planosUpserted = 0;
+  let itensUpserted = 0;
+
+  let paginasComFalha = 0;
+  while (pagina <= totalPaginas) {
+    let body;
+    try {
+      body = await fetchPncpPcaPagina({ dataInicio, dataFim, pagina });
+    } catch (e) {
+      paginasComFalha += 1;
+      console.error(`[pca] página ${pagina}/${totalPaginas} falhou após retries (${e.message}) — pulando`);
+      pagina += 1;
+      continue;
+    }
+    const data = Array.isArray(body?.data) ? body.data
+              : Array.isArray(body?.resultado) ? body.resultado
+              : Array.isArray(body) ? body : [];
+    totalPaginas = toIntOrNull(body?.totalPaginas) || toIntOrNull(body?.totalPages) || 1;
+
+    let pagePlanos = 0;
+    let pageItens = 0;
+    for (const plano of data) {
+      const r = await upsertPcaPlano(plano);
+      if (r.plano) {
+        pagePlanos += 1;
+        pageItens += r.itensInseridos;
+      }
+    }
+    planosUpserted += pagePlanos;
+    itensUpserted += pageItens;
+    if (onProgress) onProgress(pagePlanos, pageItens, { pagina, totalPaginas, dataInicio, dataFim });
+    pagina += 1;
+  }
+
+  await pool.query(
+    `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_sync = NOW(), ultimo_data_fim = $1::date WHERE id = 1`,
+    [`${dataFim.slice(0, 4)}-${dataFim.slice(4, 6)}-${dataFim.slice(6, 8)}`]
+  );
+
+  const matchResult = await runPcaWatchlistMatching().catch(e => {
+    console.error('[pca] erro matching watchlists:', e.message);
+    return { signals_inserted: 0 };
+  });
+
+  return {
+    dataInicio, dataFim,
+    planos_upserted: planosUpserted,
+    itens_upserted: itensUpserted,
+    signals_inserted: matchResult.signals_inserted,
+  };
+};
+
+// Estado in-memory do bootstrap — sobrevive a desconexões do client mas
+// reseta se o backend reiniciar (aceitável: bootstrap é re-executável).
+const pcaBootstrapState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  ano: null,
+  mes_atual: null,
+  planos_upserted: 0,
+  itens_upserted: 0,
+  error: null,
+};
+
+const runPcaBootstrap = async (ano) => {
+  const targetAno = toIntOrNull(ano) || new Date().getFullYear();
+  pcaBootstrapState.running = true;
+  pcaBootstrapState.startedAt = new Date().toISOString();
+  pcaBootstrapState.finishedAt = null;
+  pcaBootstrapState.ano = targetAno;
+  pcaBootstrapState.mes_atual = null;
+  pcaBootstrapState.planos_upserted = 0;
+  pcaBootstrapState.itens_upserted = 0;
+  pcaBootstrapState.error = null;
+
+  try {
+    for (let mes = 1; mes <= 12; mes += 1) {
+      pcaBootstrapState.mes_atual = mes;
+      const inicio = new Date(targetAno, mes - 1, 1);
+      const fim = new Date(targetAno, mes, 0);
+      const fmt = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+      try {
+        await runPcaDailySync(
+          { dataInicio: fmt(inicio), dataFim: fmt(fim) },
+          (dPlanos, dItens) => {
+            pcaBootstrapState.planos_upserted += dPlanos;
+            pcaBootstrapState.itens_upserted += dItens;
+          }
+        );
+      } catch (e) {
+        // Erro num mês não derruba os outros — continua o bootstrap
+        console.error(`[pca] mês ${mes}/${targetAno} falhou: ${e.message}`);
+      }
+    }
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE} SET bootstrap_concluido = TRUE WHERE id = 1`
+    );
+  } catch (e) {
+    pcaBootstrapState.error = e.message;
+    console.error('[pca] bootstrap error:', e);
+  } finally {
+    pcaBootstrapState.running = false;
+    pcaBootstrapState.finishedAt = new Date().toISOString();
+    pcaBootstrapState.mes_atual = null;
+  }
+  return {
+    ano: targetAno,
+    planos_upserted: pcaBootstrapState.planos_upserted,
+    itens_upserted: pcaBootstrapState.itens_upserted,
+  };
+};
+
+const runPcaWatchlistMatching = async () => {
+  const { rows: watches } = await pool.query(
+    `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE ativo = TRUE`
+  );
+  let inserted = 0;
+  for (const watch of watches) {
+    let positivos = Array.isArray(watch.palavras_chave) ? [...watch.palavras_chave] : [];
+    let negativos = Array.isArray(watch.termos_negativos) ? [...watch.termos_negativos] : [];
+
+    if (watch.usar_ia && positivos[0]) {
+      try {
+        const r = await getTermosCorrelatos(positivos[0]);
+        positivos = Array.from(new Set([...positivos, ...(r.positivos || [])]));
+        negativos = Array.from(new Set([...negativos, ...(r.negativos || [])]));
+      } catch (e) {
+        console.warn('[pca] IA falhou para watchlist', watch.id, e.message);
+      }
+    }
+    if (!positivos.length) continue;
+
+    const filtros = {};
+    if (watch.valor_minimo) filtros.valor_min = watch.valor_minimo;
+    if (watch.valor_maximo) filtros.valor_max = watch.valor_maximo;
+
+    const { items } = await matchPcaItens({
+      positivos, negativos, filtros, pagina: 1, tam: 500, termoOriginal: positivos[0] || '',
+    });
+    for (const item of items) {
+      const r = await pool.query(
+        `
+          INSERT INTO ${PCA_SIGNALS_TABLE}
+            (account_id, plano_id, item_id, watchlist_id, score, termos_matched, termos_excluidos)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+          ON CONFLICT (account_id, item_id, watchlist_id) DO NOTHING
+          RETURNING id
+        `,
+        [watch.account_id, item.plano_id, item.item_id, watch.id,
+         Number(item.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
+      );
+      if (r.rowCount > 0) inserted += 1;
+    }
+  }
+  return { signals_inserted: inserted };
+};
+
+// ============ ENDPOINTS PCA ============
+
+app.post('/api/licitacoes/pca/sync', async (req, res) => {
+  try {
+    const { dataInicio, dataFim } = req.body || {};
+    const result = await runPcaDailySync({ dataInicio, dataFim });
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing PCA:', error);
+    res.status(500).json({ error: 'Erro ao sincronizar PCA', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pca/bootstrap', async (req, res) => {
+  if (pcaBootstrapState.running) {
+    return res.status(409).json({
+      error: 'Bootstrap já em andamento',
+      state: pcaBootstrapState,
+    });
+  }
+  const ano = toIntOrNull(req.body?.ano) || new Date().getFullYear();
+  // Dispara em background — cliente recebe 202 imediato e faz polling em /status.
+  runPcaBootstrap(ano).catch(err => console.error('[pca] bootstrap async error:', err));
+  res.status(202).json({
+    accepted: true,
+    ano,
+    state: pcaBootstrapState,
+  });
+});
+
+app.post('/api/licitacoes/pca/reset', async (_req, res) => {
+  if (pcaBootstrapState.running) {
+    return res.status(409).json({ error: 'Bootstrap em andamento — aguarde ou reinicie o backend.' });
+  }
+  try {
+    await pool.query(`TRUNCATE ${PCA_PLANOS_TABLE} RESTART IDENTITY CASCADE`);
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_data_fim = NULL, bootstrap_concluido = FALSE WHERE id = 1`
+    );
+    pcaBootstrapState.running = false;
+    pcaBootstrapState.startedAt = null;
+    pcaBootstrapState.finishedAt = null;
+    pcaBootstrapState.ano = null;
+    pcaBootstrapState.mes_atual = null;
+    pcaBootstrapState.planos_upserted = 0;
+    pcaBootstrapState.itens_upserted = 0;
+    pcaBootstrapState.error = null;
+    res.json({ ok: true, message: 'pca_planos / pca_itens / pca_signals esvaziados.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/licitacoes/pca/bootstrap/status', async (_req, res) => {
+  try {
+    const { rows: planoCount } = await pool.query(
+      `SELECT COUNT(*)::int AS planos, COALESCE(SUM(quantidade_itens),0)::int AS itens FROM ${PCA_PLANOS_TABLE}`
+    );
+    res.json({
+      ...pcaBootstrapState,
+      total_planos_db: planoCount[0]?.planos || 0,
+      total_itens_db: planoCount[0]?.itens || 0,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/licitacoes/pca/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const usarIa = String(req.query.usar_ia ?? 'true') !== 'false';
+    let positivos = [];
+    let negativos = [];
+    let fonte = null;
+
+    if (req.query.positivos_override) {
+      try { positivos = JSON.parse(req.query.positivos_override); } catch { positivos = []; }
+      try { negativos = JSON.parse(req.query.negativos_override || '[]'); } catch { negativos = []; }
+      fonte = 'override';
+    } else if (usarIa && q.length >= 3) {
+      const r = await getTermosCorrelatos(q);
+      positivos = Array.from(new Set([q, ...(r.positivos || [])])).filter(Boolean);
+      negativos = r.negativos || [];
+      fonte = r.fonte;
+    } else if (q) {
+      positivos = [q];
+    }
+
+    const { items, total } = await matchPcaItens({
+      positivos, negativos,
+      filtros: {
+        ano_pca: req.query.ano_pca,
+        valor_min: req.query.valor_min,
+        valor_max: req.query.valor_max,
+        mes_previsto: req.query.mes_previsto,
+        orgao_cnpj: req.query.orgao_cnpj,
+        unidade_codigo: req.query.unidade_codigo,
+      },
+      pagina: req.query.pagina || 1,
+      tam: req.query.tam || 50,
+      termoOriginal: q,
+    });
+
+    res.json({ q, positivos, negativos, fonte_ia: fonte, total, items });
+  } catch (error) {
+    console.error('Error searching PCA:', error);
+    res.status(500).json({ error: 'Erro na busca PCA', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/pca/planos/:id', async (req, res) => {
+  try {
+    const planoId = toIntOrNull(req.params.id);
+    if (!planoId) return res.status(400).json({ error: 'id inválido' });
+    const { rows: pRows } = await pool.query(
+      `SELECT * FROM ${PCA_PLANOS_TABLE} WHERE id = $1`, [planoId]
+    );
+    if (!pRows[0]) return res.status(404).json({ error: 'plano não encontrado' });
+    const { rows: iRows } = await pool.query(
+      `SELECT * FROM ${PCA_ITENS_TABLE} WHERE plano_id = $1 ORDER BY id ASC`, [planoId]
+    );
+    res.json({ plano: pRows[0], itens: iRows });
+  } catch (error) {
+    console.error('Error fetching PCA plano:', error);
+    res.status(500).json({ error: 'Erro ao buscar plano' });
+  }
+});
+
+app.get('/api/licitacoes/pca/signals', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const status = req.query.status || 'novo';
+    const params = [accountId, status];
+    const { rows } = await pool.query(
+      `
+        SELECT s.*, i.descricao, i.valor_total, i.mes_previsto, i.numero_item,
+               p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
+               p.responsaveis, p.contatos
+        FROM ${PCA_SIGNALS_TABLE} s
+        JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
+        JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
+        WHERE s.account_id = $1 AND s.status = $2
+        ORDER BY s.criado_em DESC
+        LIMIT 500
+      `, params
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error listing PCA signals:', error);
+    res.status(500).json({ error: 'Erro ao listar signals' });
+  }
+});
+
+const promotePcaSignalToOpportunity = async (signalId, accountId) => {
+  const { rows: sigRows } = await pool.query(
+    `
+      SELECT s.*, i.descricao, i.valor_total, i.numero_item, i.mes_previsto,
+             p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome,
+             p.ano_pca, p.data_publicacao, p.contatos, p.responsaveis
+      FROM ${PCA_SIGNALS_TABLE} s
+      JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
+      JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
+      WHERE s.id = $1 AND s.account_id = $2
+    `, [signalId, accountId]
+  );
+  const sig = sigRows[0];
+  if (!sig) return null;
+  if (sig.promovido_para_opportunity_id) {
+    const { rows } = await pool.query(
+      `SELECT * FROM ${LICITACAO_TABLE} WHERE id = $1`, [sig.promovido_para_opportunity_id]
+    );
+    return rows[0] || null;
+  }
+  const titulo = (sig.descricao || 'PCA').slice(0, 200);
+  const metadados = {
+    pca_plano_id: sig.plano_id,
+    pca_item_id: sig.item_id,
+    pca_signal_id: sig.id,
+    pca_ano: sig.ano_pca,
+    pca_mes_previsto: sig.mes_previsto,
+    pca_numero_item: sig.numero_item,
+    pca_responsaveis: sig.responsaveis,
+    pca_contatos: sig.contatos,
+  };
+  const { rows: oppRows } = await pool.query(
+    `
+      INSERT INTO ${LICITACAO_TABLE}
+        (account_id, titulo, fase, status, origem_oportunidade, orgao_nome, orgao_cnpj,
+         uasg_codigo, uasg_nome, valor_oportunidade, data_publicacao, links, metadados)
+      VALUES ($1,$2,$3,'ativo','pca_pncp',$4,$5,$6,$7,$8,$9,'{}'::jsonb,$10::jsonb)
+      RETURNING *
+    `,
+    [accountId, titulo, '1. Monitoramento de PCA',
+     sig.orgao_razao_social, sig.orgao_cnpj, sig.codigo_unidade, sig.unidade_nome,
+     sig.valor_total, sig.data_publicacao, JSON.stringify(metadados)]
+  );
+  const opp = oppRows[0];
+  await pool.query(
+    `UPDATE ${PCA_SIGNALS_TABLE}
+       SET status = 'promovido', promovido_para_opportunity_id = $1
+     WHERE id = $2`,
+    [opp.id, sig.id]
+  );
+  return opp;
+};
+
+app.post('/api/licitacoes/pca/signals/:id/promote', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const opp = await promotePcaSignalToOpportunity(toIntOrNull(req.params.id), accountId);
+    if (!opp) return res.status(404).json({ error: 'signal não encontrado' });
+    res.json(opp);
+  } catch (error) {
+    console.error('Error promoting PCA signal:', error);
+    res.status(500).json({ error: 'Erro ao promover signal', details: error.message });
+  }
+});
+
+// Promove uma Futura Contratação inteira (ou um subset de itens dela) para o board.
+// Cria UMA licitacao_opportunity + N licitacao_items (um por item selecionado),
+// e atualiza pca_signals para refletir o promovido.
+app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
+  const accountId = getAccountId(req);
+  const planoId = toIntOrNull(req.body?.plano_id);
+  const itemIds = Array.isArray(req.body?.item_ids) ? req.body.item_ids.map(toIntOrNull).filter(Boolean) : [];
+  const tituloOverride = (req.body?.titulo || '').toString().trim();
+  if (!planoId || !itemIds.length) {
+    return res.status(400).json({ error: 'plano_id e item_ids são obrigatórios' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: pRows } = await client.query(
+      `SELECT * FROM ${PCA_PLANOS_TABLE} WHERE id = $1`, [planoId]
+    );
+    const plano = pRows[0];
+    if (!plano) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'plano não encontrado' });
+    }
+    const { rows: iRows } = await client.query(
+      `SELECT * FROM ${PCA_ITENS_TABLE} WHERE plano_id = $1 AND id = ANY($2::bigint[])`,
+      [planoId, itemIds]
+    );
+    if (!iRows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'nenhum item válido' });
+    }
+    const futuraId = iRows[0].futura_contratacao_id;
+    const futuraNome = iRows[0].futura_contratacao_nome;
+    const valorTotal = iRows.reduce((acc, it) => acc + (Number(it.valor_total) || 0), 0);
+    const titulo = (tituloOverride
+      || futuraNome
+      || (futuraId ? `Contratação ${futuraId}` : (iRows[0].descricao || 'PCA').slice(0, 200))
+    ).slice(0, 200);
+    // URL pública do PCA no PNCP. Usa idPcaPncp se disponível (formato canônico),
+    // senão cai no padrão /app/pca/{cnpj}/{ano}.
+    const pncpPcaUrl = plano.id_pca_pncp
+      ? `https://pncp.gov.br/app/pca/${plano.id_pca_pncp}`
+      : `https://pncp.gov.br/app/pca/${plano.orgao_cnpj}/${plano.ano_pca}`;
+    const linksPayload = { pncp: pncpPcaUrl };
+    const metadados = {
+      pca_plano_id: plano.id,
+      pca_id_pncp: plano.id_pca_pncp,
+      pca_futura_contratacao_id: futuraId,
+      pca_futura_contratacao_nome: futuraNome,
+      pca_ano: plano.ano_pca,
+      pca_codigo_unidade: plano.codigo_unidade,
+      pca_unidade_nome: plano.unidade_nome,
+      pca_item_ids: iRows.map(i => i.id),
+      pca_responsaveis: plano.responsaveis,
+      pca_contatos: plano.contatos,
+    };
+    const { rows: oppRows } = await client.query(
+      `
+        INSERT INTO ${LICITACAO_TABLE}
+          (account_id, titulo, fase, status, origem_oportunidade, orgao_nome, orgao_cnpj,
+           uasg_codigo, uasg_nome, numero_compra, valor_oportunidade, data_publicacao,
+           links, metadados)
+        VALUES ($1,$2,$3,'ativo','pca_pncp',$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb)
+        RETURNING *
+      `,
+      [accountId, titulo, '1. Monitoramento de PCA',
+       plano.orgao_razao_social, plano.orgao_cnpj,
+       plano.codigo_unidade, plano.unidade_nome,
+       futuraId || null,
+       valorTotal || null, plano.data_publicacao,
+       JSON.stringify(linksPayload), JSON.stringify(metadados)]
+    );
+    const opp = oppRows[0];
+    for (const it of iRows) {
+      await client.query(
+        `
+          INSERT INTO ${LICITACAO_ITEMS_TABLE}
+            (opportunity_id, numero_item, descricao, quantidade, unidade,
+             valor_referencia, custo_total_item)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `,
+        [opp.id, it.numero_item, it.descricao, it.quantidade, it.unidade_medida,
+         it.valor_unitario, it.valor_total]
+      );
+      await client.query(
+        `
+          INSERT INTO ${PCA_SIGNALS_TABLE}
+            (account_id, plano_id, item_id, watchlist_id, score, status, promovido_para_opportunity_id)
+          VALUES ($1,$2,$3,NULL,0,'promovido',$4)
+          ON CONFLICT (account_id, item_id, watchlist_id) DO UPDATE
+            SET status='promovido', promovido_para_opportunity_id=EXCLUDED.promovido_para_opportunity_id
+        `,
+        [accountId, planoId, it.id, opp.id]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ...opp, itens_promovidos: iRows.length });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error promoting PCA contratacao:', error);
+    res.status(500).json({ error: 'Erro ao promover contratação', details: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/licitacoes/pca/signals/promote-item', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const itemId = toIntOrNull(req.body?.item_id);
+    const watchlistId = toIntOrNull(req.body?.watchlist_id);
+    if (!itemId) return res.status(400).json({ error: 'item_id obrigatório' });
+
+    const { rows: itemRows } = await pool.query(
+      `SELECT plano_id FROM ${PCA_ITENS_TABLE} WHERE id = $1`, [itemId]
+    );
+    const planoId = itemRows[0]?.plano_id;
+    if (!planoId) return res.status(404).json({ error: 'item não encontrado' });
+
+    const sigInsert = await pool.query(
+      `
+        INSERT INTO ${PCA_SIGNALS_TABLE}
+          (account_id, plano_id, item_id, watchlist_id, score, termos_matched, status)
+        VALUES ($1,$2,$3,$4,$5,$6,'novo')
+        ON CONFLICT (account_id, item_id, watchlist_id) DO UPDATE
+          SET status = CASE WHEN ${PCA_SIGNALS_TABLE}.status = 'descartado' THEN 'novo'
+                            ELSE ${PCA_SIGNALS_TABLE}.status END
+        RETURNING id
+      `,
+      [accountId, planoId, itemId, watchlistId,
+       Number(req.body?.score) || 0,
+       Array.isArray(req.body?.termos_matched) ? req.body.termos_matched : []]
+    );
+    const signalId = sigInsert.rows[0]?.id;
+    const opp = await promotePcaSignalToOpportunity(signalId, accountId);
+    res.json(opp);
+  } catch (error) {
+    console.error('Error promoting PCA item:', error);
+    res.status(500).json({ error: 'Erro ao promover item', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pca/signals/:id/dismiss', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    await pool.query(
+      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'descartado' WHERE id = $1 AND account_id = $2`,
+      [toIntOrNull(req.params.id), accountId]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao dispensar', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pca/signals/:id/seen', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    await pool.query(
+      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'visto' WHERE id = $1 AND account_id = $2 AND status = 'novo'`,
+      [toIntOrNull(req.params.id), accountId]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao marcar como visto', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const { rows } = await pool.query(
+      `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
+      [accountId]
+    );
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar watchlist', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const b = req.body || {};
+    const { rows } = await pool.query(
+      `
+        INSERT INTO ${PCA_WATCHLIST_TABLE}
+          (account_id, nome, palavras_chave, termos_negativos, usar_ia,
+           valor_minimo, valor_maximo, orgao_filtros, uasg_filtros, ativo)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
+        RETURNING *
+      `,
+      [accountId,
+       String(b.nome || 'Sem nome').slice(0, 200),
+       asTextArray(b.palavras_chave),
+       asTextArray(b.termos_negativos),
+       b.usar_ia !== false,
+       toNullableNumber(b.valor_minimo),
+       toNullableNumber(b.valor_maximo),
+       JSON.stringify(b.orgao_filtros || []),
+       JSON.stringify(b.uasg_filtros || []),
+       b.ativo !== false]
+    );
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar watchlist', details: error.message });
+  }
+});
+
+app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const id = toIntOrNull(req.params.id);
+    const b = req.body || {};
+    const { rows } = await pool.query(
+      `
+        UPDATE ${PCA_WATCHLIST_TABLE}
+           SET nome = COALESCE($1, nome),
+               palavras_chave = COALESCE($2, palavras_chave),
+               termos_negativos = COALESCE($3, termos_negativos),
+               usar_ia = COALESCE($4, usar_ia),
+               valor_minimo = $5,
+               valor_maximo = $6,
+               orgao_filtros = COALESCE($7::jsonb, orgao_filtros),
+               uasg_filtros = COALESCE($8::jsonb, uasg_filtros),
+               ativo = COALESCE($9, ativo)
+         WHERE id = $10 AND account_id = $11
+         RETURNING *
+      `,
+      [b.nome ?? null,
+       b.palavras_chave ? asTextArray(b.palavras_chave) : null,
+       b.termos_negativos ? asTextArray(b.termos_negativos) : null,
+       typeof b.usar_ia === 'boolean' ? b.usar_ia : null,
+       toNullableNumber(b.valor_minimo),
+       toNullableNumber(b.valor_maximo),
+       b.orgao_filtros ? JSON.stringify(b.orgao_filtros) : null,
+       b.uasg_filtros ? JSON.stringify(b.uasg_filtros) : null,
+       typeof b.ativo === 'boolean' ? b.ativo : null,
+       id, accountId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'não encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar watchlist', details: error.message });
+  }
+});
+
+app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    await pool.query(
+      `DELETE FROM ${PCA_WATCHLIST_TABLE} WHERE id = $1 AND account_id = $2`,
+      [toIntOrNull(req.params.id), accountId]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao remover watchlist', details: error.message });
+  }
+});
+
+// ============ FIM PCA ============
+
 app.get('/api/licitacoes/overview/summary', async (req, res) => {
   const accountId = getAccountId(req);
   try {
@@ -5801,6 +6835,26 @@ const startServer = async () => {
         await runComprasSync();
       } catch (error) {
         console.error('Error running automatic compras sync:', error);
+      }
+    });
+    // PCA: delta diário às 07:45 UTC (escalonado de runComprasSync às 07:30)
+    cron.schedule('45 7 * * *', async () => {
+      try {
+        const result = await runPcaDailySync();
+        console.log('[pca] daily sync ok:', result);
+      } catch (error) {
+        console.error('[pca] daily sync error:', error);
+      }
+    });
+    // Limpeza anual: 1º de janeiro às 04:00 UTC apaga PCAs de anos anteriores.
+    cron.schedule('0 4 1 1 *', async () => {
+      try {
+        const r = await pool.query(
+          `DELETE FROM ${PCA_PLANOS_TABLE} WHERE ano_pca < EXTRACT(YEAR FROM NOW())::int`
+        );
+        console.log(`[pca] cleanup anual: ${r.rowCount} planos removidos`);
+      } catch (error) {
+        console.error('[pca] cleanup anual error:', error);
       }
     });
   } catch (err) {
