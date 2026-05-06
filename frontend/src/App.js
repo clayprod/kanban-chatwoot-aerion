@@ -1697,6 +1697,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   const [posDraft, setPosDraft] = useState('');
   const [negDraft, setNegDraft] = useState('');
   const [busy, setBusy] = useState({});
+  const [itemBusy, setItemBusy] = useState({});
   const [saveDialog, setSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [selecionados, setSelecionados] = useState({});
@@ -1795,7 +1796,10 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
       setPositivos(r.data.positivos || []);
       setNegativos(r.data.negativos || []);
       setFonteIa(r.data.fonte_ia || null);
-      setItems(r.data.items || []);
+      setItems((r.data.items || []).map(it => ({
+        ...it,
+        signal_status: it.signal_status || 'novo',
+      })));
       setTotal(r.data.total || 0);
     } catch (e) {
       setError(e.response?.data?.error || e.message);
@@ -2154,6 +2158,64 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
                               </button>
                             )}
                           </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {!item.ja_promovido && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  promoteSingleItem(item);
+                                }}
+                                disabled={itemBusy[`promote:${item.item_id}`]}
+                                className="h-7 rounded-md bg-primary px-2.5 text-[11px] font-semibold text-white disabled:opacity-50"
+                              >
+                                {itemBusy[`promote:${item.item_id}`] ? 'Promovendo...' : 'Promover item'}
+                              </button>
+                            )}
+                            {item.signal_status !== 'novo' && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setSingleItemStatus(item, 'novo');
+                                }}
+                                disabled={itemBusy[`status:${item.item_id}:novo`]}
+                                className="h-7 rounded-md border border-border px-2.5 text-[11px] text-muted disabled:opacity-50"
+                              >
+                                Novo
+                              </button>
+                            )}
+                            {item.signal_status !== 'visto' && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setSingleItemStatus(item, 'visto');
+                                }}
+                                disabled={itemBusy[`status:${item.item_id}:visto`]}
+                                className="h-7 rounded-md border border-border px-2.5 text-[11px] text-muted disabled:opacity-50"
+                              >
+                                Visto
+                              </button>
+                            )}
+                            {item.signal_status !== 'descartado' && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setSingleItemStatus(item, 'descartado');
+                                }}
+                                disabled={itemBusy[`status:${item.item_id}:descartado`]}
+                                className="h-7 rounded-md border border-border px-2.5 text-[11px] text-muted disabled:opacity-50"
+                              >
+                                Descartar
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </label>
                     );
@@ -2495,6 +2557,41 @@ function PcaWatchlistsPanel() {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
       setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  const updateItemLocal = useCallback((itemId, changes) => {
+    setItems(prev => prev.map(it => (String(it.item_id) === String(itemId) ? { ...it, ...changes } : it)));
+  }, []);
+
+  const promoteSingleItem = async (item) => {
+    const key = `promote:${item.item_id}`;
+    setItemBusy(prev => ({ ...prev, [key]: true }));
+    try {
+      const r = await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
+      updateItemLocal(item.item_id, {
+        ja_promovido: true,
+        signal_status: 'promovido',
+        promovido_para_opportunity_id: r.data?.id || item.promovido_para_opportunity_id,
+      });
+      onPromoted && onPromoted();
+    } catch (e) {
+      alert(`Erro ao promover item: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setItemBusy(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const setSingleItemStatus = async (item, status) => {
+    const key = `status:${item.item_id}:${status}`;
+    setItemBusy(prev => ({ ...prev, [key]: true }));
+    try {
+      await axios.put(`/api/licitacoes/pca/items/${item.item_id}/status`, { status });
+      updateItemLocal(item.item_id, { signal_status: status });
+    } catch (e) {
+      alert(`Erro ao atualizar status: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setItemBusy(prev => ({ ...prev, [key]: false }));
     }
   };
 
