@@ -629,6 +629,22 @@ const createLicitacaoTables = async () => {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_signals_account_status ON ${PCA_SIGNALS_TABLE} (account_id, status);`);
+  await pool.query(`
+    WITH ranked AS (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY account_id, item_id, COALESCE(watchlist_id, 0)
+               ORDER BY criado_em DESC, id DESC
+             ) AS rn
+      FROM ${PCA_SIGNALS_TABLE}
+    )
+    DELETE FROM ${PCA_SIGNALS_TABLE}
+    WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_pca_signals_account_item_watchlist_nullable
+      ON ${PCA_SIGNALS_TABLE} (account_id, item_id, COALESCE(watchlist_id, 0));
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${PCA_SYNC_STATE_TABLE} (
@@ -4314,6 +4330,7 @@ const matchPcaItens = async ({
   pagina = 1,
   tam = 50,
   termoOriginal = '',
+  accountId = null,
 }) => {
   const tsPos = buildTsQuery(positivos);
   if (!tsPos) {
@@ -4342,6 +4359,8 @@ const matchPcaItens = async ({
     : '0';
   if (termoOriginal) params.push(`%${termoOriginal}%`);
 
+  const accountSignalParam = params.length + 1;
+
   const sql = `
     SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
            i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
@@ -4350,6 +4369,24 @@ const matchPcaItens = async ({
            p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
            p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
            p.data_atualizacao, p.responsaveis, p.contatos,
+           EXISTS (
+             SELECT 1
+             FROM ${PCA_SIGNALS_TABLE} s2
+             WHERE s2.account_id = $${accountSignalParam}
+               AND s2.item_id = i.id
+               AND s2.status = 'promovido'
+               AND s2.promovido_para_opportunity_id IS NOT NULL
+           ) AS ja_promovido,
+           (
+             SELECT s2.promovido_para_opportunity_id
+             FROM ${PCA_SIGNALS_TABLE} s2
+             WHERE s2.account_id = $${accountSignalParam}
+               AND s2.item_id = i.id
+               AND s2.status = 'promovido'
+               AND s2.promovido_para_opportunity_id IS NOT NULL
+             ORDER BY s2.criado_em DESC
+             LIMIT 1
+           ) AS promovido_para_opportunity_id,
            (ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) AS score
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
@@ -4367,7 +4404,7 @@ const matchPcaItens = async ({
   const countParams = params.slice(0, params.length - (termoOriginal ? 3 : 2));
 
   const [rowsResult, countResult] = await Promise.all([
-    pool.query(sql, params),
+    pool.query(sql, [...params, toIntOrNull(accountId) || -1]),
     pool.query(countSql, countParams),
   ]);
 
@@ -4640,6 +4677,7 @@ app.get('/api/licitacoes/pca/bootstrap/status', async (_req, res) => {
 
 app.get('/api/licitacoes/pca/search', async (req, res) => {
   try {
+    const accountId = getAccountId(req);
     const q = String(req.query.q || '').trim();
     const usarIa = String(req.query.usar_ia ?? 'true') !== 'false';
     let positivos = [];
@@ -4672,6 +4710,7 @@ app.get('/api/licitacoes/pca/search', async (req, res) => {
       pagina: req.query.pagina || 1,
       tam: req.query.tam || 50,
       termoOriginal: q,
+      accountId,
     });
 
     res.json({ q, positivos, negativos, fonte_ia: fonte, total, items });
@@ -4944,7 +4983,6 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
     }
     const futuraId = iRows[0].futura_contratacao_id;
     const futuraNome = iRows[0].futura_contratacao_nome;
-    const valorTotal = iRows.reduce((acc, it) => acc + (Number(it.valor_total) || 0), 0);
     const titulo = (tituloOverride
       || futuraNome
       || (futuraId ? `Contratação ${futuraId}` : (iRows[0].descricao || 'PCA').slice(0, 200))
@@ -4966,7 +5004,32 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
       pca_responsaveis: plano.responsaveis,
       pca_contatos: plano.contatos,
     };
-    const { rows: oppRows } = await client.query(
+    const { rows: existingOppRows } = await client.query(
+      `
+        SELECT *
+        FROM ${LICITACAO_TABLE}
+        WHERE account_id = $1
+          AND origem_oportunidade = 'pca_pncp'
+          AND metadados->>'pca_plano_id' = $2
+          AND COALESCE(metadados->>'pca_futura_contratacao_id', '') = COALESCE($3, '')
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [accountId, String(plano.id), futuraId ? String(futuraId) : null]
+    );
+
+    let opp = existingOppRows[0] || null;
+    const createdNewOpp = !opp;
+    const currentMeta = opp?.metadados || {};
+    const promotedItemIds = new Set(
+      Array.isArray(currentMeta.pca_item_ids)
+        ? currentMeta.pca_item_ids.map(v => String(v))
+        : []
+    );
+
+    if (!opp) {
+      const valorTotal = iRows.reduce((acc, it) => acc + (Number(it.valor_total) || 0), 0);
+      const { rows: oppRows } = await client.query(
       `
         INSERT INTO ${LICITACAO_TABLE}
           (account_id, titulo, fase, status, origem_oportunidade, orgao_nome, orgao_cnpj,
@@ -4981,9 +5044,16 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
        futuraId || null,
        valorTotal || null, plano.data_publicacao,
        JSON.stringify(linksPayload), JSON.stringify(metadados)]
-    );
-    const opp = oppRows[0];
+      );
+      opp = oppRows[0];
+    }
+
+    let valorIncremento = 0;
+    let itensPromovidos = 0;
     for (const it of iRows) {
+      if (promotedItemIds.has(String(it.id))) {
+        continue;
+      }
       await client.query(
         `
           INSERT INTO ${LICITACAO_ITEMS_TABLE}
@@ -4994,19 +5064,57 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
         [opp.id, it.numero_item, it.descricao, it.quantidade, it.unidade_medida,
          it.valor_unitario, it.valor_total]
       );
+      promotedItemIds.add(String(it.id));
+      if (!createdNewOpp) {
+        valorIncremento += Number(it.valor_total) || 0;
+      }
+      itensPromovidos += 1;
+      await client.query(
+        `
+          UPDATE ${PCA_SIGNALS_TABLE}
+             SET status = 'promovido', promovido_para_opportunity_id = $4
+           WHERE account_id = $1 AND plano_id = $2 AND item_id = $3 AND watchlist_id IS NULL
+        `,
+        [accountId, planoId, it.id, opp.id]
+      );
       await client.query(
         `
           INSERT INTO ${PCA_SIGNALS_TABLE}
             (account_id, plano_id, item_id, watchlist_id, score, status, promovido_para_opportunity_id)
-          VALUES ($1,$2,$3,NULL,0,'promovido',$4)
-          ON CONFLICT (account_id, item_id, watchlist_id) DO UPDATE
-            SET status='promovido', promovido_para_opportunity_id=EXCLUDED.promovido_para_opportunity_id
+          SELECT $1,$2,$3,NULL,0,'promovido',$4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM ${PCA_SIGNALS_TABLE}
+             WHERE account_id = $1 AND plano_id = $2 AND item_id = $3 AND watchlist_id IS NULL
+          )
         `,
         [accountId, planoId, it.id, opp.id]
       );
     }
+
+    await client.query(
+      `
+        UPDATE ${LICITACAO_TABLE}
+           SET metadados = $1::jsonb,
+               valor_oportunidade = COALESCE(valor_oportunidade, 0) + COALESCE($2::numeric, 0),
+               updated_at = NOW()
+         WHERE id = $3
+      `,
+      [
+        JSON.stringify({
+          ...currentMeta,
+          ...metadados,
+          pca_item_ids: Array.from(promotedItemIds),
+        }),
+        valorIncremento,
+        opp.id,
+      ]
+    );
     await client.query('COMMIT');
-    res.json({ ...opp, itens_promovidos: iRows.length });
+    const { rows: refreshedOppRows } = await client.query(
+      `SELECT * FROM ${LICITACAO_TABLE} WHERE id = $1`,
+      [opp.id]
+    );
+    res.json({ ...(refreshedOppRows[0] || opp), itens_promovidos: itensPromovidos });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error promoting PCA contratacao:', error);
@@ -5029,20 +5137,29 @@ app.post('/api/licitacoes/pca/signals/promote-item', async (req, res) => {
     const planoId = itemRows[0]?.plano_id;
     if (!planoId) return res.status(404).json({ error: 'item não encontrado' });
 
-    const sigInsert = await pool.query(
+    const sigUpdate = await pool.query(
       `
-        INSERT INTO ${PCA_SIGNALS_TABLE}
-          (account_id, plano_id, item_id, watchlist_id, score, termos_matched, status)
-        VALUES ($1,$2,$3,$4,$5,$6,'novo')
-        ON CONFLICT (account_id, item_id, watchlist_id) DO UPDATE
-          SET status = CASE WHEN ${PCA_SIGNALS_TABLE}.status = 'descartado' THEN 'novo'
-                            ELSE ${PCA_SIGNALS_TABLE}.status END
-        RETURNING id
+        UPDATE ${PCA_SIGNALS_TABLE}
+           SET status = CASE WHEN status = 'descartado' THEN 'novo' ELSE status END
+         WHERE account_id = $1 AND plano_id = $2 AND item_id = $3
+           AND ((watchlist_id = $4) OR (watchlist_id IS NULL AND $4 IS NULL))
+         RETURNING id
       `,
-      [accountId, planoId, itemId, watchlistId,
-       Number(req.body?.score) || 0,
-       Array.isArray(req.body?.termos_matched) ? req.body.termos_matched : []]
+      [accountId, planoId, itemId, watchlistId || null]
     );
+    const sigInsert = sigUpdate.rows[0]
+      ? { rows: sigUpdate.rows }
+      : await pool.query(
+        `
+          INSERT INTO ${PCA_SIGNALS_TABLE}
+            (account_id, plano_id, item_id, watchlist_id, score, termos_matched, status)
+          VALUES ($1,$2,$3,$4,$5,$6,'novo')
+          RETURNING id
+        `,
+        [accountId, planoId, itemId, watchlistId,
+         Number(req.body?.score) || 0,
+         Array.isArray(req.body?.termos_matched) ? req.body.termos_matched : []]
+      );
     const signalId = sigInsert.rows[0]?.id;
     const opp = await promotePcaSignalToOpportunity(signalId, accountId);
     res.json(opp);
