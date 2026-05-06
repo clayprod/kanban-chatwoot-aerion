@@ -1677,7 +1677,7 @@ const PcaChips = ({ items, onRemove, accent }) => (
   </div>
 );
 
-function PcaExplorer({ onPromoted, onSwitchToBoard }) {
+function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   const [q, setQ] = useState('');
   const [usarIa, setUsarIa] = useState(true);
   const [positivos, setPositivos] = useState([]);
@@ -1824,19 +1824,28 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
   const promoverContratacao = async (ct) => {
     const set = selecionados[ct.key];
     const itemIds = set ? Array.from(set) : [];
-    if (!itemIds.length) return;
+    const itemIdsPromoviveis = itemIds.filter((id) => {
+      const item = ct.itens.find(i => i.item_id === id);
+      return item && !item.ja_promovido;
+    });
+    if (!itemIdsPromoviveis.length) return;
     setBusy(prev => ({ ...prev, [ct.key]: true }));
     try {
       const r = await axios.post('/api/licitacoes/pca/contratacoes/promote', {
         plano_id: ct.plano_id,
-        item_ids: itemIds,
+        item_ids: itemIdsPromoviveis,
         titulo: ct.contratacao_nome || (ct.contratacao_id ? `Contratação ${ct.contratacao_id}` : null),
       });
       onPromoted && onPromoted();
       setSelecionados(prev => ({ ...prev, [ct.key]: new Set() }));
+      setItems(prev => prev.map(it => (
+        itemIdsPromoviveis.includes(it.item_id)
+          ? { ...it, ja_promovido: true, promovido_para_opportunity_id: r.data?.id || it.promovido_para_opportunity_id }
+          : it
+      )));
       setLastPromoted({
         titulo: r.data?.titulo || ct.contratacao_nome || `Contratação ${ct.contratacao_id || ''}`,
-        itens: itemIds.length,
+        itens: itemIdsPromoviveis.length,
         opportunityId: r.data?.id,
         pncpUrl: ct.pncp_url,
       });
@@ -2040,6 +2049,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
           const allItemIds = ct.itens.map(i => i.item_id);
           const sel = selecionados[ct.key] || new Set();
           const selectedCount = sel.size;
+          const selectedPromotableCount = ct.itens.filter(i => sel.has(i.item_id) && !i.ja_promovido).length;
+          const promotedCount = ct.itens.filter(i => i.ja_promovido).length;
           const valorSelecionado = ct.itens
             .filter(i => sel.has(i.item_id))
             .reduce((acc, i) => acc + (Number(i.valor_total) || 0), 0);
@@ -2072,6 +2083,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                     <span>{ct.itens.length} item(ns)</span>
                     <span>{formatPcaQuantity(ct.quantidade_total)} unidade(s)</span>
                     <span>{formatPcaCurrency(ct.valor_total)}</span>
+                    {promotedCount > 0 && <span>{promotedCount}/{ct.itens.length} promovido(s)</span>}
                     <span className="inline-flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
                       Score {ct.max_score.toFixed(2)}
@@ -2081,11 +2093,15 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                 <button
                   type="button"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); promoverContratacao(ct); }}
-                  disabled={busy[ct.key] || selectedCount === 0}
+                  disabled={busy[ct.key] || selectedPromotableCount === 0}
                   className="h-9 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-40 shrink-0"
-                  title={selectedCount === 0 ? 'Selecione itens primeiro' : `Promover ${selectedCount} de ${ct.itens.length} (${formatPcaCurrency(valorSelecionado)})`}
+                  title={selectedCount === 0
+                    ? 'Selecione itens primeiro'
+                    : selectedPromotableCount === 0
+                      ? 'Itens selecionados já estão promovidos'
+                      : `Promover ${selectedPromotableCount} de ${ct.itens.length} (${formatPcaCurrency(valorSelecionado)})`}
                 >
-                  {busy[ct.key] ? '...' : `Promover ${selectedCount > 0 ? `(${selectedCount}/${ct.itens.length})` : ''}`}
+                  {busy[ct.key] ? '...' : `Promover ${selectedPromotableCount > 0 ? `(${selectedPromotableCount}/${ct.itens.length})` : ''}`}
                 </button>
               </summary>
               <div className="border-t border-border bg-slate-800/70 p-3">
@@ -2119,6 +2135,24 @@ function PcaExplorer({ onPromoted, onSwitchToBoard }) {
                             <span>{formatPcaCurrency(item.valor_total)}</span>
                             {item.mes_previsto && <span>mês {item.mes_previsto}/{ct.ano_pca}</span>}
                             {item.classificacao_nome && <span className="truncate max-w-[200px]">{item.classificacao_nome}</span>}
+                            {item.ja_promovido && (
+                              <span className="inline-flex items-center rounded-md bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-600">
+                                Promovido
+                              </span>
+                            )}
+                            {item.ja_promovido && item.promovido_para_opportunity_id && onOpenOpportunity && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  onOpenOpportunity(item.promovido_para_opportunity_id);
+                                }}
+                                className="text-primary hover:underline"
+                              >
+                                Ver no Board ↗
+                              </button>
+                            )}
                           </div>
                         </div>
                       </label>
@@ -2849,9 +2883,12 @@ function App() {
     setLicitacaoLoading(true);
     try {
       const opportunitiesResponse = await axios.get('/api/licitacoes/opportunities');
-      setLicitacaoOpportunities(opportunitiesResponse.data || []);
+      const data = opportunitiesResponse.data || [];
+      setLicitacaoOpportunities(data);
+      return data;
     } catch (error) {
       console.error('Error loading licitações:', error);
+      return [];
     } finally {
       setLicitacaoLoading(false);
     }
@@ -6812,6 +6849,17 @@ function App() {
                 <PcaExplorer
                   onPromoted={() => loadLicitações()}
                   onSwitchToBoard={() => setLicitacaoSubview('board')}
+                  onOpenOpportunity={async (opportunityId) => {
+                    setLicitacaoSubview('board');
+                    let target = licitacaoOpportunities.find(item => String(item.id) === String(opportunityId));
+                    if (!target) {
+                      const refreshed = await loadLicitações();
+                      target = (refreshed || []).find(item => String(item.id) === String(opportunityId));
+                    }
+                    if (target) {
+                      openOpportunity(target);
+                    }
+                  }}
                 />
               )}
 
