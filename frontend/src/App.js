@@ -2385,6 +2385,7 @@ function PcaSignalsPanel({ onPromoted }) {
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('novo');
   const [busy, setBusy] = useState({});
+  const [selectedSignals, setSelectedSignals] = useState({});
   const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
 
   const loadCounts = useCallback(async () => {
@@ -2416,6 +2417,35 @@ function PcaSignalsPanel({ onPromoted }) {
   }, [statusFilter, loadCounts]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setSelectedSignals({});
+  }, [statusFilter]);
+
+  const toggleSelected = (id) => {
+    setSelectedSignals(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const selectedIds = Object.keys(selectedSignals).filter(id => selectedSignals[id]).map(id => Number(id));
+
+  const runBatch = async (action, status = null) => {
+    if (!selectedIds.length) return;
+    setBusy(prev => ({ ...prev, __batch: true }));
+    try {
+      await axios.post('/api/licitacoes/pca/signals/batch', {
+        action,
+        status,
+        signal_ids: selectedIds,
+      });
+      if (action === 'promote') onPromoted && onPromoted();
+      setSelectedSignals({});
+      load();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, __batch: false }));
+    }
+  };
 
   const act = async (id, kind) => {
     setBusy(prev => ({ ...prev, [id]: true }));
@@ -2459,6 +2489,28 @@ function PcaSignalsPanel({ onPromoted }) {
         </button>
       </div>
 
+      {statusFilter !== 'promovido' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted">{selectedIds.length} selecionado(s)</span>
+          {statusFilter === 'novo' && (
+            <button type="button" disabled={!selectedIds.length || busy.__batch}
+              onClick={() => runBatch('promote')}
+              className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white disabled:opacity-50">
+              Promover selecionados
+            </button>
+          )}
+          <button type="button" disabled={!selectedIds.length || busy.__batch}
+            onClick={() => runBatch('status', 'visto')}
+            className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Marcar visto</button>
+          <button type="button" disabled={!selectedIds.length || busy.__batch}
+            onClick={() => runBatch('status', 'descartado')}
+            className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
+          <button type="button" disabled={!selectedIds.length || busy.__batch}
+            onClick={() => setSelectedSignals({})}
+            className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Limpar seleção</button>
+        </div>
+      )}
+
       {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
 
       {loading ? (
@@ -2501,6 +2553,7 @@ function PcaSignalsPanel({ onPromoted }) {
                     <div className="divide-y divide-border">
                       {plan.items.map(s => (
                         <div key={s.id} className="p-3 flex items-start gap-3">
+                          <input type="checkbox" checked={!!selectedSignals[s.id]} onChange={() => toggleSelected(s.id)} className="mt-1" />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm text-ink">{s.descricao}</div>
                             <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">

@@ -5349,6 +5349,52 @@ app.put('/api/licitacoes/pca/signals/:id/status', async (req, res) => {
   }
 });
 
+app.post('/api/licitacoes/pca/signals/batch', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const signalIds = Array.isArray(req.body?.signal_ids)
+      ? req.body.signal_ids.map(toIntOrNull).filter(Boolean)
+      : [];
+
+    if (!signalIds.length) return res.status(400).json({ error: 'signal_ids obrigatório' });
+
+    if (action === 'promote') {
+      let promoted = 0;
+      const opportunities = [];
+      for (const signalId of signalIds) {
+        const opp = await promotePcaSignalToOpportunity(signalId, accountId);
+        if (opp) {
+          promoted += 1;
+          opportunities.push(opp.id);
+        }
+      }
+      return res.json({ ok: true, affected: promoted, opportunity_ids: Array.from(new Set(opportunities)) });
+    }
+
+    if (action === 'status') {
+      const nextStatus = String(req.body?.status || '').trim().toLowerCase();
+      const allowed = new Set(['novo', 'visto', 'descartado']);
+      if (!allowed.has(nextStatus)) return res.status(400).json({ error: 'status inválido' });
+
+      const { rowCount } = await pool.query(
+        `
+          UPDATE ${PCA_SIGNALS_TABLE}
+             SET status = $1
+           WHERE account_id = $2
+             AND id = ANY($3::bigint[])
+        `,
+        [nextStatus, accountId, signalIds]
+      );
+      return res.json({ ok: true, affected: rowCount || 0 });
+    }
+
+    return res.status(400).json({ error: 'action inválida' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro na ação em lote de signals', details: error.message });
+  }
+});
+
 app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
