@@ -6948,7 +6948,7 @@ function App() {
                   onSwitchToBoard={() => setLicitacaoSubview('board')}
                   onOpenOpportunity={async (opportunityId) => {
                     setLicitacaoSubview('board');
-                    let target = licitacaoOpportunities.find(item => String(item.id) === String(opportunityId));
+                    let target = licitaçãoOpportunities.find(item => String(item.id) === String(opportunityId));
                     if (!target) {
                       const refreshed = await loadLicitações();
                       target = (refreshed || []).find(item => String(item.id) === String(opportunityId));
