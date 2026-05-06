@@ -1878,6 +1878,41 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     }
   };
 
+  const updateItemLocal = useCallback((itemId, changes) => {
+    setItems(prev => prev.map(it => (String(it.item_id) === String(itemId) ? { ...it, ...changes } : it)));
+  }, []);
+
+  const promoteSingleItem = async (item) => {
+    const key = `promote:${item.item_id}`;
+    setItemBusy(prev => ({ ...prev, [key]: true }));
+    try {
+      const r = await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
+      updateItemLocal(item.item_id, {
+        ja_promovido: true,
+        signal_status: 'promovido',
+        promovido_para_opportunity_id: r.data?.id || item.promovido_para_opportunity_id,
+      });
+      onPromoted && onPromoted();
+    } catch (e) {
+      alert(`Erro ao promover item: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setItemBusy(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const setSingleItemStatus = async (item, status) => {
+    const key = `status:${item.item_id}:${status}`;
+    setItemBusy(prev => ({ ...prev, [key]: true }));
+    try {
+      await axios.put(`/api/licitacoes/pca/items/${item.item_id}/status`, { status });
+      updateItemLocal(item.item_id, { signal_status: status });
+    } catch (e) {
+      alert(`Erro ao atualizar status: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setItemBusy(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
   // Lista plana de Futuras Contratações (uma por card).
   // Itens sem futura_contratacao_id viram cards "solo" (key inclui o item_id pra não fundir não-relacionados).
   const contrataçõesPlanas = useMemo(() => {
@@ -2557,41 +2592,6 @@ function PcaWatchlistsPanel() {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
       setBusy(prev => ({ ...prev, [row.id]: false }));
-    }
-  };
-
-  const updateItemLocal = useCallback((itemId, changes) => {
-    setItems(prev => prev.map(it => (String(it.item_id) === String(itemId) ? { ...it, ...changes } : it)));
-  }, []);
-
-  const promoteSingleItem = async (item) => {
-    const key = `promote:${item.item_id}`;
-    setItemBusy(prev => ({ ...prev, [key]: true }));
-    try {
-      const r = await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
-      updateItemLocal(item.item_id, {
-        ja_promovido: true,
-        signal_status: 'promovido',
-        promovido_para_opportunity_id: r.data?.id || item.promovido_para_opportunity_id,
-      });
-      onPromoted && onPromoted();
-    } catch (e) {
-      alert(`Erro ao promover item: ${e.response?.data?.error || e.message}`);
-    } finally {
-      setItemBusy(prev => ({ ...prev, [key]: false }));
-    }
-  };
-
-  const setSingleItemStatus = async (item, status) => {
-    const key = `status:${item.item_id}:${status}`;
-    setItemBusy(prev => ({ ...prev, [key]: true }));
-    try {
-      await axios.put(`/api/licitacoes/pca/items/${item.item_id}/status`, { status });
-      updateItemLocal(item.item_id, { signal_status: status });
-    } catch (e) {
-      alert(`Erro ao atualizar status: ${e.response?.data?.error || e.message}`);
-    } finally {
-      setItemBusy(prev => ({ ...prev, [key]: false }));
     }
   };
 
