@@ -1513,6 +1513,62 @@ Responda SOMENTE JSON válido no formato:
   }
 };
 
+const summarizePcaOpportunityTitleWithAI = async ({ futuraNome, itens = [] }) => {
+  if (!Array.isArray(itens) || itens.length < 2) return null;
+  const baseTitle = (futuraNome || '').toString().trim();
+  const snippets = itens
+    .slice(0, 8)
+    .map((it, idx) => `${idx + 1}. ${(it?.descricao || '').toString().trim().slice(0, 220)}`)
+    .filter(Boolean)
+    .join('\n');
+  if (!snippets) return null;
+
+  const prompt = `Contexto: itens de uma mesma futura contratacao do PCA.\n\nTitulo base: ${baseTitle || 'nao informado'}\n\nItens:\n${snippets}\n\nGere um unico titulo curto (maximo 120 caracteres), objetivo e comercial para a oportunidade. Sem aspas e sem pontuacao final.`;
+
+  const callProvider = async ({ url, key, model }, timeoutMs = 10000) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: 'Voce resume oportunidades de licitacao em um titulo curto e claro.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.2,
+          max_tokens: 80,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      const text = (data?.choices?.[0]?.message?.content || '').replace(/[\r\n]+/g, ' ').trim();
+      if (!text) return null;
+      return text.replace(/^"+|"+$/g, '').slice(0, 120);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  if (OPENAI_API_KEY) {
+    const t = await callProvider({ url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: OPENAI_AI_MODEL }, 12000);
+    if (t) return t;
+  }
+  if (GROQ_API_KEY) {
+    const t = await callProvider({ url: 'https://api.groq.com/openai/v1/chat/completions', key: GROQ_API_KEY, model: GROQ_AI_MODEL }, 10000);
+    if (t) return t;
+  }
+  return null;
+};
+
 const pickHighPrecisionPositiveTerms = (original, terms = []) => {
   const originalTokens = new Set(tokenizeSearchTerms(original));
   const filtered = [];
@@ -4387,6 +4443,14 @@ const matchPcaItens = async ({
              ORDER BY s2.criado_em DESC
              LIMIT 1
            ) AS promovido_para_opportunity_id,
+           (
+             SELECT s2.status
+             FROM ${PCA_SIGNALS_TABLE} s2
+             WHERE s2.account_id = $${accountSignalParam}
+               AND s2.item_id = i.id
+             ORDER BY s2.criado_em DESC
+             LIMIT 1
+           ) AS signal_status,
            (ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) AS score
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
@@ -4814,16 +4878,16 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
     return rows[0] || null;
   }
 
-  const { rows: existingOppRows } = await pool.query(
-    `
-      SELECT *
-      FROM ${LICITACAO_TABLE}
-      WHERE account_id = $1
-        AND origem_oportunidade = 'pca_pncp'
-        AND metadados->>'pca_plano_id' = $2
-      ORDER BY id DESC
-      LIMIT 1
-    `,
+    const { rows: existingOppRows } = await pool.query(
+      `
+        SELECT *
+        FROM ${LICITACAO_TABLE}
+        WHERE account_id = $1
+          AND origem_oportunidade = 'pca_pncp'
+          AND metadados->>'pca_plano_id' = $2
+        ORDER BY id DESC
+        LIMIT 1
+      `,
     [accountId, String(sig.plano_id)]
   );
   if (existingOppRows[0]) {
@@ -4983,10 +5047,14 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
     }
     const futuraId = iRows[0].futura_contratacao_id;
     const futuraNome = iRows[0].futura_contratacao_nome;
-    const titulo = (tituloOverride
+    let titulo = (tituloOverride
       || futuraNome
       || (futuraId ? `Contratação ${futuraId}` : (iRows[0].descricao || 'PCA').slice(0, 200))
     ).slice(0, 200);
+    if (!tituloOverride && iRows.length > 1) {
+      const aiTitulo = await summarizePcaOpportunityTitleWithAI({ futuraNome, itens: iRows });
+      if (aiTitulo) titulo = aiTitulo;
+    }
     // URL pública canônica do PCA no PNCP.
     // Alguns ids retornados pela API vêm em formatos variantes (ex.: com sufixos),
     // então fixamos no padrão estável /app/pca/{cnpj}/{ano}.
@@ -5011,11 +5079,10 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
         WHERE account_id = $1
           AND origem_oportunidade = 'pca_pncp'
           AND metadados->>'pca_plano_id' = $2
-          AND COALESCE(metadados->>'pca_futura_contratacao_id', '') = COALESCE($3, '')
         ORDER BY id DESC
         LIMIT 1
       `,
-      [accountId, String(plano.id), futuraId ? String(futuraId) : null]
+      [accountId, String(plano.id)]
     );
 
     let opp = existingOppRows[0] || null;
@@ -5091,6 +5158,10 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
       );
     }
 
+    const currentFuturaId = currentMeta?.pca_futura_contratacao_id ? String(currentMeta.pca_futura_contratacao_id) : null;
+    const incomingFuturaId = futuraId ? String(futuraId) : null;
+    const mixedFuturas = Boolean(currentFuturaId && incomingFuturaId && currentFuturaId !== incomingFuturaId);
+
     await client.query(
       `
         UPDATE ${LICITACAO_TABLE}
@@ -5103,6 +5174,12 @@ app.post('/api/licitacoes/pca/contratacoes/promote', async (req, res) => {
         JSON.stringify({
           ...currentMeta,
           ...metadados,
+          pca_futura_contratacao_id: mixedFuturas
+            ? null
+            : (currentMeta?.pca_futura_contratacao_id ?? metadados.pca_futura_contratacao_id),
+          pca_futura_contratacao_nome: mixedFuturas
+            ? 'Múltiplas contratações'
+            : (currentMeta?.pca_futura_contratacao_nome ?? metadados.pca_futura_contratacao_nome),
           pca_item_ids: Array.from(promotedItemIds),
         }),
         valorIncremento,
@@ -5166,6 +5243,55 @@ app.post('/api/licitacoes/pca/signals/promote-item', async (req, res) => {
   } catch (error) {
     console.error('Error promoting PCA item:', error);
     res.status(500).json({ error: 'Erro ao promover item', details: error.message });
+  }
+});
+
+app.put('/api/licitacoes/pca/items/:itemId/status', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const itemId = toIntOrNull(req.params.itemId);
+    const nextStatus = String(req.body?.status || '').trim().toLowerCase();
+    const allowed = new Set(['novo', 'visto', 'descartado']);
+    if (!itemId) return res.status(400).json({ error: 'item_id inválido' });
+    if (!allowed.has(nextStatus)) return res.status(400).json({ error: 'status inválido' });
+
+    const { rows: itemRows } = await pool.query(
+      `SELECT plano_id FROM ${PCA_ITENS_TABLE} WHERE id = $1`,
+      [itemId]
+    );
+    const planoId = itemRows[0]?.plano_id;
+    if (!planoId) return res.status(404).json({ error: 'item não encontrado' });
+
+    const { rows: updatedRows } = await pool.query(
+      `
+        UPDATE ${PCA_SIGNALS_TABLE}
+           SET status = $4
+         WHERE account_id = $1
+           AND plano_id = $2
+           AND item_id = $3
+           AND watchlist_id IS NULL
+         RETURNING id, status
+      `,
+      [accountId, planoId, itemId, nextStatus]
+    );
+
+    if (updatedRows[0]) {
+      return res.json(updatedRows[0]);
+    }
+
+    const { rows: insertedRows } = await pool.query(
+      `
+        INSERT INTO ${PCA_SIGNALS_TABLE}
+          (account_id, plano_id, item_id, watchlist_id, score, status)
+        VALUES ($1,$2,$3,NULL,0,$4)
+        RETURNING id, status
+      `,
+      [accountId, planoId, itemId, nextStatus]
+    );
+
+    res.json(insertedRows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar status do item PCA', details: error.message });
   }
 });
 
