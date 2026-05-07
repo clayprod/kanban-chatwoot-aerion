@@ -4806,13 +4806,19 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const status = req.query.status || 'novo';
-    const params = [accountId, status];
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const requestedOffset = Number.parseInt(req.query.offset, 10);
+    const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 1000, 1), 2000);
+    const offset = Math.max(Number.isFinite(requestedOffset) ? requestedOffset : 0, 0);
+    const params = [accountId, status, limit, offset];
     const { rows } = await pool.query(
       `
         SELECT s.*, i.descricao, i.valor_total, i.mes_previsto, i.numero_item,
                i.quantidade, i.unidade_medida, i.futura_contratacao_id, i.futura_contratacao_nome,
                p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
-               p.responsaveis, p.contatos, w.nome AS watchlist_nome
+               p.responsaveis, p.contatos, w.nome AS watchlist_nome,
+               COUNT(*) OVER()::int AS total_count,
+               COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
         FROM ${PCA_SIGNALS_TABLE} s
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
@@ -4820,10 +4826,12 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
         WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
         ORDER BY w.nome ASC NULLS LAST, p.orgao_razao_social ASC NULLS LAST, p.ano_pca DESC,
                  p.id ASC, i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
-        LIMIT 500
+        LIMIT $3 OFFSET $4
       `, params
     );
-    res.json(rows);
+    const total = Number(rows[0]?.total_count) || 0;
+    const data = rows.map(({ total_count, ...row }) => row);
+    res.json({ data, total, limit, offset, has_more: offset + data.length < total });
   } catch (error) {
     console.error('Error listing PCA signals:', error);
     res.status(500).json({ error: 'Erro ao listar signals' });

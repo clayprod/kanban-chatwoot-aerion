@@ -1620,9 +1620,11 @@ const groupPcaSignalsByWatchlist = (signals) => {
         title: s.watchlist_nome || (s.watchlist_id ? `Watchlist #${s.watchlist_id}` : 'Sem watchlist'),
         plans: new Map(),
         itemsCount: 0,
+        totalCount: Number(s.watchlist_total_count) || 0,
       });
     }
     const group = groups.get(key);
+    group.totalCount = Math.max(group.totalCount, Number(s.watchlist_total_count) || 0);
     const planKey = `plano_${s.plano_id || `${s.orgao_cnpj}:${s.codigo_unidade}:${s.ano_pca}`}`;
     if (!group.plans.has(planKey)) {
       group.plans.set(planKey, {
@@ -2379,14 +2381,18 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   );
 }
 
+const PCA_SIGNALS_PAGE_SIZE = 1000;
+
 function PcaSignalsPanel({ onPromoted }) {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('novo');
   const [busy, setBusy] = useState({});
   const [selectedSignals, setSelectedSignals] = useState({});
   const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
+  const [pageInfo, setPageInfo] = useState({ total: 0, limit: PCA_SIGNALS_PAGE_SIZE, offset: 0, hasMore: false });
 
   const loadCounts = useCallback(async () => {
     try {
@@ -2402,17 +2408,29 @@ function PcaSignalsPanel({ onPromoted }) {
     }
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ append = false, offset = 0 } = {}) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setError(null);
     try {
-      const r = await axios.get('/api/licitacoes/pca/signals', { params: { status: statusFilter } });
-      setSignals(r.data || []);
+      const r = await axios.get('/api/licitacoes/pca/signals', {
+        params: { status: statusFilter, limit: PCA_SIGNALS_PAGE_SIZE, offset },
+      });
+      const rows = Array.isArray(r.data) ? r.data : (r.data?.data || []);
+      const total = Array.isArray(r.data) ? rows.length : (Number(r.data?.total) || 0);
+      setSignals(prev => append ? [...prev, ...rows] : rows);
+      setPageInfo({
+        total,
+        limit: Number(r.data?.limit) || PCA_SIGNALS_PAGE_SIZE,
+        offset,
+        hasMore: Array.isArray(r.data) ? false : !!r.data?.has_more,
+      });
       loadCounts();
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
-      setLoading(false);
+      if (append) setLoadingMore(false);
+      else setLoading(false);
     }
   }, [statusFilter, loadCounts]);
 
@@ -2484,6 +2502,9 @@ function PcaSignalsPanel({ onPromoted }) {
             {s} ({statusCounts[s] || 0})
           </button>
         ))}
+        <span className="text-xs text-muted">
+          Exibindo {signals.length} de {pageInfo.total || statusCounts[statusFilter] || signals.length}
+        </span>
         <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
           Atualizar sinais
         </button>
@@ -2522,7 +2543,7 @@ function PcaSignalsPanel({ onPromoted }) {
           {groupPcaSignalsByWatchlist(signals).map(group => (
             <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
               <div className="px-3 py-2 border-b border-border bg-primary/10 text-xs font-semibold text-primary">
-                {group.title} ({group.itemsCount})
+                {group.title} ({group.totalCount > group.itemsCount ? `${group.itemsCount}/${group.totalCount}` : group.itemsCount})
               </div>
               <div className="space-y-3 p-3 bg-cardAlt/40">
                 {group.plans.map(plan => (
@@ -2607,6 +2628,18 @@ function PcaSignalsPanel({ onPromoted }) {
               </div>
             </div>
           ))}
+          {pageInfo.hasMore && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                disabled={loadingMore}
+                onClick={() => load({ append: true, offset: signals.length })}
+                className="h-9 rounded-lg border border-border bg-card px-4 text-xs font-semibold text-primary disabled:opacity-50"
+              >
+                {loadingMore ? 'Carregando...' : `Carregar mais (${signals.length}/${pageInfo.total})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
