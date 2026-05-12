@@ -2768,6 +2768,7 @@ function App() {
   const [selectedLinkedContacts, setSelectedLinkedContacts] = useState([]);
   const [newOpportunityForm, setNewOpportunityForm] = useState(createEmptyOpportunityForm);
   const [showNewOpportunityForm, setShowNewOpportunityForm] = useState(false);
+  const [newOpportunityFormSubview, setNewOpportunityFormSubview] = useState(null);
   const [newOpportunityContact, setNewOpportunityContact] = useState({ contact_id: '', papel: '', observacao: '' });
   const [newOpportunityContactQuery, setNewOpportunityContactQuery] = useState('');
   const [orgaoLookupQuery, setOrgaoLookupQuery] = useState('');
@@ -3867,6 +3868,7 @@ function App() {
 
       setLicitacaoOpportunities(prev => [response.data, ...prev]);
       setShowNewOpportunityForm(false);
+      setNewOpportunityFormSubview(null);
       setIsPncpImportDraft(false);
       setNewOpportunityForm(createEmptyOpportunityForm());
       setNewOpportunityContact({ contact_id: '', papel: '', observacao: '' });
@@ -4209,6 +4211,8 @@ function App() {
       setExpandedDraftChecklist({});
       setChecklistModalItemId(null);
       setIsPncpImportDraft(true);
+      setNewOpportunityFormSubview('editais');
+      setLicitacaoSubview('editais');
       setShowNewOpportunityForm(true);
       setPncpSearchExpanded(false);
     } catch (error) {
@@ -5465,6 +5469,7 @@ function App() {
                       type="button"
                       onClick={() => {
                         setIsPncpImportDraft(false);
+                        setNewOpportunityFormSubview(licitaçãoSubview);
                         setShowNewOpportunityForm(true);
                       }}
                       className="h-9 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-ink"
@@ -6075,7 +6080,7 @@ function App() {
               </>
               )}
 
-              {showNewOpportunityForm && (
+              {showNewOpportunityForm && newOpportunityFormSubview === licitaçãoSubview && (
                 <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
                   <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5">
                     <div className="flex items-center justify-between gap-3">
@@ -6084,6 +6089,7 @@ function App() {
                         type="button"
                         onClick={() => {
                           setShowNewOpportunityForm(false);
+                          setNewOpportunityFormSubview(null);
                           setIsPncpImportDraft(false);
                           setNewOpportunityForm(createEmptyOpportunityForm());
                           setNewOpportunityContact({ contact_id: '', papel: '', observacao: '' });
@@ -6474,6 +6480,7 @@ function App() {
                         type="button"
                         onClick={() => {
                           setShowNewOpportunityForm(false);
+                          setNewOpportunityFormSubview(null);
                           setNewOpportunityForm(createEmptyOpportunityForm());
                           setNewOpportunityContact({ contact_id: '', papel: '', observacao: '' });
                           setNewOpportunityContactQuery('');
