@@ -8595,7 +8595,7 @@ function App() {
                           checked={rfbOnlyMatriz}
                           onChange={e => setRfbOnlyMatriz(e.target.checked)}
                         />
-                        <span className="text-xs text-ink">Somente matriz (CNPJ 0001)</span>
+                        <span className="text-xs text-ink">Somente matriz</span>
                       </label>
                     </div>
 

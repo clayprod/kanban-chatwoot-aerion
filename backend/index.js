@@ -6676,7 +6676,7 @@ app.post('/api/rfb/cnpj-enrich/:cnpj', async (req, res) => {
   }
 });
 
-// GET /api/rfb/filiais/:cnpjBasico — retorna todas as filiais (cnpj_ordem != '0001') de um CNPJ base
+// GET /api/rfb/filiais/:cnpjBasico — retorna todas as filiais de um CNPJ base
 app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
   const { cnpjBasico } = req.params;
   try {
@@ -6704,7 +6704,7 @@ app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
       FROM rfb_estabelecimentos e
       LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
       LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
-      WHERE e.cnpj_basico = $1 AND e.cnpj_ordem != '0001'
+      WHERE e.cnpj_basico = $1 AND e.identificador_matriz_filial != '1'
       ORDER BY e.cnpj_ordem
     `, [cnpjBasico]);
     res.json(r.rows);
@@ -6743,6 +6743,7 @@ app.get('/api/rfb/search', async (req, res) => {
 
     const params = [];
     const where  = [];
+    const cleanCnpjFilter = cnpj.trim() ? cnpj.replace(/\D/g, '') : '';
 
     // Helper: aplica operador de texto em uma ou mais colunas
     const applyTextOp = (cols, val, op) => {
@@ -6763,7 +6764,7 @@ app.get('/api/rfb/search', async (req, res) => {
     };
 
     if (cnpj.trim()) {
-      const clean = cnpj.replace(/\D/g, '');
+      const clean = cleanCnpjFilter;
       if (clean.length === 14) {
         params.push(clean.slice(0, 8), clean.slice(8, 12), clean.slice(12, 14));
         where.push(`(e.cnpj_basico = $${params.length - 2} AND e.cnpj_ordem = $${params.length - 1} AND e.cnpj_dv = $${params.length})`);
@@ -6787,7 +6788,7 @@ app.get('/api/rfb/search', async (req, res) => {
         const unionSql = (idx) =>
           `SELECT cnpj_basico FROM rfb_empresas WHERE immutable_unaccent(lower(razao_social)) ILIKE immutable_unaccent(lower($${idx}))
            UNION
-           SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnpj_ordem = '0001' AND immutable_unaccent(lower(nome_fantasia)) ILIKE immutable_unaccent(lower($${idx}))`;
+           SELECT cnpj_basico FROM rfb_estabelecimentos WHERE identificador_matriz_filial = '1' AND immutable_unaccent(lower(nome_fantasia)) ILIKE immutable_unaccent(lower($${idx}))`;
 
         const addNomeTerm = (v, op) => {
           const negated = op === 'not_contains';
@@ -6940,8 +6941,8 @@ app.get('/api/rfb/search', async (req, res) => {
           const parts = codes.flatMap(code => {
             params.push(code);
             const i = params.length;
-            const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND cnpj_ordem = '0001'`;
-            const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND cnpj_ordem = '0001'${secNarrow}`;
+            const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND identificador_matriz_filial = '1'`;
+            const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND identificador_matriz_filial = '1'${secNarrow}`;
             return onlyPrincipal ? [principal] : [principal, secundario];
           });
           cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
@@ -6959,7 +6960,7 @@ app.get('/api/rfb/search', async (req, res) => {
           const principalCond = `x.cnae_fiscal_principal = ANY(${arrParam})`;
           const secundarioCond = `string_to_array(NULLIF(TRIM(x.cnae_fiscal_secundaria), ''), ',') && ${arrParam}`;
           const cnaeCond = onlyPrincipal ? principalCond : `(${principalCond} OR ${secundarioCond})`;
-          where.push(`NOT EXISTS (SELECT 1 FROM rfb_estabelecimentos x WHERE x.cnpj_basico = e.cnpj_basico AND x.cnpj_ordem = '0001' AND ${cnaeCond})`);
+          where.push(`NOT EXISTS (SELECT 1 FROM rfb_estabelecimentos x WHERE x.cnpj_basico = e.cnpj_basico AND x.identificador_matriz_filial = '1' AND ${cnaeCond})`);
         }
       }
     }
@@ -7075,8 +7076,9 @@ app.get('/api/rfb/search', async (req, res) => {
     if (mei === 'S') where.push(`EXISTS (SELECT 1 FROM rfb_simples sim_m WHERE sim_m.cnpj_basico = e.cnpj_basico AND sim_m.opcao_pelo_mei = 'S')`);
     if (mei === 'N') where.push(`NOT EXISTS (SELECT 1 FROM rfb_simples sim_m WHERE sim_m.cnpj_basico = e.cnpj_basico AND sim_m.opcao_pelo_mei = 'S')`);
 
-    // Mostrar apenas matriz (cnpj_ordem = '0001') por padrão
-    if (only_matriz !== 'false') where.push(`e.cnpj_ordem = '0001'`);
+    // Mostrar apenas matriz por padrão, exceto quando a busca é por CNPJ completo.
+    // Nesse caso, o usuário pediu um estabelecimento específico, que pode ser filial.
+    if (only_matriz !== 'false' && cleanCnpjFilter.length !== 14) where.push(`e.identificador_matriz_filial = '1'`);
 
     // Capital social (TEXT → NUMERIC)
     const capitalExpr = `NULLIF(replace(replace(emp.capital_social,'.',''),',','.'), '')::NUMERIC`;
@@ -7207,7 +7209,7 @@ app.get('/api/rfb/search', async (req, res) => {
            ) FROM rfb_socios s2
            LEFT JOIN rfb_qualificacoes q2 ON s2.qualificacao_do_socio = q2.codigo
            WHERE s2.cnpj_basico = e.cnpj_basico) AS socios_nomes,
-          (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND cnpj_ordem != '0001')::INT AS filiais_count,
+          (SELECT COUNT(*) FROM rfb_estabelecimentos WHERE cnpj_basico = e.cnpj_basico AND identificador_matriz_filial != '1')::INT AS filiais_count,
           e.cnae_fiscal_secundaria,
           (SELECT json_agg(json_build_object('codigo', c2.codigo, 'descricao', c2.descricao) ORDER BY c2.codigo)
            FROM rfb_cnaes c2
