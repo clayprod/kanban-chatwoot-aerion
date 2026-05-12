@@ -6075,8 +6075,6 @@ function App() {
               </>
               )}
 
-              {licitaçãoSubview === 'board' && (
-              <>
               {showNewOpportunityForm && (
                 <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
                   <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5">
@@ -6505,6 +6503,8 @@ function App() {
                 </div>
               )}
 
+              {licitaçãoSubview === 'board' && (
+              <>
               {licitaçãoLoading && (
                 <div className="mt-4 text-sm text-muted">Carregando licitações...</div>
               )}
