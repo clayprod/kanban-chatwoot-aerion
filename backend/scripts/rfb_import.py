@@ -53,7 +53,12 @@ WORKERS    = max(2, os.cpu_count() or 2)
 
 # ── Progress output (parsado pelo Node.js) ────────────────────────────────────
 
+PROGRESS_ENABLED = True
+
+
 def progress(status, message, file='', percent=0, records=0, error=''):
+    if not PROGRESS_ENABLED:
+        return
     print(json.dumps({
         'status': status,
         'message': message,
@@ -373,7 +378,51 @@ def record_imported_file(conn, filename, table, remote_size, records):
     conn.commit()
 
 
+def check_remote_updates(conn, dev_limit):
+    token = parse_token(BASE_URL)
+    all_zips = discover_files(token)
+    selected = select_files(all_zips, dev_limit)
+    already_imported = load_imported_files(conn)
+    missing = []
+    changed = []
+
+    for z in selected:
+        filename = Path(z['href']).name
+        remote = int(z.get('size', 0) or 0)
+        local = already_imported.get(filename)
+        item = {
+            'filename': filename,
+            'remote_size': remote,
+            'table_name': FILE_TABLE_MAP.get(classify(filename).lower(), 'unknown'),
+        }
+        if local is None:
+            missing.append(item)
+        elif remote > 0 and int(local) != remote:
+            item['local_size'] = int(local)
+            changed.append(item)
+
+    suggested_mode = 'none'
+    if changed:
+        suggested_mode = 'incremental'
+    elif missing:
+        suggested_mode = 'append'
+
+    return {
+        'status': 'done',
+        'type': 'rfb_update_check',
+        'has_updates': bool(missing or changed),
+        'suggested_mode': suggested_mode,
+        'remote_files': len(selected),
+        'tracked_files': len(already_imported),
+        'missing_count': len(missing),
+        'changed_count': len(changed),
+        'missing': missing[:20],
+        'changed': changed[:20],
+    }
+
+
 def main():
+    global PROGRESS_ENABLED
     parser = argparse.ArgumentParser()
     parser.add_argument('--skip-download', action='store_true')
     parser.add_argument('--limit', type=int, default=None)
@@ -385,12 +434,17 @@ def main():
                         help='Importa apenas arquivos faltantes (não em rfb_arquivos) direto nas '
                              'tabelas de produção sem truncar. Ideal para preencher gaps sem '
                              'reimportar tudo.')
+    parser.add_argument('--check-updates', action='store_true',
+                        help='Compara a pasta remota mais recente com rfb_arquivos sem baixar/importar.')
     args = parser.parse_args()
 
     dev_limit = args.limit if args.limit is not None else int(os.environ.get('RFB_DEV_LIMIT', '0'))
     DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-    progress('running', f'Iniciando import (DEV_LIMIT={dev_limit})...')
+    if args.check_updates:
+        PROGRESS_ENABLED = False
+    else:
+        progress('running', f'Iniciando import (DEV_LIMIT={dev_limit})...')
 
     # ── Conectar ao banco cedo para verificar arquivos já importados ──────────
     db_url = os.environ.get('DATABASE_URL', '')
@@ -402,6 +456,21 @@ def main():
     except Exception as e:
         progress('error', f'Falha ao conectar ao banco: {e}', error=str(e))
         sys.exit(1)
+
+    if args.check_updates:
+        try:
+            print(json.dumps(check_remote_updates(conn, dev_limit)), flush=True)
+            conn.close()
+            return
+        except Exception as e:
+            print(json.dumps({
+                'status': 'error',
+                'type': 'rfb_update_check',
+                'has_updates': False,
+                'error': str(e),
+            }), flush=True)
+            conn.close()
+            sys.exit(1)
 
     already_imported = {} if args.force else load_imported_files(conn)
     if args.append and not args.force:
