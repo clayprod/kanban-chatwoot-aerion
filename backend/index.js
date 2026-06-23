@@ -6235,10 +6235,45 @@ let rfbImportState = {
   startedAt: null,
 };
 
-function startRFBImport({ force = false, staging = false, append = false } = {}) {
-  if (rfbImportState.status === 'running') return; // already running
+const isEnvFlagEnabled = (value) => {
+  if (value === undefined || value === null) return false;
+  return !['', '0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
+};
+
+let rfbUpdateCheckRunning = false;
+
+async function recordRFBImportStart(modeLabel, notes) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO rfb_import_log (status, notes) VALUES ('running', $1) RETURNING id`,
+      [`${modeLabel}${notes ? ` | ${notes}` : ''}`]
+    );
+    return rows[0]?.id || null;
+  } catch (e) {
+    console.warn('[rfb] Falha ao registrar início do import:', e.message);
+    return null;
+  }
+}
+
+async function recordRFBImportFinish(logId, status, notes = '') {
+  if (!logId) return;
+  try {
+    await pool.query(
+      `UPDATE rfb_import_log
+       SET finished_at = NOW(), status = $2, notes = CONCAT(COALESCE(notes, ''), $3)
+       WHERE id = $1`,
+      [logId, status, notes ? ` | ${notes}` : '']
+    );
+  } catch (e) {
+    console.warn('[rfb] Falha ao registrar fim do import:', e.message);
+  }
+}
+
+function startRFBImport({ force = false, staging = false, append = false, reason = '' } = {}) {
+  if (rfbImportState.status === 'running') return false; // already running
   const modeLabel = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : append ? 'append (gap-fill)' : 'incremental';
   rfbImportState = { status: 'running', message: `Iniciando importação ${modeLabel}...`, file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
+  const importLogPromise = recordRFBImportStart(modeLabel, reason);
 
   const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
   const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
@@ -6289,6 +6324,11 @@ function startRFBImport({ force = false, staging = false, append = false } = {})
     _rfbMunicipiosCache = null;
     _rfbCnaesCache = null;
     _rfbNaturezasCache = null;
+    importLogPromise.then((importLogId) => recordRFBImportFinish(
+      importLogId,
+      rfbImportState.status === 'error' || code !== 0 ? 'error' : 'done',
+      `code=${code}; records=${rfbImportState.records || 0}; message=${rfbImportState.message || ''}`
+    ));
     console.log('[rfb_import] finished with code', code);
   });
 
@@ -6296,8 +6336,62 @@ function startRFBImport({ force = false, staging = false, append = false } = {})
     rfbImportState.status = 'error';
     rfbImportState.error = err.message;
     rfbImportState.message = `Falha ao iniciar script: ${err.message}`;
+    importLogPromise.then((importLogId) => recordRFBImportFinish(importLogId, 'error', `spawn=${err.message}`));
     console.error('[rfb_import] spawn error:', err);
   });
+
+  return true;
+}
+
+function runRFBUpdateCheck() {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const py = spawn(pythonCmd, [scriptPath, '--check-updates'], {
+      env: { ...process.env },
+      cwd: path.join(__dirname, 'scripts'),
+    });
+    let stdout = '';
+    let stderr = '';
+
+    py.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    py.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    py.on('error', reject);
+    py.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(stderr || `rfb update check failed with code ${code}`));
+      }
+      const lines = stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+      const parsed = lines.map((line) => {
+        try { return JSON.parse(line); } catch (_) { return null; }
+      }).filter(Boolean);
+      const result = parsed.reverse().find((msg) => msg.type === 'rfb_update_check') || parsed.pop();
+      if (!result) {
+        return reject(new Error('rfb update check did not return JSON'));
+      }
+      resolve(result);
+    });
+  });
+}
+
+async function checkAndStartRFBImport(reason = 'scheduled-check') {
+  if (rfbImportState.status === 'running' || rfbUpdateCheckRunning) return;
+  rfbUpdateCheckRunning = true;
+  try {
+    const result = await runRFBUpdateCheck();
+    if (!result.has_updates) {
+      console.log(`[rfb] Base local atualizada (${reason}). remote=${result.remote_files}, tracked=${result.tracked_files}`);
+      return;
+    }
+    const append = result.suggested_mode === 'append';
+    const details = `missing=${result.missing_count || 0}; changed=${result.changed_count || 0}`;
+    console.log(`[rfb] Atualização detectada (${reason}): ${details}; modo=${append ? 'append' : 'incremental'}`);
+    startRFBImport({ append, reason: `${reason}; ${details}` });
+  } catch (e) {
+    console.error(`[rfb] Erro na checagem de atualização (${reason}):`, e.message);
+  } finally {
+    rfbUpdateCheckRunning = false;
+  }
 }
 
 const createRFBTables = async () => {
@@ -7335,27 +7429,28 @@ const startServer = async () => {
       console.log('[rfb] Índices GIN de endereço verificados.');
     })();
     // Auto-import RFB data if tables are empty (desabilitar com RFB_SKIP_AUTO_IMPORT=1)
-    if (!process.env.RFB_SKIP_AUTO_IMPORT) {
+    if (!isEnvFlagEnabled(process.env.RFB_SKIP_AUTO_IMPORT)) {
       try {
         const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
         if (parseInt(rows[0].count, 10) === 0) {
           console.log('[rfb] Tabelas vazias — iniciando import automático...');
-          startRFBImport();
+          startRFBImport({ reason: 'startup-empty-tables' });
+        } else {
+          setImmediate(() => checkAndStartRFBImport('startup-check'));
         }
       } catch (e) {
         console.error('[rfb] Erro ao verificar tabelas:', e.message);
       }
+    } else {
+      console.log('[rfb] Auto-import desabilitado por RFB_SKIP_AUTO_IMPORT.');
     }
     await createLicitacaoTables();
     await migrateLicitacaoFases();
     await seedHistorySnapshot();
     await pollStageChanges();
     cron.schedule('0 * * * *', pollStageChanges);
-    // Atualização mensal da base RFB — todo dia 1º às 03:00
-    cron.schedule('0 3 1 * *', () => {
-      console.log('[rfb] Atualização mensal agendada — iniciando...');
-      startRFBImport();
-    });
+    // Checagem recorrente da base RFB — evita perder a janela se o container reiniciar.
+    cron.schedule('17 */6 * * *', () => checkAndStartRFBImport('scheduled-check'));
     cron.schedule('30 7 * * *', async () => {
       try {
         await runComprasSync();
