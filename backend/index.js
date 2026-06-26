@@ -6899,11 +6899,19 @@ app.get('/api/rfb/search', async (req, res) => {
         const t1 = n1 ? addNomeTerm(n1, nome_op)  : null;
         const t2 = n2 ? addNomeTerm(n2, nome2_op) : null;
 
-        // Termos negativos (NOT IN): mantém subquery — raro e não causa disk-spill pois
-        // o planner os aplica depois dos filtros positivos reduzirem o conjunto.
+        // Termos negativos: filtro direto nas colunas já presentes no JOIN
+        // (emp.razao_social + e.nome_fantasia da matriz) — NÃO usar subquery.
+        // NOT IN (union) força o PG a materializar TODO o conjunto do termo negado via
+        // índice GIN trigrama; para termos comuns ("agro") esse scan leva 60s+ → timeout
+        // (o planner subestima o nº de linhas e escolhe hash anti join sobre o set inteiro).
+        // O filtro escalar é avaliado por linha candidata (já reduzida pelos positivos) →
+        // trivial. COALESCE trata NULL como "não contém" (mantém a linha), igual ao NOT IN.
         [t1, t2].forEach(t => {
           if (t?.negated) {
-            where.push(`e.cnpj_basico NOT IN (${unionSql(t.idx)})`);
+            where.push(
+              `immutable_unaccent(lower(COALESCE(emp.razao_social,''))) NOT ILIKE immutable_unaccent(lower($${t.idx}))
+               AND immutable_unaccent(lower(COALESCE(e.nome_fantasia,''))) NOT ILIKE immutable_unaccent(lower($${t.idx}))`
+            );
           }
         });
 
@@ -6957,14 +6965,20 @@ app.get('/api/rfb/search', async (req, res) => {
       };
       const s1 = socio.trim(), s2 = socio2.trim();
       if (s1 || s2) {
-        // Negativos → WHERE (sem extensão MEI: NOT IN com MEI excluiria empresas válidas)
+        // Negativos → NOT EXISTS correlato (sem extensão MEI: excluir por MEI removeria
+        // empresas válidas). NOT IN materializa todo o conjunto de sócios que casam o termo
+        // ("silva" → milhões) via trigrama → timeout. NOT EXISTS correlaciona por cnpj_basico
+        // (indexado em rfb_socios): 1 lookup por candidato, já reduzido pelos positivos.
+        const socioNotExists = (idx) =>
+          `NOT EXISTS (SELECT 1 FROM rfb_socios _soc_neg WHERE _soc_neg.cnpj_basico = e.cnpj_basico
+             AND immutable_unaccent(lower(_soc_neg.nome_do_socio)) ILIKE immutable_unaccent(lower($${idx})))`;
         if (s1 && socio_op === 'not_contains') {
           params.push(`%${s1}%`);
-          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length, false)})`);
+          where.push(socioNotExists(params.length));
         }
         if (s2 && socio2_op === 'not_contains') {
           params.push(`%${s2}%`);
-          where.push(`e.cnpj_basico NOT IN (${socioSql(params.length, false)})`);
+          where.push(socioNotExists(params.length));
         }
         // Positivos → CTE + JOIN
         const pos = [];
@@ -7115,7 +7129,13 @@ app.get('/api/rfb/search', async (req, res) => {
           const endSql = `SELECT DISTINCT cnpj_basico FROM rfb_estabelecimentos
                           WHERE ${ilikeSql('rfb_estabelecimentos')}`;
           if (negated) {
-            where.push(`e.cnpj_basico NOT IN (${endSql})`);
+            // Filtro direto na matriz e (logradouro/bairro já na linha base) — NÃO subquery.
+            // NOT IN (...) força seq scan de 70M linhas para materializar o conjunto → timeout.
+            // COALESCE trata NULL como "não contém" (mantém a linha), igual ao NOT IN.
+            where.push(
+              `immutable_unaccent(lower(COALESCE(e.logradouro,''))) NOT ILIKE immutable_unaccent(lower($${idx}))
+               AND immutable_unaccent(lower(COALESCE(e.bairro,''))) NOT ILIKE immutable_unaccent(lower($${idx}))`
+            );
             return { handled: true };
           }
           return { handled: false, sql: endSql, ilikeSql };
