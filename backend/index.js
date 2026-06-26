@@ -195,6 +195,9 @@ const LICITACAO_INTERMEDIARIOS_TABLE = 'licitacao_intermediarios';
 const LICITACAO_WATCHLIST_TABLE = 'licitacao_watchlist';
 const LICITACAO_SIGNALS_TABLE = 'licitacao_signals';
 const LICITACAO_COMMENTS_TABLE = 'licitacao_comments';
+const EDITAL_WATCHLIST_TABLE = 'edital_watchlist';
+const EDITAL_SIGNALS_TABLE = 'edital_signals';
+const WATCHLIST_NOTIFICATIONS_TABLE = 'watchlist_notifications';
 const PCA_PLANOS_TABLE = 'pca_planos';
 const PCA_ITENS_TABLE = 'pca_itens';
 const PCA_WATCHLIST_TABLE = 'pca_watchlist';
@@ -532,6 +535,84 @@ const createLicitacaoTables = async () => {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_licitacao_contacts_contact ON ${LICITACAO_CONTACTS_TABLE} (contact_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_licitacao_comments_opportunity ON ${LICITACAO_COMMENTS_TABLE} (opportunity_id);`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${EDITAL_WATCHLIST_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      palavras_chave TEXT[] NOT NULL DEFAULT '{}',
+      termos_negativos TEXT[] NOT NULL DEFAULT '{}',
+      usar_ia BOOLEAN NOT NULL DEFAULT TRUE,
+      filtros JSONB NOT NULL DEFAULT '{}'::jsonb,
+      whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      whatsapp_number TEXT,
+      ativo BOOLEAN NOT NULL DEFAULT TRUE,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+      atualizado_em TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS palavras_chave TEXT[] NOT NULL DEFAULT '{}';`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS termos_negativos TEXT[] NOT NULL DEFAULT '{}';`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS usar_ia BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS filtros JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_edital_watchlist_account ON ${EDITAL_WATCHLIST_TABLE} (account_id);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${EDITAL_SIGNALS_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      watchlist_id BIGINT REFERENCES ${EDITAL_WATCHLIST_TABLE}(id) ON DELETE SET NULL,
+      fonte TEXT NOT NULL DEFAULT 'pncp',
+      chave_externa TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      score NUMERIC(6,3),
+      termos_matched TEXT[] NOT NULL DEFAULT '{}',
+      termos_excluidos TEXT[] NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'novo',
+      promovido_para_opportunity_id BIGINT REFERENCES ${LICITACAO_TABLE}(id) ON DELETE SET NULL,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (account_id, watchlist_id, chave_externa)
+    );
+  `);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS fonte TEXT NOT NULL DEFAULT 'pncp';`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS score NUMERIC(6,3);`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS termos_matched TEXT[] NOT NULL DEFAULT '{}';`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS termos_excluidos TEXT[] NOT NULL DEFAULT '{}';`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'novo';`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS promovido_para_opportunity_id BIGINT REFERENCES ${LICITACAO_TABLE}(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE ${EDITAL_SIGNALS_TABLE} ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_edital_signals_account_status ON ${EDITAL_SIGNALS_TABLE} (account_id, status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_edital_signals_watchlist_status ON ${EDITAL_SIGNALS_TABLE} (account_id, status, watchlist_id, criado_em DESC);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${WATCHLIST_NOTIFICATIONS_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      watchlist_id BIGINT NOT NULL,
+      signal_id BIGINT NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'whatsapp',
+      recipient TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      sent_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (source, signal_id, channel, recipient)
+    );
+  `);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'whatsapp';`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS last_error TEXT;`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_watchlist_notifications_pending ON ${WATCHLIST_NOTIFICATIONS_TABLE} (status, attempts, created_at);`);
+
   // ===== PCA (Plano Anual de Contratações) =====
   // Inventário público compartilhado (sem account_id em pca_planos / pca_itens).
   // Scoping por account fica em pca_watchlist e pca_signals.
@@ -610,6 +691,9 @@ const createLicitacaoTables = async () => {
       criado_em TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account ON ${PCA_WATCHLIST_TABLE} (account_id);`);
 
   await pool.query(`
@@ -710,6 +794,162 @@ const toNullableText = (value) => {
   return text.length ? text : null;
 };
 
+const normalizeWatchlistPhone = (raw) => {
+  if (!raw) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  const digits = text.replace(/\D/g, '');
+  if (!digits) return null;
+  if (text.startsWith('+')) return digits.length >= 8 ? digits : null;
+  if (digits.startsWith('55') && digits.length >= 12) return digits;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  return digits.length >= 8 ? digits : null;
+};
+
+const enqueueWatchlistNotification = async ({ source, watchlistId, signalId, recipient }) => {
+  const number = normalizeWatchlistPhone(recipient);
+  if (!source || !watchlistId || !signalId || !number) return false;
+  await pool.query(
+    `
+      INSERT INTO ${WATCHLIST_NOTIFICATIONS_TABLE}
+        (source, watchlist_id, signal_id, channel, recipient)
+      VALUES ($1, $2, $3, 'whatsapp', $4)
+      ON CONFLICT (source, signal_id, channel, recipient) DO NOTHING
+    `,
+    [source, watchlistId, signalId, number]
+  );
+  return true;
+};
+
+const buildWatchlistNotificationMessage = (source, row) => {
+  if (source === 'pca') {
+    const parts = [
+      `Nova oportunidade PCA na watchlist "${row.watchlist_nome || 'Watchlist'}"`,
+      row.descricao,
+      row.orgao_razao_social || row.orgao_cnpj ? `Orgao: ${row.orgao_razao_social || row.orgao_cnpj}` : null,
+      row.codigo_unidade ? `UASG: ${row.codigo_unidade}${row.unidade_nome ? ` - ${row.unidade_nome}` : ''}` : null,
+      row.valor_total ? `Valor: R$ ${Number(row.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : null,
+      row.mes_previsto ? `Mes previsto: ${row.mes_previsto}/${row.ano_pca || ''}` : null,
+      row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(2)}` : null,
+      row.orgao_cnpj && row.ano_pca ? `PNCP: https://pncp.gov.br/app/pca/${row.orgao_cnpj}/${row.ano_pca}` : null,
+    ];
+    return parts.filter(Boolean).join('\n');
+  }
+
+  const payload = row.payload || {};
+  const orgao = payload.orgao?.nome || payload.orgao_nome || payload.orgao_cnpj;
+  const unidade = payload.unidade?.codigo || payload.unidade_codigo;
+  const title = payload.titulo || payload.title || payload.descricao || 'Edital PNCP';
+  const parts = [
+    `Nova oportunidade em edital na watchlist "${row.watchlist_nome || 'Watchlist'}"`,
+    title,
+    orgao ? `Orgao: ${orgao}` : null,
+    unidade ? `UASG: ${unidade}${payload.unidade?.nome ? ` - ${payload.unidade.nome}` : ''}` : null,
+    payload.valor_total_estimado || payload.valor_global ? `Valor: R$ ${Number(payload.valor_total_estimado || payload.valor_global).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : null,
+    payload.prazo_info?.label ? `Prazo: ${payload.prazo_info.label}` : null,
+    row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(2)}` : null,
+    payload.url ? `PNCP: ${payload.url}` : null,
+  ];
+  return parts.filter(Boolean).join('\n');
+};
+
+const sendEvolutionTextMessage = async (number, text) => {
+  const baseUrl = String(process.env.EVOLUTION_API_URL || '').replace(/\/+$/, '');
+  const instance = process.env.EVOLUTION_INSTANCE;
+  const apiKey = process.env.EVOLUTION_API_KEY;
+  if (!baseUrl || !instance || !apiKey) {
+    throw new Error('Evolution API nao configurada. Defina EVOLUTION_API_URL, EVOLUTION_INSTANCE e EVOLUTION_API_KEY.');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(`${baseUrl}/message/sendText/${encodeURIComponent(instance)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ApiKey: apiKey,
+      },
+      body: JSON.stringify({
+        number,
+        textMessage: { text },
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Evolution API ${response.status}: ${body.slice(0, 300)}`);
+    }
+    return response.json().catch(() => ({}));
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const processWatchlistNotifications = async (limit = 20) => {
+  const { rows } = await pool.query(
+    `
+      SELECT *
+      FROM ${WATCHLIST_NOTIFICATIONS_TABLE}
+      WHERE status IN ('pending', 'failed') AND attempts < 3
+      ORDER BY created_at ASC
+      LIMIT $1
+    `,
+    [Math.max(1, Math.min(Number(limit) || 20, 100))]
+  );
+  let sent = 0;
+  let failed = 0;
+  for (const notification of rows) {
+    try {
+      let sourceRow = null;
+      if (notification.source === 'pca') {
+        const result = await pool.query(
+          `
+            SELECT s.*, i.descricao, i.valor_total, i.mes_previsto,
+                   p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
+                   w.nome AS watchlist_nome
+            FROM ${PCA_SIGNALS_TABLE} s
+            JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
+            JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
+            LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
+            WHERE s.id = $1
+          `,
+          [notification.signal_id]
+        );
+        sourceRow = result.rows[0];
+      } else if (notification.source === 'edital') {
+        const result = await pool.query(
+          `
+            SELECT s.*, w.nome AS watchlist_nome
+            FROM ${EDITAL_SIGNALS_TABLE} s
+            LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
+            WHERE s.id = $1
+          `,
+          [notification.signal_id]
+        );
+        sourceRow = result.rows[0];
+      }
+      if (!sourceRow) throw new Error('Signal nao encontrado para notificacao');
+      await sendEvolutionTextMessage(notification.recipient, buildWatchlistNotificationMessage(notification.source, sourceRow));
+      await pool.query(
+        `UPDATE ${WATCHLIST_NOTIFICATIONS_TABLE}
+            SET status = 'sent', attempts = attempts + 1, sent_at = NOW(), updated_at = NOW(), last_error = NULL
+          WHERE id = $1`,
+        [notification.id]
+      );
+      sent += 1;
+    } catch (error) {
+      await pool.query(
+        `UPDATE ${WATCHLIST_NOTIFICATIONS_TABLE}
+            SET status = 'failed', attempts = attempts + 1, updated_at = NOW(), last_error = $2
+          WHERE id = $1`,
+        [notification.id, error.message]
+      );
+      failed += 1;
+    }
+  }
+  return { sent, failed, processed: rows.length };
+};
+
 const createComprasGovUrl = (pathName, query = {}) => {
   const url = new URL(pathName, 'https://dadosabertos.compras.gov.br');
   Object.entries(query).forEach(([key, value]) => {
@@ -796,6 +1036,30 @@ const fetchPncpSearch = async (query = {}) => {
 };
 
 // Função para buscar detalhes de uma compra específica no PNCP
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const fetchPncpSearchStable = async (query = {}, { retries = 2, minItemsWhenKnown = 1 } = {}) => {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const data = await fetchPncpSearch(query);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const total = Number(data?.total) || 0;
+      if (items.length > 0 || total === 0 || items.length >= minItemsWhenKnown || attempt === retries) {
+        return data;
+      }
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) {
+        throw error;
+      }
+    }
+    await sleep(250 * (attempt + 1));
+  }
+  if (lastError) throw lastError;
+  return { items: [], total: 0 };
+};
+
 const fetchPncpConsulta = async (pathName, query = {}) => {
   const normalizedPath = String(pathName || '').replace(/^\/+/, '');
   const url = new URL(normalizedPath, 'https://pncp.gov.br/api/consulta/');
@@ -829,11 +1093,13 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_AI_MODEL = process.env.OPENAI_AI_MODEL || 'gpt-4.1-mini';
 const GROQ_AI_MODEL = process.env.GROQ_AI_MODEL || 'llama-3.3-70b-versatile';
-const AI_RELATIONS_VERSION = 'v2';
+const AI_RELATIONS_VERSION = 'v3';
 
 // Cache simples para termos correlatos (evita chamadas repetidas)
 const termosCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
+const PNCP_SEARCH_RESPONSE_CACHE = new Map();
+const PNCP_SEARCH_RESPONSE_CACHE_TTL = 10 * 60 * 1000; // 10 minutos
 const pncpCompraDetalheCache = new Map();
 const PNCP_DETALHE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
 const pncpCompraEnrichmentCache = new Map();
@@ -1022,6 +1288,19 @@ const mergeUniqueTerms = (...groups) => {
   return merged;
 };
 
+const getPncpRawItemKey = (item = {}) => {
+  const control = item.numero_controle_pncp || item.numeroControlePNCP;
+  if (control) return `control:${control}`;
+  const orgao = item.orgao_cnpj || item.cnpjOrgao || item.orgaoEntidade?.cnpj || item.cnpjOrgaoEntidade;
+  const ano = item.ano || item.anoCompra;
+  const sequencial = item.numero_sequencial || item.sequencialCompra || item.numeroSequencial;
+  if (orgao && ano && sequencial) return `path:${orgao}-${ano}-${sequencial}`;
+  const url = item.item_url || item.linkSistemaOrigem || item.url;
+  if (url) return `url:${url}`;
+  if (item.id) return `id:${item.id}`;
+  return `text:${normalizeSearchText(`${item.title || item.objetoCompra || ''} ${item.orgao_nome || item.nomeOrgao || ''}`).slice(0, 160)}`;
+};
+
 const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
 
@@ -1083,6 +1362,20 @@ const containsTermStrict = (text, term) => {
   const phraseRegex = new RegExp(`(^|[^a-z0-9])${escapeRegex(normalizedTerm).replace(/\s+/g, '\\s+')}([^a-z0-9]|$)`);
   return phraseRegex.test(normalizedText);
 };
+
+const containsTermStrictFlexible = (text, term) => {
+  const normalizedTerm = normalizeSearchText(term).trim();
+  if (!normalizedTerm) return false;
+  if (containsTermStrict(text, normalizedTerm)) return true;
+  const parts = normalizedTerm.split(/\s+/).filter(Boolean);
+  if (parts.length === 1 && normalizedTerm.length >= 4) {
+    if (normalizedTerm.endsWith('s') && containsTermStrict(text, normalizedTerm.slice(0, -1))) return true;
+    if (containsTermStrict(text, `${normalizedTerm}s`)) return true;
+  }
+  return false;
+};
+
+const containsAnyTermStrictFlexible = (text, terms = []) => terms.some(term => containsTermStrictFlexible(text, term));
 
 const mapWithConcurrency = async (items, limit, mapper) => {
   const safeLimit = Math.max(1, Number(limit) || 1);
@@ -1659,9 +1952,9 @@ const buildIntelligentRelations = (original, aiResult) => {
   const aiNegativos = aiResult?.negativos || [];
 
   const positivosRaw = mergeUniqueTerms(
-    aiPositivos,
     getQuerySpecificAllowlist(original),
-    profile?.positiveBoost || []
+    profile?.positiveBoost || [],
+    aiPositivos
   );
 
   const negativosRaw = mergeUniqueTerms(
@@ -1714,6 +2007,19 @@ const shouldExcludeByNegativeTerms = (item, query, positiveTerms = [], negativeT
   }
 
   return !hasExactQuery && !hasPositiveMatch && tokenMatches < Math.min(2, Math.max(1, queryTokens.length));
+};
+
+const pncpItemHasSemanticEvidence = (item, query, positiveTerms = []) => {
+  const text = [
+    item?.title,
+    item?.titulo,
+    item?.description,
+    item?.descricao,
+    item?.itens_resumo_texto,
+    item?.__itens_resumo_texto,
+  ].filter(Boolean).join(' ');
+  const terms = mergeUniqueTerms([query], positiveTerms, getQuerySpecificAllowlist(query));
+  return containsAnyTermStrictFlexible(text, terms);
 };
 
 const getTermosCorrelatos = async (termo) => {
@@ -2117,7 +2423,7 @@ const getAccountId = (req) => {
 };
 
 const LICITACAO_STATUS = ['ativo', 'ganho', 'perdido', 'nao_atendido', 'suspenso', 'cancelado', 'fracassado', 'arquivado'];
-const LICITACAO_ORIGEM = ['direta', 'intermediario', 'automatica_api'];
+const LICITACAO_ORIGEM = ['direta', 'intermediario', 'automatica_api', 'pca_pncp'];
 const LICITACAO_MODELO_INTERMEDIACAO = ['revenda', 'comissao', 'misto'];
 const LICITACAO_STATUS_COMISSAO = ['pendente', 'aprovado', 'pago', 'cancelado'];
 const LICITACAO_ITEM_TIPO = ['material', 'servico'];
@@ -3193,7 +3499,7 @@ app.get('/api/licitacoes/pncp/orgaos/:cnpj/compras', async (req, res) => {
 // Função auxiliar para normalizar item da busca PNCP
 // A API PNCP pode retornar campos com nomes diferentes dependendo do endpoint
 const normalizePncpItem = (item, matchedTermo = null) => ({
-  id: item.id,
+  id: item.id || getPncpRawItemKey(item),
   titulo: item.title || 'Sem título',
   descricao: item.description || '',
   url: normalizePncpItemUrl(item.item_url),
@@ -3257,6 +3563,199 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
 });
 
 // Endpoint principal de busca de editais/contratações no PNCP
+const splitPncpTerms = (value = '') => String(value || '')
+  .split(/[,;\n]+/)
+  .map(term => term.trim())
+  .filter(Boolean);
+
+const getPncpBestEstimatedValue = (item) => {
+  const candidates = [
+    item?.valor_itens_pertinentes,
+    item?.valor_total_estimado,
+    item?.valor_global,
+    item?.valor_total_homologado,
+  ];
+  for (const value of candidates) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
+};
+
+const getPncpDeadlineInfo = (item) => {
+  const rawDate = item?.data_fim_vigencia || item?.data_envio_proposta_limite || item?.dataFimProposta || null;
+  if (!rawDate) return { days: null, label: 'Prazo n/d', urgency: 'unknown' };
+  const deadline = new Date(rawDate);
+  if (Number.isNaN(deadline.getTime())) return { days: null, label: 'Prazo n/d', urgency: 'unknown' };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  deadline.setHours(0, 0, 0, 0);
+  const days = Math.ceil((deadline.getTime() - today.getTime()) / 86400000);
+  if (days < 0) return { days, label: 'Prazo vencido', urgency: 'expired' };
+  if (days === 0) return { days, label: 'Vence hoje', urgency: 'critical' };
+  if (days <= 3) return { days, label: `Vence em ${days} dia(s)`, urgency: 'critical' };
+  if (days <= 10) return { days, label: `Vence em ${days} dia(s)`, urgency: 'warning' };
+  return { days, label: `Vence em ${days} dia(s)`, urgency: 'ok' };
+};
+
+const classifyPncpLegalStage = (item) => {
+  const text = normalizeSearchText([item?.situacao?.nome, item?.tipo?.nome, item?.titulo, item?.descricao].filter(Boolean).join(' '));
+  if (text.includes('plano') || text.includes('pca')) return { id: 'planejamento', label: 'Planejamento/PCA' };
+  if (text.includes('dispensa') || text.includes('inexigibilidade')) return { id: 'contratacao_direta', label: 'Contratacao direta' };
+  if (text.includes('recebendo') || text.includes('proposta') || text.includes('abert')) return { id: 'propostas', label: 'Propostas/lances' };
+  if (text.includes('julg')) return { id: 'julgamento', label: 'Julgamento' };
+  if (text.includes('habilit')) return { id: 'habilitacao', label: 'Habilitacao' };
+  if (text.includes('homolog') || text.includes('adjudic')) return { id: 'homologacao', label: 'Homologacao/contrato' };
+  return { id: 'edital_publicado', label: 'Edital publicado' };
+};
+
+const classifyPncpJudgement = (item) => {
+  const text = normalizeSearchText(`${item?.titulo || ''} ${item?.descricao || ''} ${item?.itens_resumo_texto || ''}`);
+  if (text.includes('menor preco')) return 'Menor preco';
+  if (text.includes('maior desconto')) return 'Maior desconto';
+  if (text.includes('tecnica e preco')) return 'Tecnica e preco';
+  if (text.includes('melhor tecnica')) return 'Melhor tecnica';
+  if (text.includes('maior retorno economico')) return 'Maior retorno economico';
+  return null;
+};
+
+const decoratePncpSearchItem = (item, context = {}) => {
+  const qText = String(context.qText || '').trim();
+  const positiveTerms = (context.positiveTerms || []).filter(Boolean);
+  const negativeTerms = (context.negativeTerms || []).filter(Boolean);
+  const normalizedText = normalizeSearchText([
+    item?.titulo,
+    item?.descricao,
+    item?.itens_resumo_texto,
+    item?.orgao?.nome,
+    item?.unidade?.nome,
+    item?.modalidade?.nome,
+    item?.tipo?.nome,
+  ].filter(Boolean).join(' '));
+  const queryTokens = tokenizeSearchTerms(qText).filter(t => t.length >= 3);
+  const positiveTokens = positiveTerms.flatMap(term => tokenizeSearchTerms(term)).filter(t => t.length >= 3);
+  const negativeTokens = negativeTerms.flatMap(term => tokenizeSearchTerms(term)).filter(t => t.length >= 3);
+  const matchedQueryTokens = [...new Set(queryTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
+  const matchedPositiveTokens = [...new Set(positiveTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
+  const matchedNegativeTokens = [...new Set(negativeTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
+  const deadline = getPncpDeadlineInfo(item);
+  const value = getPncpBestEstimatedValue(item);
+  const itemCount = Number(item?.itens_pertinentes_count || 0);
+  const stage = classifyPncpLegalStage(item);
+  const judgement = classifyPncpJudgement(item);
+  const source = item?.__from_consulta_uasg ? 'pncp_consulta' : 'pncp_search';
+
+  let score = 35;
+  const reasons = [];
+  if (qText && containsTermStrictFlexible(item?.titulo || '', qText)) {
+    score += 22;
+    reasons.push('Objeto/titulo contem a busca');
+  } else if (matchedQueryTokens.length > 0) {
+    score += Math.min(18, matchedQueryTokens.length * 6);
+    reasons.push(`Termos no objeto: ${matchedQueryTokens.slice(0, 3).join(', ')}`);
+  }
+  if (matchedPositiveTokens.length > 0) {
+    score += Math.min(18, matchedPositiveTokens.length * 4);
+    reasons.push(`Aderencia semantica: ${matchedPositiveTokens.slice(0, 3).join(', ')}`);
+  }
+  if (itemCount > 0) {
+    score += Math.min(16, 8 + itemCount * 2);
+    reasons.push(`${itemCount} item(ns) pertinente(s)`);
+  }
+  if (deadline.urgency === 'ok') {
+    score += 8;
+    reasons.push(deadline.label);
+  } else if (deadline.urgency === 'warning') {
+    score += 4;
+    reasons.push(deadline.label);
+  } else if (deadline.urgency === 'critical') {
+    score -= 6;
+    reasons.push(deadline.label);
+  } else if (deadline.urgency === 'expired') {
+    score -= 24;
+    reasons.push('Prazo vencido');
+  }
+  if (value) {
+    score += value >= 100000 ? 8 : 4;
+    reasons.push('Valor estimado informado');
+  }
+  if (context.orgaoFilterRaw || context.unidadeFilterRaw) {
+    score += 8;
+    reasons.push('Filtro de orgao/UASG atendido');
+  }
+  if (matchedNegativeTokens.length > 0) {
+    score -= Math.min(35, matchedNegativeTokens.length * 10);
+    reasons.push(`Possivel ruido: ${matchedNegativeTokens.slice(0, 3).join(', ')}`);
+  }
+  if (!reasons.length) reasons.push('Resultado PNCP relacionado aos filtros');
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    ...item,
+    source,
+    legal_stage: stage,
+    criterio_julgamento: judgement,
+    prazo_info: deadline,
+    score,
+    score_label: score >= 75 ? 'Alta aderencia' : score >= 50 ? 'Media aderencia' : 'Baixa aderencia',
+    match_reasons: reasons.slice(0, 5),
+    highlights: {
+      termos: [...new Set([...matchedQueryTokens, ...matchedPositiveTokens])].slice(0, 8),
+      negativos: matchedNegativeTokens.slice(0, 5),
+    },
+  };
+};
+
+const createPncpSearchSummary = (items = []) => {
+  const emptyBucket = () => ({ count: 0, total_value: 0 });
+  const summary = {
+    count: items.length,
+    total_value: 0,
+    by_adherence: {
+      alta: emptyBucket(),
+      media: emptyBucket(),
+      baixa: emptyBucket(),
+    },
+    by_stage: {},
+    by_status: {},
+    by_source: {},
+    by_publication: {
+      publicado: emptyBucket(),
+      nao_publicado: emptyBucket(),
+    },
+  };
+
+  for (const item of items) {
+    const value = getPncpBestEstimatedValue(item) || 0;
+    summary.total_value += value;
+
+    const adherence = Number(item?.score || 0) >= 75 ? 'alta' : Number(item?.score || 0) >= 50 ? 'media' : 'baixa';
+    summary.by_adherence[adherence].count += 1;
+    summary.by_adherence[adherence].total_value += value;
+
+    const stageKey = item?.legal_stage?.label || 'Sem fase';
+    summary.by_stage[stageKey] = summary.by_stage[stageKey] || emptyBucket();
+    summary.by_stage[stageKey].count += 1;
+    summary.by_stage[stageKey].total_value += value;
+
+    const statusKey = item?.situacao?.nome || 'Status n/d';
+    summary.by_status[statusKey] = summary.by_status[statusKey] || emptyBucket();
+    summary.by_status[statusKey].count += 1;
+    summary.by_status[statusKey].total_value += value;
+
+    const sourceKey = item?.source === 'pncp_consulta' ? 'PNCP Consulta' : 'PNCP Search';
+    summary.by_source[sourceKey] = summary.by_source[sourceKey] || emptyBucket();
+    summary.by_source[sourceKey].count += 1;
+    summary.by_source[sourceKey].total_value += value;
+
+    const publicationKey = item?.data_publicacao ? 'publicado' : 'nao_publicado';
+    summary.by_publication[publicationKey].count += 1;
+    summary.by_publication[publicationKey].total_value += value;
+  }
+
+  return summary;
+};
+
 app.get('/api/licitacoes/pncp/search', async (req, res) => {
   console.log('[PNCP Search] Request params:', {
     q: req.query.q,
@@ -3280,6 +3779,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       tam = 20,
       ordenacao = 'valor_desc_data_desc',
       usar_ia = 'false', // Ativa busca inteligente com termos correlatos
+      semantic = 'true',
+      negative_terms = '',
     } = req.query;
 
     const qText = String(q || '').trim();
@@ -3300,7 +3801,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       pagina,
       tam,
     };
-    if (mappedStatus && String(mappedStatus) !== 'todos') {
+    const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
+    if (mappedStatus && String(mappedStatus) !== 'todos' && !shouldApplyReceivingProposalLocally) {
       baseParams.status = mappedStatus;
     }
     if (modalidade_licitacao_id) baseParams.modalidade_licitacao_id = modalidade_licitacao_id;
@@ -3315,19 +3817,89 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const paginaNum = Math.max(1, Number(pagina) || 1);
     let totalItems = 0;
     let termosUsados = [qText || entityQuerySeed || ''];
-    let termosNegativos = [];
+    let termosNegativos = splitPncpTerms(negative_terms);
     let fonteIA = null;
     let iaPositivos = []; // Sinônimos positivos da IA — usados também no filtro local do endpoint de contratações
+    const deterministicPositiveTerms = mergeUniqueTerms(
+      getQuerySpecificAllowlist(qText),
+      detectContextProfile(qText)?.positiveBoost || []
+    );
     const iaForcada = usar_ia === 'true';
-    const shouldUseAi = iaForcada && qText && qText.length >= 3 && !isSpecificNoticeIdentifierQuery(qText);
+    const qTokensForAi = tokenizeSearchTerms(qText).filter(token => token.length >= 3);
+    const hasEntityOnlySearch = !qText && Boolean(entityQuerySeed);
+    const queryLooksSpecific = isSpecificNoticeIdentifierQuery(qText)
+      || /\d{4,}/.test(qText)
+      || qTokensForAi.length >= 7;
+    const shouldUseAi = iaForcada
+      && qText
+      && qText.length >= 3
+      && !hasEntityOnlySearch
+      && !queryLooksSpecific;
 
     // Se usar_ia está ativado e há um termo de busca
+    const pncpSearchCacheKey = JSON.stringify({
+      version: 4,
+      q: normalizeSearchText(qText),
+      tipos_documento,
+      status: mappedStatus,
+      modalidade_licitacao_id: modalidade_licitacao_id || '',
+      tipo_id: tipo_id || '',
+      modo_disputa_id: modo_disputa_id || '',
+      uf: uf || '',
+      esfera_id: esfera_id || '',
+      orgao_cnpj: orgaoFilterRaw,
+      unidade_codigo: unidadeFilterRaw,
+      pagina: paginaNum,
+      tam: tamNum,
+      ordenacao,
+      usar_ia: iaForcada,
+      semantic,
+      negative_terms: normalizeSearchText(negative_terms),
+    });
+    const cachedSearch = PNCP_SEARCH_RESPONSE_CACHE.get(pncpSearchCacheKey);
+    if (cachedSearch && (Date.now() - cachedSearch.timestamp) < PNCP_SEARCH_RESPONSE_CACHE_TTL) {
+      return res.json({
+        ...cachedSearch.payload,
+        diagnostics: {
+          ...(cachedSearch.payload?.diagnostics || {}),
+          cacheHit: true,
+        },
+        query_plan: {
+          ...(cachedSearch.payload?.query_plan || {}),
+          cache_hit: true,
+        },
+      });
+    }
+
+    const termRuns = [];
+    const createTermRun = (term, source, extra = {}) => ({
+      term: String(term || ''),
+      source,
+      endpoint: extra.endpoint || 'pncp_search',
+      params: {
+        q: String(term || ''),
+        status_sent_to_pncp: baseParams.status || null,
+        tipos_documento,
+        tam: extra.tam || tamNum,
+      },
+      pages_requested: 0,
+      pages_completed: 0,
+      total_reported: 0,
+      items_collected: 0,
+      errors: [],
+      stop_reason: null,
+      duration_ms: 0,
+    });
+
     if (shouldUseAi) {
       // Buscar termos correlatos com IA
       const termosResult = await getTermosCorrelatos(qText);
       fonteIA = termosResult.fonte;
-      termosNegativos = termosResult.negativos || [];
-      iaPositivos = (termosResult.positivos || termosResult.correlatos || []).slice(0, 8);
+      termosNegativos = [...new Set([...termosNegativos, ...(termosResult.negativos || [])])];
+      iaPositivos = mergeUniqueTerms(
+        deterministicPositiveTerms,
+        termosResult.positivos || termosResult.correlatos || []
+      ).slice(0, 12);
 
       // Usar até 8 termos correlatos (além do original) para ampliar cobertura
       let termosParaBuscar = [qText, ...iaPositivos];
@@ -3347,57 +3919,74 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
       termosUsados = termosParaBuscar;
 
-      const requiredItemsWithBuffer = Math.min(400, Math.max(40, paginaNum * tamNum * 2));
+      const maxItemsPerTerm = Math.min(500, Math.max(250, paginaNum * tamNum * 3));
       const maxPagesPerTerm = 8;
+      const pncpTermPageSize = Math.max(tamNum, 100);
 
       // Fazer buscas em paralelo (cada termo pode precisar de várias páginas)
-      const buscasPromises = termosParaBuscar.map(async (termo, index) => {
+      const resultados = await mapWithConcurrency(termosParaBuscar, 2, async (termo, index) => {
+        const run = createTermRun(termo, index === 0 ? 'original' : 'ai_or_alias', { tam: pncpTermPageSize });
+        const startedAt = Date.now();
         try {
-          const isOriginalTerm = index === 0;
-          const targetForTerm = isOriginalTerm
-            ? requiredItemsWithBuffer
-            : Math.max(20, Math.ceil(requiredItemsWithBuffer / Math.max(2, termosParaBuscar.length - 1)));
+          const targetForTerm = maxItemsPerTerm;
 
           const collected = [];
           let page = 1;
-          let effectivePageSize = 0;
+          let totalFromApi = 0;
 
           while (collected.length < targetForTerm && page <= maxPagesPerTerm) {
-            const data = await fetchPncpSearch({ ...baseParams, q: termo, pagina: page, tam: tamNum });
+            run.pages_requested += 1;
+            const data = await fetchPncpSearchStable({ ...baseParams, q: termo, pagina: page, tam: pncpTermPageSize });
+            run.pages_completed += 1;
             const items = Array.isArray(data?.items) ? data.items : [];
-            if (items.length === 0) {
-              break;
+            if (page === 1) {
+              totalFromApi = Number(data?.total) || 0;
+              run.total_reported = totalFromApi;
             }
-
-            if (effectivePageSize === 0) {
-              effectivePageSize = items.length;
+            if (items.length === 0) {
+              run.stop_reason = 'empty_page';
+              break;
             }
 
             collected.push(...items.map(item => ({ ...item, __matched_termo: termo })));
 
             // Se retornou menos itens que o solicitado, não há mais páginas
-            if (items.length < effectivePageSize) {
+            if (items.length < pncpTermPageSize) {
+              run.stop_reason = 'short_page';
+              break;
+            }
+
+            if (totalFromApi > 0 && collected.length >= totalFromApi) {
+              run.stop_reason = 'total_reached';
               break;
             }
 
             page += 1;
           }
 
-          return collected;
+          if (!run.stop_reason) {
+            run.stop_reason = collected.length >= targetForTerm ? 'target_reached' : 'max_pages';
+          }
+          run.items_collected = collected.length;
+          return { items: collected, run };
         } catch (err) {
           console.error(`Erro buscando termo "${termo}":`, err.message);
-          return [];
+          run.errors.push(err.message);
+          run.stop_reason = 'error';
+          return { items: [], run };
+        } finally {
+          run.duration_ms = Date.now() - startedAt;
         }
       });
-
-      const resultados = await Promise.all(buscasPromises);
+      termRuns.push(...resultados.map(resultado => resultado.run).filter(Boolean));
 
       // Combinar resultados, priorizando o termo original
       const seenIds = new Set();
       for (const resultado of resultados) {
-        for (const item of resultado) {
-          if (!seenIds.has(item.id)) {
-            seenIds.add(item.id);
+        for (const item of resultado.items || []) {
+          const itemKey = getPncpRawItemKey(item);
+          if (!seenIds.has(itemKey)) {
+            seenIds.add(itemKey);
             allItems.push(item);
           }
         }
@@ -3410,22 +3999,54 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         : qText;
 
       // Função auxiliar para buscar múltiplas páginas
-      const fetchMultiplePages = async (searchTerm, maxPages) => {
-        const firstData = await fetchPncpSearch({ ...baseParams, q: searchTerm, pagina: 1, tam: tamNum });
-        const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
-        const totalFromApi = Number(firstData?.total) || 0;
-        const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
-        const collected = [...firstItems.map(item => ({ ...item, __matched_termo: searchTerm }))];
-        let page = 2;
-        while (page <= maxPages && ((page - 1) * apiPageSize) < totalFromApi) {
-          const nextData = await fetchPncpSearch({ ...baseParams, q: searchTerm, pagina: page, tam: tamNum });
-          const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
-          if (nextItems.length === 0) break;
-          collected.push(...nextItems.map(item => ({ ...item, __matched_termo: searchTerm })));
-          if (nextItems.length < apiPageSize) break;
-          page += 1;
+      const fetchMultiplePages = async (searchTerm, maxPages, source = 'manual') => {
+        const run = createTermRun(searchTerm, source, { tam: tamNum });
+        const startedAt = Date.now();
+        const collected = [];
+        let totalFromApi = 0;
+        let apiPageSize = tamNum;
+        try {
+          run.pages_requested += 1;
+          const firstData = await fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: 1, tam: tamNum });
+          run.pages_completed += 1;
+          const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
+          totalFromApi = Number(firstData?.total) || 0;
+          run.total_reported = totalFromApi;
+          apiPageSize = firstItems.length > 0 ? firstItems.length : tamNum;
+          collected.push(...firstItems.map(item => ({ ...item, __matched_termo: searchTerm })));
+          if (firstItems.length === 0) {
+            run.stop_reason = 'empty_page';
+          }
+          let page = 2;
+          while (!run.stop_reason && page <= maxPages && ((page - 1) * apiPageSize) < totalFromApi) {
+            run.pages_requested += 1;
+            const nextData = await fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: page, tam: tamNum });
+            run.pages_completed += 1;
+            const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
+            if (nextItems.length === 0) {
+              run.stop_reason = 'empty_page';
+              break;
+            }
+            collected.push(...nextItems.map(item => ({ ...item, __matched_termo: searchTerm })));
+            if (nextItems.length < apiPageSize) {
+              run.stop_reason = 'short_page';
+              break;
+            }
+            page += 1;
+          }
+          if (!run.stop_reason) {
+            run.stop_reason = collected.length >= totalFromApi ? 'total_reached' : 'max_pages';
+          }
+          return { items: collected, total: totalFromApi, run };
+        } catch (err) {
+          console.error(`Erro buscando termo "${searchTerm}":`, err.message);
+          run.errors.push(err.message);
+          run.stop_reason = 'error';
+          return { items: collected, total: totalFromApi, run };
+        } finally {
+          run.items_collected = collected.length;
+          run.duration_ms = Date.now() - startedAt;
         }
-        return { items: collected, total: totalFromApi };
       };
 
       if (hasEntityFilter) {
@@ -3472,9 +4093,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         // Executar buscas em paralelo
         const searchPromises = searchTerms.map(term => {
           console.log(`[PNCP Search] Executing search for: "${term}"`);
-          return fetchMultiplePages(term, maxPagesPerSearch);
+          return fetchMultiplePages(term, maxPagesPerSearch, term === qText ? 'original' : 'entity_combined');
         });
         const results = await Promise.all(searchPromises);
+        termRuns.push(...results.map(result => result.run).filter(Boolean));
 
         // Log detalhado dos resultados
         results.forEach((result, index) => {
@@ -3501,7 +4123,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
             });
           }
           for (const item of result.items) {
-            const itemId = item.id || `${item.orgao_cnpj}-${item.ano}-${item.numero_sequencial}`;
+            const itemId = getPncpRawItemKey(item);
             if (!seenIds.has(itemId)) {
               seenIds.add(itemId);
               combined.push(item);
@@ -3512,7 +4134,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         allItems = combined;
       } else {
         // Busca simples sem filtro de entidade - paginação direta da API
-        const firstData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
+        const firstData = await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
         const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
         const totalFromApi = Number(firstData?.total) || 0;
         const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
@@ -3524,13 +4146,13 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
         const pageData = apiPage === 1
           ? firstData
-          : await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+          : await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
         const pageItems = Array.isArray(pageData?.items) ? pageData.items : [];
         fetched.push(...pageItems.slice(offsetInFirstPage));
 
         while (fetched.length < tamNum && (startOffset + fetched.length) < totalFromApi) {
           apiPage += 1;
-          const nextData = await fetchPncpSearch({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+          const nextData = await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
           const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
           if (nextItems.length === 0) {
             break;
@@ -3543,6 +4165,14 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
         allItems = fetched.slice(0, tamNum).map(item => ({ ...item, __matched_termo: effectiveSearchTerm }));
         totalItems = totalFromApi;
+        termRuns.push({
+          ...createTermRun(effectiveSearchTerm, 'original', { tam: tamNum }),
+          pages_requested: apiPage,
+          pages_completed: apiPage,
+          total_reported: totalFromApi,
+          items_collected: allItems.length,
+          stop_reason: fetched.length >= tamNum ? 'page_window_complete' : 'total_reached',
+        });
       }
     }
 
@@ -3551,6 +4181,11 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     // como campo filtrável e pode não retornar itens por diferença de terminologia
     // (ex: busca "drone" não encontra "aeronaves remotamente pilotadas").
     if (entityQuerySeed && /^\d{5,6}$/.test(entityQuerySeed)) {
+      const consultaRun = createTermRun(entityQuerySeed, 'pncp_consulta_uasg', {
+        endpoint: 'v1/contratacoes/publicacao',
+        tam: 50,
+      });
+      const consultaStartedAt = Date.now();
       try {
         const hoje = new Date();
         const doisAnosAtras = new Date(hoje);
@@ -3566,6 +4201,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         const consultaRawItems = [];
 
         while (consultaHasMore && consultaPage <= maxConsultaPages) {
+          consultaRun.pages_requested += 1;
           const data = await fetchPncp('v1/contratacoes/publicacao', {
             codigoUnidadeOrgao: entityQuerySeed,
             dataInicial: fmtDate(doisAnosAtras),
@@ -3573,12 +4209,23 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
             pagina: consultaPage,
             tamanhoPagina: consultaPageSize,
           });
+          consultaRun.pages_completed += 1;
           const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-          if (items.length === 0) break;
+          if (items.length === 0) {
+            consultaRun.stop_reason = 'empty_page';
+            break;
+          }
           consultaRawItems.push(...items);
           consultaHasMore = items.length >= consultaPageSize;
+          if (!consultaHasMore) {
+            consultaRun.stop_reason = 'short_page';
+          }
           consultaPage++;
         }
+        if (!consultaRun.stop_reason) {
+          consultaRun.stop_reason = consultaPage > maxConsultaPages ? 'max_pages' : 'total_reached';
+        }
+        consultaRun.items_collected = consultaRawItems.length;
 
         console.log(`[PNCP Contratações UASG ${entityQuerySeed}] ${consultaRawItems.length} itens encontrados`);
 
@@ -3650,6 +4297,11 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         }
       } catch (err) {
         console.error(`[PNCP Contratações UASG] Erro ao buscar UASG ${entityQuerySeed}:`, err.message);
+        consultaRun.errors.push(err.message);
+        consultaRun.stop_reason = 'error';
+      } finally {
+        consultaRun.duration_ms = Date.now() - consultaStartedAt;
+        termRuns.push(consultaRun);
       }
     }
 
@@ -3707,7 +4359,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         }
         const matchedTermo = item?.__matched_termo;
         if (!matchedTermo || matchedTermo === qText) {
-          return true;
+          return pncpItemHasSemanticEvidence(item, qText, termosUsados.slice(1));
+        }
+        if (!pncpItemHasSemanticEvidence(item, qText, termosUsados.slice(1))) {
+          return false;
         }
         const contextOk = isPncpItemRelevantToQuery(item, qText);
         if (!contextOk) {
@@ -3717,6 +4372,20 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         return !shouldExcludeByNegativeTerms(item, qText, termosUsados.slice(1), termosNegativos);
       })
       .map(item => normalizePncpItem(item, item.__matched_termo || qText || entityQuerySeed));
+
+    if (shouldApplyReceivingProposalLocally) {
+      const now = Date.now();
+      allItems = allItems.filter(item => {
+        if (item?.cancelado) return false;
+        const deadlineRaw = item?.data_fim_vigencia || item?.data_encerramento_proposta || item?.dataFimProposta || null;
+        if (!deadlineRaw) {
+          const situacaoText = normalizeSearchText(item?.situacao?.nome || '');
+          return situacaoText.includes('divulgada') || situacaoText.includes('recebendo');
+        }
+        const deadline = new Date(deadlineRaw).getTime();
+        return Number.isFinite(deadline) && deadline >= now;
+      });
+    }
 
     const rawOrgaoFilter = String(orgao_cnpj || '').trim();
     const rawUnidadeFilter = String(unidade_codigo || '').trim();
@@ -3777,6 +4446,15 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       console.log(`[PNCP Filter] After client-side filter: ${allItems.length} items`);
     }
 
+    const semanticEnabled = String(semantic || '').toLowerCase() !== 'false';
+    allItems = allItems.map(item => decoratePncpSearchItem(item, {
+      qText,
+      positiveTerms: semanticEnabled ? termosUsados : [],
+      negativeTerms: termosNegativos,
+      orgaoFilterRaw,
+      unidadeFilterRaw,
+    }));
+
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;
     const getValueSortValue = (item) => {
       const estimated = Number(item?.valor_total_estimado);
@@ -3790,7 +4468,13 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       return -1;
     };
 
-    if (ordenacao === 'data_asc') {
+    if (ordenacao === 'relevancia_desc') {
+      allItems.sort((a, b) => {
+        const byScore = Number(b?.score || 0) - Number(a?.score || 0);
+        if (byScore !== 0) return byScore;
+        return getDateSortValue(b) - getDateSortValue(a);
+      });
+    } else if (ordenacao === 'data_asc') {
       allItems.sort((a, b) => getDateSortValue(a) - getDateSortValue(b));
     } else if (ordenacao === 'valor_asc_data_desc') {
       allItems.sort((a, b) => {
@@ -3813,7 +4497,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     }
 
     // Paginar resultados combinados (busca IA ou filtros locais por órgão/UASG)
-    const hasLocalFilterForPagination = Boolean(normalizedOrgaoTextFilter || normalizedUnidadeTextFilter);
+    const hasLocalFilterForPagination = Boolean(normalizedOrgaoTextFilter || normalizedUnidadeTextFilter || shouldApplyReceivingProposalLocally);
     if (iaRealmenteUsada || hasLocalFilterForPagination) {
       totalItems = allItems.length;
     }
@@ -3821,18 +4505,62 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const paginatedItems = (iaRealmenteUsada || hasLocalFilterForPagination)
       ? allItems.slice(startIndex, startIndex + tamNum)
       : allItems;
+    const summary = createPncpSearchSummary(allItems);
+    const pageSummary = createPncpSearchSummary(paginatedItems);
+    const queryPlan = {
+      query: qText,
+      entity_seed: entityQuerySeed || null,
+      status_requested: mappedStatus || null,
+      pncp_status_sent: baseParams.status || null,
+      local_filters: {
+        receiving_proposal: shouldApplyReceivingProposalLocally,
+        orgao: orgaoFilterRaw || null,
+        unidade: unidadeFilterRaw || null,
+        modo_disputa_id: modo_disputa_id || null,
+      },
+      terms: termosUsados,
+      negative_terms: termosNegativos,
+      ai: {
+        requested: iaForcada,
+        used: iaRealmenteUsada,
+        source: iaRealmenteUsada ? fonteIA : null,
+        skipped_reason: iaForcada && !iaRealmenteUsada
+          ? (queryLooksSpecific ? 'consulta_especifica' : hasEntityOnlySearch ? 'busca_por_entidade' : 'sem_termo')
+          : null,
+      },
+      term_runs: termRuns,
+      cache_hit: false,
+    };
 
-    res.json({
+    const responsePayload = {
       items: paginatedItems,
       total: totalItems,
       pagina: paginaNum,
       tamanhoPagina: tamNum,
       totalPaginas: Math.ceil(totalItems / tamNum) || 1,
       termosUsados: iaRealmenteUsada ? termosUsados : [qText || entityQuerySeed || ''],
-      termosNegativos: iaRealmenteUsada ? termosNegativos : [],
+      termosNegativos: termosNegativos,
       fonteIA: iaRealmenteUsada ? fonteIA : null,
       iaDesativadaPorConsultaEspecifica: iaForcada && !iaRealmenteUsada && isSpecificNoticeIdentifierQuery(qText),
-    });
+      summary,
+      pageSummary,
+      query_plan: queryPlan,
+      diagnostics: {
+        semantic: semanticEnabled,
+        aiRequested: iaForcada,
+        aiUsed: iaRealmenteUsada,
+        aiSkippedReason: iaForcada && !iaRealmenteUsada
+          ? (queryLooksSpecific ? 'consulta_especifica' : hasEntityOnlySearch ? 'busca_por_entidade' : 'sem_termo')
+          : null,
+        candidate_count: allItems.length,
+        sources: {
+          pncp_search: allItems.filter(item => item.source === 'pncp_search').length,
+          pncp_consulta: allItems.filter(item => item.source === 'pncp_consulta').length,
+        },
+      },
+    };
+    PNCP_SEARCH_RESPONSE_CACHE.set(pncpSearchCacheKey, { payload: responsePayload, timestamp: Date.now() });
+    res.json(responsePayload);
   } catch (error) {
     console.error('Error searching PNCP:', error);
     res.status(502).json({ error: 'Erro ao buscar licitações no PNCP', details: error.message });
@@ -3991,6 +4719,343 @@ app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/arquivos', async (re
   } catch (error) {
     console.error('Error fetching PNCP compra arquivos:', error);
     res.status(502).json({ error: 'Erro ao consultar arquivos da compra no PNCP', details: error.message });
+  }
+});
+
+const buildEditalWatchlistFilters = (value) => {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const filters = {};
+  [
+    'tipos_documento', 'status', 'modalidade_licitacao_id', 'tipo_id',
+    'modo_disputa_id', 'uf', 'esfera_id', 'orgao_cnpj', 'unidade_codigo',
+    'ordenacao',
+  ].forEach(key => {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      filters[key] = String(source[key]);
+    }
+  });
+  filters.tipos_documento = filters.tipos_documento || 'edital';
+  filters.status = filters.status || 'recebendo_proposta';
+  filters.ordenacao = filters.ordenacao || 'relevancia_desc';
+  return filters;
+};
+
+const listEditalSignalsQuery = `
+  SELECT s.*, w.nome AS watchlist_nome, w.whatsapp_enabled, w.whatsapp_number,
+         COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
+  FROM ${EDITAL_SIGNALS_TABLE} s
+  LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
+  WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+  ORDER BY w.nome ASC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
+  LIMIT $3 OFFSET $4
+`;
+
+const runEditalWatchlistMatching = async () => {
+  const { rows: watches } = await pool.query(
+    `SELECT * FROM ${EDITAL_WATCHLIST_TABLE} WHERE ativo = TRUE`
+  );
+  let inserted = 0;
+  for (const watch of watches) {
+    let positivos = Array.isArray(watch.palavras_chave) ? [...watch.palavras_chave] : [];
+    let negativos = Array.isArray(watch.termos_negativos) ? [...watch.termos_negativos] : [];
+    if (watch.usar_ia && positivos[0]) {
+      try {
+        const r = await getTermosCorrelatos(positivos[0]);
+        positivos = Array.from(new Set([...positivos, ...(r.positivos || r.correlatos || [])])).slice(0, 8);
+        negativos = Array.from(new Set([...negativos, ...(r.negativos || [])])).slice(0, 8);
+      } catch (e) {
+        console.warn('[editais] IA falhou para watchlist', watch.id, e.message);
+      }
+    }
+    positivos = positivos.filter(Boolean);
+    if (!positivos.length) continue;
+
+    const filters = buildEditalWatchlistFilters(watch.filtros || {});
+    const baseParams = {
+      tipos_documento: filters.tipos_documento,
+      status: filters.status === 'todos' ? undefined : filters.status,
+      modalidade_licitacao_id: filters.modalidade_licitacao_id,
+      tipo_id: filters.tipo_id,
+      modo_disputa_id: filters.modo_disputa_id,
+      uf: filters.uf,
+      esfera_id: filters.esfera_id,
+      tam: 50,
+    };
+    const seen = new Set();
+    for (const term of positivos.slice(0, 6)) {
+      let data;
+      try {
+        data = await fetchPncpSearchStable({ ...baseParams, q: term, pagina: 1, tam: 50 });
+      } catch (e) {
+        console.warn('[editais] busca PNCP falhou para watchlist', watch.id, e.message);
+        continue;
+      }
+      const rawItems = Array.isArray(data?.items) ? data.items : [];
+      for (const raw of rawItems) {
+        const key = getPncpRawItemKey(raw);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        const normalized = normalizePncpItem(raw, term);
+
+        const orgaoFilter = String(filters.orgao_cnpj || '').trim();
+        const unidadeFilter = String(filters.unidade_codigo || '').trim();
+        if (orgaoFilter) {
+          const orgaoDigits = orgaoFilter.replace(/\D/g, '');
+          const itemCnpj = String(normalized.orgao?.cnpj || '').replace(/\D/g, '');
+          const orgaoText = normalizeSearchText(orgaoFilter);
+          const itemOrgaoText = normalizeSearchText(normalized.orgao?.nome || '');
+          if (!((orgaoDigits.length >= 3 && itemCnpj.includes(orgaoDigits)) || itemOrgaoText.includes(orgaoText))) {
+            continue;
+          }
+        }
+        if (unidadeFilter) {
+          const unidadeDigits = unidadeFilter.replace(/\D/g, '');
+          const itemUnidadeDigits = String(normalized.unidade?.codigo || '').replace(/\D/g, '');
+          const unidadeText = normalizeSearchText(unidadeFilter);
+          const itemUnidadeText = normalizeSearchText(`${normalized.unidade?.codigo || ''} ${normalized.unidade?.nome || ''}`);
+          if (!((unidadeDigits.length >= 4 && itemUnidadeDigits.includes(unidadeDigits)) || itemUnidadeText.includes(unidadeText))) {
+            continue;
+          }
+        }
+        if (shouldExcludeByNegativeTerms(normalized, term, positivos, negativos)) {
+          continue;
+        }
+        const decorated = decoratePncpSearchItem(normalized, {
+          qText: term,
+          positiveTerms: positivos,
+          negativeTerms: negativos,
+          orgaoFilterRaw: filters.orgao_cnpj,
+          unidadeFilterRaw: filters.unidade_codigo,
+        });
+        const r = await pool.query(
+          `
+            INSERT INTO ${EDITAL_SIGNALS_TABLE}
+              (account_id, watchlist_id, fonte, chave_externa, payload, score, termos_matched, termos_excluidos)
+            VALUES ($1,$2,'pncp',$3,$4::jsonb,$5,$6,$7)
+            ON CONFLICT (account_id, watchlist_id, chave_externa) DO NOTHING
+            RETURNING id
+          `,
+          [watch.account_id, watch.id, key, JSON.stringify(decorated), Number(decorated.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
+        );
+        if (r.rowCount > 0) {
+          inserted += 1;
+          if (watch.whatsapp_enabled && watch.whatsapp_number) {
+            await enqueueWatchlistNotification({
+              source: 'edital',
+              watchlistId: watch.id,
+              signalId: r.rows[0].id,
+              recipient: watch.whatsapp_number,
+            });
+          }
+        }
+      }
+    }
+  }
+  const notifications = await processWatchlistNotifications().catch(error => {
+    console.warn('[editais] notificacoes falharam:', error.message);
+    return { sent: 0, failed: 0, processed: 0 };
+  });
+  return { watchlist_count: watches.length, signals_inserted: inserted, notifications };
+};
+
+app.post('/api/licitacoes/editais/sync', async (req, res) => {
+  try {
+    const result = await runEditalWatchlistMatching();
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing edital watchlists:', error);
+    res.status(500).json({ error: 'Erro ao sincronizar watchlists de editais', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/editais/watchlist', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const { rows } = await pool.query(
+      `SELECT * FROM ${EDITAL_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
+      [accountId]
+    );
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar watchlists de editais', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/editais/watchlist', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const b = req.body || {};
+    const filtros = buildEditalWatchlistFilters(b.filtros || b);
+    const nome = String(b.nome || filtros.q || 'Watchlist de editais').slice(0, 200);
+    const { rows } = await pool.query(
+      `
+        INSERT INTO ${EDITAL_WATCHLIST_TABLE}
+          (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros,
+           whatsapp_enabled, whatsapp_number, ativo)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
+        RETURNING *
+      `,
+      [
+        accountId,
+        nome,
+        asTextArray(b.palavras_chave || b.q || filtros.q),
+        asTextArray(b.termos_negativos || b.negative_terms),
+        b.usar_ia !== false,
+        JSON.stringify(filtros),
+        b.whatsapp_enabled === true,
+        normalizeWatchlistPhone(b.whatsapp_number),
+        b.ativo !== false,
+      ]
+    );
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar watchlist de editais', details: error.message });
+  }
+});
+
+app.put('/api/licitacoes/editais/watchlist/:id', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const id = toIntOrNull(req.params.id);
+    const b = req.body || {};
+    const filtros = b.filtros ? buildEditalWatchlistFilters(b.filtros) : null;
+    const { rows } = await pool.query(
+      `
+        UPDATE ${EDITAL_WATCHLIST_TABLE}
+           SET nome = COALESCE($1, nome),
+               palavras_chave = COALESCE($2, palavras_chave),
+               termos_negativos = COALESCE($3, termos_negativos),
+               usar_ia = COALESCE($4, usar_ia),
+               filtros = COALESCE($5::jsonb, filtros),
+               whatsapp_enabled = COALESCE($6, whatsapp_enabled),
+               whatsapp_number = COALESCE($7, whatsapp_number),
+               ativo = COALESCE($8, ativo),
+               atualizado_em = NOW()
+         WHERE id = $9 AND account_id = $10
+         RETURNING *
+      `,
+      [
+        b.nome ?? null,
+        b.palavras_chave !== undefined ? asTextArray(b.palavras_chave) : null,
+        b.termos_negativos !== undefined ? asTextArray(b.termos_negativos) : null,
+        typeof b.usar_ia === 'boolean' ? b.usar_ia : null,
+        filtros ? JSON.stringify(filtros) : null,
+        typeof b.whatsapp_enabled === 'boolean' ? b.whatsapp_enabled : null,
+        b.whatsapp_number !== undefined ? normalizeWatchlistPhone(b.whatsapp_number) : null,
+        typeof b.ativo === 'boolean' ? b.ativo : null,
+        id,
+        accountId,
+      ]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'nao encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar watchlist de editais', details: error.message });
+  }
+});
+
+app.delete('/api/licitacoes/editais/watchlist/:id', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const id = toIntOrNull(req.params.id);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM ${WATCHLIST_NOTIFICATIONS_TABLE} WHERE source = 'edital' AND watchlist_id = $1`,
+        [id]
+      );
+      await client.query(`DELETE FROM ${EDITAL_SIGNALS_TABLE} WHERE watchlist_id = $1 AND account_id = $2`, [id, accountId]);
+      await client.query(`DELETE FROM ${EDITAL_WATCHLIST_TABLE} WHERE id = $1 AND account_id = $2`, [id, accountId]);
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir watchlist de editais', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/editais/signals', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const status = req.query.status || 'novo';
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 1000, 1), 2000);
+    const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
+    const [signalsResult, countResult] = await Promise.all([
+      pool.query(listEditalSignalsQuery, [accountId, status, limit, offset]),
+      pool.query(
+        `SELECT COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE} WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL`,
+        [accountId, status]
+      ),
+    ]);
+    const rows = signalsResult.rows;
+    const total = Number(countResult.rows[0]?.total) || 0;
+    const data = rows;
+    res.json({ data, total, limit, offset, has_more: offset + data.length < total });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar sinais de editais', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/editais/signals/stats', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const { rows } = await pool.query(
+      `SELECT status, COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE} WHERE account_id = $1 AND watchlist_id IS NOT NULL GROUP BY status`,
+      [accountId]
+    );
+    const base = { novo: 0, visto: 0, promovido: 0, descartado: 0 };
+    rows.forEach(row => {
+      if (Object.prototype.hasOwnProperty.call(base, row.status)) base[row.status] = Number(row.total) || 0;
+    });
+    res.json(base);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao contar sinais de editais', details: error.message });
+  }
+});
+
+app.put('/api/licitacoes/editais/signals/:id/status', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const id = toIntOrNull(req.params.id);
+    const status = ['novo', 'visto', 'promovido', 'descartado'].includes(req.body?.status) ? req.body.status : null;
+    if (!id || !status) return res.status(400).json({ error: 'id/status invalidos' });
+    const promotedId = toIntOrNull(req.body?.promovido_para_opportunity_id);
+    const { rows } = await pool.query(
+      `
+        UPDATE ${EDITAL_SIGNALS_TABLE}
+           SET status = $1,
+               promovido_para_opportunity_id = COALESCE($2, promovido_para_opportunity_id)
+         WHERE id = $3 AND account_id = $4
+         RETURNING *
+      `,
+      [status, promotedId, id, accountId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'sinal nao encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar sinal de edital', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/editais/signals/batch', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const ids = Array.isArray(req.body?.signal_ids) ? req.body.signal_ids.map(toIntOrNull).filter(Boolean) : [];
+    const status = ['novo', 'visto', 'promovido', 'descartado'].includes(req.body?.status) ? req.body.status : null;
+    if (!ids.length || !status) return res.status(400).json({ error: 'signal_ids/status invalidos' });
+    const { rows } = await pool.query(
+      `UPDATE ${EDITAL_SIGNALS_TABLE} SET status = $1 WHERE account_id = $2 AND id = ANY($3::bigint[]) RETURNING id`,
+      [status, accountId, ids]
+    );
+    res.json({ updated: rows.length });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro na acao em lote de sinais de editais', details: error.message });
   }
 });
 
@@ -4665,10 +5730,24 @@ const runPcaWatchlistMatching = async () => {
         [watch.account_id, item.plano_id, item.item_id, watch.id,
          Number(item.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
       );
-      if (r.rowCount > 0) inserted += 1;
+      if (r.rowCount > 0) {
+        inserted += 1;
+        if (watch.whatsapp_enabled && watch.whatsapp_number) {
+          await enqueueWatchlistNotification({
+            source: 'pca',
+            watchlistId: watch.id,
+            signalId: r.rows[0].id,
+            recipient: watch.whatsapp_number,
+          });
+        }
+      }
     }
   }
-  return { signals_inserted: inserted };
+  const notifications = await processWatchlistNotifications().catch(error => {
+    console.warn('[pca] notificacoes falharam:', error.message);
+    return { sent: 0, failed: 0, processed: 0 };
+  });
+  return { signals_inserted: inserted, notifications };
 };
 
 // ============ ENDPOINTS PCA ============
@@ -5424,8 +6503,9 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
       `
         INSERT INTO ${PCA_WATCHLIST_TABLE}
           (account_id, nome, palavras_chave, termos_negativos, usar_ia,
-           valor_minimo, valor_maximo, orgao_filtros, uasg_filtros, ativo)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
+           valor_minimo, valor_maximo, orgao_filtros, uasg_filtros,
+           whatsapp_enabled, whatsapp_number, ativo)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)
         RETURNING *
       `,
       [accountId,
@@ -5437,6 +6517,8 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
        toNullableNumber(b.valor_maximo),
        JSON.stringify(b.orgao_filtros || []),
        JSON.stringify(b.uasg_filtros || []),
+       b.whatsapp_enabled === true,
+       normalizeWatchlistPhone(b.whatsapp_number),
        b.ativo !== false]
     );
     res.json(rows[0]);
@@ -5461,8 +6543,11 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
                valor_maximo = $6,
                orgao_filtros = COALESCE($7::jsonb, orgao_filtros),
                uasg_filtros = COALESCE($8::jsonb, uasg_filtros),
-               ativo = COALESCE($9, ativo)
-         WHERE id = $10 AND account_id = $11
+               whatsapp_enabled = COALESCE($9, whatsapp_enabled),
+               whatsapp_number = COALESCE($10, whatsapp_number),
+               ativo = COALESCE($11, ativo),
+               atualizado_em = NOW()
+         WHERE id = $12 AND account_id = $13
          RETURNING *
       `,
       [b.nome ?? null,
@@ -5473,6 +6558,8 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
        toNullableNumber(b.valor_maximo),
        b.orgao_filtros ? JSON.stringify(b.orgao_filtros) : null,
        b.uasg_filtros ? JSON.stringify(b.uasg_filtros) : null,
+       typeof b.whatsapp_enabled === 'boolean' ? b.whatsapp_enabled : null,
+       b.whatsapp_number !== undefined ? normalizeWatchlistPhone(b.whatsapp_number) : null,
        typeof b.ativo === 'boolean' ? b.ativo : null,
        id, accountId]
     );
@@ -5490,6 +6577,10 @@ app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM ${WATCHLIST_NOTIFICATIONS_TABLE} WHERE source = 'pca' AND watchlist_id = $1`,
+        [watchlistId]
+      );
       await client.query(
         `DELETE FROM ${PCA_SIGNALS_TABLE} WHERE watchlist_id = $1 AND account_id = $2`,
         [watchlistId, accountId]
@@ -7488,6 +8579,22 @@ const startServer = async () => {
       }
     });
     // Limpeza anual: 1º de janeiro às 04:00 UTC apaga PCAs de anos anteriores.
+    cron.schedule('0 8 * * *', async () => {
+      try {
+        const result = await runEditalWatchlistMatching();
+        console.log('[editais] daily watchlist sync ok:', result);
+      } catch (error) {
+        console.error('[editais] daily watchlist sync error:', error);
+      }
+    });
+    cron.schedule('*/5 * * * *', async () => {
+      try {
+        const result = await processWatchlistNotifications();
+        if (result.processed > 0) console.log('[watchlist-notifications] processed:', result);
+      } catch (error) {
+        console.error('[watchlist-notifications] error:', error);
+      }
+    });
     cron.schedule('0 4 1 1 *', async () => {
       try {
         const r = await pool.query(
