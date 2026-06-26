@@ -701,6 +701,56 @@ const getBestEstimatedValue = (item) => {
   return values.length ? values[0] : null;
 };
 
+const getPncpScoreClass = (score) => {
+  const value = Number(score || 0);
+  if (value >= 75) return 'bg-status-success/10 text-status-success border-status-success/20';
+  if (value >= 50) return 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800';
+  return 'bg-status-danger/10 text-status-danger border-status-danger/20';
+};
+
+const getPncpUrgencyClass = (urgency) => {
+  if (urgency === 'ok') return 'bg-status-success/10 text-status-success';
+  if (urgency === 'warning') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
+  if (urgency === 'critical' || urgency === 'expired') return 'bg-status-danger/10 text-status-danger';
+  return 'bg-gray-100 text-muted dark:bg-gray-800';
+};
+
+const createPncpUiSummary = (items = []) => {
+  const emptyBucket = () => ({ count: 0, total_value: 0 });
+  const summary = {
+    count: items.length,
+    total_value: 0,
+    by_adherence: { alta: emptyBucket(), media: emptyBucket(), baixa: emptyBucket() },
+    by_stage: {},
+    by_status: {},
+    by_source: {},
+    by_publication: { publicado: emptyBucket(), nao_publicado: emptyBucket() },
+  };
+  for (const item of items) {
+    const value = getBestEstimatedValue(item) || 0;
+    summary.total_value += value;
+    const adherence = Number(item?.score || 0) >= 75 ? 'alta' : Number(item?.score || 0) >= 50 ? 'media' : 'baixa';
+    summary.by_adherence[adherence].count += 1;
+    summary.by_adherence[adherence].total_value += value;
+    const stage = item?.legal_stage?.label || 'Sem fase';
+    summary.by_stage[stage] = summary.by_stage[stage] || emptyBucket();
+    summary.by_stage[stage].count += 1;
+    summary.by_stage[stage].total_value += value;
+    const status = item?.situacao?.nome || 'Status n/d';
+    summary.by_status[status] = summary.by_status[status] || emptyBucket();
+    summary.by_status[status].count += 1;
+    summary.by_status[status].total_value += value;
+    const source = item?.source === 'pncp_consulta' ? 'PNCP Consulta' : 'PNCP Search';
+    summary.by_source[source] = summary.by_source[source] || emptyBucket();
+    summary.by_source[source].count += 1;
+    summary.by_source[source].total_value += value;
+    const publication = item?.data_publicacao ? 'publicado' : 'nao_publicado';
+    summary.by_publication[publication].count += 1;
+    summary.by_publication[publication].total_value += value;
+  }
+  return summary;
+};
+
 const toDateInputValue = (value) => {
   if (!value) {
     return '';
@@ -963,8 +1013,8 @@ const createEmptyOpportunityForm = () => ({
   links_edital: '',
   intermediario_id: '',
   modelo_intermediacao: '',
-  comissão_percentual: '',
-  comissão_valor_previsto: '',
+  comissao_percentual: '',
+  comissao_valor_previsto: '',
   valor_revenda_previsto: '',
   comentario_inicial: '',
   linked_contacts: [],
@@ -1422,7 +1472,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       : opportunity.prazo_status === 'sem_data'
         ? 'Sem prazo'
         : 'No prazo';
-  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'não_atendido'
+  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'nao_atendido'
     ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
     : opportunity.status === 'ganho'
       ? 'border border-status-success/30 bg-status-success/10 text-status-success'
@@ -1658,6 +1708,30 @@ const groupPcaSignalsByWatchlist = (signals) => {
   }));
 };
 
+const groupEditalSignalsByWatchlist = (signals) => {
+  const groups = new Map();
+  for (const s of (signals || [])) {
+    if (!s.watchlist_id) continue;
+    const key = `watchlist_${s.watchlist_id}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        title: s.watchlist_nome || `Watchlist #${s.watchlist_id}`,
+        items: [],
+        itemsCount: 0,
+        totalCount: Number(s.watchlist_total_count) || 0,
+        maxScore: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.items.push(s);
+    group.itemsCount += 1;
+    group.totalCount = Math.max(group.totalCount, Number(s.watchlist_total_count) || 0);
+    group.maxScore = Math.max(group.maxScore, Number(s.score) || 0);
+  }
+  return Array.from(groups.values()).sort((a, b) => b.maxScore - a.maxScore);
+};
+
 const PcaChips = ({ items, onRemove, accent }) => (
   <div className="flex flex-wrap gap-1.5">
     {(items || []).map((t, i) => (
@@ -1679,7 +1753,7 @@ const PcaChips = ({ items, onRemove, accent }) => (
   </div>
 );
 
-function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
+function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchToWatchlist }) {
   const [q, setQ] = useState('');
   const [usarIa, setUsarIa] = useState(true);
   const [positivos, setPositivos] = useState([]);
@@ -1702,6 +1776,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   const [itemBusy, setItemBusy] = useState({});
   const [saveDialog, setSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [saveWhatsappEnabled, setSaveWhatsappEnabled] = useState(false);
+  const [saveWhatsappNumber, setSaveWhatsappNumber] = useState('');
   const [selecionados, setSelecionados] = useState({});
   const [lastPromoted, setLastPromoted] = useState(null);
   const [bootstrapStatus, setBootstrapStatus] = useState(null);
@@ -1869,11 +1945,15 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
         palavras_chave: q ? [q] : positivos.slice(0, 1),
         termos_negativos: negativos,
         usar_ia: usarIa,
-        valor_mínimo: filtros.valor_min ? Number(filtros.valor_min) : null,
+        valor_minimo: filtros.valor_min ? Number(filtros.valor_min) : null,
         valor_maximo: filtros.valor_max ? Number(filtros.valor_max) : null,
+        whatsapp_enabled: saveWhatsappEnabled,
+        whatsapp_number: saveWhatsappNumber || null,
       });
       setSaveDialog(false);
       setSaveName('');
+      setSaveWhatsappEnabled(false);
+      setSaveWhatsappNumber('');
       alert('Watchlist salva. Sinais serão gerados no próximo sync (07:45 UTC).');
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
@@ -1995,6 +2075,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
             className="h-10 rounded-xl border border-border bg-card px-3 text-xs font-semibold text-ink disabled:opacity-50"
           >
             Salvar watchlist
+          </button>
+          <button
+            type="button"
+            onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()}
+            className="h-10 rounded-xl bg-primary px-3 text-xs font-semibold text-white"
+          >
+            Watchlist
           </button>
         </div>
 
@@ -2366,6 +2453,22 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
               value={saveName}
               onChange={e => setSaveName(e.target.value)}
             />
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={saveWhatsappEnabled}
+                onChange={e => setSaveWhatsappEnabled(e.target.checked)}
+              />
+              Enviar novas oportunidades por WhatsApp
+            </label>
+            {saveWhatsappEnabled && (
+              <input
+                className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                placeholder="WhatsApp com DDD (ex: 48999999999)"
+                value={saveWhatsappNumber}
+                onChange={e => setSaveWhatsappNumber(e.target.value)}
+              />
+            )}
             <div className="text-xs text-muted">
               Termos: <strong>{(q ? [q] : positivos.slice(0, 1)).join(', ') || '—'}</strong>
               {negativos.length > 0 && <> · negativos: {negativos.slice(0, 4).join(', ')}{negativos.length > 4 ? '…' : ''}</>}
@@ -2391,6 +2494,7 @@ function PcaSignalsPanel({ onPromoted }) {
   const [statusFilter, setStatusFilter] = useState('novo');
   const [busy, setBusy] = useState({});
   const [selectedSignals, setSelectedSignals] = useState({});
+  const [collapsedWatchlists, setCollapsedWatchlists] = useState({});
   const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
   const [pageInfo, setPageInfo] = useState({ total: 0, limit: PCA_SIGNALS_PAGE_SIZE, offset: 0, hasMore: false });
 
@@ -2445,6 +2549,19 @@ function PcaSignalsPanel({ onPromoted }) {
   };
 
   const selectedIds = Object.keys(selectedSignals).filter(id => selectedSignals[id]).map(id => Number(id));
+  const groupedSignals = useMemo(() => groupPcaSignalsByWatchlist(signals), [signals]);
+
+  const toggleWatchlistCollapsed = (key) => {
+    setCollapsedWatchlists(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const setAllWatchlistsCollapsed = (collapsed) => {
+    const next = {};
+    groupedSignals.forEach(group => {
+      next[group.key] = collapsed;
+    });
+    setCollapsedWatchlists(next);
+  };
 
   const runBatch = async (action, status = null) => {
     if (!selectedIds.length) return;
@@ -2505,6 +2622,24 @@ function PcaSignalsPanel({ onPromoted }) {
         <span className="text-xs text-muted">
           Exibindo {signals.length} de {pageInfo.total || statusCounts[statusFilter] || signals.length}
         </span>
+        {groupedSignals.length > 0 && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setAllWatchlistsCollapsed(false)}
+              className="h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink"
+            >
+              Expandir watchlists
+            </button>
+            <button
+              type="button"
+              onClick={() => setAllWatchlistsCollapsed(true)}
+              className="h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink"
+            >
+              Colapsar watchlists
+            </button>
+          </div>
+        )}
         <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">
           Atualizar sinais
         </button>
@@ -2540,11 +2675,24 @@ function PcaSignalsPanel({ onPromoted }) {
         <div className="text-sm text-muted py-6 text-center">Nenhum signal {statusFilter}.</div>
       ) : (
         <div className="space-y-3">
-          {groupPcaSignalsByWatchlist(signals).map(group => (
+          {groupedSignals.map(group => {
+            const isCollapsed = !!collapsedWatchlists[group.key];
+            const itemLabel = group.totalCount > group.itemsCount ? `${group.itemsCount}/${group.totalCount}` : group.itemsCount;
+            return (
             <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
-              <div className="px-3 py-2 border-b border-border bg-primary/10 text-xs font-semibold text-primary">
-                {group.title} ({group.totalCount > group.itemsCount ? `${group.itemsCount}/${group.totalCount}` : group.itemsCount})
-              </div>
+              <button
+                type="button"
+                onClick={() => toggleWatchlistCollapsed(group.key)}
+                aria-expanded={!isCollapsed}
+                className="flex w-full items-center gap-2 px-3 py-2 border-b border-border bg-primary/10 text-left text-xs font-semibold text-primary hover:bg-primary/15"
+              >
+                <span className="w-4 text-center text-[10px]" aria-hidden="true">{isCollapsed ? '>' : 'v'}</span>
+                <span className="flex-1 min-w-0 truncate">{group.title}</span>
+                <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-[11px] text-primary">
+                  {itemLabel} sinal{Number(group.itemsCount) === 1 ? '' : 's'}
+                </span>
+              </button>
+              {!isCollapsed && (
               <div className="space-y-3 p-3 bg-cardAlt/40">
                 {group.plans.map(plan => (
                   <div key={plan.key} className="rounded-xl border border-border bg-card overflow-hidden">
@@ -2626,8 +2774,10 @@ function PcaSignalsPanel({ onPromoted }) {
                   </div>
                 ))}
               </div>
+              )}
             </div>
-          ))}
+            );
+          })}
           {pageInfo.hasMore && (
             <div className="flex justify-center pt-1">
               <button
@@ -2694,6 +2844,23 @@ function PcaWatchlistsPanel() {
     }
   };
 
+  const updateWhatsapp = async (row) => {
+    const nextNumber = window.prompt('Número de WhatsApp para alertas desta watchlist:', row.whatsapp_number || '');
+    if (nextNumber === null) return;
+    setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
+    try {
+      await axios.put(`/api/licitacoes/pca/watchlist/${row.id}`, {
+        whatsapp_enabled: Boolean(nextNumber.trim()),
+        whatsapp_number: nextNumber.trim() || null,
+      });
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [`wa:${row.id}`]: false }));
+    }
+  };
+
   return (
     <div className="mt-6 space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -2718,6 +2885,7 @@ function PcaWatchlistsPanel() {
                 <div className="mt-1 text-xs text-muted flex flex-wrap gap-2">
                   <span>Status: {w.ativo ? 'Ativa' : 'Inativa'}</span>
                   <span>IA: {w.usar_ia ? 'Sim' : 'Não'}</span>
+                  <span>WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'Não'}</span>
                   <span>Criada: {formatPcaDate(w.criado_em)}</span>
                 </div>
                 <div className="mt-2 text-xs text-muted">
@@ -2738,6 +2906,14 @@ function PcaWatchlistsPanel() {
                 </button>
                 <button
                   type="button"
+                  disabled={busy[`wa:${w.id}`]}
+                  onClick={() => updateWhatsapp(w)}
+                  className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50"
+                >
+                  WhatsApp
+                </button>
+                <button
+                  type="button"
                   disabled={busy[w.id]}
                   onClick={() => removeWatchlist(w)}
                   className="h-8 rounded-lg border border-rose-300 px-3 text-xs font-semibold text-rose-600 disabled:opacity-50"
@@ -2749,6 +2925,325 @@ function PcaWatchlistsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PcaWatchlistPage({ onPromoted }) {
+  return (
+    <div className="space-y-6">
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-ink">Configurações da watchlist</h3>
+            <p className="text-xs text-muted">Ative, remova e configure WhatsApp das regras salvas.</p>
+          </div>
+        </div>
+        <PcaWatchlistsPanel />
+      </section>
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <div>
+          <h3 className="text-base font-semibold text-ink">Oportunidades encontradas</h3>
+          <p className="text-xs text-muted">Sinais gerados pelas watchlists PCA.</p>
+        </div>
+        <PcaSignalsPanel onPromoted={onPromoted} />
+      </section>
+    </div>
+  );
+}
+
+function EditalWatchlistsPanel() {
+  const [watchlists, setWatchlists] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState({});
+
+  const loadWatchlists = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await axios.get('/api/licitacoes/editais/watchlist');
+      setWatchlists(r.data || []);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWatchlists();
+  }, [loadWatchlists]);
+
+  const toggleAtivo = async (row) => {
+    setBusy(prev => ({ ...prev, [row.id]: true }));
+    try {
+      await axios.put(`/api/licitacoes/editais/watchlist/${row.id}`, { ativo: !row.ativo });
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  const updateWhatsapp = async (row) => {
+    const nextNumber = window.prompt('Número de WhatsApp para alertas desta watchlist:', row.whatsapp_number || '');
+    if (nextNumber === null) return;
+    setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
+    try {
+      await axios.put(`/api/licitacoes/editais/watchlist/${row.id}`, {
+        whatsapp_enabled: Boolean(nextNumber.trim()),
+        whatsapp_number: nextNumber.trim() || null,
+      });
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [`wa:${row.id}`]: false }));
+    }
+  };
+
+  const removeWatchlist = async (row) => {
+    if (!window.confirm(`Excluir watchlist "${row.nome}"?`)) return;
+    setBusy(prev => ({ ...prev, [row.id]: true }));
+    try {
+      await axios.delete(`/api/licitacoes/editais/watchlist/${row.id}`);
+      await loadWatchlists();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted">Watchlists de editais usam a busca PNCP e geram sinais no sync.</p>
+        <button type="button" onClick={loadWatchlists} className="h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">Atualizar</button>
+      </div>
+      {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
+      {loading ? (
+        <div className="text-sm text-muted">Carregando...</div>
+      ) : watchlists.length === 0 ? (
+        <div className="text-sm text-muted py-6 text-center">Nenhuma watchlist de edital salva.</div>
+      ) : (
+        <div className="rounded-2xl border border-border bg-card divide-y divide-border">
+          {watchlists.map(w => (
+            <div key={w.id} className="p-3 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-ink">{w.nome}</div>
+                <div className="mt-1 text-xs text-muted flex flex-wrap gap-2">
+                  <span>Status: {w.ativo ? 'Ativa' : 'Inativa'}</span>
+                  <span>IA: {w.usar_ia ? 'Sim' : 'Não'}</span>
+                  <span>WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'Não'}</span>
+                  <span>Criada: {formatPcaDate(w.criado_em)}</span>
+                </div>
+                <div className="mt-2 text-xs text-muted">
+                  <strong>Termos:</strong> {(w.palavras_chave || []).join(', ') || '—'}
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  <strong>Filtros:</strong> {Object.entries(w.filtros || {}).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50">
+                  {w.ativo ? 'Desativar' : 'Ativar'}
+                </button>
+                <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => updateWhatsapp(w)} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50">
+                  WhatsApp
+                </button>
+                <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className="h-8 rounded-lg border border-rose-300 px-3 text-xs font-semibold text-rose-600 disabled:opacity-50">
+                  Excluir
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const EDITAL_SIGNALS_PAGE_SIZE = 100;
+
+function EditalSignalsPanel({ onImportSignal }) {
+  const [signals, setSignals] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('novo');
+  const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
+  const [pageInfo, setPageInfo] = useState({ total: 0, hasMore: false });
+  const [busy, setBusy] = useState({});
+  const [collapsedWatchlists, setCollapsedWatchlists] = useState({});
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const r = await axios.get('/api/licitacoes/editais/signals/stats');
+      setStatusCounts({
+        novo: Number(r.data?.novo) || 0,
+        visto: Number(r.data?.visto) || 0,
+        promovido: Number(r.data?.promovido) || 0,
+        descartado: Number(r.data?.descartado) || 0,
+      });
+    } catch {
+      setStatusCounts({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
+    }
+  }, []);
+
+  const load = useCallback(async ({ append = false, offset = 0 } = {}) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const r = await axios.get('/api/licitacoes/editais/signals', {
+        params: { status: statusFilter, limit: EDITAL_SIGNALS_PAGE_SIZE, offset },
+      });
+      const rows = r.data?.data || [];
+      setSignals(prev => append ? [...prev, ...rows] : rows);
+      setPageInfo({ total: Number(r.data?.total) || 0, hasMore: !!r.data?.has_more });
+      loadCounts();
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      if (append) setLoadingMore(false);
+      else setLoading(false);
+    }
+  }, [statusFilter, loadCounts]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const groupedSignals = useMemo(() => groupEditalSignalsByWatchlist(signals), [signals]);
+
+  const setStatus = async (row, status) => {
+    setBusy(prev => ({ ...prev, [row.id]: true }));
+    try {
+      await axios.put(`/api/licitacoes/editais/signals/${row.id}/status`, { status });
+      await load();
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setBusy(prev => ({ ...prev, [row.id]: false }));
+    }
+  };
+
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        {['novo', 'visto', 'promovido', 'descartado'].map(s => (
+          <button key={s} type="button" onClick={() => setStatusFilter(s)}
+            className={`h-8 rounded-full px-3 text-xs font-semibold ${statusFilter === s ? 'bg-primary/10 text-primary' : 'border border-border text-muted'}`}>
+            {s} ({statusCounts[s] || 0})
+          </button>
+        ))}
+        <span className="text-xs text-muted">Exibindo {signals.length} de {pageInfo.total || statusCounts[statusFilter] || signals.length}</span>
+        <button type="button" onClick={load} className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs text-ink">Atualizar sinais</button>
+      </div>
+      {error && <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
+      {loading ? (
+        <div className="text-sm text-muted">Carregando...</div>
+      ) : signals.length === 0 ? (
+        <div className="text-sm text-muted py-6 text-center">Nenhum sinal {statusFilter}.</div>
+      ) : (
+        <div className="space-y-3">
+          {groupedSignals.map(group => {
+            const isCollapsed = !!collapsedWatchlists[group.key];
+            return (
+              <div key={group.key} className="rounded-2xl border border-border bg-card overflow-hidden">
+                <button type="button" onClick={() => setCollapsedWatchlists(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+                  aria-expanded={!isCollapsed}
+                  className="flex w-full items-center gap-2 px-3 py-2 border-b border-border bg-primary/10 text-left text-xs font-semibold text-primary hover:bg-primary/15">
+                  <span className="w-4 text-center text-[10px]" aria-hidden="true">{isCollapsed ? '>' : 'v'}</span>
+                  <span className="flex-1 min-w-0 truncate">{group.title}</span>
+                  <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-[11px] text-primary">{group.itemsCount} sinais</span>
+                </button>
+                {!isCollapsed && (
+                  <div className="divide-y divide-border">
+                    {group.items.map(s => {
+                      const item = s.payload || {};
+                      return (
+                        <div key={s.id} className="p-3 flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-semibold text-ink">{item.titulo || item.title || 'Edital PNCP'}</div>
+                            <div className="mt-1 text-xs text-muted line-clamp-2">{item.descricao || item.description}</div>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                              <span>{item.orgao?.nome || item.orgao_nome || 'Órgão n/d'}</span>
+                              {item.unidade?.codigo && <span>UASG {item.unidade.codigo}</span>}
+                              {item.prazo_info?.label && <span>{item.prazo_info.label}</span>}
+                              <span>Score {Number(s.score || 0).toFixed(2)}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 justify-end">
+                            {item.url && (
+                              <a href={item.url} target="_blank" rel="noopener noreferrer" className="h-8 inline-flex items-center rounded-lg border border-border px-3 text-xs font-semibold text-primary">PNCP</a>
+                            )}
+                            {statusFilter !== 'promovido' && onImportSignal && (
+                              <button type="button" disabled={busy[s.id]} onClick={() => onImportSignal(item, s.id)} className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white disabled:opacity-50">
+                                Importar
+                              </button>
+                            )}
+                            {s.status !== 'visto' && (
+                              <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'visto')} className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
+                            )}
+                            {s.status !== 'descartado' && (
+                              <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'descartado')} className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {pageInfo.hasMore && (
+            <div className="flex justify-center pt-1">
+              <button type="button" disabled={loadingMore} onClick={() => load({ append: true, offset: signals.length })}
+                className="h-9 rounded-lg border border-border bg-card px-4 text-xs font-semibold text-primary disabled:opacity-50">
+                {loadingMore ? 'Carregando...' : `Carregar mais (${signals.length}/${pageInfo.total})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditalWatchlistPage({ onImportSignal }) {
+  const [syncing, setSyncing] = useState(false);
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      const r = await axios.post('/api/licitacoes/editais/sync');
+      alert(`Sync concluído: ${r.data?.signals_inserted || 0} novo(s) sinal(is).`);
+    } catch (e) {
+      alert(`Erro: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+  return (
+    <div className="space-y-6">
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-ink">Configurações da watchlist de editais</h3>
+            <p className="text-xs text-muted">Regras salvas a partir da busca PNCP.</p>
+          </div>
+          <button type="button" disabled={syncing} onClick={syncNow} className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white disabled:opacity-50">
+            {syncing ? 'Sincronizando...' : 'Rodar sync'}
+          </button>
+        </div>
+        <EditalWatchlistsPanel />
+      </section>
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <h3 className="text-base font-semibold text-ink">Oportunidades encontradas</h3>
+        <EditalSignalsPanel onImportSignal={onImportSignal} />
+      </section>
     </div>
   );
 }
@@ -2804,15 +3299,16 @@ function App() {
     q: '',
     tipos_documento: 'edital',
     status: 'recebendo_proposta',
-    modalidade_licitação_id: '',
+    modalidade_licitacao_id: '',
     tipo_id: '',
     modo_disputa_id: '',
     uf: '',
     esfera_id: '',
     orgao_cnpj: '',
     unidade_codigo: '',
-    ordenacao: 'valor_desc_data_desc',
+    ordenacao: 'relevancia_desc',
     usar_ia: true, // Busca inteligente com termos correlatos
+    negative_terms: '',
   });
   const [pncpSearchResults, setPncpSearchResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
   const [pncpSearchLoading, setPncpSearchLoading] = useState(false);
@@ -2823,6 +3319,10 @@ function App() {
   const [pncpOrgaoLookupLoading, setPncpOrgaoLookupLoading] = useState(false);
   const [pncpUasgLookupLoading, setPncpUasgLookupLoading] = useState(false);
   const [pncpSearchExpanded, setPncpSearchExpanded] = useState(true);
+  const [pncpSummaryExpanded, setPncpSummaryExpanded] = useState(false);
+  const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
+  const [pncpResultScope, setPncpResultScope] = useState('visible');
+  const [pncpDebugControlId, setPncpDebugControlId] = useState('');
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
   const [pncpHiddenIds, setPncpHiddenIds] = useState(() => {
@@ -3647,26 +4147,76 @@ function App() {
     return { controls, paths, ids };
   }, [licitaçãoOpportunities]);
 
+  const getPncpResultVisibility = useCallback((item) => {
+    if (pncpHiddenIds.includes(item.id)) {
+      return 'hidden';
+    }
+    const controlId = normalizePncpControlId(item.numero_controle_pncp);
+    if (controlId && pncpInPipelineIndex.controls.has(controlId)) {
+      return 'pipeline';
+    }
+    const pathKey = extractPncpPathKey(item.url || item.item_url);
+    if (pathKey && pncpInPipelineIndex.paths.has(pathKey)) {
+      return 'pipeline';
+    }
+    const itemId = String(item.id || '').trim();
+    if (itemId && pncpInPipelineIndex.ids.has(itemId)) {
+      return 'pipeline';
+    }
+    return 'visible';
+  }, [pncpHiddenIds, pncpInPipelineIndex]);
+
+  const pncpResultsWithVisibility = useMemo(() => {
+    return (pncpSearchResults.items || []).map(item => ({
+      ...item,
+      __visibility: getPncpResultVisibility(item),
+    }));
+  }, [pncpSearchResults.items, getPncpResultVisibility]);
+
+  const pncpVisibilityCounts = useMemo(() => {
+    return pncpResultsWithVisibility.reduce((acc, item) => {
+      acc[item.__visibility] = (acc[item.__visibility] || 0) + 1;
+      acc.all += 1;
+      return acc;
+    }, { all: 0, visible: 0, hidden: 0, pipeline: 0 });
+  }, [pncpResultsWithVisibility]);
+
   const visiblePncpResults = useMemo(() => {
-    return (pncpSearchResults.items || []).filter(item => {
-      if (pncpHiddenIds.includes(item.id)) {
-        return false;
-      }
-      const controlId = normalizePncpControlId(item.numero_controle_pncp);
-      if (controlId && pncpInPipelineIndex.controls.has(controlId)) {
-        return false;
-      }
-      const pathKey = extractPncpPathKey(item.url || item.item_url);
-      if (pathKey && pncpInPipelineIndex.paths.has(pathKey)) {
-        return false;
-      }
-      const itemId = String(item.id || '').trim();
-      if (itemId && pncpInPipelineIndex.ids.has(itemId)) {
-        return false;
-      }
-      return true;
+    if (pncpResultScope === 'all') {
+      return pncpResultsWithVisibility;
+    }
+    return pncpResultsWithVisibility.filter(item => item.__visibility === pncpResultScope);
+  }, [pncpResultsWithVisibility, pncpResultScope]);
+
+  const pncpSearchSummary = useMemo(() => {
+    const backendSummary = pncpSearchResults.summary || pncpSearchResults.pageSummary;
+    return backendSummary || createPncpUiSummary(pncpSearchResults.items || []);
+  }, [pncpSearchResults]);
+
+  const visiblePncpSummary = useMemo(() => createPncpUiSummary(visiblePncpResults), [visiblePncpResults]);
+
+  const pncpDebugLookup = useMemo(() => {
+    const query = normalizePncpControlId(pncpDebugControlId);
+    if (!query) {
+      return null;
+    }
+    const queryDigits = query.replace(/\D/g, '');
+    const found = pncpResultsWithVisibility.find(item => {
+      const control = normalizePncpControlId(item.numero_controle_pncp);
+      const path = extractPncpPathKey(item.url || item.item_url);
+      const id = normalizePncpControlId(item.id);
+      const combinedDigits = `${control} ${path} ${id}`.replace(/\D/g, '');
+      return (control && control.includes(query))
+        || (path && path.includes(query))
+        || (id && id.includes(query))
+        || (queryDigits.length >= 8 && combinedDigits.includes(queryDigits));
     });
-  }, [pncpSearchResults.items, pncpHiddenIds, pncpInPipelineIndex]);
+    return {
+      query: pncpDebugControlId,
+      found,
+      status: found ? found.__visibility : 'missing',
+    };
+  }, [pncpDebugControlId, pncpResultsWithVisibility]);
 
   const agentOptions = useMemo(() => {
     const names = contacts
@@ -3798,11 +4348,11 @@ function App() {
         valor_oportunidade: newOpportunityForm.valor_oportunidade
           ? parseCurrency(newOpportunityForm.valor_oportunidade)
           : null,
-        comissão_percentual: newOpportunityForm.comissão_percentual
-          ? Number(String(newOpportunityForm.comissão_percentual).replace(',', '.'))
+        comissao_percentual: newOpportunityForm.comissao_percentual
+          ? Number(String(newOpportunityForm.comissao_percentual).replace(',', '.'))
           : null,
-        comissão_valor_previsto: newOpportunityForm.comissão_valor_previsto
-          ? Number(String(newOpportunityForm.comissão_valor_previsto).replace(',', '.'))
+        comissao_valor_previsto: newOpportunityForm.comissao_valor_previsto
+          ? Number(String(newOpportunityForm.comissao_valor_previsto).replace(',', '.'))
           : null,
         valor_revenda_previsto: newOpportunityForm.valor_revenda_previsto
           ? Number(String(newOpportunityForm.valor_revenda_previsto).replace(',', '.'))
@@ -4009,23 +4559,26 @@ function App() {
   };
 
   // Buscar editais/licitações no PNCP
-  const runPncpSearch = async (page = 1) => {
+  const runPncpSearch = async (page = 1, overrides = {}) => {
     setPncpSearchLoading(true);
+    const effectiveFilters = { ...pncpSearchFilters, ...overrides };
     try {
       const response = await axios.get('/api/licitacoes/pncp/search', {
         params: {
-          q: pncpSearchFilters.q,
-          tipos_documento: pncpSearchFilters.tipos_documento,
-          status: pncpSearchFilters.status,
-          modalidade_licitação_id: pncpSearchFilters.modalidade_licitação_id || undefined,
-          tipo_id: pncpSearchFilters.tipo_id || undefined,
-          modo_disputa_id: pncpSearchFilters.modo_disputa_id || undefined,
-          uf: pncpSearchFilters.uf || undefined,
-          esfera_id: pncpSearchFilters.esfera_id || undefined,
-          orgao_cnpj: pncpSearchFilters.orgao_cnpj || (String(pncpOrgaoLookupQuery || '').trim().length >= 2 ? pncpOrgaoLookupQuery : undefined),
-          unidade_codigo: pncpSearchFilters.unidade_codigo || (String(pncpUasgLookupQuery || '').trim().length >= 2 ? pncpUasgLookupQuery : undefined),
-          ordenacao: pncpSearchFilters.ordenacao,
-          usar_ia: pncpSearchFilters.usar_ia ? 'true' : 'false',
+          q: effectiveFilters.q,
+          tipos_documento: effectiveFilters.tipos_documento,
+          status: effectiveFilters.status,
+          modalidade_licitacao_id: effectiveFilters.modalidade_licitacao_id || undefined,
+          semantic: 'true',
+          negative_terms: effectiveFilters.negative_terms || undefined,
+          tipo_id: effectiveFilters.tipo_id || undefined,
+          modo_disputa_id: effectiveFilters.modo_disputa_id || undefined,
+          uf: effectiveFilters.uf || undefined,
+          esfera_id: effectiveFilters.esfera_id || undefined,
+          orgao_cnpj: effectiveFilters.orgao_cnpj || (String(pncpOrgaoLookupQuery || '').trim().length >= 2 ? pncpOrgaoLookupQuery : undefined),
+          unidade_codigo: effectiveFilters.unidade_codigo || (String(pncpUasgLookupQuery || '').trim().length >= 2 ? pncpUasgLookupQuery : undefined),
+          ordenacao: effectiveFilters.ordenacao,
+          usar_ia: effectiveFilters.usar_ia ? 'true' : 'false',
           pagina: page,
           tam: 50,
         },
@@ -4036,6 +4589,44 @@ function App() {
       setPncpSearchResults({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
     } finally {
       setPncpSearchLoading(false);
+    }
+  };
+
+  const savePncpWatchlist = async () => {
+    const term = String(pncpSearchFilters.q || '').trim();
+    if (!term) {
+      alert('Informe um termo de busca antes de salvar a watchlist.');
+      return;
+    }
+    const name = window.prompt('Nome da watchlist de editais:', term);
+    if (name === null) return;
+    const whatsappNumber = window.prompt('WhatsApp para alertas (opcional):', '');
+    if (whatsappNumber === null) return;
+    try {
+      await axios.post('/api/licitacoes/editais/watchlist', {
+        nome: name.trim() || term,
+        palavras_chave: [term],
+        termos_negativos: pncpSearchFilters.negative_terms,
+        usar_ia: pncpSearchFilters.usar_ia,
+        filtros: {
+          tipos_documento: pncpSearchFilters.tipos_documento,
+          status: pncpSearchFilters.status,
+          modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id,
+          tipo_id: pncpSearchFilters.tipo_id,
+          modo_disputa_id: pncpSearchFilters.modo_disputa_id,
+          uf: pncpSearchFilters.uf,
+          esfera_id: pncpSearchFilters.esfera_id,
+          orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
+          unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
+          ordenacao: pncpSearchFilters.ordenacao,
+        },
+        whatsapp_enabled: Boolean(whatsappNumber.trim()),
+        whatsapp_number: whatsappNumber.trim() || null,
+      });
+      alert('Watchlist de editais salva. Ela será processada no próximo sync.');
+      setLicitacaoSubview('editais_watchlist');
+    } catch (error) {
+      alert(`Erro: ${error.response?.data?.error || error.message}`);
     }
   };
 
@@ -4204,6 +4795,11 @@ function App() {
           pncp_esfera: item.esfera?.nome,
           pncp_municipio: item.municipio?.nome,
           pncp_uf: item.uf,
+          pncp_score: item.score,
+          pncp_score_label: item.score_label,
+          pncp_fase_lei_14133: item.legal_stage?.label,
+          pncp_criterio_julgamento: item.criterio_julgamento,
+          pncp_match_reasons: item.match_reasons || [],
         },
       }));
       setNewOpportunityItemsDraft(importedItemsDraft);
@@ -5481,6 +6077,37 @@ function App() {
               )}
             </header>
 
+          <nav className="mt-3 flex flex-wrap items-center gap-1 text-xs text-muted">
+            <button type="button" onClick={() => setActiveView('Overview')} className="hover:text-primary">Início</button>
+            <span>/</span>
+            <button type="button" onClick={() => setActiveView(activeView)} className="font-semibold text-ink hover:text-primary">{activeView}</button>
+            {activeView === 'Licitações' && (
+              <>
+                <span>/</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (licitaçãoSubview === 'editais_watchlist') setLicitacaoSubview('editais');
+                    else if (licitaçãoSubview === 'sinais') setLicitacaoSubview('pca');
+                    else setLicitacaoSubview(licitaçãoSubview);
+                  }}
+                  className="font-semibold text-ink hover:text-primary"
+                >
+                  {licitaçãoSubview === 'board' ? 'Board'
+                    : licitaçãoSubview === 'editais' || licitaçãoSubview === 'editais_watchlist' ? 'Busca Editais'
+                    : licitaçãoSubview === 'pca' || licitaçãoSubview === 'sinais' ? 'PCA'
+                    : 'Watchlist'}
+                </button>
+                {(licitaçãoSubview === 'sinais' || licitaçãoSubview === 'editais_watchlist') && (
+                  <>
+                    <span>/</span>
+                    <span className="font-semibold text-primary">Watchlist</span>
+                  </>
+                )}
+              </>
+            )}
+          </nav>
+
           {activeView === 'Board' && (
             <>
               <div className="mt-8 flex items-center gap-3">
@@ -5538,7 +6165,7 @@ function App() {
             </div>
           )}
           <div
-            className={`kanban-board-scroll mt-2 flex gap-4 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
+            className={`kanban-board-scroll mt-2 flex gap-2 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
             ref={boardScrollRef}
             onScroll={handleBoardScroll}
           >
@@ -5596,14 +6223,16 @@ function App() {
                   { key: 'board', label: 'Board' },
                   { key: 'editais', label: 'Busca Editais' },
                   { key: 'pca', label: 'PCA' },
-                  { key: 'sinais', label: 'Sinais PCA' },
-                  { key: 'watchlists', label: 'Watchlists PCA' },
                 ].map(opt => (
                   <button
                     key={opt.key}
                     type="button"
                     onClick={() => setLicitacaoSubview(opt.key)}
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${licitaçãoSubview === opt.key ? 'bg-primary/10 text-primary' : 'text-muted'}`}
+                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${
+                      licitaçãoSubview === opt.key || (opt.key === 'editais' && licitaçãoSubview === 'editais_watchlist')
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted'
+                    }`}
                   >
                     {opt.label}
                   </button>
@@ -5621,13 +6250,30 @@ function App() {
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-primary/10 text-primary text-xs font-bold">P</span>
                     Buscar Licitações no PNCP
                   </h3>
-                  <button
-                    type="button"
-                    onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)}
-                    className="text-xs text-muted hover:text-ink"
-                  >
-                    {pncpSearchExpanded ? 'Recolher' : 'Expandir'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={savePncpWatchlist}
+                      disabled={!String(pncpSearchFilters.q || '').trim()}
+                      className="h-8 rounded-lg border border-border px-3 text-xs font-semibold text-ink disabled:opacity-50"
+                    >
+                      Salvar watchlist
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLicitacaoSubview('editais_watchlist')}
+                      className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white"
+                    >
+                      Watchlist
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)}
+                      className="text-xs text-muted hover:text-ink"
+                    >
+                      {pncpSearchExpanded ? 'Recolher' : 'Expandir'}
+                    </button>
+                  </div>
                 </div>
 
                 {pncpSearchExpanded && (
@@ -5635,11 +6281,19 @@ function App() {
                     <div className="grid gap-3 md:grid-cols-6">
                       <input
                         type="text"
-                        placeholder="Buscar por palavra-chave..."
+                        placeholder="Objeto, item, solução ou problema..."
                         value={pncpSearchFilters.q}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, q: event.target.value }))}
                         onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
                         className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink md:col-span-2"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Excluir termos (opcional)"
+                        value={pncpSearchFilters.negative_terms}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))}
+                        onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
+                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                       />
                       <select
                         value={pncpSearchFilters.tipos_documento}
@@ -5663,8 +6317,8 @@ function App() {
                         <option value="todos">Todos os Status</option>
                       </select>
                       <select
-                        value={pncpSearchFilters.modalidade_licitação_id}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitação_id: event.target.value }))}
+                        value={pncpSearchFilters.modalidade_licitacao_id}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))}
                         className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                       >
                         <option value="">Todas Modalidades</option>
@@ -5818,9 +6472,16 @@ function App() {
                       </div>
                       <select
                         value={pncpSearchFilters.ordenacao}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, ordenacao: event.target.value }))}
+                        onChange={(event) => {
+                          const ordenacao = event.target.value;
+                          setPncpSearchFilters(prev => ({ ...prev, ordenacao }));
+                          if ((pncpSearchResults.items || []).length > 0) {
+                            runPncpSearch(1, { ordenacao });
+                          }
+                        }}
                         className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
                       >
+                        <option value="relevancia_desc">Maior aderência</option>
                         <option value="valor_desc_data_desc">Maior valor (mais recente)</option>
                         <option value="valor_asc_data_desc">Menor valor (mais recente)</option>
                         <option value="data_desc">Mais recentes primeiro</option>
@@ -5830,8 +6491,8 @@ function App() {
                         {pncpSearchResults.total > 0 && (
                           <>
                             <span>{pncpSearchResults.total.toLocaleString('pt-BR')} resultados</span>
-                            {visiblePncpResults.length !== pncpSearchResults.items.length && (
-                              <span>{visiblePncpResults.length.toLocaleString('pt-BR')} visíveis</span>
+                            {pncpVisibilityCounts.visible !== pncpVisibilityCounts.all && (
+                              <span>{pncpVisibilityCounts.visible.toLocaleString('pt-BR')} visíveis</span>
                             )}
                             <span>Pág. {pncpSearchResults.pagina}/{pncpSearchResults.totalPaginas}</span>
                           </>
@@ -5900,7 +6561,100 @@ function App() {
                         <span className="text-ink">Busca inteligente</span>
                         <span className="text-xs text-muted">(usa IA para encontrar termos correlatos)</span>
                       </label>
+                      {pncpSearchResults.diagnostics && (
+                        <span className="text-xs text-muted">
+                          IA {pncpSearchResults.diagnostics.aiUsed ? 'usada' : pncpSearchResults.diagnostics.aiRequested ? 'pulada' : 'desligada'}
+                          {pncpSearchResults.diagnostics.aiSkippedReason ? `: ${pncpSearchResults.diagnostics.aiSkippedReason}` : ''}
+                        </span>
+                      )}
                     </div>
+
+                    {pncpResultsWithVisibility.length > 0 && (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        {[
+                          ['visible', 'Visíveis', pncpVisibilityCounts.visible],
+                          ['all', 'Todos encontrados', pncpVisibilityCounts.all],
+                          ['hidden', 'Ocultos', pncpVisibilityCounts.hidden],
+                          ['pipeline', 'Já no pipeline', pncpVisibilityCounts.pipeline],
+                        ].map(([scope, label, count]) => (
+                          <button
+                            key={scope}
+                            type="button"
+                            onClick={() => {
+                              setPncpResultScope(scope);
+                              setShowPncpHidden(false);
+                            }}
+                            className={`h-8 rounded-lg border px-3 text-xs font-semibold ${pncpResultScope === scope ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:bg-cardAlt'}`}
+                          >
+                            {label} ({Number(count || 0).toLocaleString('pt-BR')})
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {pncpSearchResults.items?.length > 0 && (
+                      <div className="mt-3 rounded-xl border border-border bg-cardAlt p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="grid flex-1 gap-2 md:grid-cols-4">
+                            <div>
+                              <p className="text-[11px] uppercase tracking-wide text-muted">Encontradas</p>
+                              <p className="text-sm font-semibold text-ink">
+                                {pncpSearchSummary.count?.toLocaleString('pt-BR') || 0} · {formatCurrency(pncpSearchSummary.total_value) || 'R$ 0,00'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] uppercase tracking-wide text-muted">Visíveis</p>
+                              <p className="text-sm font-semibold text-ink">
+                                {visiblePncpSummary.count.toLocaleString('pt-BR')} · {formatCurrency(visiblePncpSummary.total_value) || 'R$ 0,00'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] uppercase tracking-wide text-muted">Alta aderência</p>
+                              <p className="text-sm font-semibold text-ink">
+                                {pncpSearchSummary.by_adherence?.alta?.count || 0} · {formatCurrency(pncpSearchSummary.by_adherence?.alta?.total_value) || 'R$ 0,00'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] uppercase tracking-wide text-muted">Publicadas</p>
+                              <p className="text-sm font-semibold text-ink">
+                                {pncpSearchSummary.by_publication?.publicado?.count || 0} · {formatCurrency(pncpSearchSummary.by_publication?.publicado?.total_value) || 'R$ 0,00'}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setPncpSummaryExpanded(prev => !prev)}
+                            className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-card"
+                          >
+                            {pncpSummaryExpanded ? 'Recolher totais' : 'Ver segmentação'}
+                          </button>
+                        </div>
+
+                        {pncpSummaryExpanded && (
+                          <div className="mt-3 grid gap-3 md:grid-cols-5">
+                            {[
+                              ['Aderência', pncpSearchSummary.by_adherence],
+                              ['Fase Lei 14.133', pncpSearchSummary.by_stage],
+                              ['Status', pncpSearchSummary.by_status],
+                              ['Fonte', pncpSearchSummary.by_source],
+                              ['Publicação', pncpSearchSummary.by_publication],
+                            ].map(([title, bucket]) => (
+                              <div key={title} className="rounded-lg border border-border bg-card p-2">
+                                <p className="mb-2 text-xs font-semibold text-ink">{title}</p>
+                                <div className="space-y-1">
+                                  {Object.entries(bucket || {}).filter(([, data]) => Number(data?.count || 0) > 0).map(([label, data]) => (
+                                    <div key={label} className="flex items-center justify-between gap-2 text-[11px] text-muted">
+                                      <span className="truncate capitalize">{String(label).replace(/_/g, ' ')}</span>
+                                      <span className="shrink-0 font-semibold text-ink">{data.count} · {formatCurrency(data.total_value) || 'R$ 0,00'}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Termos usados na busca */}
                     {pncpSearchResults.termosUsados && pncpSearchResults.termosUsados.length > 1 && (
@@ -5928,6 +6682,84 @@ function App() {
                             </span>
                           ))}
                         </p>
+                      </div>
+                    )}
+
+                    {pncpSearchResults.query_plan && (
+                      <div className="mt-3 rounded-xl border border-border bg-cardAlt p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-xs text-muted">
+                            <strong className="text-ink">Auditoria da busca</strong>
+                            <span className="ml-2">
+                              {pncpSearchResults.query_plan.term_runs?.length || 0} termo(s) executado(s)
+                              {pncpSearchResults.query_plan.cache_hit ? ' · cache' : ''}
+                              {pncpSearchResults.query_plan.pncp_status_sent ? ` · status PNCP: ${pncpSearchResults.query_plan.pncp_status_sent}` : ' · status filtrado localmente'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setPncpDiagnosticsExpanded(prev => !prev)}
+                            className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-card"
+                          >
+                            {pncpDiagnosticsExpanded ? 'Recolher auditoria' : 'Ver auditoria'}
+                          </button>
+                        </div>
+                        {pncpDiagnosticsExpanded && (
+                          <div className="mt-3 space-y-3">
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <div className="rounded-lg border border-border bg-card p-2 text-xs text-muted">
+                                <p className="font-semibold text-ink">Filtros locais</p>
+                                <p>Status recebendo proposta: {pncpSearchResults.query_plan.local_filters?.receiving_proposal ? 'sim' : 'não'}</p>
+                                <p>Órgão: {pncpSearchResults.query_plan.local_filters?.orgao || 'n/d'}</p>
+                                <p>Unidade: {pncpSearchResults.query_plan.local_filters?.unidade || 'n/d'}</p>
+                              </div>
+                              <div className="rounded-lg border border-border bg-card p-2 text-xs text-muted md:col-span-2">
+                                <p className="font-semibold text-ink">Checar edital específico</p>
+                                <input
+                                  value={pncpDebugControlId}
+                                  onChange={(event) => setPncpDebugControlId(event.target.value)}
+                                  placeholder="Ex.: 18715532000170/2026/54"
+                                  className="mt-2 h-8 w-full rounded-lg border border-border bg-cardAlt px-2 text-xs"
+                                />
+                                {pncpDebugLookup && (
+                                  <p className="mt-2">
+                                    {pncpDebugLookup.found
+                                      ? `Encontrado nesta resposta: ${pncpDebugLookup.status === 'visible' ? 'visível' : pncpDebugLookup.status === 'pipeline' ? 'já no pipeline' : 'oculto'}`
+                                      : 'Não retornou da API nesta busca/página.'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="max-h-56 overflow-y-auto rounded-lg border border-border bg-card">
+                              <table className="w-full text-left text-[11px]">
+                                <thead className="sticky top-0 bg-cardAlt text-muted">
+                                  <tr>
+                                    <th className="px-2 py-1">Termo</th>
+                                    <th className="px-2 py-1">Fonte</th>
+                                    <th className="px-2 py-1">Pág.</th>
+                                    <th className="px-2 py-1">Coletados</th>
+                                    <th className="px-2 py-1">Total API</th>
+                                    <th className="px-2 py-1">Parada</th>
+                                    <th className="px-2 py-1">Erro</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(pncpSearchResults.query_plan.term_runs || []).map((run, index) => (
+                                    <tr key={`${run.term}-${index}`} className="border-t border-border">
+                                      <td className="px-2 py-1 font-medium text-ink">{run.term || 'vazio'}</td>
+                                      <td className="px-2 py-1 text-muted">{run.source}</td>
+                                      <td className="px-2 py-1 text-muted">{run.pages_completed}/{run.pages_requested}</td>
+                                      <td className="px-2 py-1 text-muted">{Number(run.items_collected || 0).toLocaleString('pt-BR')}</td>
+                                      <td className="px-2 py-1 text-muted">{Number(run.total_reported || 0).toLocaleString('pt-BR')}</td>
+                                      <td className="px-2 py-1 text-muted">{String(run.stop_reason || 'n/d').replace(/_/g, ' ')}</td>
+                                      <td className="px-2 py-1 text-status-danger">{Array.isArray(run.errors) && run.errors.length ? run.errors.join('; ') : '-'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -5963,11 +6795,25 @@ function App() {
 
                     {/* Resultados da busca PNCP */}
                     {visiblePncpResults.length > 0 && !showPncpHidden && (
-                      <div className="mt-4 space-y-2 max-h-96 overflow-y-auto pr-1 scrollbar-theme">
+                      <div className="mt-4 space-y-3 max-h-[34rem] overflow-y-auto pr-1 scrollbar-theme">
                         {visiblePncpResults.map((item) => (
                           <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 hover:bg-muted/10 transition-colors">
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 min-w-0">
+                                <div className="mb-2 flex flex-wrap items-center gap-2">
+                                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${getPncpScoreClass(item.score)}`}>
+                                    {Number(item.score || 0)} · {item.score_label || 'Aderência'}
+                                  </span>
+                                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
+                                    {item.prazo_info?.label || 'Prazo n/d'}
+                                  </span>
+                                  <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                                    {item.legal_stage?.label || 'Edital publicado'}
+                                  </span>
+                                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs text-muted dark:bg-gray-800">
+                                    {item.source === 'pncp_consulta' ? 'PNCP Consulta' : 'PNCP Search'}
+                                  </span>
+                                </div>
                                 <h4 className="font-semibold text-sm text-ink truncate">
                                   {item.url ? (
                                     <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
@@ -5980,6 +6826,11 @@ function App() {
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary">
                                     {item.modalidade?.nome || 'Modalidade n/d'}
                                   </span>
+                                  {item.criterio_julgamento && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-card border border-border text-muted">
+                                      {item.criterio_julgamento}
+                                    </span>
+                                  )}
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-muted">
                                     {item.esfera?.nome} | {item.uf}
                                   </span>
@@ -6004,6 +6855,15 @@ function App() {
                                   {Number(item.itens_pertinentes_count) > 0 ? ` | ${item.itens_pertinentes_count} item(ns) pertinente(s)` : ''}
                                   {item.total_itens ? ` | ${item.total_itens} item(ns)` : ''}
                                 </p>
+                                {Array.isArray(item.match_reasons) && item.match_reasons.length > 0 && (
+                                  <div className="mt-3 flex flex-wrap gap-1.5">
+                                    {item.match_reasons.map(reason => (
+                                      <span key={reason} className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted">
+                                        {reason}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex flex-col gap-2">
                                 <button
@@ -6122,12 +6982,13 @@ function App() {
                         <option value="suspenso">Suspenso</option>
                         <option value="cancelado">Cancelado</option>
                         <option value="fracassado">Fracassado</option>
-                        <option value="não_atendido">Não atendido</option>
+                        <option value="nao_atendido">Não atendido</option>
                         <option value="arquivado">Arquivado</option>
                       </select>
                       <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
                         <option value="direta">Origem direta</option>
                         <option value="automatica_api">Automática via API</option>
+                        <option value="pca_pncp">PCA PNCP</option>
                       </select>
                       <div className="space-y-1">
                         <input
@@ -6372,7 +7233,7 @@ function App() {
                                 <input className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs md:col-span-2" placeholder="Requisito técnico" value={reqForm.requisito || ''} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, requisito: event.target.value } }))} />
                                 <select className="h-7 rounded-lg border border-border bg-cardAlt px-2 text-xs" value={reqForm.status || 'verificar'} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, status: event.target.value } }))}>
                                   <option value="ok">OK</option>
-                                  <option value="não_ok">Não OK</option>
+                                  <option value="nao_ok">Não OK</option>
                                   <option value="verificar">Verificar</option>
                                 </select>
                                 <button type="button" className="h-7 rounded-lg border border-border px-2 text-xs font-semibold" onClick={() => addDraftItemRequirement(item.id)}>Adicionar requisito</button>
@@ -6523,7 +7384,7 @@ function App() {
               )}
 
               <div
-                className={`kanban-board-scroll mt-2 flex gap-4 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
+                className={`kanban-board-scroll mt-2 flex gap-2 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
                 ref={boardScrollRef}
                 onScroll={handleBoardScroll}
               >
@@ -6602,7 +7463,7 @@ function App() {
                             <option value="suspenso">Suspenso</option>
                             <option value="cancelado">Cancelado</option>
                             <option value="fracassado">Fracassado</option>
-                            <option value="não_atendido">Não atendido</option>
+                            <option value="nao_atendido">Não atendido</option>
                             <option value="arquivado">Arquivado</option>
                           </select>
                         </div>
@@ -6670,11 +7531,11 @@ function App() {
                         </div>
                         <div className="mt-3 space-y-2 max-h-64 overflow-y-auto pr-1 scrollbar-theme">
                           {selectedCommercialRequirements.map(requirement => (
-                            <div key={requirement.id} className={`rounded-xl border p-2 space-y-2 ${requirement.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : requirement.status === 'não_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`}>
+                            <div key={requirement.id} className={`rounded-xl border p-2 space-y-2 ${requirement.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : requirement.status === 'nao_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`}>
                               <div className="flex items-center gap-2">
                                 <div className="h-7 rounded-lg border border-border bg-cardAlt px-1 flex items-center gap-1">
                                   <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'ok' ? 'bg-status-success text-white' : 'text-muted hover:bg-status-success/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'ok' })} title="Concluído">OK</button>
-                                  <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'não_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'não_ok' })} title="Problema">X</button>
+                                  <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'nao_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'nao_ok' })} title="Problema">X</button>
                                   <button type="button" className={`h-5 w-7 rounded text-[10px] font-bold ${requirement.status === 'pendente' ? 'bg-status-warning text-white' : 'text-muted hover:bg-status-warning/10'}`} onClick={() => updateRequirement(requirement.id, { status: 'pendente' })} title="Pendente">?</button>
                                 </div>
                                 <input className="h-7 flex-1 rounded-lg border border-border bg-cardAlt px-2 text-xs" value={requirement.titulo} onChange={(event) => updateRequirement(requirement.id, { titulo: event.target.value })} />
@@ -6874,11 +7735,11 @@ function App() {
 
                                     <div className="space-y-1 max-h-48 overflow-y-auto pr-1 scrollbar-theme">
                                       {itemRequirements.map((req, index) => (
-                                        <div key={req.id} className={`rounded-lg border p-2 flex items-center gap-2 ${req.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : req.status === 'não_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`} onClick={(e) => e.stopPropagation()}>
+                                        <div key={req.id} className={`rounded-lg border p-2 flex items-center gap-2 ${req.status === 'ok' ? 'border-status-success/30 bg-status-success/5' : req.status === 'nao_ok' ? 'border-status-danger/30 bg-status-danger/5' : 'border-border bg-card'}`} onClick={(e) => e.stopPropagation()}>
                                           <span className="w-5 text-center text-[10px] font-semibold text-muted">{index + 1}</span>
                                           <div className="h-6 rounded border border-border bg-cardAlt px-0.5 flex items-center gap-0.5">
                                             <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'ok' ? 'bg-status-success text-white' : 'text-muted hover:bg-status-success/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'ok' })}>OK</button>
-                                            <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'não_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'não_ok' })}>X</button>
+                                            <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'nao_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'nao_ok' })}>X</button>
                                             <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning text-white' : 'text-muted hover:bg-status-warning/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'verificar' })}>?</button>
                                           </div>
                                           <input className="h-6 flex-1 rounded border border-border bg-cardAlt px-2 text-[11px]" value={req.requisito || ''} onChange={(event) => updateItemRequirement(item.id, req.id, { requisito: event.target.value })} />
@@ -7012,7 +7873,7 @@ function App() {
                                 <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs md:col-span-2" value={req.requisito || ''} onChange={(event) => updateItemRequirement(checklistModalItemId, req.id, { requisito: event.target.value })} />
                                 <div className="h-8 rounded-lg border border-border bg-card px-1 flex items-center gap-1">
                                   <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'ok' ? 'bg-status-success/15 text-status-success' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'ok' })}>OK</button>
-                                  <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'não_ok' ? 'bg-status-danger/15 text-status-danger' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'não_ok' })}>Não OK</button>
+                                  <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'nao_ok' ? 'bg-status-danger/15 text-status-danger' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'nao_ok' })}>Não OK</button>
                                   <button type="button" className={`flex-1 h-6 rounded text-[11px] font-semibold ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning/15 text-status-warning' : 'text-muted'}`} onClick={() => updateItemRequirement(checklistModalItemId, req.id, { status: 'verificar' })}>Verificar</button>
                                 </div>
                                 <input className="h-8 rounded-lg border border-border bg-card px-2 text-xs" placeholder="Observação" value={req.observacao || ''} onChange={(event) => updateItemRequirement(checklistModalItemId, req.id, { observacao: event.target.value })} />
@@ -7039,6 +7900,7 @@ function App() {
                 <PcaExplorer
                   onPromoted={() => loadLicitações()}
                   onSwitchToBoard={() => setLicitacaoSubview('board')}
+                  onSwitchToWatchlist={() => setLicitacaoSubview('sinais')}
                   onOpenOpportunity={async (opportunityId) => {
                     setLicitacaoSubview('board');
                     let target = licitaçãoOpportunities.find(item => String(item.id) === String(opportunityId));
@@ -7054,11 +7916,18 @@ function App() {
               )}
 
               {licitaçãoSubview === 'sinais' && (
-                <PcaSignalsPanel onPromoted={() => loadLicitações()} />
+                <PcaWatchlistPage onPromoted={() => loadLicitações()} />
               )}
 
-              {licitaçãoSubview === 'watchlists' && (
-                <PcaWatchlistsPanel />
+              {licitaçãoSubview === 'editais_watchlist' && (
+                <EditalWatchlistPage
+                  onImportSignal={async (item, signalId) => {
+                    await importPncpLicitacao(item);
+                    if (signalId) {
+                      await axios.put(`/api/licitacoes/editais/signals/${signalId}/status`, { status: 'visto' }).catch(() => {});
+                    }
+                  }}
+                />
               )}
             </>
           )}
