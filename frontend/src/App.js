@@ -6755,6 +6755,7 @@ function App() {
                                     <th className="px-2 py-1">Fonte</th>
                                     <th className="px-2 py-1">Pág.</th>
                                     <th className="px-2 py-1">Tam real</th>
+                                    <th className="px-2 py-1">Orçamento</th>
                                     <th className="px-2 py-1">Coletados</th>
                                     <th className="px-2 py-1">Total API</th>
                                     <th className="px-2 py-1">Parada</th>
@@ -6768,6 +6769,7 @@ function App() {
                                       <td className="px-2 py-1 text-muted">{run.source}</td>
                                       <td className="px-2 py-1 text-muted">{run.pages_completed}/{run.pages_requested}</td>
                                       <td className="px-2 py-1 text-muted">{run.observed_page_size || '-'}</td>
+                                      <td className="px-2 py-1 text-muted">{run.target_items || '-'} / {run.max_pages || '-'}</td>
                                       <td className="px-2 py-1 text-muted">{Number(run.items_collected || 0).toLocaleString('pt-BR')}</td>
                                       <td className="px-2 py-1 text-muted">{Number(run.total_reported || 0).toLocaleString('pt-BR')}</td>
                                       <td className="px-2 py-1 text-muted">{String(run.stop_reason || 'n/d').replace(/_/g, ' ')}</td>
@@ -7969,53 +7971,54 @@ function App() {
           {activeView === 'Overview' && (
             <div className="mt-6 space-y-12">
               <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <p className="text-xs text-muted">Total de leads (SDR)</p>
+                <div className={`${card} p-5`}>
+                  <p className={subtle}>Total de leads (SDR)</p>
                   <p className="text-2xl font-semibold mt-2">
                     {overviewData.summary?.leads_count ?? 0}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <p className="text-xs text-muted">Total de clientes (CS)</p>
+                <div className={`${card} p-5`}>
+                  <p className={subtle}>Total de clientes (CS)</p>
                   <p className="text-2xl font-semibold mt-2">
                     {overviewData.summary?.customers_count ?? 0}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <p className="text-xs text-muted">Oportunidade total</p>
+                <div className={`${card} p-5`}>
+                  <p className={subtle}>Oportunidade total</p>
                   <p className="text-2xl font-semibold mt-2">
                     {formatCurrency(overviewData.summary?.total_value) || 'R$ 0,00'}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <p className="text-xs text-muted">Oportunidade total (Licitações)</p>
+                <div className={`${card} p-5`}>
+                  <p className={subtle}>Oportunidade total (Licitações)</p>
                   <p className="text-2xl font-semibold mt-2">
                     {formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00'}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <p className="text-xs text-muted">Oportunidades licitatórias</p>
+                <div className={`${card} p-5`}>
+                  <p className={subtle}>Oportunidades licitatórias</p>
                   <p className="text-2xl font-semibold mt-2">
                     {overviewData.licitaçãoSummary?.opportunities_count ?? 0}
                   </p>
-                  <p className="mt-2 text-xs text-muted">
+                  <p className={`${subtle} mt-2`}>
                     Vencendo em 48h: {overviewData.licitaçãoSummary?.due_48h ?? 0} | Atrasadas: {overviewData.licitaçãoSummary?.overdue_count ?? 0}
                   </p>
                 </div>
               </div>
 
               {overviewLoading && (
-                <div className="text-sm text-muted">Carregando dados do overview...</div>
+                <div className={`${subtle} py-8 text-center`}>Carregando dados do overview...</div>
               )}
 
               {!overviewLoading && (
                 <div className="space-y-10">
                   <div className="grid gap-8 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-card p-5">
+                    <div className={`${card} p-5`}>
                       <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold">Quantidade por grupo</h3>
+                        <h3 className={sectionTitle}>Quantidade por grupo</h3>
                       </div>
                       <div className="h-64">
+                        {stageGroupData.length ? (
                         <ResponsiveBar
                           data={stageGroupData}
                           keys={['count']}
@@ -8046,11 +8049,17 @@ function App() {
                             </div>
                           )}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Oportunidade por grupo</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Oportunidade por grupo</h3>
                       <div className="h-64">
+                        {stageGroupData.length ? (
                         <ResponsiveBar
                           data={stageGroupData}
                           keys={['totalValue']}
@@ -8081,14 +8090,20 @@ function App() {
                             </div>
                           )}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid gap-8 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Leads por etiqueta</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Leads por etiqueta</h3>
                       <div className="h-64">
+                        {labelCountData.length ? (
                         <ResponsiveBar
                           data={labelCountData}
                           keys={['value']}
@@ -8096,17 +8111,23 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors={({ data }) => data.color || '#60a5fa'}
+                          colors={({ data }) => data.color || '#2563eb'}
                           enableLabel={false}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6 }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Oportunidade por etiqueta</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Oportunidade por etiqueta</h3>
                       <div className="h-64">
+                        {labelValueData.length ? (
                         <ResponsiveBar
                           data={labelValueData}
                           keys={['value']}
@@ -8114,21 +8135,27 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors={({ data }) => data.color || '#3b82f6'}
+                          colors={({ data }) => data.color || '#1d4ed8'}
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid gap-8 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Leads por estado</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Leads por estado</h3>
                       <div className="h-96">
+                        {stateCountData.length ? (
                         <ResponsiveBar
                           data={stateCountData}
                           keys={['value']}
@@ -8136,17 +8163,23 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 80 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#60a5fa"
+                          colors="#2563eb"
                           enableLabel={false}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Oportunidade por estado</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Oportunidade por estado</h3>
                       <div className="h-96">
+                        {stateValueData.length ? (
                         <ResponsiveBar
                           data={stateValueData}
                           keys={['value']}
@@ -8154,21 +8187,27 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 80 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#3b82f6"
+                          colors="#1d4ed8"
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid gap-8 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Leads por agente</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Leads por agente</h3>
                       <div className="h-96">
+                        {agentCountData.length ? (
                         <ResponsiveBar
                           data={agentCountData}
                           keys={['value']}
@@ -8176,17 +8215,23 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#60a5fa"
+                          colors="#2563eb"
                           enableLabel={false}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Oportunidade por agente</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Oportunidade por agente</h3>
                       <div className="h-96">
+                        {agentValueData.length ? (
                         <ResponsiveBar
                           data={agentValueData}
                           keys={['value']}
@@ -8194,21 +8239,27 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#3b82f6"
+                          colors="#1d4ed8"
                           enableLabel={false}
                           valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid gap-8 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Leads por canal</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Leads por canal</h3>
                       <div className="h-96">
+                        {channelCountData.length ? (
                         <ResponsiveBar
                           data={channelCountData}
                           keys={['value']}
@@ -8216,17 +8267,23 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#60a5fa"
+                          colors="#2563eb"
                           enableLabel={false}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="rounded-2xl border border-border bg-card p-5">
-                      <h3 className="text-sm font-semibold">Leads por tipo de cliente</h3>
+                    <div className={`${card} p-5`}>
+                      <h3 className={sectionTitle}>Leads por tipo de cliente</h3>
                       <div className="h-96">
+                        {customerTypeCountData.length ? (
                         <ResponsiveBar
                           data={customerTypeCountData}
                           keys={['value']}
@@ -8234,19 +8291,25 @@ function App() {
                           margin={{ top: 20, right: 20, bottom: 40, left: 160 }}
                           padding={0.3}
                           layout="horizontal"
-                          colors="#3b82f6"
+                          colors="#2563eb"
                           enableLabel={false}
                           axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                           axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
                           theme={chartTheme}
                         />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <span className={subtle}>Sem dados para exibir</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-border bg-card p-5">
-                    <h3 className="text-sm font-semibold">Oportunidade por probabilidade de fechamento</h3>
+                  <div className={`${card} p-5`}>
+                    <h3 className={sectionTitle}>Oportunidade por probabilidade de fechamento</h3>
                     <div className="h-96">
+                      {probabilityValueData.length ? (
                       <ResponsiveBar
                         data={probabilityValueData}
                         keys={['value']}
@@ -8254,7 +8317,7 @@ function App() {
                         margin={{ top: 20, right: 20, bottom: 40, left: 220 }}
                         padding={0.3}
                         layout="horizontal"
-                        colors="#2563eb"
+                        colors="#1d4ed8"
                         enableLabel={false}
                         axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
                         axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
@@ -8267,16 +8330,21 @@ function App() {
                           },
                         }}
                       />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <span className={subtle}>Sem dados para exibir</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-border bg-card p-5">
+                  <div className={`${card} p-5`}>
                     <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold">Evolução por quantidade (por grupo)</h3>
+                      <h3 className={sectionTitle}>Evolução por quantidade (por grupo)</h3>
                       <select
                         value={historyGranularity}
                         onChange={(event) => setHistoryGranularity(event.target.value)}
-                        className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                        className={select}
                       >
                         <option value="day">Diario</option>
                         <option value="week">Semanal</option>
@@ -8284,6 +8352,7 @@ function App() {
                       </select>
                     </div>
                     <div className="h-80">
+                      {historySeries.length ? (
                       <ResponsiveLine
                         data={historySeries}
                         margin={{ top: 20, right: 40, bottom: 70, left: 50 }}
@@ -8353,6 +8422,11 @@ function App() {
                         ]}
                         theme={chartTheme}
                       />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <span className={subtle}>Sem dados para exibir</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
