@@ -90,7 +90,25 @@
       "Bash(npx eslint *)",
       "Bash(curl -s \"https://pncp.gov.br/api/consulta/v1/pca/atualizacao?dataInicio=20260101&dataFim=20260105&pagina=1&tamanhoPagina=10\" -H \"Accept: application/json\")",
       "Read(//tmp/**)",
-      "Bash(break)"
+      "Bash(break)",
+      "Bash(command -v sshpass)",
+      "Bash(command -v ssh)",
+      "Bash(command -v plink)",
+      "Bash(SSHPASS='Hgcn2hpn##12' sshpass *)",
+      "Bash(printf '%s' 'Hgcn2hpn##12')",
+      "Bash(rm -f /tmp/sshpw.txt)",
+      "Bash(command -v psql)",
+      "Bash(rtk psql *)",
+      "Bash(command -v node)",
+      "Bash(nc -zv -w 5 195.35.40.49 5432)",
+      "Bash(rtk ls *)",
+      "Bash(node test_conn.js)",
+      "Bash(node test_query.js)",
+      "Bash(node explain.js)",
+      "Bash(node test2.js)",
+      "Bash(SSH_ASKPASS=__TRACKED_VAR__/askpass.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0 ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=15 root@195.35.40.49 'echo CONNECTED && hostname')",
+      "Bash(rtk wc *)",
+      "Bash(rtk git *)"
     ]
   }
 }
