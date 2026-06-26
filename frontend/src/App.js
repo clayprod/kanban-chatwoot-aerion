@@ -13,6 +13,16 @@ import { SortableContext, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ResponsiveBar } from '@nivo/bar';
 import { ResponsiveLine } from '@nivo/line';
+import {
+  btnPrimary,
+  btnSecondary,
+  input,
+  card,
+  modalOverlay,
+  modalPanel,
+  badge,
+  chip,
+} from './ui';
 import './App.css';
 
 // Configurar axios para enviar cookies em todas as requisições
@@ -1027,7 +1037,6 @@ const CardPreview = ({ contact }) => {
   }
   const customAttributes = contact.custom_attributes || {};
   const statusLabel = customAttributes.Origem || customAttributes.Canal || 'On Track';
-  const statusClass = 'bg-primary/10 text-primary';
   const secondaryName = contact.company_name ? contact.name : null;
   const cityLabel = contact.additional_attributes?.city || customAttributes.Cidade;
   const estadoLabel = customAttributes.Estado;
@@ -1037,7 +1046,7 @@ const CardPreview = ({ contact }) => {
   return (
     <div className="kanban-card is-overlay rounded-[14px] border border-border bg-card p-3.5 shadow-card">
       <div className="flex items-center justify-between">
-        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusClass}`}>
+        <span className={badge}>
           {statusLabel}
         </span>
       </div>
@@ -1088,7 +1097,6 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
   const opportunityValue = customAttributes.Valor_Oportunidade;
   const agentName = contact.agent_name;
 
-  const statusClass = 'bg-primary/10 text-primary';
   let priorityClass = 'bg-cardAlt text-muted border-border';
   const normalizedPriority = priorityLabel ? normalizeText(priorityLabel) : '';
   if (normalizedPriority) {
@@ -1204,7 +1212,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
       className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between">
-        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusClass}`}>
+        <span className={badge}>
           {statusLabel}
         </span>
         {showMenu && (
@@ -1305,12 +1313,12 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
           </span>
         )}
         {tipoClienteLabel && (
-          <span className="text-xs px-2.5 py-1 rounded-full bg-cardAlt border border-border text-muted max-w-full truncate">
+          <span className={chip}>
             {tipoClienteLabel}
           </span>
         )}
         {agentName && (
-          <span className="text-xs px-2.5 py-1 rounded-full bg-cardAlt border border-border text-muted max-w-full truncate">
+          <span className={chip}>
             Agente: {agentName}
           </span>
         )}
@@ -2039,7 +2047,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   return (
     <div className="mt-6 space-y-4">
       {/* SEARCH BAR — uma linha, sem ruído */}
-      <div className="rounded-2xl border border-border bg-card p-3">
+      <div className={`${card} p-3`}>
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="text"
@@ -2047,13 +2055,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             value={q}
             onChange={e => setQ(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && runSearch()}
-            className="h-10 flex-1 min-w-[260px] rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+            className={`${input} flex-1 min-w-[260px]`}
           />
           <button
             type="button"
             onClick={() => runSearch()}
             disabled={loading}
-            className="h-10 rounded-xl bg-primary text-white px-5 text-sm font-semibold disabled:opacity-50"
+            className={btnPrimary}
           >
             {loading ? 'Buscando...' : 'Buscar'}
           </button>
@@ -2064,7 +2072,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
           <button
             type="button"
             onClick={() => setShowFilters(v => !v)}
-            className={`h-10 rounded-xl border px-3 text-xs font-semibold ${showFilters || filtrosAtivos > 0 ? 'border-primary text-primary bg-primary/5' : 'border-border text-muted bg-card'}`}
+            className={`h-9 rounded-xl border px-3 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${showFilters || filtrosAtivos > 0 ? 'border-primary text-primary bg-primary/5' : 'border-border text-muted bg-card hover:bg-cardAlt'}`}
           >
             Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''} {showFilters ? '▴' : '▾'}
           </button>
@@ -2072,14 +2080,14 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             type="button"
             onClick={() => setSaveDialog(true)}
             disabled={!q.trim() && !positivos.length}
-            className="h-10 rounded-xl border border-border bg-card px-3 text-xs font-semibold text-ink disabled:opacity-50"
+            className={`${btnSecondary} text-xs`}
           >
             Salvar watchlist
           </button>
           <button
             type="button"
             onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()}
-            className="h-10 rounded-xl bg-primary px-3 text-xs font-semibold text-white"
+            className={`${btnPrimary} text-xs`}
           >
             Watchlist
           </button>
@@ -2141,17 +2149,17 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
         {/* FILTROS — colapsados por padrão */}
         {showFilters && (
           <div className="mt-3 pt-3 border-t border-border grid gap-2 md:grid-cols-3 lg:grid-cols-6">
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Ano PCA"
+            <input className={input} placeholder="Ano PCA"
               value={filtros.ano_pca} onChange={e => setFiltros({ ...filtros, ano_pca: e.target.value })} />
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Valor mín (R$)"
+            <input className={input} placeholder="Valor mín (R$)"
               value={filtros.valor_min} onChange={e => setFiltros({ ...filtros, valor_min: e.target.value })} />
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Valor máx (R$)"
+            <input className={input} placeholder="Valor máx (R$)"
               value={filtros.valor_max} onChange={e => setFiltros({ ...filtros, valor_max: e.target.value })} />
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Mês previsto (1-12)"
+            <input className={input} placeholder="Mês previsto (1-12)"
               value={filtros.mes_previsto} onChange={e => setFiltros({ ...filtros, mes_previsto: e.target.value })} />
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="CNPJ órgão"
+            <input className={input} placeholder="CNPJ órgão"
               value={filtros.orgao_cnpj} onChange={e => setFiltros({ ...filtros, orgao_cnpj: e.target.value })} />
-            <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="UASG (código unidade)"
+            <input className={input} placeholder="UASG (código unidade)"
               value={filtros.unidade_codigo} onChange={e => setFiltros({ ...filtros, unidade_codigo: e.target.value })} />
           </div>
         )}
@@ -2444,11 +2452,11 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       )}
 
       {saveDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-card rounded-2xl border border-border p-4 w-full max-w-md space-y-3">
+        <div className={modalOverlay}>
+          <div className={`${modalPanel} max-w-md space-y-3`}>
             <h3 className="text-base font-semibold text-ink">Salvar watchlist</h3>
             <input
-              className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+              className={`${input} w-full`}
               placeholder="Nome (ex: Drones / RPA)"
               value={saveName}
               onChange={e => setSaveName(e.target.value)}
@@ -2463,7 +2471,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             </label>
             {saveWhatsappEnabled && (
               <input
-                className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                className={`${input} w-full`}
                 placeholder="WhatsApp com DDD (ex: 48999999999)"
                 value={saveWhatsappNumber}
                 onChange={e => setSaveWhatsappNumber(e.target.value)}
@@ -2474,8 +2482,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               {negativos.length > 0 && <> · negativos: {negativos.slice(0, 4).join(', ')}{negativos.length > 4 ? '…' : ''}</>}
             </div>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setSaveDialog(false)} className="h-9 rounded-xl border border-border px-3 text-sm">Cancelar</button>
-              <button type="button" onClick={salvarWatchlist} className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold">Salvar</button>
+              <button type="button" onClick={() => setSaveDialog(false)} className={btnSecondary}>Cancelar</button>
+              <button type="button" onClick={salvarWatchlist} className={btnPrimary}>Salvar</button>
             </div>
           </div>
         </div>
@@ -4584,6 +4592,8 @@ function App() {
         },
       });
       setPncpSearchResults(response.data || { items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
+      setPncpResultScope('visible');
+      setShowPncpHidden(false);
     } catch (error) {
       console.error('Error searching PNCP:', error);
       setPncpSearchResults({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
@@ -6737,6 +6747,7 @@ function App() {
                                     <th className="px-2 py-1">Termo</th>
                                     <th className="px-2 py-1">Fonte</th>
                                     <th className="px-2 py-1">Pág.</th>
+                                    <th className="px-2 py-1">Tam real</th>
                                     <th className="px-2 py-1">Coletados</th>
                                     <th className="px-2 py-1">Total API</th>
                                     <th className="px-2 py-1">Parada</th>
@@ -6749,6 +6760,7 @@ function App() {
                                       <td className="px-2 py-1 font-medium text-ink">{run.term || 'vazio'}</td>
                                       <td className="px-2 py-1 text-muted">{run.source}</td>
                                       <td className="px-2 py-1 text-muted">{run.pages_completed}/{run.pages_requested}</td>
+                                      <td className="px-2 py-1 text-muted">{run.observed_page_size || '-'}</td>
                                       <td className="px-2 py-1 text-muted">{Number(run.items_collected || 0).toLocaleString('pt-BR')}</td>
                                       <td className="px-2 py-1 text-muted">{Number(run.total_reported || 0).toLocaleString('pt-BR')}</td>
                                       <td className="px-2 py-1 text-muted">{String(run.stop_reason || 'n/d').replace(/_/g, ' ')}</td>
@@ -6813,6 +6825,11 @@ function App() {
                                   <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs text-muted dark:bg-gray-800">
                                     {item.source === 'pncp_consulta' ? 'PNCP Consulta' : 'PNCP Search'}
                                   </span>
+                                  {item.__visibility !== 'visible' && (
+                                    <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                                      {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Oculto'}
+                                    </span>
+                                  )}
                                 </div>
                                 <h4 className="font-semibold text-sm text-ink truncate">
                                   {item.url ? (
@@ -6869,7 +6886,7 @@ function App() {
                                 <button
                                   type="button"
                                   onClick={() => importPncpLicitacao(item)}
-                                  disabled={pncpImportingId === item.id}
+                                  disabled={pncpImportingId === item.id || item.__visibility === 'pipeline'}
                                   className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary/90 disabled:opacity-60"
                                 >
                                   {pncpImportingId === item.id ? 'Importando...' : 'Importar'}
@@ -6884,13 +6901,23 @@ function App() {
                                     Ver no PNCP
                                   </a>
                                 )}
-                                <button
-                                  type="button"
-                                  onClick={() => hidePncpItem(item.id)}
-                                  className="h-8 px-3 rounded-lg border border-orange-300 text-orange-600 text-xs font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20"
-                                >
-                                  Ocultar
-                                </button>
+                                {item.__visibility === 'hidden' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => restorePncpItem(item.id)}
+                                    className="h-8 px-3 rounded-lg border border-orange-300 text-orange-600 text-xs font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                                  >
+                                    Restaurar
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => hidePncpItem(item.id)}
+                                    className="h-8 px-3 rounded-lg border border-orange-300 text-orange-600 text-xs font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                                  >
+                                    Ocultar
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
