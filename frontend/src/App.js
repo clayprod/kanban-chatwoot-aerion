@@ -14,6 +14,23 @@ import { CSS } from '@dnd-kit/utilities';
 import { ResponsiveBar } from '@nivo/bar';
 import { ResponsiveLine } from '@nivo/line';
 import {
+  Squares2X2Icon,
+  ViewColumnsIcon,
+  MagnifyingGlassIcon,
+  DocumentMagnifyingGlassIcon,
+  ClipboardDocumentListIcon,
+  BookOpenIcon,
+  ChatBubbleLeftRightIcon,
+  SunIcon,
+  MoonIcon,
+  UsersIcon,
+  CheckBadgeIcon,
+  BanknotesIcon,
+  DocumentTextIcon,
+  BuildingLibraryIcon,
+  ArrowRightOnRectangleIcon,
+} from '@heroicons/react/24/outline';
+import {
   btnPrimary,
   btnSecondary,
   btnGhost,
@@ -5925,40 +5942,41 @@ function App() {
       {authStatus.authenticated && (
         <div className="min-h-screen flex bg-surface text-ink">
           <aside className="hidden md:flex w-60 shrink-0 sticky top-0 h-screen flex-col bg-[#0b0d14] border-r border-[#1b1f2a] text-[#9aa3b2]">
-            <div className="flex items-center px-5 h-16 shrink-0 border-b border-[#1b1f2a]">
-              <img src="/logo_aerion.png" alt="Aerion" className="h-7 w-auto object-contain [filter:brightness(0)_invert(1)]" />
+            <div className="flex items-center px-6 h-[72px] shrink-0 border-b border-[#1b1f2a]">
+              <img src="/logo_aerion.png" alt="Aerion" className="h-10 w-auto object-contain [filter:brightness(0)_invert(1)]" />
             </div>
-            <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-4 space-y-5">
+            <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-5 space-y-6">
               {[
                 {
                   label: 'Vendas',
                   items: [
-                    { name: 'Overview', view: 'Overview', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M4 5.5h6v5H4v-5Zm0 8h6v5H4v-5Zm10-8h6v5h-6v-5Zm0 8h6v5h-6v-5Z" /> },
-                    { name: 'Board', view: 'Board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
-                    { name: 'Busca Lead B2B', view: 'Busca Lead B2B', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
+                    { name: 'Overview', view: 'Overview', icon: Squares2X2Icon },
+                    { name: 'Board', view: 'Board', icon: ViewColumnsIcon },
+                    { name: 'Busca Lead B2B', view: 'Busca Lead B2B', icon: MagnifyingGlassIcon },
                   ],
                 },
                 {
                   label: 'Licitações',
                   items: [
-                    { name: 'Board', view: 'Licitações', sub: 'board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
-                    { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
-                    { name: 'PCA', view: 'Licitações', sub: 'pca', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M9 7h6m-6 4h6m-6 4h4M6 3.5h12a1 1 0 0 1 1 1V20a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 20V4.5a1 1 0 0 1 1-1Z" /> },
+                    { name: 'Board', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon },
+                    { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: DocumentMagnifyingGlassIcon },
+                    { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ClipboardDocumentListIcon },
                   ],
                 },
                 {
                   label: 'Operação',
                   items: [
-                    { name: 'Processo', view: 'Processo', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h9l5 5v10a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5v-14a.5.5 0 0 1 .5-.5Zm9 0V9h5M8 13h8M8 16.5h5" /> },
+                    { name: 'Processo', view: 'Processo', icon: BookOpenIcon },
                   ],
                 },
               ].map(group => (
                 <div key={group.label} className="space-y-1">
-                  <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5b6273]">{group.label}</p>
+                  <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#5b6273]">{group.label}</p>
                   {group.items.map(item => {
                     const active = item.sub
                       ? activeView === item.view && (licitaçãoSubview === item.sub || (item.sub === 'editais' && licitaçãoSubview === 'editais_watchlist'))
                       : activeView === item.view && (item.view !== 'Licitações');
+                    const Icon = item.icon;
                     return (
                       <button
                         key={item.name}
@@ -5967,11 +5985,11 @@ function App() {
                           setActiveView(item.view);
                           if (item.sub) setLicitacaoSubview(item.sub);
                         }}
-                        className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active ? 'bg-white/10 text-white shadow-sm' : 'text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white'}`}
+                        className={`group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition ${active ? 'bg-white/[0.07] text-white' : 'text-[#8b93a4] hover:bg-white/[0.04] hover:text-white'}`}
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-white'}`}>{item.icon}</svg>
+                        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-primary" />}
+                        <Icon className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-[#cbd2dd]'}`} />
                         <span className="truncate">{item.name}</span>
-                        {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
                       </button>
                     );
                   })}
@@ -5979,15 +5997,15 @@ function App() {
               ))}
             </nav>
             <div className="shrink-0 border-t border-[#1b1f2a] p-3">
-              <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white transition">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-[18px] w-[18px] shrink-0"><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 17.5 4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H7.5Z" /></svg>
+              <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-[#8b93a4] hover:bg-white/[0.04] hover:text-white transition">
+                <ChatBubbleLeftRightIcon className="h-[18px] w-[18px] shrink-0" />
                 <span className="truncate">Chatwoot</span>
               </a>
             </div>
           </aside>
           <div className="flex-1 min-w-0 flex flex-col px-4 md:px-6 lg:px-8 pb-12">
             <header>
-              <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-border bg-surface/85 backdrop-blur supports-[backdrop-filter]:bg-surface/70">
+              <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-border bg-surface/90 dark:bg-[#0b0f1a]/85 backdrop-blur">
                 <div className="min-w-0 flex items-center gap-3">
                   <img src="/logo_aerion.png" alt="Aerion" className="logo-image md:hidden h-6 w-auto object-contain" />
                   <div className="min-w-0">
@@ -6010,16 +6028,15 @@ function App() {
                     className={`${iconBtn} border border-border bg-card`}
                     aria-label="Alternar tema"
                   >
-                    {isDarkMode ? (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="12" r="4.2" /><path strokeLinecap="round" d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M19.1 4.9l-1.6 1.6M6.5 17.5l-1.6 1.6" /></svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6"><path strokeLinecap="round" strokeLinejoin="round" d="M20 13.5A8 8 0 1 1 10.5 4a6.5 6.5 0 0 0 9.5 9.5Z" /></svg>
-                    )}
+                    {isDarkMode ? <SunIcon className="h-[18px] w-[18px]" /> : <MoonIcon className="h-[18px] w-[18px]" />}
                   </button>
                   {authStatus.email && (
                     <span className="hidden lg:inline text-xs text-muted max-w-[180px] truncate">{authStatus.email}</span>
                   )}
-                  <button type="button" onClick={handleLogout} className={`${btnSecondary} px-3`}>Sair</button>
+                  <button type="button" onClick={handleLogout} className={`${btnSecondary} px-3 gap-1.5`}>
+                    <ArrowRightOnRectangleIcon className="h-4 w-4" />
+                    <span className="hidden sm:inline">Sair</span>
+                  </button>
                 </div>
               </div>
 
@@ -7999,29 +8016,29 @@ function App() {
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                 {[
                   {
-                    label: 'Total de leads', bar: 'bg-primary', iconWrap: 'bg-primary/10 text-primary',
+                    label: 'Total de leads', iconWrap: 'bg-primary/10 text-primary',
                     value: overviewData.summary?.leads_count ?? 0,
-                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.7a3 3 0 0 0-6 0M15 11a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM6 18.7a3 3 0 0 1 5.4-1.8M7.5 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
+                    icon: UsersIcon,
                   },
                   {
-                    label: 'Total de clientes', bar: 'bg-status-success', iconWrap: 'bg-status-success/10 text-status-success',
+                    label: 'Total de clientes', iconWrap: 'bg-status-success/10 text-status-success',
                     value: overviewData.summary?.customers_count ?? 0,
-                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="m9 12.5 2 2 4-4.5M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
+                    icon: CheckBadgeIcon,
                   },
                   {
-                    label: 'Oportunidade total', bar: 'bg-secondary', iconWrap: 'bg-secondary/10 text-secondary',
+                    label: 'Oportunidade total', iconWrap: 'bg-secondary/10 text-secondary',
                     value: formatCurrency(overviewData.summary?.total_value) || 'R$ 0,00',
-                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m3-9.5C15 7 13.7 6 12 6S9 7 9 8.5 10.3 11 12 11s3 1 3 2.5S13.7 16 12 16s-3-1-3-2.5" />,
+                    icon: BanknotesIcon,
                   },
                   {
-                    label: 'Oportunidade licitações', bar: 'bg-status-warning', iconWrap: 'bg-status-warning/10 text-status-warning',
+                    label: 'Oportunidade licitações', iconWrap: 'bg-status-warning/10 text-status-warning',
                     value: formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00',
-                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M9 7h6m-6 4h6m-6 4h4M6 3.5h12a1 1 0 0 1 1 1V20a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 20V4.5a1 1 0 0 1 1-1Z" />,
+                    icon: DocumentTextIcon,
                   },
                   {
-                    label: 'Oportunidades licitatórias', bar: 'bg-status-info', iconWrap: 'bg-status-info/10 text-status-info',
+                    label: 'Oportunidades licitatórias', iconWrap: 'bg-status-info/10 text-status-info',
                     value: overviewData.licitaçãoSummary?.opportunities_count ?? 0,
-                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5 12 4l9 9.5M5.5 11.5V20h13v-8.5M9.5 20v-5h5v5" />,
+                    icon: BuildingLibraryIcon,
                     sub: (
                       <span className="flex items-center gap-3">
                         <span className="inline-flex items-center gap-1 text-status-warning"><span className="h-1.5 w-1.5 rounded-full bg-status-warning" />48h: {overviewData.licitaçãoSummary?.due_48h ?? 0}</span>
@@ -8029,18 +8046,21 @@ function App() {
                       </span>
                     ),
                   },
-                ].map((kpi, i) => (
+                ].map((kpi, i) => {
+                  const Icon = kpi.icon;
+                  return (
                   <div key={i} className={`${card} group p-5 transition hover:border-primary/30`}>
                     <div className="flex items-center gap-3">
                       <span className={`shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-full ${kpi.iconWrap}`}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-[18px] w-[18px]">{kpi.icon}</svg>
+                        <Icon className="h-[18px] w-[18px]" />
                       </span>
                       <p className={`${subtle} font-medium`}>{kpi.label}</p>
                     </div>
                     <p className="mt-4 text-[1.7rem] font-bold leading-tight text-ink dark:text-[#e5e7eb] truncate">{kpi.value}</p>
                     {kpi.sub && <div className={`${subtle} mt-2`}>{kpi.sub}</div>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {overviewLoading && (
