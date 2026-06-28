@@ -6011,14 +6011,14 @@ function App() {
                       placeholder="Buscar empresas, contatos, tags..."
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
-                      className="h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className={`${input} w-full pl-9 pr-3`}
                     />
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     <select
                       value={priorityFilter}
                       onChange={(event) => setPriorityFilter(event.target.value)}
-                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                      className={select}
                     >
                       <option value="all">Todas prioridades</option>
                       <option value="alta">Alta</option>
@@ -6029,7 +6029,7 @@ function App() {
                     <select
                       value={agentFilter}
                       onChange={(event) => setAgentFilter(event.target.value)}
-                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                      className={select}
                     >
                       <option value="all">Todos agentes</option>
                       {agentOptions.map(agent => (
@@ -6039,7 +6039,7 @@ function App() {
                     <select
                       value={labelFilter}
                       onChange={(event) => setLabelFilter(event.target.value)}
-                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                      className={select}
                     >
                       <option value="all">Todas etiquetas</option>
                       {labelOptions.map(label => (
@@ -6049,7 +6049,7 @@ function App() {
                     <select
                       value={sortOption}
                       onChange={(event) => setSortOption(event.target.value)}
-                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm text-ink"
+                      className={select}
                     >
                       <option value="name-asc">Nome (A-Z)</option>
                       <option value="name-desc">Nome (Z-A)</option>
@@ -6074,7 +6074,7 @@ function App() {
                       placeholder="Buscar órgão, UASG, edital, SEI..."
                       value={licitaçãoSearch}
                       onChange={(event) => setLicitacaoSearch(event.target.value)}
-                      className="h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className={`${input} w-full pl-9 pr-3`}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -6085,7 +6085,7 @@ function App() {
                         setNewOpportunityFormSubview(licitaçãoSubview);
                         setShowNewOpportunityForm(true);
                       }}
-                      className="h-9 rounded-xl border border-border bg-card px-3 text-sm font-semibold text-ink"
+                      className={btnSecondary}
                     >
                       Nova licitação
                     </button>
@@ -6132,14 +6132,14 @@ function App() {
                 <div className="inline-flex items-center rounded-full border border-border bg-card p-1">
                   <button
                     type="button"
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${activeTab === 'leads' ? 'bg-primary/10 text-primary' : 'text-muted'}`}
+                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'leads' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
                     onClick={() => setActiveTab('leads')}
                   >
                     Leads (SDR)
                   </button>
                   <button
                     type="button"
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${activeTab === 'customers' ? 'bg-secondary/10 text-secondary' : 'text-muted'}`}
+                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'customers' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
                     onClick={() => setActiveTab('customers')}
                   >
                     Novos Clientes (CS)
@@ -6245,10 +6245,10 @@ function App() {
                     key={opt.key}
                     type="button"
                     onClick={() => setLicitacaoSubview(opt.key)}
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full ${
+                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${
                       licitaçãoSubview === opt.key || (opt.key === 'editais' && licitaçãoSubview === 'editais_watchlist')
                         ? 'bg-primary/10 text-primary'
-                        : 'text-muted'
+                        : 'text-muted hover:text-ink'
                     }`}
                   >
                     {opt.label}
@@ -6302,7 +6302,7 @@ function App() {
                         value={pncpSearchFilters.q}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, q: event.target.value }))}
                         onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink md:col-span-2"
+                        className={`${input} md:col-span-2`}
                       />
                       <input
                         type="text"
@@ -6310,12 +6310,12 @@ function App() {
                         value={pncpSearchFilters.negative_terms}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))}
                         onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       />
                       <select
                         value={pncpSearchFilters.tipos_documento}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="edital">Editais</option>
                         <option value="ata">Atas de Registro</option>
@@ -6326,7 +6326,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.status}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="recebendo_proposta">Recebendo Proposta</option>
                         <option value="encerrada">Encerrada</option>
@@ -6336,7 +6336,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.modalidade_licitacao_id}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="">Todas Modalidades</option>
                         {modalidadeOptions.map(item => (
@@ -6347,7 +6347,7 @@ function App() {
                         type="button"
                         onClick={() => runPncpSearch(1)}
                         disabled={pncpSearchLoading}
-                        className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold disabled:opacity-50"
+                        className={btnPrimary}
                       >
                         {pncpSearchLoading ? 'Buscando...' : 'Buscar'}
                       </button>
@@ -6357,7 +6357,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.uf}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="">Todos os Estados</option>
                         <option value="AC">Acre</option>
@@ -6391,7 +6391,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.esfera_id}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, esfera_id: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="">Todas as Esferas</option>
                         <option value="F">Federal</option>
@@ -6401,7 +6401,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.tipo_id}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipo_id: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="">Todos os Tipos</option>
                         {tipoInstrumentoOptions.map(item => (
@@ -6411,7 +6411,7 @@ function App() {
                       <select
                         value={pncpSearchFilters.modo_disputa_id}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modo_disputa_id: event.target.value }))}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="">Todos os Modos</option>
                         {modoDisputaOptions.map(item => (
@@ -6431,7 +6431,7 @@ function App() {
                           }}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={pncpSearchFilters.orgao_cnpj}
                           onChange={(event) => {
                             const selected = pncpOrgaoOptions.find(item => String(item.cnpj || '') === String(event.target.value));
@@ -6465,7 +6465,7 @@ function App() {
                           }}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={pncpSearchFilters.unidade_codigo}
                           onChange={(event) => {
                             const selected = pncpUasgOptions.find(item => String(item.codigo || '') === String(event.target.value));
@@ -6496,7 +6496,7 @@ function App() {
                             runPncpSearch(1, { ordenacao });
                           }
                         }}
-                        className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm text-ink"
+                        className={input}
                       >
                         <option value="relevancia_desc">Maior aderência</option>
                         <option value="valor_desc_data_desc">Maior valor (mais recente)</option>
@@ -6961,12 +6961,12 @@ function App() {
 
                     {/* Mensagem quando não há resultados */}
                     {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total === 0 && (
-                      <div className="mt-4 text-center text-sm text-muted py-8">
+                      <div className={`mt-4 text-center ${subtle} py-8`}>
                         Use os filtros acima e clique em "Buscar" para encontrar licitações no PNCP.
                       </div>
                     )}
                     {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total > 0 && (
-                      <div className="mt-4 text-center text-sm text-muted py-8">
+                      <div className={`mt-4 text-center ${subtle} py-8`}>
                         Todos os resultados desta página já estão no pipeline ou foram ocultados.
                       </div>
                     )}
@@ -6977,8 +6977,8 @@ function App() {
               )}
 
               {showNewOpportunityForm && newOpportunityFormSubview === licitaçãoSubview && (
-                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-                  <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5">
+                <div className="fixed inset-0 z-modal bg-black/50 flex items-center justify-center p-4">
+                  <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5 shadow-lift dark:bg-[#111827] dark:border-[#1f2937]">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-lg font-semibold">Nova licitação</h3>
                       <button
@@ -7007,11 +7007,11 @@ function App() {
                     </div>
 
                     <div className="mt-4 grid gap-3 md:grid-cols-4">
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Título da oportunidade" value={newOpportunityForm.titulo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, titulo: event.target.value }))} />
-                      <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.fase} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, fase: event.target.value }))}>
+                      <input className={input} placeholder="Título da oportunidade" value={newOpportunityForm.titulo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, titulo: event.target.value }))} />
+                      <select className={input} value={newOpportunityForm.fase} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, fase: event.target.value }))}>
                         {licitaçãoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                       </select>
-                      <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
+                      <select className={input} value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
                         <option value="ativo">Ativo</option>
                         <option value="ganho">Ganho</option>
                         <option value="perdido">Perdido</option>
@@ -7021,7 +7021,7 @@ function App() {
                         <option value="nao_atendido">Não atendido</option>
                         <option value="arquivado">Arquivado</option>
                       </select>
-                      <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
+                      <select className={input} value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
                         <option value="direta">Origem direta</option>
                         <option value="automatica_api">Automática via API</option>
                         <option value="pca_pncp">PCA PNCP</option>
@@ -7038,7 +7038,7 @@ function App() {
                           }}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={newOpportunityForm.orgao_cnpj}
                           onChange={(event) => {
                             const selected = orgaoOptions.find(item => String(item.cnpj || '') === String(event.target.value));
@@ -7061,7 +7061,7 @@ function App() {
                           ))}
                         </select>
                       </div>
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="CNPJ do órgão" value={newOpportunityForm.orgao_cnpj || ''} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, orgao_cnpj: event.target.value, uasg_codigo: '', uasg_nome: '' }))} />
+                      <input className={input} placeholder="CNPJ do órgão" value={newOpportunityForm.orgao_cnpj || ''} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, orgao_cnpj: event.target.value, uasg_codigo: '', uasg_nome: '' }))} />
                       <div className="space-y-1">
                         <input
                           className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs"
@@ -7070,7 +7070,7 @@ function App() {
                           onChange={(event) => setUasgLookupQuery(event.target.value)}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={newOpportunityForm.uasg_codigo}
                           onChange={(event) => {
                             const selected = uasgOptions.find(item => String(item.codigo || '') === String(event.target.value));
@@ -7100,7 +7100,7 @@ function App() {
                           })}
                         </select>
                       </div>
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Nome da UASG" value={newOpportunityForm.uasg_nome} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, uasg_nome: event.target.value }))} />
+                      <input className={input} placeholder="Nome da UASG" value={newOpportunityForm.uasg_nome} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, uasg_nome: event.target.value }))} />
                       <div className="space-y-1">
                         <input
                           className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs"
@@ -7109,7 +7109,7 @@ function App() {
                           onChange={(event) => setModalidadeLookupQuery(event.target.value)}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={newOpportunityForm.modalidade}
                           onChange={(event) => {
                             setNewOpportunityForm(prev => ({ ...prev, modalidade: event.target.value }));
@@ -7122,10 +7122,10 @@ function App() {
                           ))}
                         </select>
                       </div>
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Número do edital" value={newOpportunityForm.numero_edital} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_edital: event.target.value }))} />
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Número do processo SEI" value={newOpportunityForm.numero_processo_sei} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_processo_sei: event.target.value }))} />
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Número da compra" value={newOpportunityForm.numero_compra} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_compra: event.target.value }))} />
-                      <select className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" value={newOpportunityForm.item_tipo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, item_tipo: event.target.value }))}>
+                      <input className={input} placeholder="Número do edital" value={newOpportunityForm.numero_edital} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_edital: event.target.value }))} />
+                      <input className={input} placeholder="Número do processo SEI" value={newOpportunityForm.numero_processo_sei} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_processo_sei: event.target.value }))} />
+                      <input className={input} placeholder="Número da compra" value={newOpportunityForm.numero_compra} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, numero_compra: event.target.value }))} />
+                      <select className={input} value={newOpportunityForm.item_tipo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, item_tipo: event.target.value }))}>
                         <option value="material">Material</option>
                         <option value="servico">Serviço</option>
                       </select>
@@ -7137,7 +7137,7 @@ function App() {
                           onChange={(event) => setCatalogoLookupQuery(event.target.value)}
                         />
                         <select
-                          className="h-9 w-full rounded-xl border border-border bg-cardAlt px-3 text-sm"
+                          className={`${select} w-full`}
                           value={newOpportunityForm.codigo_item_catalogo}
                           onChange={(event) => {
                             const selected = catalogOptions.find(option => String(option.codigo) === String(event.target.value));
@@ -7153,8 +7153,8 @@ function App() {
                           ))}
                         </select>
                       </div>
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Palavras-chave (separadas por vírgula)" value={newOpportunityForm.palavras_chave} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, palavras_chave: event.target.value }))} />
-                      <input className="h-9 rounded-xl border border-border bg-cardAlt px-3 text-sm" placeholder="Valor da oportunidade" inputMode="decimal" value={newOpportunityForm.valor_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, valor_oportunidade: event.target.value.replace(/\./g, ',') }))} />
+                      <input className={input} placeholder="Palavras-chave (separadas por vírgula)" value={newOpportunityForm.palavras_chave} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, palavras_chave: event.target.value }))} />
+                      <input className={input} placeholder="Valor da oportunidade" inputMode="decimal" value={newOpportunityForm.valor_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, valor_oportunidade: event.target.value.replace(/\./g, ',') }))} />
                     </div>
                     <div className="mt-4 rounded-xl border border-border bg-cardAlt p-4">
                       <h4 className="text-xs font-semibold text-muted mb-3">Datas Importantes</h4>
@@ -7391,14 +7391,14 @@ function App() {
                           setExpandedDraftChecklist({});
                           setChecklistModalItemId(null);
                         }}
-                        className="h-9 rounded-xl border border-border bg-card px-4 text-sm font-semibold text-ink"
+                        className={btnSecondary}
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
                         onClick={createOpportunity}
-                        className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold"
+                        className={btnPrimary}
                       >
                         Salvar licitação
                       </button>
@@ -7410,7 +7410,7 @@ function App() {
               {licitaçãoSubview === 'board' && (
               <>
               {licitaçãoLoading && (
-                <div className="mt-4 text-sm text-muted">Carregando licitações...</div>
+                <div className={`mt-4 ${subtle}`}>Carregando licitações...</div>
               )}
 
               {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
@@ -7436,8 +7436,8 @@ function App() {
               </div>
 
               {selectedOpportunity && (
-                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-                  <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5">
+                <div className="fixed inset-0 z-modal bg-black/50 flex items-center justify-center p-4">
+                  <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-5 shadow-lift dark:bg-[#111827] dark:border-[#1f2937]">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-lg font-semibold">{selectedOpportunity.titulo}</h3>
                       <div className="flex items-center gap-2">
@@ -7850,8 +7850,8 @@ function App() {
                     </div>
 
                     {false && checklistModalItemId && (
-                      <div className="fixed inset-0 z-[60] bg-black/45 flex items-center justify-center p-4">
-                        <div className="w-full max-w-3xl max-h-[88vh] overflow-y-auto rounded-2xl border border-border bg-card p-4">
+                      <div className="fixed inset-0 z-modal bg-black/50 flex items-center justify-center p-4">
+                        <div className="w-full max-w-3xl max-h-[88vh] overflow-y-auto rounded-2xl border border-border bg-card p-4 shadow-lift dark:bg-[#111827] dark:border-[#1f2937]">
                           <div className="flex items-center justify-between gap-2">
                             <h4 className="text-sm font-semibold">
                               Checklist técnico - Item {selectedItems.find(item => item.id === checklistModalItemId)?.numero_item || '-'}
