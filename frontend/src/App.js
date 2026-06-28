@@ -5923,78 +5923,83 @@ function App() {
       )}
 
       {authStatus.authenticated && (
-        <div className="min-h-screen bg-surface text-ink relative overflow-hidden">
-          <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
-          <div className="pointer-events-none absolute top-16 right-12 h-64 w-64 rounded-full bg-secondary/10 blur-3xl" />
-          <div className="max-w-7xl mx-auto px-4 md:px-5 lg:px-6 pb-12">
-            <header className="pt-8">
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {authStatus.email && (
-                  <span className="text-xs text-muted">{authStatus.email}</span>
-                )}
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
-                >
-                  Sair
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsDarkMode(prev => !prev)}
-                  className="inline-flex items-center gap-3 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-ink shadow-card"
-                  aria-label="Alternar tema"
-                >
-                  <span>{isDarkMode ? 'Modo escuro' : 'Modo claro'}</span>
-                  <span className="relative h-4 w-8 rounded-full bg-cardAlt border border-border">
-                    <span
-                      className={`absolute top-0.5 h-3 w-3 rounded-full bg-primary transition ${isDarkMode ? 'left-4' : 'left-0.5'}`}
-                    />
+        <div className="min-h-screen flex bg-surface text-ink">
+          <aside className="hidden md:flex w-60 shrink-0 sticky top-0 h-screen flex-col bg-[#0b0d14] border-r border-[#1b1f2a] text-[#9aa3b2]">
+            <div className="flex items-center gap-2.5 px-5 h-16 shrink-0 border-b border-[#1b1f2a]">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/95 p-1.5">
+                <img src="/logo_aerion.png" alt="Aerion" className="h-full w-full object-contain" />
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight text-white">Aerion</span>
+            </div>
+            <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-4 space-y-1">
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5b6273]">Funil</p>
+              {[
+                { name: 'Overview', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M4 5.5h6v5H4v-5Zm0 8h6v5H4v-5Zm10-8h6v5h-6v-5Zm0 8h6v5h-6v-5Z" /> },
+                { name: 'Board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
+                { name: 'Busca Lead B2B', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
+                { name: 'Licitações', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8M8 11h8M8 15h5M6 3.5h12a1 1 0 0 1 1 1v15a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 19.5v-15a1 1 0 0 1 1-1Z" /> },
+                { name: 'Processo', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h9l5 5v10a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5v-14a.5.5 0 0 1 .5-.5Zm9 0V9h5M8 13h8M8 16.5h5" /> },
+              ].map(item => {
+                const active = activeView === item.name;
+                return (
+                  <button
+                    key={item.name}
+                    type="button"
+                    onClick={() => setActiveView(item.name)}
+                    className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active ? 'bg-white/10 text-white shadow-sm' : 'text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white'}`}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-white'}`}>{item.icon}</svg>
+                    <span className="truncate">{item.name}</span>
+                    {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="shrink-0 border-t border-[#1b1f2a] p-3">
+              <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white transition">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-[18px] w-[18px] shrink-0"><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 17.5 4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H7.5Z" /></svg>
+                <span className="truncate">Chatwoot</span>
+              </a>
+            </div>
+          </aside>
+          <div className="flex-1 min-w-0 flex flex-col px-4 md:px-6 lg:px-8 pb-12">
+            <header>
+              <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-border bg-surface/85 backdrop-blur supports-[backdrop-filter]:bg-surface/70">
+                <div className="min-w-0 flex items-center gap-3">
+                  <span className="md:hidden inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#0b0d14] p-1.5">
+                    <img src="/logo_aerion.png" alt="Aerion" className="h-full w-full object-contain" />
                   </span>
-                </button>
-              </div>
-              <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-                <div>
-                  <div className="flex items-center gap-4">
-                    <div className="logo-wrap h-14 w-16 rounded-2xl border border-border bg-card flex items-center justify-center overflow-hidden p-2">
-                      <img
-                        src="/logo_aerion.png"
-                        alt="Aerion"
-                        className="logo-image h-full w-full object-contain"
-                      />
-                    </div>
-                    <div>
-                      <h1 className="text-3xl md:text-4xl font-semibold">Funil de Vendas - Aerion</h1>
-                      <p className="text-sm text-muted mt-2">
-                        Etapas de leads e clientes no funil de vendas da Aerion Technologies Ltda.
-                        {' '}
-                        Alimentado pelo{' '}
-                        <a
-                          href="https://chatwoot.tenryu.com.br/app/accounts/2"
-                          className="text-primary font-semibold hover:underline"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          chatwoot
-                        </a>
-                        .
-                      </p>
-                    </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted leading-none">Funil de Vendas · Aerion</p>
+                    <h1 className="text-lg font-semibold leading-tight truncate mt-1">{activeView}</h1>
                   </div>
                 </div>
-              </div>
-
-              <div className="mt-8 border-b border-border flex items-center gap-6 text-sm">
-                {viewTabs.map(tab => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveView(tab)}
-                    className={`pb-3 transition ${tab === activeView ? 'text-primary border-b-2 border-primary font-semibold' : 'text-muted hover:text-secondary'}`}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={activeView}
+                    onChange={(event) => setActiveView(event.target.value)}
+                    className={`${select} md:hidden`}
+                    aria-label="Trocar de tela"
                   >
-                    {tab}
+                    {viewTabs.map(tab => <option key={tab} value={tab}>{tab}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(prev => !prev)}
+                    className={`${iconBtn} border border-border bg-card`}
+                    aria-label="Alternar tema"
+                  >
+                    {isDarkMode ? (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="12" r="4.2" /><path strokeLinecap="round" d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M19.1 4.9l-1.6 1.6M6.5 17.5l-1.6 1.6" /></svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6"><path strokeLinecap="round" strokeLinejoin="round" d="M20 13.5A8 8 0 1 1 10.5 4a6.5 6.5 0 0 0 9.5 9.5Z" /></svg>
+                    )}
                   </button>
-                ))}
+                  {authStatus.email && (
+                    <span className="hidden lg:inline text-xs text-muted max-w-[180px] truncate">{authStatus.email}</span>
+                  )}
+                  <button type="button" onClick={handleLogout} className={`${btnSecondary} px-3`}>Sair</button>
+                </div>
               </div>
 
               {activeView === 'Board' && (
@@ -8004,18 +8009,15 @@ function App() {
                     ),
                   },
                 ].map((kpi, i) => (
-                  <div key={i} className={`${card} group relative overflow-hidden p-5 transition hover:shadow-lift`}>
-                    <span className={`pointer-events-none absolute inset-x-0 top-0 h-1 ${kpi.bar}`} />
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className={`${subtle} font-medium uppercase tracking-wide`}>{kpi.label}</p>
-                        <p className="mt-2 text-[1.75rem] font-bold leading-tight text-ink dark:text-[#e5e7eb] truncate">{kpi.value}</p>
-                      </div>
-                      <span className={`shrink-0 inline-flex h-11 w-11 items-center justify-center rounded-xl ${kpi.iconWrap} transition group-hover:scale-105`}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-5 w-5">{kpi.icon}</svg>
+                  <div key={i} className={`${card} group p-5 transition hover:border-primary/30`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-full ${kpi.iconWrap}`}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-[18px] w-[18px]">{kpi.icon}</svg>
                       </span>
+                      <p className={`${subtle} font-medium`}>{kpi.label}</p>
                     </div>
-                    {kpi.sub && <div className={`${subtle} mt-3`}>{kpi.sub}</div>}
+                    <p className="mt-4 text-[1.7rem] font-bold leading-tight text-ink dark:text-[#e5e7eb] truncate">{kpi.value}</p>
+                    {kpi.sub && <div className={`${subtle} mt-2`}>{kpi.sub}</div>}
                   </div>
                 ))}
               </div>
