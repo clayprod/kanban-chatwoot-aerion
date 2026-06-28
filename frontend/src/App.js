@@ -8865,8 +8865,8 @@ function App() {
 
                 {/* ── Dialog confirmação de Atualizar (zero-downtime) ─────────── */}
                 {rfbUpdateConfirm && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbUpdateConfirm(false)}>
-                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                  <div className={modalOverlay} onClick={() => setRfbUpdateConfirm(false)}>
+                    <div className={`${modalPanel} flex flex-col gap-4`} onClick={e => e.stopPropagation()}>
                       <div>
                         <p className="font-semibold text-ink text-base">Atualizar base da Receita Federal</p>
                         <p className="text-sm text-muted mt-1">Baixa os arquivos novos ou alterados desde o último import e atualiza a base sem derrubar as buscas.</p>
@@ -8888,7 +8888,7 @@ function App() {
                         <button
                           autoFocus
                           onClick={() => setRfbUpdateConfirm(false)}
-                          className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
+                          className={btnSecondary}
                         >
                           Cancelar
                         </button>
@@ -8911,8 +8911,8 @@ function App() {
 
                 {/* ── Dialog opções avançadas (··· botão) ────────────────────── */}
                 {rfbReimportConfirm && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbReimportConfirm(false)}>
-                    <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-md p-6 flex flex-col gap-5" onClick={e => e.stopPropagation()}>
+                  <div className={modalOverlay} onClick={() => setRfbReimportConfirm(false)}>
+                    <div className={`${modalPanel} flex flex-col gap-5`} onClick={e => e.stopPropagation()}>
                       <p className="font-semibold text-ink text-base">Opções avançadas de importação</p>
 
                       {/* Gap-fill */}
@@ -8964,7 +8964,7 @@ function App() {
                         <button
                           autoFocus
                           onClick={() => setRfbReimportConfirm(false)}
-                          className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink transition"
+                          className={btnSecondary}
                         >
                           Cancelar
                         </button>
@@ -8987,8 +8987,8 @@ function App() {
                     { key: 'real', label: 'Lucro Real' },
                   ];
                   return (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setRfbImportDialog(null)}>
-                      <div className="bg-card rounded-2xl border border-border shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4 overflow-y-auto max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                    <div className={modalOverlay} onClick={() => setRfbImportDialog(null)}>
+                      <div className={`${modalPanel} flex flex-col gap-4 overflow-y-auto max-h-[90vh]`} onClick={e => e.stopPropagation()}>
                         {/* Header */}
                         <div>
                           <p className="text-xs text-muted uppercase tracking-wide mb-0.5">{isDup ? 'Atualizar contato' : 'Importar para o Chatwoot'}</p>
@@ -9002,7 +9002,7 @@ function App() {
                           <label className="block text-xs font-medium text-muted mb-1.5">Sócio (contato principal)</label>
                           <input
                             type="text"
-                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${input} w-full`}
                             placeholder="Nome do sócio-administrador"
                             value={rfbImportDialogSocio}
                             onChange={e => setRfbImportDialogSocio(e.target.value)}
@@ -9014,7 +9014,7 @@ function App() {
                           <label className="block text-xs font-medium text-muted mb-1.5">Telefone</label>
                           <input
                             type="text"
-                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${input} w-full`}
                             placeholder="+5511..."
                             value={rfbImportDialogTel1}
                             onChange={e => setRfbImportDialogTel1(e.target.value)}
@@ -9026,7 +9026,7 @@ function App() {
                           <label className="block text-xs font-medium text-muted mb-1.5">E-mail</label>
                           <input
                             type="email"
-                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${input} w-full`}
                             placeholder="contato@empresa.com.br"
                             value={rfbImportDialogEmail}
                             onChange={e => setRfbImportDialogEmail(e.target.value)}
@@ -9055,7 +9055,7 @@ function App() {
                         <div>
                           <label className="block text-xs font-medium text-muted mb-1.5">Estágio no Chatwoot</label>
                           <select
-                            className="w-full rounded-lg border border-border bg-cardAlt px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${select} w-full`}
                             value={rfbImportDialogStage}
                             onChange={e => setRfbImportDialogStage(e.target.value)}
                           >
@@ -9089,13 +9089,13 @@ function App() {
                         <div className="flex gap-2 justify-end pt-2 border-t border-border">
                           <button
                             onClick={() => setRfbImportDialog(null)}
-                            className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-ink hover:border-primary/40 transition"
+                            className={btnSecondary}
                           >
                             Cancelar
                           </button>
                           <button
                             onClick={() => handleRfbImport(row, { stage: rfbImportDialogStage, labels: rfbImportDialogLabels })}
-                            className={`px-4 py-2 rounded-lg text-sm font-semibold text-white transition ${isDup ? 'bg-status-warning hover:bg-status-warning/90' : 'bg-primary hover:bg-primary/90'}`}
+                            className={`${btnPrimary} ${isDup ? '!bg-status-warning hover:!bg-status-warning/90' : ''}`}
                           >
                             {isDup ? 'Atualizar' : 'Importar'}
                           </button>
@@ -9672,7 +9672,7 @@ function App() {
                         </span>
                         <div className="ml-auto flex items-center gap-2">
                           <select
-                            className="rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${select} text-xs`}
                             value={rfbOrderBy}
                             onChange={e => { const v = e.target.value; setRfbOrderBy(v); handleRfbSearch(1, null, v); }}
                           >
@@ -9686,7 +9686,7 @@ function App() {
                             <option value="abertura_asc">Mais antigas</option>
                           </select>
                           <select
-                            className="rounded-lg border border-border bg-cardAlt px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-primary/40"
+                            className={`${select} text-xs`}
                             value={rfbPageSize}
                             onChange={e => { const n = Number(e.target.value); setRfbPageSize(n); handleRfbSearch(1, n); }}
                           >
@@ -9737,8 +9737,8 @@ function App() {
                                 {row.natureza_juridica_descricao && <p className="text-muted">Natureza: <span className="font-mono">{row.natureza_juridica}</span> — {row.natureza_juridica_descricao}</p>}
                                 {row.data_de_inicio_da_atividade && <p className="text-muted">Abertura: {fmtDate(row.data_de_inicio_da_atividade)}{calcAge(row.data_de_inicio_da_atividade) ? ` · ${calcAge(row.data_de_inicio_da_atividade)}` : ''}</p>}
                                 <div className="flex gap-2 mt-1.5 flex-wrap">
-                                  {row.opcao_pelo_mei === 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">MEI</span>}
-                                  {row.opcao_pelo_simples === 'S' && row.opcao_pelo_mei !== 'S' && <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-primary">Simples</span>}
+                                  {row.opcao_pelo_mei === 'S' && <span className={badge}>MEI</span>}
+                                  {row.opcao_pelo_simples === 'S' && row.opcao_pelo_mei !== 'S' && <span className={badge}>Simples</span>}
                                 </div>
                               </div>
                               {row.cnae_fiscal_principal && (
@@ -9874,7 +9874,7 @@ function App() {
                               </div>
                             );
                             return (
-                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 transition-colors ${isExp ? 'bg-primary/8 border-l-[3px] border-l-primary' : ''}`}>
+                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 transition-colors ${isExp ? 'bg-primary/8 border-l-[3px] border-l-primary' : 'hover:bg-cardAlt'}`}>
                                 {/* Mobile card row */}
                                 <div className="lg:hidden px-4 py-3 flex items-start gap-3">
                                   <div className="flex-1 min-w-0" onClick={toggleExpand}>
@@ -9893,7 +9893,7 @@ function App() {
                                         {situacaoLabel(row.situacao_cadastral)}
                                       </span>
                                       {row.filiais_count > 0 && (
-                                        <span className="text-xs px-1.5 py-0.5 rounded-full border border-border bg-cardAlt text-muted">
+                                        <span className={chip}>
                                           {row.filiais_count} filial{row.filiais_count !== 1 ? 'is' : ''}
                                         </span>
                                       )}
@@ -9907,7 +9907,7 @@ function App() {
                                   <div className="min-w-0">
                                     <span className="font-mono text-xs text-muted">{fmtCNPJ(row.cnpj)}</span>
                                     {row.filiais_count > 0 && (
-                                      <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full border border-border bg-cardAlt text-muted">+{row.filiais_count}</span>
+                                      <span className={`${chip} ml-1.5`}>+{row.filiais_count}</span>
                                     )}
                                   </div>
                                   <div className="min-w-0">
@@ -9937,7 +9937,7 @@ function App() {
 
                     {/* Empty state */}
                     {!rfbLoading && rfbResults.length === 0 && rfbTotal === 0 && !rfbError && (
-                      <div className="text-center py-16 text-muted text-sm">
+                      <div className={`text-center py-16 ${subtle}`}>
                         {(Object.values(rfbFilters).some(v => v) || rfbEndereco || rfbSimples || rfbMei) ? 'Nenhum resultado encontrado. Tente outros filtros.' : 'Use os filtros para buscar empresas.'}
                       </div>
                     )}
