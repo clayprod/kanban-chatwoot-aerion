@@ -7970,40 +7970,54 @@ function App() {
 
           {activeView === 'Overview' && (
             <div className="mt-6 space-y-12">
-              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                <div className={`${card} p-5`}>
-                  <p className={subtle}>Total de leads (SDR)</p>
-                  <p className="text-2xl font-semibold mt-2">
-                    {overviewData.summary?.leads_count ?? 0}
-                  </p>
-                </div>
-                <div className={`${card} p-5`}>
-                  <p className={subtle}>Total de clientes (CS)</p>
-                  <p className="text-2xl font-semibold mt-2">
-                    {overviewData.summary?.customers_count ?? 0}
-                  </p>
-                </div>
-                <div className={`${card} p-5`}>
-                  <p className={subtle}>Oportunidade total</p>
-                  <p className="text-2xl font-semibold mt-2">
-                    {formatCurrency(overviewData.summary?.total_value) || 'R$ 0,00'}
-                  </p>
-                </div>
-                <div className={`${card} p-5`}>
-                  <p className={subtle}>Oportunidade total (Licitações)</p>
-                  <p className="text-2xl font-semibold mt-2">
-                    {formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00'}
-                  </p>
-                </div>
-                <div className={`${card} p-5`}>
-                  <p className={subtle}>Oportunidades licitatórias</p>
-                  <p className="text-2xl font-semibold mt-2">
-                    {overviewData.licitaçãoSummary?.opportunities_count ?? 0}
-                  </p>
-                  <p className={`${subtle} mt-2`}>
-                    Vencendo em 48h: {overviewData.licitaçãoSummary?.due_48h ?? 0} | Atrasadas: {overviewData.licitaçãoSummary?.overdue_count ?? 0}
-                  </p>
-                </div>
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {[
+                  {
+                    label: 'Total de leads', bar: 'bg-primary', iconWrap: 'bg-primary/10 text-primary',
+                    value: overviewData.summary?.leads_count ?? 0,
+                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.7a3 3 0 0 0-6 0M15 11a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM6 18.7a3 3 0 0 1 5.4-1.8M7.5 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />,
+                  },
+                  {
+                    label: 'Total de clientes', bar: 'bg-status-success', iconWrap: 'bg-status-success/10 text-status-success',
+                    value: overviewData.summary?.customers_count ?? 0,
+                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="m9 12.5 2 2 4-4.5M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
+                  },
+                  {
+                    label: 'Oportunidade total', bar: 'bg-secondary', iconWrap: 'bg-secondary/10 text-secondary',
+                    value: formatCurrency(overviewData.summary?.total_value) || 'R$ 0,00',
+                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m3-9.5C15 7 13.7 6 12 6S9 7 9 8.5 10.3 11 12 11s3 1 3 2.5S13.7 16 12 16s-3-1-3-2.5" />,
+                  },
+                  {
+                    label: 'Oportunidade licitações', bar: 'bg-status-warning', iconWrap: 'bg-status-warning/10 text-status-warning',
+                    value: formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00',
+                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M9 7h6m-6 4h6m-6 4h4M6 3.5h12a1 1 0 0 1 1 1V20a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 20V4.5a1 1 0 0 1 1-1Z" />,
+                  },
+                  {
+                    label: 'Oportunidades licitatórias', bar: 'bg-status-info', iconWrap: 'bg-status-info/10 text-status-info',
+                    value: overviewData.licitaçãoSummary?.opportunities_count ?? 0,
+                    icon: <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.5 12 4l9 9.5M5.5 11.5V20h13v-8.5M9.5 20v-5h5v5" />,
+                    sub: (
+                      <span className="flex items-center gap-3">
+                        <span className="inline-flex items-center gap-1 text-status-warning"><span className="h-1.5 w-1.5 rounded-full bg-status-warning" />48h: {overviewData.licitaçãoSummary?.due_48h ?? 0}</span>
+                        <span className="inline-flex items-center gap-1 text-status-danger"><span className="h-1.5 w-1.5 rounded-full bg-status-danger" />Atrasadas: {overviewData.licitaçãoSummary?.overdue_count ?? 0}</span>
+                      </span>
+                    ),
+                  },
+                ].map((kpi, i) => (
+                  <div key={i} className={`${card} group relative overflow-hidden p-5 transition hover:shadow-lift`}>
+                    <span className={`pointer-events-none absolute inset-x-0 top-0 h-1 ${kpi.bar}`} />
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className={`${subtle} font-medium uppercase tracking-wide`}>{kpi.label}</p>
+                        <p className="mt-2 text-[1.75rem] font-bold leading-tight text-ink dark:text-[#e5e7eb] truncate">{kpi.value}</p>
+                      </div>
+                      <span className={`shrink-0 inline-flex h-11 w-11 items-center justify-center rounded-xl ${kpi.iconWrap} transition group-hover:scale-105`}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-5 w-5">{kpi.icon}</svg>
+                      </span>
+                    </div>
+                    {kpi.sub && <div className={`${subtle} mt-3`}>{kpi.sub}</div>}
+                  </div>
+                ))}
               </div>
 
               {overviewLoading && (
