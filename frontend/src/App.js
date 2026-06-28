@@ -1233,10 +1233,11 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
       {...listeners}
       role="button"
       tabIndex={0}
-      className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
+      className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition hover:border-primary/30 hover:shadow-lift focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between">
-        <span className={badge}>
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted dark:text-[#94a3b8]">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary/60" />
           {statusLabel}
         </span>
         {showMenu && (
@@ -1327,12 +1328,12 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
           </p>
         )}
         {formattedOpportunity && (
-          <p className="text-xs font-semibold text-ink mt-2 truncate">{formattedOpportunity}</p>
+          <p className="text-[15px] font-bold text-ink dark:text-[#e5e7eb] mt-2.5 truncate">{formattedOpportunity}</p>
         )}
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 max-w-full">
+      <div className="mt-3 flex flex-wrap gap-1.5 max-w-full">
         {displayPriority && (
-          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border max-w-full truncate ${priorityClass}`}>
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border max-w-full truncate ${priorityClass}`}>
             {displayPriority}
           </span>
         )}
@@ -1365,7 +1366,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
           return (
             <span
               key={`${label?.name || 'label'}-${index}`}
-              className="text-xs px-2.5 py-1 rounded-full border font-semibold max-w-full truncate"
+              className="text-[11px] px-2 py-0.5 rounded-full border font-medium max-w-full truncate"
               style={{ backgroundColor: background, borderColor: borderShade, color: textShade }}
             >
               {label?.name || 'label'}
@@ -1399,7 +1400,7 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
             </span>
           </div>
           {formattedTotal && (
-            <span className="text-xs font-semibold text-ink">{formattedTotal}</span>
+            <span className="text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
           )}
         </div>
         <div className="flex items-center gap-1">
