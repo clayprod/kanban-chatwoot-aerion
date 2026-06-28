@@ -5925,35 +5925,58 @@ function App() {
       {authStatus.authenticated && (
         <div className="min-h-screen flex bg-surface text-ink">
           <aside className="hidden md:flex w-60 shrink-0 sticky top-0 h-screen flex-col bg-[#0b0d14] border-r border-[#1b1f2a] text-[#9aa3b2]">
-            <div className="flex items-center gap-2.5 px-5 h-16 shrink-0 border-b border-[#1b1f2a]">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/95 p-1.5">
-                <img src="/logo_aerion.png" alt="Aerion" className="h-full w-full object-contain" />
-              </span>
-              <span className="text-[15px] font-semibold tracking-tight text-white">Aerion</span>
+            <div className="flex items-center px-5 h-16 shrink-0 border-b border-[#1b1f2a]">
+              <img src="/logo_aerion.png" alt="Aerion" className="h-7 w-auto object-contain [filter:brightness(0)_invert(1)]" />
             </div>
-            <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-4 space-y-1">
-              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5b6273]">Funil</p>
+            <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-4 space-y-5">
               {[
-                { name: 'Overview', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M4 5.5h6v5H4v-5Zm0 8h6v5H4v-5Zm10-8h6v5h-6v-5Zm0 8h6v5h-6v-5Z" /> },
-                { name: 'Board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
-                { name: 'Busca Lead B2B', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
-                { name: 'Licitações', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8M8 11h8M8 15h5M6 3.5h12a1 1 0 0 1 1 1v15a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 19.5v-15a1 1 0 0 1 1-1Z" /> },
-                { name: 'Processo', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h9l5 5v10a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5v-14a.5.5 0 0 1 .5-.5Zm9 0V9h5M8 13h8M8 16.5h5" /> },
-              ].map(item => {
-                const active = activeView === item.name;
-                return (
-                  <button
-                    key={item.name}
-                    type="button"
-                    onClick={() => setActiveView(item.name)}
-                    className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active ? 'bg-white/10 text-white shadow-sm' : 'text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white'}`}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-white'}`}>{item.icon}</svg>
-                    <span className="truncate">{item.name}</span>
-                    {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
-                  </button>
-                );
-              })}
+                {
+                  label: 'Vendas',
+                  items: [
+                    { name: 'Overview', view: 'Overview', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M4 5.5h6v5H4v-5Zm0 8h6v5H4v-5Zm10-8h6v5h-6v-5Zm0 8h6v5h-6v-5Z" /> },
+                    { name: 'Board', view: 'Board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
+                    { name: 'Busca Lead B2B', view: 'Busca Lead B2B', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
+                  ],
+                },
+                {
+                  label: 'Licitações',
+                  items: [
+                    { name: 'Board', view: 'Licitações', sub: 'board', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h4v15H5v-15Zm5 0h4v10h-4v-10Zm5 0h4v13h-4v-13Z" /> },
+                    { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: <><circle cx="11" cy="11" r="6.5" /><path strokeLinecap="round" d="M20 20l-3.8-3.8" /></> },
+                    { name: 'PCA', view: 'Licitações', sub: 'pca', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M9 7h6m-6 4h6m-6 4h4M6 3.5h12a1 1 0 0 1 1 1V20a.5.5 0 0 1-.8.4L16 19l-2 1.4-2-1.4-2 1.4-2-1.4-2.2 1.4A.5.5 0 0 1 5 20V4.5a1 1 0 0 1 1-1Z" /> },
+                  ],
+                },
+                {
+                  label: 'Operação',
+                  items: [
+                    { name: 'Processo', view: 'Processo', icon: <path strokeLinecap="round" strokeLinejoin="round" d="M5 4.5h9l5 5v10a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5v-14a.5.5 0 0 1 .5-.5Zm9 0V9h5M8 13h8M8 16.5h5" /> },
+                  ],
+                },
+              ].map(group => (
+                <div key={group.label} className="space-y-1">
+                  <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5b6273]">{group.label}</p>
+                  {group.items.map(item => {
+                    const active = item.sub
+                      ? activeView === item.view && (licitaçãoSubview === item.sub || (item.sub === 'editais' && licitaçãoSubview === 'editais_watchlist'))
+                      : activeView === item.view && (item.view !== 'Licitações');
+                    return (
+                      <button
+                        key={item.name}
+                        type="button"
+                        onClick={() => {
+                          setActiveView(item.view);
+                          if (item.sub) setLicitacaoSubview(item.sub);
+                        }}
+                        className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active ? 'bg-white/10 text-white shadow-sm' : 'text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white'}`}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-white'}`}>{item.icon}</svg>
+                        <span className="truncate">{item.name}</span>
+                        {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </nav>
             <div className="shrink-0 border-t border-[#1b1f2a] p-3">
               <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-[#9aa3b2] hover:bg-white/[0.06] hover:text-white transition">
@@ -5966,9 +5989,7 @@ function App() {
             <header>
               <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-border bg-surface/85 backdrop-blur supports-[backdrop-filter]:bg-surface/70">
                 <div className="min-w-0 flex items-center gap-3">
-                  <span className="md:hidden inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#0b0d14] p-1.5">
-                    <img src="/logo_aerion.png" alt="Aerion" className="h-full w-full object-contain" />
-                  </span>
+                  <img src="/logo_aerion.png" alt="Aerion" className="logo-image md:hidden h-6 w-auto object-contain" />
                   <div className="min-w-0">
                     <p className="text-[11px] text-muted leading-none">Funil de Vendas · Aerion</p>
                     <h1 className="text-lg font-semibold leading-tight truncate mt-1">{activeView}</h1>
@@ -8027,7 +8048,8 @@ function App() {
               )}
 
               {!overviewLoading && (
-                <div className="space-y-10">
+                <div className="space-y-12">
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Grupos do funil</h2>
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className={`${card} p-5`}>
                       <div className="flex items-center justify-between">
@@ -8115,6 +8137,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por etiqueta</h2>
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className={`${card} p-5`}>
                       <h3 className={sectionTitle}>Leads por etiqueta</h3>
@@ -8167,6 +8190,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por estado</h2>
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className={`${card} p-5`}>
                       <h3 className={sectionTitle}>Leads por estado</h3>
@@ -8219,6 +8243,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por agente</h2>
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className={`${card} p-5`}>
                       <h3 className={sectionTitle}>Leads por agente</h3>
@@ -8271,6 +8296,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Origem e perfil</h2>
                   <div className="grid gap-8 lg:grid-cols-2">
                     <div className={`${card} p-5`}>
                       <h3 className={sectionTitle}>Leads por canal</h3>
@@ -8322,6 +8348,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Probabilidade de fechamento</h2>
                   <div className={`${card} p-5`}>
                     <h3 className={sectionTitle}>Oportunidade por probabilidade de fechamento</h3>
                     <div className="h-96">
@@ -8354,6 +8381,7 @@ function App() {
                     </div>
                   </div>
 
+                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Evolução no tempo</h2>
                   <div className={`${card} p-5`}>
                     <div className="flex items-center justify-between gap-3">
                       <h3 className={sectionTitle}>Evolução por quantidade (por grupo)</h3>
