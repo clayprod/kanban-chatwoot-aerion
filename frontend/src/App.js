@@ -9991,7 +9991,7 @@ function App() {
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-center">
                     {processBlueprint.stats.map(stat => (
-                      <div key={stat.label} className="rounded-2xl border border-border bg-cardAlt px-4 py-3">
+                      <div key={stat.label} className={`${cardAlt} px-4 py-3`}>
                         <p className="text-xs text-muted">{stat.label}</p>
                         <p className="text-lg font-semibold text-ink">{stat.value}</p>
                       </div>
@@ -10001,8 +10001,8 @@ function App() {
               </div>
 
               <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-                <aside className="rounded-2xl border border-border bg-card p-4 lg:sticky lg:top-24 h-fit">
-                  <p className="text-xs font-semibold text-muted">Onboarding do processo</p>
+                <aside className={`${card} p-4 lg:sticky lg:top-24 h-fit`}>
+                  <p className={`${subtle} font-semibold uppercase tracking-wide`}>Onboarding do processo</p>
                   <nav className="mt-4 flex flex-col gap-2">
                     {processBlueprint.map.map((item, index) => {
                       const isUnlocked = index <= processMaxUnlockedStep;
@@ -10016,16 +10016,16 @@ function App() {
                           if (!isUnlocked) return;
                           setProcessCurrentStep(index);
                         }}
-                        className={`rounded-xl px-3 py-2 text-left text-sm font-semibold transition ${isActive ? 'bg-primary/10 text-primary' : 'text-ink'} ${isUnlocked ? 'hover:bg-cardAlt' : 'opacity-50 cursor-not-allowed'}`}
+                        className={`flex w-full items-center rounded-xl px-3 py-2 text-left text-sm font-semibold transition ${isActive ? 'bg-primary/10 text-primary' : 'text-muted'} ${isUnlocked ? 'hover:bg-cardAlt hover:text-ink' : 'opacity-50 cursor-not-allowed'}`}
                       >
-                        <span className="mr-2 text-xs text-muted">{String(index + 1).padStart(2, '0')}</span>
-                        {item.title}
-                        {isDone && <span className="ml-2 text-[11px] text-primary">OK</span>}
+                        <span className={`mr-2 text-xs ${isActive ? 'text-primary' : 'text-muted'}`}>{String(index + 1).padStart(2, '0')}</span>
+                        <span className="flex-1">{item.title}</span>
+                        {isDone && <span className="ml-2 text-[11px] font-semibold text-status-success">OK</span>}
                       </button>
                     )})}
                   </nav>
-                  <div className="mt-6 rounded-2xl border border-border bg-cardAlt p-4">
-                    <p className="text-xs font-semibold text-muted">Links rápidos</p>
+                  <div className={`mt-6 ${cardAlt} p-4`}>
+                    <p className={`${subtle} font-semibold uppercase tracking-wide`}>Links rápidos</p>
                     <div className="mt-3 flex flex-col gap-2 text-sm">
                       <a
                         href="https://chatwoot.tenryu.com.br/app/accounts/2"
@@ -10039,14 +10039,14 @@ function App() {
                   </div>
                 </aside>
 
-                <main className="rounded-2xl border border-border bg-card p-6 lg:p-8 space-y-8">
+                <main className={`${card} p-6 lg:p-8 space-y-8`}>
                   {/* Seção Metas 2026 */}
                   <ProcessSection id="metas-2026">
                     <p className="text-xs font-semibold text-muted">Motor de Receita</p>
                     <h3 className="mt-2 text-lg font-semibold text-ink">Metas 2026 - Modelo Alto Volume</h3>
 
                     {/* Fórmula Principal */}
-                    <div className="mt-4 rounded-xl border-2 border-primary bg-primary/5 px-5 py-4">
+                    <div className="mt-4 rounded-2xl border-2 border-primary bg-primary/5 px-5 py-4 dark:bg-primary/10">
                       <p className="text-center text-sm font-semibold text-primary">{processBlueprint.revenueEngine.formula}</p>
                       <div className="mt-3 grid grid-cols-3 gap-4 text-center">
                         <div>
@@ -10069,7 +10069,7 @@ function App() {
                       <p className="text-sm font-semibold text-ink mb-3">Funil Comercial</p>
                       <div className="grid grid-cols-4 gap-2">
                         {processBlueprint.funnel.map((step, idx) => (
-                          <div key={step.stage} className="rounded-xl border border-border bg-card px-3 py-3 text-center">
+                          <div key={step.stage} className={`${cardAlt} px-3 py-3 text-center`}>
                             <p className="text-xs text-muted">{step.conversion}</p>
                             <p className="text-xl font-bold text-ink">{step.volume}</p>
                             <p className="text-xs font-semibold text-muted">{step.stage}</p>
@@ -10081,9 +10081,9 @@ function App() {
                     {/* Metas por Função */}
                     <div className="mt-5 grid gap-4 md:grid-cols-2">
                       {/* SDR */}
-                      <div className="rounded-xl border-2 border-blue-500 bg-blue-500/5 px-4 py-4">
+                      <div className="rounded-2xl border-2 border-primary bg-primary/5 px-4 py-4 dark:bg-primary/10">
                         <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full bg-blue-500" />
+                          <span className="h-3 w-3 rounded-full bg-primary" />
                           <p className="text-sm font-semibold text-ink">SDR ({processBlueprint.sdrGoals.teamSize} pessoas)</p>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3">
@@ -10098,15 +10098,15 @@ function App() {
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {processBlueprint.sdrGoals.kpis.map(kpi => (
-                            <span key={kpi} className="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-600">{kpi}</span>
+                            <span key={kpi} className="rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">{kpi}</span>
                           ))}
                         </div>
                       </div>
 
                       {/* AE */}
-                      <div className="rounded-xl border-2 border-green-500 bg-green-500/5 px-4 py-4">
+                      <div className="rounded-2xl border-2 border-status-success bg-status-success/5 px-4 py-4 dark:bg-status-success/10">
                         <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full bg-green-500" />
+                          <span className="h-3 w-3 rounded-full bg-status-success" />
                           <p className="text-sm font-semibold text-ink">AE ({processBlueprint.aeGoals.teamSize} pessoas)</p>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3">
@@ -10121,14 +10121,14 @@ function App() {
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {processBlueprint.aeGoals.kpis.map(kpi => (
-                            <span key={kpi} className="rounded-full bg-green-500/10 px-2 py-1 text-xs text-green-600">{kpi}</span>
+                            <span key={kpi} className="rounded-full bg-status-success/10 px-2 py-1 text-xs font-semibold text-status-success">{kpi}</span>
                           ))}
                         </div>
                       </div>
                     </div>
 
                     {/* Resultado Anual */}
-                    <div className="mt-5 rounded-xl border border-border bg-card px-4 py-4 text-center">
+                    <div className={`mt-5 ${card} px-4 py-4 text-center`}>
                       <p className="text-xs text-muted">Resultado Anual Projetado</p>
                       <p className="text-3xl font-bold text-primary">R$ 6.2M</p>
                       <p className="text-sm text-muted">207 vendas | Ticket médio R$ 30k</p>
@@ -10140,7 +10140,7 @@ function App() {
                     <h3 className="mt-2 text-lg font-semibold text-ink">Principios que guiam o processo</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
                       {processBlueprint.pillars.map(pillar => (
-                        <div key={pillar.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={pillar.title} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <h4 className="text-sm font-semibold text-ink">{pillar.title}</h4>
                           <p className="mt-2 text-xs text-muted">{pillar.text}</p>
                         </div>
@@ -10164,7 +10164,7 @@ function App() {
                     </p>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.productTraining.map(item => (
-                        <div key={item.product} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={item.product} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{item.product}</p>
                           <p className="mt-2 text-xs text-muted">{item.summary}</p>
                           <p className="mt-2 text-xs font-semibold text-primary">{item.equivalent}</p>
@@ -10179,7 +10179,7 @@ function App() {
                     <h3 className="mt-2 text-lg font-semibold text-ink">Resumo dos 4 ICPs Autel</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.icps.map(icp => (
-                        <div key={icp.id} className="rounded-xl border border-border bg-card px-4 py-4">
+                        <div key={icp.id} className={`${card} px-4 py-4 transition hover:border-primary/30`}>
                           <h4 className="text-sm font-semibold text-ink">{icp.name}</h4>
                           <p className="mt-2 text-xs text-muted">Setor: {icp.sector}</p>
                           <p className="mt-1 text-xs text-muted">Porte: {icp.profile}</p>
@@ -10215,7 +10215,7 @@ function App() {
                     <h3 className="mt-2 text-lg font-semibold text-ink">Como usar os boards e as abas</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
                       {processBlueprint.boards.map(board => (
-                        <div key={board.name} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={board.name} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{board.name}</p>
                           <p className="mt-2 text-xs text-muted">{board.purpose}</p>
                           <div className="mt-3 space-y-1.5">
@@ -10229,11 +10229,11 @@ function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="mt-5 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-5 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Guia rápido das abas do sistema</p>
                       <div className="mt-3 grid gap-2 md:grid-cols-2">
                         {processBlueprint.funnelGuide.map(item => (
-                          <div key={item.tab} className="rounded-lg border border-border bg-cardAlt px-3 py-2">
+                          <div key={item.tab} className={`${cardAlt} px-3 py-2`}>
                             <p className="text-xs font-semibold text-primary">{item.tab}</p>
                             <p className="mt-1 text-xs text-muted">{item.use}</p>
                             <p className="mt-1 text-xs text-muted">Rotina: {item.routine}</p>
@@ -10241,18 +10241,18 @@ function App() {
                         ))}
                       </div>
                     </div>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-4 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Sumário de nomenclaturas</p>
                       <div className="mt-3 grid gap-2 md:grid-cols-2">
                         {processBlueprint.glossary.map(item => (
-                          <div key={item.term} className="rounded-lg border border-border bg-cardAlt px-3 py-2">
+                          <div key={item.term} className={`${cardAlt} px-3 py-2`}>
                             <p className="text-xs font-semibold text-primary">{item.term}</p>
                             <p className="mt-1 text-xs text-muted">{item.meaning}</p>
                           </div>
                         ))}
                       </div>
                     </div>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-4 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Vantagens competitivas da Aerion</p>
                       <div className="mt-3 grid gap-2">
                         {processBlueprint.marketAdvantages.map(item => (
@@ -10293,7 +10293,7 @@ function App() {
                     </div>
                     <div className="mt-5 grid gap-3">
                       {processBlueprint.pipelineSteps.map((step, index) => (
-                        <div key={step.title} className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={step.title} className={`flex items-start gap-3 ${card} px-4 py-3 transition hover:border-primary/30`}>
                           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-semibold">
                             {index + 1}
                           </span>
@@ -10322,7 +10322,7 @@ function App() {
                   <ProcessSection id="venda-consultiva">
                     <p className="text-xs font-semibold text-muted">Abordagem consultiva</p>
                     <h3 className="mt-2 text-lg font-semibold text-ink">Script BANT+U com técnicas de Chris Voss</h3>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-4 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Abertura (30 segundos)</p>
                       <div className="mt-2 space-y-1.5">
                         {processBlueprint.consultiveSales.opening.map(line => (
@@ -10332,7 +10332,7 @@ function App() {
                     </div>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.consultiveSales.bantu.map(block => (
-                        <div key={block.key} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={block.key} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{block.key}</p>
                           <div className="mt-2 space-y-1.5">
                             {block.prompts.map(prompt => (
@@ -10345,7 +10345,7 @@ function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-4 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Fechamento e agendamento</p>
                       <div className="mt-2 space-y-1.5">
                         {processBlueprint.consultiveSales.close.map(line => (
@@ -10356,11 +10356,11 @@ function App() {
                         ))}
                       </div>
                     </div>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-4">
+                    <div className={`mt-4 ${card} px-4 py-4`}>
                       <p className="text-sm font-semibold text-ink">Objeções comuns e respostas consultivas</p>
                       <div className="mt-3 grid gap-3">
                         {processBlueprint.objections.map(item => (
-                          <div key={item.objection} className="rounded-lg border border-border bg-cardAlt px-3 py-3">
+                          <div key={item.objection} className={`${cardAlt} px-3 py-3`}>
                             <p className="text-xs font-semibold text-ink">{item.objection}</p>
                             <p className="mt-1 text-xs text-muted">{item.answer}</p>
                           </div>
@@ -10374,7 +10374,7 @@ function App() {
                     <h3 className="mt-2 text-lg font-semibold text-ink">Guia operacional do Funil Aerion</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
                       {processBlueprint.playbook.map(block => (
-                        <div key={block.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={block.title} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{block.title}</p>
                           <div className="mt-2 space-y-1.5">
                             {block.items.map(item => (
@@ -10416,7 +10416,7 @@ function App() {
                     <h3 className="text-lg font-semibold">Rituais comerciais</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.rituals.map(ritual => (
-                        <div key={ritual.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={ritual.title} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <div className="flex items-center justify-between">
                             <p className="text-sm font-semibold text-ink">{ritual.title}</p>
                             <span className="text-xs text-muted">{ritual.cadence}</span>
@@ -10431,7 +10431,7 @@ function App() {
                     <h3 className="text-lg font-semibold">Ferramentas e registros</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.tools.map(tool => (
-                        <div key={tool.name} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={tool.name} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{tool.name}</p>
                           <p className="mt-2 text-xs text-muted">{tool.purpose}</p>
                         </div>
@@ -10451,7 +10451,7 @@ function App() {
                     </div>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {processBlueprint.erpDeepDive.map(block => (
-                        <div key={block.title} className="rounded-xl border border-border bg-card px-4 py-3">
+                        <div key={block.title} className={`${card} px-4 py-3 transition hover:border-primary/30`}>
                           <p className="text-sm font-semibold text-ink">{block.title}</p>
                           <div className="mt-2 space-y-1.5">
                             {block.items.map(item => (
@@ -10464,7 +10464,7 @@ function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="mt-4 rounded-xl border border-border bg-card px-4 py-3">
+                    <div className={`mt-4 ${card} px-4 py-3`}>
                       <p className="text-xs text-muted">Referência oficial Sankhya:</p>
                       <a
                         href="https://ajuda.sankhya.com.br/hc/pt-br/categories/360003333814-Documenta%C3%A7%C3%A3o-de-Telas-Manual"
