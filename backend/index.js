@@ -442,6 +442,69 @@ app.get('/api/vendas/realizado', async (req, res) => {
   }
 });
 
+// ===================== Disparo WhatsApp (via n8n) =====================
+// Native dispatcher UI; the actual send is delegated to the existing n8n flow via
+// webhook. Pluggable: set DISPARO_WEBHOOK_URL (+ optional DISPARO_WEBHOOK_TOKEN).
+const DISPARO_LOG_TABLE = 'disparo_log';
+async function ensureDisparoTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ${DISPARO_LOG_TABLE} (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_by TEXT,
+        audience TEXT,
+        recipients INTEGER NOT NULL DEFAULT 0,
+        message TEXT,
+        status TEXT NOT NULL DEFAULT 'queued'
+      )
+    `);
+  } catch (error) {
+    console.error('ensureDisparoTable failed:', error.message);
+  }
+}
+ensureDisparoTable();
+
+app.get('/api/disparo/status', (req, res) => {
+  res.json({ configured: Boolean(process.env.DISPARO_WEBHOOK_URL) });
+});
+
+app.post('/api/disparo/send', async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+  const audience = String(req.body?.audience || '');
+  if (!message) return res.status(400).json({ error: 'Mensagem vazia.' });
+  if (!recipients.length) return res.status(400).json({ error: 'Nenhum destinatário.' });
+  let logId = null;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [req.auth?.sub || null, audience, recipients.length, message, process.env.DISPARO_WEBHOOK_URL ? 'sent' : 'unconfigured']
+    );
+    logId = rows[0]?.id;
+  } catch (error) {
+    console.error('disparo log failed:', error.message);
+  }
+  if (!process.env.DISPARO_WEBHOOK_URL) {
+    return res.json({ configured: false, queued: recipients.length, log_id: logId });
+  }
+  try {
+    const resp = await fetch(process.env.DISPARO_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.DISPARO_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.DISPARO_WEBHOOK_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({ audience, message, recipients }),
+    });
+    return res.json({ configured: true, ok: resp.ok, status: resp.status, queued: recipients.length, log_id: logId });
+  } catch (error) {
+    console.error('disparo webhook failed:', error.message);
+    return res.status(502).json({ configured: true, error: 'Falha ao acionar o n8n.' });
+  }
+});
+
 const HISTORY_TABLE = 'kanban_stage_history';
 const LICITACAO_TABLE = 'licitacao_opportunities';
 const LICITACAO_REQUIREMENTS_TABLE = 'licitacao_requirements';
