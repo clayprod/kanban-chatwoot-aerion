@@ -19,14 +19,15 @@ module.exports = {
         cardAlt: '#f7f8fb',
         border: '#e5e7eb',
         primary: {
-          DEFAULT: '#2563eb',
-          strong: '#1d4ed8',
-          soft: '#dbeafe',
-        },
-        secondary: {
-          DEFAULT: '#4f46e5',
+          DEFAULT: '#6366f1',
+          strong: '#4f46e5',
           soft: '#e0e7ff',
         },
+        secondary: {
+          DEFAULT: '#8b5cf6',
+          soft: '#ede9fe',
+        },
+        violet: '#a855f7',
         status: {
           success: '#16a34a',
           warning: '#f59e0b',
