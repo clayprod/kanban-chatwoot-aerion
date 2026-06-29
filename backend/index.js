@@ -441,10 +441,14 @@ app.get('/api/vendas/realizado', async (req, res) => {
   if (!faturamentoPool) {
     return res.json({ configured: false, ano, mes, receita: null, vendas: null });
   }
+  // Aerion scope = product groups 'AERION%', value column valor_total_prod
+  // (exact definition from Metabase dashboard 34, card "AE: Faturamento vs Meta Mensal").
   const query = process.env.FATURAMENTO_QUERY
-    || `SELECT COALESCE(SUM(valor_total_nota_item),0)::float AS receita,
+    || `SELECT COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
-          FROM vendas WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
+          FROM vendas
+         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
+           AND ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
   try {
     const { rows } = await faturamentoPool.query(query, [ano, mes]);
     const row = rows[0] || {};
@@ -452,7 +456,7 @@ app.get('/api/vendas/realizado', async (req, res) => {
       configured: true, ano, mes,
       receita: Number(row.receita) || 0,
       vendas: row.vendas != null ? Number(row.vendas) : null,
-      scope: process.env.FATURAMENTO_QUERY ? 'custom' : 'venda_total',
+      scope: process.env.FATURAMENTO_QUERY ? 'custom' : 'aerion',
     });
   } catch (error) {
     console.error('Error fetching realizado:', error);
