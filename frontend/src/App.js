@@ -3289,6 +3289,8 @@ function App() {
   const [contacts, setContacts] = useState([]);
   const [licitaçãoOpportunities, setLicitacaoOpportunities] = useState([]);
   const [licSummary, setLicSummary] = useState(null);
+  const [usersList, setUsersList] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
   const [licitaçãoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
@@ -3443,7 +3445,7 @@ function App() {
     const stored = getCookieValue('theme');
     return stored === 'dark';
   });
-  const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '' });
+  const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '', name: '', role: 'member', allowedViews: null });
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
@@ -3511,6 +3513,9 @@ function App() {
           checked: true,
           authenticated: Boolean(response.data?.authenticated),
           email: response.data?.email || '',
+          name: response.data?.name || '',
+          role: response.data?.role || 'member',
+          allowedViews: response.data?.allowed_views ?? null,
         });
       })
       .catch(() => {
@@ -3522,6 +3527,28 @@ function App() {
     return () => {
       isMounted = false;
     };
+  }, []);
+
+  const loadUsers = useCallback(() => {
+    setUsersLoading(true);
+    axios.get('/api/users')
+      .then(r => setUsersList(r.data || []))
+      .catch(() => setUsersList([]))
+      .finally(() => setUsersLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || authStatus.role !== 'admin' || activeView !== 'Usuários') return;
+    loadUsers();
+  }, [authStatus.authenticated, authStatus.role, activeView, loadUsers]);
+
+  const saveUserAccess = useCallback(async (userId, allowedViews) => {
+    try {
+      await axios.put(`/api/users/${userId}/access`, { allowed_views: allowedViews });
+      setUsersList(prev => prev.map(u => (u.id === userId ? { ...u, allowed_views: allowedViews } : u)));
+    } catch (error) {
+      console.error('Error saving user access:', error);
+    }
   }, []);
 
   useEffect(() => {
@@ -5458,6 +5485,9 @@ function App() {
         checked: true,
         authenticated: true,
         email: response.data?.email || email,
+        name: response.data?.name || '',
+        role: response.data?.role || 'member',
+        allowedViews: response.data?.allowed_views ?? null,
       });
       setLoginForm({ email: '', password: '' });
     } catch (error) {
@@ -5975,10 +6005,26 @@ function App() {
                     { name: 'Processo', view: 'Processo', icon: BookOpenIcon },
                   ],
                 },
-              ].map(group => (
+                {
+                  label: 'Administração',
+                  adminOnly: true,
+                  items: [
+                    { name: 'Usuários', view: 'Usuários', icon: UsersIcon, adminOnly: true },
+                  ],
+                },
+              ].filter(group => !group.adminOnly || authStatus.role === 'admin').map(group => {
+                const groupItems = group.items.filter(item => {
+                  if (item.adminOnly) return authStatus.role === 'admin';
+                  if (authStatus.role === 'admin') return true;
+                  const av = authStatus.allowedViews;
+                  if (!av || av.length === 0) return true;
+                  return av.includes(item.view);
+                });
+                if (!groupItems.length) return null;
+                return (
                 <div key={group.label} className="space-y-1">
                   <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#5b6273]">{group.label}</p>
-                  {group.items.map(item => {
+                  {groupItems.map(item => {
                     const active = item.sub
                       ? activeView === item.view && (licitaçãoSubview === item.sub || (item.sub === 'editais' && licitaçãoSubview === 'editais_watchlist'))
                       : activeView === item.view && (item.view !== 'Licitações');
@@ -6000,7 +6046,8 @@ function App() {
                     );
                   })}
                 </div>
-              ))}
+                );
+              })}
             </nav>
             <div className="shrink-0 border-t border-[#1b1f2a] p-3">
               <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-[#8b93a4] hover:bg-white/[0.04] hover:text-white transition">
@@ -8155,7 +8202,7 @@ function App() {
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
                 <div>
                   <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">
-                    {(() => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; })()}, {((authStatus.email || 'time').split('@')[0])} <span className="align-middle">👋</span>
+                    {(() => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; })()}, {(authStatus.name || (authStatus.email || 'time').split('@')[0]).split(' ')[0]} <span className="align-middle">👋</span>
                   </h2>
                   <p className="text-sm text-muted mt-1 capitalize">{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
                 </div>
@@ -8330,6 +8377,66 @@ function App() {
                     </div>
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {activeView === 'Usuários' && authStatus.role === 'admin' && (
+            <div className="mt-6">
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+                <div>
+                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Usuários</h2>
+                  <p className="text-sm text-muted mt-1">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
+                </div>
+                <button type="button" onClick={loadUsers} className={`${btnSecondary} h-10 px-4`}>Atualizar</button>
+              </div>
+              {usersLoading ? (
+                <div className={`${subtle} py-10 text-center`}>Carregando usuários…</div>
+              ) : (
+                <div className={`${card} divide-y divide-border dark:divide-[#1f2937]`}>
+                  {usersList.map(u => {
+                    const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
+                    const isAdminUser = u.role === 'admin';
+                    const current = Array.isArray(u.allowed_views) && u.allowed_views.length ? u.allowed_views : (isAdminUser ? allViews : []);
+                    return (
+                      <div key={u.id} className="flex flex-col lg:flex-row lg:items-center gap-4 p-4">
+                        <div className="flex items-center gap-3 lg:w-64 shrink-0">
+                          <div className="h-9 w-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0">
+                            {String(u.name || u.email || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-ink dark:text-white truncate">{u.name}</p>
+                            <p className={`${subtle} truncate`}>{u.email}</p>
+                          </div>
+                        </div>
+                        <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-semibold shrink-0 ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-cardAlt text-muted border border-border'}`}>
+                          {isAdminUser ? 'Admin' : 'Membro'}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {isAdminUser ? (
+                            <span className={subtle}>Acesso total (admin)</span>
+                          ) : allViews.map(v => {
+                            const on = current.includes(v);
+                            return (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => {
+                                  const next = on ? current.filter(x => x !== v) : [...current, v];
+                                  saveUserAccess(u.id, next);
+                                }}
+                                className={`h-7 px-2.5 rounded-full text-[12px] font-medium border transition ${on ? 'bg-primary/10 text-primary border-primary/30' : 'bg-cardAlt text-muted border-border hover:text-ink'}`}
+                              >
+                                {v}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {!usersList.length && <div className={`${subtle} p-6 text-center`}>Nenhum usuário encontrado.</div>}
+                </div>
               )}
             </div>
           )}
