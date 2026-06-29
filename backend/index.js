@@ -487,40 +487,67 @@ async function ensureDisparoTable() {
 }
 ensureDisparoTable();
 
+// Base of the existing n8n disparo flow (e.g. https://n8n.tenryu.com.br/webhook).
+const disparoBase = () => String(process.env.DISPARO_WEBHOOK_URL || '').replace(/\/+$/, '');
+
 app.get('/api/disparo/status', (req, res) => {
-  res.json({ configured: Boolean(process.env.DISPARO_WEBHOOK_URL) });
+  res.json({ configured: Boolean(disparoBase()) });
 });
 
+// List Evolution instances via the n8n flow (read-only).
+app.get('/api/disparo/instancias', async (req, res) => {
+  if (!disparoBase()) return res.json({ configured: false, instancias: [] });
+  try {
+    const resp = await fetch(`${disparoBase()}/listar-instancias`);
+    const instancias = await resp.json().catch(() => []);
+    res.json({ configured: true, instancias: Array.isArray(instancias) ? instancias : [] });
+  } catch (error) {
+    console.error('listar-instancias failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao listar instâncias.' });
+  }
+});
+
+// Start a campaign via the existing n8n flow (modo funil — n8n resolves the
+// contacts from the selected pipeline stages). Mirrors disparo-wpp /iniciar-disparo.
 app.post('/api/disparo/send', async (req, res) => {
   const message = String(req.body?.message || '').trim();
-  const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
-  const audience = String(req.body?.audience || '');
+  const stages = Array.isArray(req.body?.funil_vendas)
+    ? req.body.funil_vendas
+    : (req.body?.stage ? [req.body.stage] : []);
+  const instancias = Array.isArray(req.body?.instancias) ? req.body.instancias : [];
+  const nomeCampanha = req.body?.nomeCampanha ? String(req.body.nomeCampanha) : null;
   if (!message) return res.status(400).json({ error: 'Mensagem vazia.' });
-  if (!recipients.length) return res.status(400).json({ error: 'Nenhum destinatário.' });
+  if (!stages.length) return res.status(400).json({ error: 'Selecione ao menos uma etapa.' });
+  if (!instancias.length) return res.status(400).json({ error: 'Selecione uma instância.' });
   let logId = null;
   try {
     const { rows } = await pool.query(
       `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
        VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [req.auth?.sub || null, audience, recipients.length, message, process.env.DISPARO_WEBHOOK_URL ? 'sent' : 'unconfigured']
+      [req.auth?.sub || null, stages.join(', '), 0, message, disparoBase() ? 'sent' : 'unconfigured']
     );
     logId = rows[0]?.id;
   } catch (error) {
     console.error('disparo log failed:', error.message);
   }
-  if (!process.env.DISPARO_WEBHOOK_URL) {
-    return res.json({ configured: false, queued: recipients.length, log_id: logId });
+  if (!disparoBase()) {
+    return res.json({ configured: false, log_id: logId });
   }
+  const payload = {
+    destinatarios: { modo: 'funil', funil_vendas: stages, tags: [], canais: [], ddds: [], contatos: [], combinar: false },
+    nomeCampanha,
+    mensagens: [{ tipo: 'texto', texto: message, legenda: null, arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null }],
+    instancias,
+    config: { maxPerDay: 30, minInterval: 30, maxInterval: 60, sendPeriod: 'integral', diasSemana: [1, 2, 3, 4, 5] },
+  };
   try {
-    const resp = await fetch(process.env.DISPARO_WEBHOOK_URL, {
+    const resp = await fetch(`${disparoBase()}/iniciar-disparo`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(process.env.DISPARO_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.DISPARO_WEBHOOK_TOKEN}` } : {}),
-      },
-      body: JSON.stringify({ audience, message, recipients }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
-    return res.json({ configured: true, ok: resp.ok, status: resp.status, queued: recipients.length, log_id: logId });
+    const data = await resp.json().catch(() => ({}));
+    return res.json({ configured: true, ok: resp.ok, status: resp.status, log_id: logId, ...data });
   } catch (error) {
     console.error('disparo webhook failed:', error.message);
     return res.status(502).json({ configured: true, error: 'Falha ao acionar o n8n.' });
