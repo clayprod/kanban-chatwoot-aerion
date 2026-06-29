@@ -3288,9 +3288,10 @@ function EditalWatchlistPage({ onImportSignal }) {
 function App() {
   const [contacts, setContacts] = useState([]);
   const [licitaçãoOpportunities, setLicitacaoOpportunities] = useState([]);
+  const [licSummary, setLicSummary] = useState(null);
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
-  const [licitaçãoSubview, setLicitacaoSubview] = useState('board'); // 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
+  const [licitaçãoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [selectedCommercialRequirements, setSelectedCommercialRequirements] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
@@ -3604,6 +3605,7 @@ function App() {
       const opportunitiesResponse = await axios.get('/api/licitacoes/opportunities');
       const data = opportunitiesResponse.data || [];
       setLicitacaoOpportunities(data);
+      axios.get('/api/licitacoes/overview/summary').then(r => setLicSummary(r.data)).catch(() => {});
       return data;
     } catch (error) {
       console.error('Error loading licitações:', error);
@@ -5961,6 +5963,7 @@ function App() {
                 {
                   label: 'Licitações',
                   items: [
+                    { name: 'Overview', view: 'Licitações', sub: 'overview', icon: Squares2X2Icon },
                     { name: 'Board', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon },
                     { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: DocumentMagnifyingGlassIcon },
                     { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ClipboardDocumentListIcon },
@@ -6156,7 +6159,8 @@ function App() {
                   }}
                   className="font-semibold text-ink hover:text-primary"
                 >
-                  {licitaçãoSubview === 'board' ? 'Board'
+                  {licitaçãoSubview === 'overview' ? 'Overview'
+                    : licitaçãoSubview === 'board' ? 'Board'
                     : licitaçãoSubview === 'editais' || licitaçãoSubview === 'editais_watchlist' ? 'Busca Editais'
                     : licitaçãoSubview === 'pca' || licitaçãoSubview === 'sinais' ? 'PCA'
                     : 'Watchlist'}
@@ -6283,6 +6287,7 @@ function App() {
             <>
               <div className="mt-4 inline-flex items-center rounded-full border border-border bg-card p-1">
                 {[
+                  { key: 'overview', label: 'Overview' },
                   { key: 'board', label: 'Board' },
                   { key: 'editais', label: 'Busca Editais' },
                   { key: 'pca', label: 'PCA' },
@@ -6301,6 +6306,121 @@ function App() {
                   </button>
                 ))}
               </div>
+
+              {licitaçãoSubview === 'overview' && (
+                <div className="mt-6">
+                  <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+                    <div>
+                      <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Licitações</h2>
+                      <p className="text-sm text-muted mt-1">Panorama de editais, prazos e oportunidades públicas.</p>
+                    </div>
+                    <button type="button" onClick={() => setLicitacaoSubview('editais')} className={`${btnPrimary} h-10 px-4`}>
+                      <PlusIcon className="h-4 w-4" /> Buscar editais
+                    </button>
+                  </div>
+
+                  <div className="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
+                    {[
+                      { label: 'Oportunidades', value: licSummary?.opportunities_count ?? licitaçãoOpportunities.length ?? 0, icon: BuildingLibraryIcon, wrap: 'bg-primary/10 text-primary' },
+                      { label: 'Valor em aberto', value: formatCompactCurrency(licSummary?.total_value) || 'R$ 0', icon: BanknotesIcon, wrap: 'bg-secondary/10 text-secondary' },
+                      { label: 'Vencendo em 48h', value: licSummary?.due_48h ?? 0, icon: ChartBarIcon, wrap: 'bg-status-warning/10 text-status-warning' },
+                      { label: 'Atrasadas', value: licSummary?.overdue_count ?? 0, icon: DocumentTextIcon, wrap: 'bg-status-danger/10 text-status-danger' },
+                    ].map((kpi, i) => {
+                      const Icon = kpi.icon;
+                      return (
+                        <div key={i} className={`${card} p-5 transition hover:border-primary/30`}>
+                          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${kpi.wrap}`}>
+                            <Icon className="h-[18px] w-[18px]" />
+                          </span>
+                          <p className={`${subtle} mt-4`}>{kpi.label}</p>
+                          <p className="text-[26px] font-extrabold leading-none mt-1 text-ink dark:text-white truncate">{kpi.value}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                    <div className="xl:col-span-2 space-y-5">
+                      <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base`}>Funil de licitações</h3>
+                        <p className={`${subtle} mt-0.5 mb-5`}>Oportunidades por fase</p>
+                        {(() => {
+                          const groups = {};
+                          licitaçãoOpportunities.forEach(o => {
+                            const key = o.fase || o.status || 'Sem fase';
+                            if (!groups[key]) groups[key] = { fase: key, count: 0, value: 0 };
+                            groups[key].count += 1;
+                            groups[key].value += Number(o.valor_oportunidade) || 0;
+                          });
+                          const list = Object.values(groups).sort((a, b) => b.count - a.count);
+                          const max = Math.max(...list.map(g => g.count), 1);
+                          const palette = ['#6366f1', '#8b5cf6', '#a855f7', '#f59e0b', '#22c55e', '#38bdf8', '#6b7280'];
+                          return list.length ? (
+                            <div className="space-y-3.5">
+                              {list.map((g, idx) => (
+                                <div key={g.fase} className="flex items-center gap-4">
+                                  <span className="w-28 sm:w-36 shrink-0 text-[13px] text-muted truncate">{g.fase}</span>
+                                  <div className="flex-1 h-7 rounded-lg bg-cardAlt overflow-hidden">
+                                    <div className="h-full rounded-lg" style={{ width: `${Math.max((g.count / max) * 100, 2)}%`, background: palette[idx % palette.length] }} />
+                                  </div>
+                                  <span className="w-12 text-right text-[13px] font-bold text-ink dark:text-white">{g.count}</span>
+                                  <span className="w-24 text-right text-[13px] text-muted hidden sm:block">{formatCompactCurrency(g.value) || 'R$ 0'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className={`${subtle} py-8 text-center`}>Nenhuma oportunidade ainda</div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    <div className="space-y-5">
+                      <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base mb-4`}>Prazos</h3>
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-3 rounded-xl bg-status-danger/[0.08] border border-status-danger/20 p-3">
+                            <span className="h-9 w-9 rounded-lg bg-status-danger/15 text-status-danger flex items-center justify-center shrink-0 font-bold">{licSummary?.overdue_count ?? 0}</span>
+                            <div className="flex-1"><p className="text-[13px] font-semibold text-ink dark:text-white">Atrasadas</p><p className={subtle}>Requerem ação imediata</p></div>
+                          </div>
+                          <div className="flex items-center gap-3 rounded-xl bg-status-warning/[0.08] border border-status-warning/20 p-3">
+                            <span className="h-9 w-9 rounded-lg bg-status-warning/15 text-status-warning flex items-center justify-center shrink-0 font-bold">{licSummary?.due_48h ?? 0}</span>
+                            <div className="flex-1"><p className="text-[13px] font-semibold text-ink dark:text-white">Vencendo em 48h</p><p className={subtle}>Priorizar envio</p></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`${card} p-6`}>
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className={`${sectionTitle} text-base`}>Top oportunidades</h3>
+                          <button type="button" onClick={() => setLicitacaoSubview('board')} className="text-[13px] text-primary font-medium hover:underline">Board</button>
+                        </div>
+                        {(() => {
+                          const top = [...licitaçãoOpportunities]
+                            .filter(o => !String(o.status || '').toLowerCase().includes('perdido'))
+                            .sort((a, b) => (Number(b.valor_oportunidade) || 0) - (Number(a.valor_oportunidade) || 0))
+                            .slice(0, 5);
+                          return top.length ? (
+                            <div className="space-y-3">
+                              {top.map(o => (
+                                <div key={o.id} className="flex items-center gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-[13px] font-semibold text-ink dark:text-white truncate">{o.titulo || o.orgao || 'Oportunidade'}</p>
+                                    <p className={`${subtle} truncate`}>{o.fase || o.status || '—'}</p>
+                                  </div>
+                                  <span className="text-[13px] font-bold text-ink dark:text-white shrink-0">{formatCompactCurrency(o.valor_oportunidade) || 'R$ 0'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className={`${subtle} py-6 text-center`}>Sem oportunidades</div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {(licitaçãoSubview === 'board' || licitaçãoSubview === 'editais') && (
               <>
