@@ -111,6 +111,8 @@ const licitaçãoColumns = [
   '14. Não Atendido',
   '15. Descartado',
 ];
+const PNCP_SCORE_HIGH_THRESHOLD = 68;
+const PNCP_SCORE_MEDIUM_THRESHOLD = 38;
 
 const processBlueprint = {
   stats: [
@@ -739,9 +741,16 @@ const getBestEstimatedValue = (item) => {
 
 const getPncpScoreClass = (score) => {
   const value = Number(score || 0);
-  if (value >= 75) return 'bg-status-success/10 text-status-success border-status-success/20';
-  if (value >= 50) return 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800';
+  if (value >= PNCP_SCORE_HIGH_THRESHOLD) return 'bg-status-success/10 text-status-success border-status-success/20';
+  if (value >= PNCP_SCORE_MEDIUM_THRESHOLD) return 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800';
   return 'bg-status-danger/10 text-status-danger border-status-danger/20';
+};
+
+const getPncpScoreLabel = (score) => {
+  const value = Number(score || 0);
+  if (value >= PNCP_SCORE_HIGH_THRESHOLD) return 'Alta aderencia';
+  if (value >= PNCP_SCORE_MEDIUM_THRESHOLD) return 'Media aderencia';
+  return 'Baixa aderencia';
 };
 
 const getPncpUrgencyClass = (urgency) => {
@@ -765,7 +774,7 @@ const createPncpUiSummary = (items = []) => {
   for (const item of items) {
     const value = getBestEstimatedValue(item) || 0;
     summary.total_value += value;
-    const adherence = Number(item?.score || 0) >= 75 ? 'alta' : Number(item?.score || 0) >= 50 ? 'media' : 'baixa';
+    const adherence = Number(item?.score || 0) >= PNCP_SCORE_HIGH_THRESHOLD ? 'alta' : Number(item?.score || 0) >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'media' : 'baixa';
     summary.by_adherence[adherence].count += 1;
     summary.by_adherence[adherence].total_value += value;
     const stage = item?.legal_stage?.label || 'Sem fase';
@@ -956,6 +965,11 @@ const normalizeText = (value) => {
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '');
 };
+
+const splitTermsInput = (value = '') => String(value || '')
+  .split(/[,;\n]+/)
+  .map(term => term.trim())
+  .filter(Boolean);
 
 const normalizePncpControlId = (value) => String(value || '').trim().toLowerCase();
 
@@ -3362,6 +3376,20 @@ function App() {
   });
   const [pncpSearchResults, setPncpSearchResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
   const [pncpSearchLoading, setPncpSearchLoading] = useState(false);
+  const [pncpSearchJobs, setPncpSearchJobs] = useState([]);
+  const [activePncpSearchJobId, setActivePncpSearchJobId] = useState(() => {
+    try {
+      return localStorage.getItem('pncp_active_search_job_id') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [pncpSuggestedTerms, setPncpSuggestedTerms] = useState({ positivos: [], negativos: [], fonte: null });
+  const [pncpAcceptedPositiveTerms, setPncpAcceptedPositiveTerms] = useState([]);
+  const [pncpAcceptedNegativeTerms, setPncpAcceptedNegativeTerms] = useState([]);
+  const [pncpCustomTermInput, setPncpCustomTermInput] = useState('');
+  const [pncpActiveJobTermInput, setPncpActiveJobTermInput] = useState('');
+  const [pncpSuggestionLoading, setPncpSuggestionLoading] = useState(false);
   const [pncpOrgaoLookupQuery, setPncpOrgaoLookupQuery] = useState('');
   const [pncpUasgLookupQuery, setPncpUasgLookupQuery] = useState('');
   const [pncpOrgaoOptions, setPncpOrgaoOptions] = useState([]);
@@ -3372,6 +3400,7 @@ function App() {
   const [pncpSummaryExpanded, setPncpSummaryExpanded] = useState(false);
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpResultScope, setPncpResultScope] = useState('visible');
+  const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
   const [pncpDebugControlId, setPncpDebugControlId] = useState('');
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
@@ -3382,6 +3411,19 @@ function App() {
     } catch { return []; }
   });
   const [showPncpHidden, setShowPncpHidden] = useState(false);
+  const [pncpOutcomeFilters, setPncpOutcomeFilters] = useState({
+    q: '',
+    fornecedor: '',
+    fornecedor_ni: '',
+    orgao_cnpj: '',
+    uf: '',
+    tipo: 'todos',
+  });
+  const [pncpOutcomeResults, setPncpOutcomeResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
+  const [pncpOutcomeLoading, setPncpOutcomeLoading] = useState(false);
+  const [pncpOutcomeError, setPncpOutcomeError] = useState('');
+  const [pncpOutcomeDossier, setPncpOutcomeDossier] = useState(null);
+  const [pncpOutcomeDossierLoading, setPncpOutcomeDossierLoading] = useState(false);
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
@@ -4268,6 +4310,18 @@ function App() {
     return pncpUasgOptions.find(item => String(item.codigo || '') === String(pncpSearchFilters.unidade_codigo)) || null;
   }, [pncpUasgOptions, pncpSearchFilters.unidade_codigo]);
 
+  const selectedPncpTipoInstrumento = useMemo(() => {
+    if (!pncpSearchFilters.tipo_id) {
+      return null;
+    }
+    return tipoInstrumentoOptions.find(item => String(item.id || '') === String(pncpSearchFilters.tipo_id)) || null;
+  }, [tipoInstrumentoOptions, pncpSearchFilters.tipo_id]);
+
+  const pncpEditalTipoInstrumentoOptions = useMemo(
+    () => tipoInstrumentoOptions.filter(item => item.bucket !== 'resultado'),
+    [tipoInstrumentoOptions]
+  );
+
   const pncpInPipelineIndex = useMemo(() => {
     const controls = new Set();
     const paths = new Set();
@@ -4328,6 +4382,7 @@ function App() {
   const pncpResultsWithVisibility = useMemo(() => {
     return (pncpSearchResults.items || []).map(item => ({
       ...item,
+      score_label: getPncpScoreLabel(item.score),
       __visibility: getPncpResultVisibility(item),
     }));
   }, [pncpSearchResults.items, getPncpResultVisibility]);
@@ -4353,6 +4408,39 @@ function App() {
   }, [pncpSearchResults]);
 
   const visiblePncpSummary = useMemo(() => createPncpUiSummary(visiblePncpResults), [visiblePncpResults]);
+
+  const activePncpSearchJob = useMemo(() => {
+    if (!activePncpSearchJobId) return null;
+    return pncpSearchJobs.find(job => String(job.id) === String(activePncpSearchJobId)) || null;
+  }, [activePncpSearchJobId, pncpSearchJobs]);
+
+  const activePncpJobProgress = useMemo(() => {
+    const progress = activePncpSearchJob?.progress || {};
+    const done = Number(progress.terms_done || 0);
+    const total = Math.max(Number(progress.terms_total || activePncpSearchJob?.terms?.length || 0), 1);
+    const pct = ['completed', 'failed', 'cancelled'].includes(activePncpSearchJob?.status) ? 100 : Math.min(98, Math.round((done / total) * 100));
+    return {
+      done,
+      total,
+      pct,
+      currentTerm: progress.current_term || '',
+      currentPage: progress.current_page || null,
+      currentCollected: Number(progress.current_term_collected || 0),
+      currentReported: progress.current_term_total_reported ? Number(progress.current_term_total_reported) : null,
+      totalCollected: Number(progress.items_collected || activePncpSearchJob?.total || 0),
+    };
+  }, [activePncpSearchJob]);
+
+  const getPncpJobStatusMeta = (status) => {
+    const normalized = String(status || 'queued');
+    if (normalized === 'completed') return { label: 'Concluida', className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/25' };
+    if (normalized === 'running') return { label: 'Rodando', className: 'bg-primary/10 text-primary border-primary/25' };
+    if (normalized === 'paused_rate_limit') return { label: 'Pausada pelo PNCP', className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' };
+    if (normalized === 'queued') return { label: 'Na fila', className: 'bg-sky-500/10 text-sky-600 border-sky-500/25' };
+    if (normalized === 'cancelled') return { label: 'Cancelada', className: 'bg-cardAlt text-muted border-border' };
+    if (normalized === 'failed') return { label: 'Falhou', className: 'bg-status-danger/10 text-status-danger border-status-danger/25' };
+    return { label: normalized.replace(/_/g, ' '), className: 'bg-cardAlt text-muted border-border' };
+  };
 
   const pncpDebugLookup = useMemo(() => {
     const query = normalizePncpControlId(pncpDebugControlId);
@@ -4718,12 +4806,176 @@ function App() {
   };
 
   // Buscar editais/licitações no PNCP
+  const applyPncpJobSnapshot = (job) => {
+    if (!job) return;
+    setPncpSearchResults({
+      items: Array.isArray(job.items) ? job.items : (pncpSearchResults.items || []),
+      total: Number(job.total || job.items?.length || pncpSearchResults.total || 0),
+      pagina: pncpSearchResults.pagina || 1,
+      tamanhoPagina: pncpSearchResults.tamanhoPagina || 25,
+      totalPaginas: pncpSearchResults.totalPaginas || 1,
+      termosUsados: job.terms || [],
+      termosNegativos: job.negative_terms || [],
+      fonteIA: job.suggested_positive_terms?.length ? 'IA + termos aceitos' : null,
+      summary: job.summary || null,
+      query_plan: job.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
+      diagnostics: {
+        aiRequested: true,
+        aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
+        jobStatus: job.status,
+      },
+    });
+    setPncpResultScope('visible');
+    setShowPncpHidden(false);
+  };
+
+  const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
+    if (!jobId) return null;
+    const effectivePage = Math.max(1, Number(page) || 1);
+    const effectiveScope = overrides.scope || (pncpResultScope === 'hidden' || pncpResultScope === 'pipeline' ? 'all' : pncpResultScope);
+    const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}/results`, {
+      params: {
+        pagina: effectivePage,
+        tam: 25,
+        ordenacao: overrides.ordenacao || pncpSearchFilters.ordenacao,
+        scope: effectiveScope,
+      },
+    });
+    const payload = response.data || {};
+    setPncpJobResultsPage(effectivePage);
+    setPncpSearchResults(prev => ({
+      ...prev,
+      items: Array.isArray(payload.items) ? payload.items : [],
+      total: Number(payload.total || 0),
+      pagina: Number(payload.pagina || effectivePage),
+      tamanhoPagina: Number(payload.tamanhoPagina || 25),
+      totalPaginas: Number(payload.totalPaginas || 1),
+      summary: payload.summary || prev.summary || null,
+    }));
+    return payload;
+  };
+
+  const loadPncpSearchJobs = async ({ hydrateActive = false } = {}) => {
+    try {
+      const response = await axios.get('/api/licitacoes/pncp/search/jobs');
+      const jobs = Array.isArray(response.data) ? response.data : [];
+      setPncpSearchJobs(jobs);
+      if (hydrateActive && jobs.length > 0) {
+        let storedId = activePncpSearchJobId;
+        try {
+          storedId = storedId || localStorage.getItem('pncp_active_search_job_id');
+        } catch {}
+        const storedJob = storedId ? jobs.find(job => String(job.id) === String(storedId)) : null;
+        const preferredJob = storedJob
+          || jobs.find(job => ['queued', 'running', 'paused_rate_limit'].includes(job.status))
+          || jobs[0];
+        if (preferredJob && String(preferredJob.id) !== String(activePncpSearchJobId || '')) {
+          await openPncpSearchJob(preferredJob.id, { refreshJobs: false });
+        }
+      }
+      return jobs;
+    } catch (error) {
+      console.error('Error loading PNCP jobs:', error);
+      return [];
+    }
+  };
+
+  const openPncpSearchJob = async (jobId, { refreshJobs = true } = {}) => {
+    if (!jobId) return;
+    try {
+      const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}`);
+      setActivePncpSearchJobId(jobId);
+      applyPncpJobSnapshot(response.data);
+      await loadPncpJobResults(jobId, 1);
+      if (response.data?.filters) {
+        setPncpSearchFilters(prev => ({
+          ...prev,
+          ...response.data.filters,
+          usar_ia: response.data.filters.usar_ia === undefined ? prev.usar_ia : String(response.data.filters.usar_ia) !== 'false',
+        }));
+      }
+      try {
+        localStorage.setItem('pncp_active_search_job_id', jobId);
+      } catch {}
+      if (refreshJobs) loadPncpSearchJobs();
+    } catch (error) {
+      console.error('Error opening PNCP job:', error);
+      if (error.response?.status === 404) {
+        setActivePncpSearchJobId(null);
+        try {
+          localStorage.removeItem('pncp_active_search_job_id');
+        } catch {}
+      }
+    }
+  };
+
+  const cancelPncpSearchJob = async (jobId) => {
+    if (!jobId) return;
+    try {
+      await axios.post(`/api/licitacoes/pncp/search/deep/${jobId}/cancel`);
+      await loadPncpSearchJobs();
+      if (activePncpSearchJobId === jobId) await openPncpSearchJob(jobId);
+    } catch (error) {
+      console.error('Error cancelling PNCP job:', error);
+    }
+  };
+
+  const convertPncpSearchJobToWatchlist = async (jobId) => {
+    if (!jobId) return;
+    const name = window.prompt('Nome da watchlist:', pncpSearchFilters.q || 'Watchlist PNCP');
+    if (name === null) return;
+    try {
+      await axios.post(`/api/licitacoes/pncp/search/deep/${jobId}/watchlist`, { nome: name });
+      await loadPncpSearchJobs();
+      setLicitacaoSubview('editais_watchlist');
+    } catch (error) {
+      alert(`Erro: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
+  const addPncpCustomTerms = () => {
+    const terms = splitTermsInput(pncpCustomTermInput);
+    if (!terms.length) return;
+    setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, ...terms])));
+    setPncpCustomTermInput('');
+  };
+
+  const postPncpSearchJobTerms = async (jobId, payload) => {
+    if (!jobId) throw new Error('Nenhuma busca selecionada.');
+    try {
+      return await axios.post(`/api/licitacoes/pncp/search/deep-terms/${jobId}`, payload);
+    } catch (error) {
+      if (error.response?.status === 404) {
+        setActivePncpSearchJobId(null);
+        try {
+          localStorage.removeItem('pncp_active_search_job_id');
+        } catch {}
+        await loadPncpSearchJobs({ hydrateActive: true });
+        throw new Error('Essa busca nao foi encontrada no backend atual. Reabra uma busca recente ou reinicie o backend local para carregar a rota nova.');
+      }
+      throw error;
+    }
+  };
+
+  const addTermsToActivePncpJob = async () => {
+    const terms = splitTermsInput(pncpActiveJobTermInput);
+    if (!activePncpSearchJobId || !terms.length) return;
+    try {
+      await postPncpSearchJobTerms(activePncpSearchJobId, { terms });
+      setPncpActiveJobTermInput('');
+      await openPncpSearchJob(activePncpSearchJobId);
+    } catch (error) {
+      alert(`Erro: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
   const runPncpSearch = async (page = 1, overrides = {}) => {
     setPncpSearchLoading(true);
     const effectiveFilters = { ...pncpSearchFilters, ...overrides };
+    let startedJob = false;
     try {
-      const response = await axios.get('/api/licitacoes/pncp/search', {
-        params: {
+      const response = await axios.post('/api/licitacoes/pncp/search/deep-start', {
+        filters: {
           q: effectiveFilters.q,
           tipos_documento: effectiveFilters.tipos_documento,
           status: effectiveFilters.status,
@@ -4738,20 +4990,182 @@ function App() {
           unidade_codigo: effectiveFilters.unidade_codigo || (String(pncpUasgLookupQuery || '').trim().length >= 2 ? pncpUasgLookupQuery : undefined),
           ordenacao: effectiveFilters.ordenacao,
           usar_ia: effectiveFilters.usar_ia ? 'true' : 'false',
-          pagina: page,
-          tam: 50,
         },
+        terms: [effectiveFilters.q, ...pncpAcceptedPositiveTerms].filter(Boolean),
+        accepted_positive_terms: pncpAcceptedPositiveTerms,
+        accepted_negative_terms: pncpAcceptedNegativeTerms,
+        suggested_positive_terms: pncpSuggestedTerms.positivos || [],
+        suggested_negative_terms: pncpSuggestedTerms.negativos || [],
       });
-      setPncpSearchResults(response.data || { items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
+      const jobId = response.data?.job_id;
+      startedJob = Boolean(jobId);
+      setActivePncpSearchJobId(jobId || null);
+      if (jobId) {
+        try {
+          localStorage.setItem('pncp_active_search_job_id', jobId);
+        } catch {}
+      }
+      if (jobId) {
+        const optimisticJob = {
+          id: jobId,
+          nome: effectiveFilters.q || 'Busca PNCP',
+          status: response.data?.reused ? response.data.status || 'queued' : 'queued',
+          filters: effectiveFilters,
+          terms: [effectiveFilters.q, ...pncpAcceptedPositiveTerms].filter(Boolean),
+          negative_terms: pncpAcceptedNegativeTerms,
+          progress: {
+            current_term: '',
+            terms_done: 0,
+            terms_total: [effectiveFilters.q, ...pncpAcceptedPositiveTerms].filter(Boolean).length,
+            items_collected: 0,
+          },
+          total: 0,
+          updated_at: new Date().toISOString(),
+        };
+        setPncpSearchJobs(prev => [optimisticJob, ...prev.filter(job => String(job.id) !== String(jobId))].slice(0, 20));
+      }
       setPncpResultScope('visible');
       setShowPncpHidden(false);
+      await loadPncpSearchJobs();
+      if (jobId) setTimeout(() => openPncpSearchJob(jobId), response.data?.reused ? 100 : 900);
     } catch (error) {
       console.error('Error searching PNCP:', error);
-      setPncpSearchResults({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
     } finally {
-      setPncpSearchLoading(false);
+      if (!startedJob) setPncpSearchLoading(false);
     }
   };
+
+  const runPncpOutcomeSearch = async (page = 1, overrides = {}) => {
+    setPncpOutcomeLoading(true);
+    setPncpOutcomeError('');
+    const effectiveFilters = { ...pncpOutcomeFilters, ...overrides };
+    try {
+      const response = await axios.get('/api/licitacoes/pncp/resultados/search', {
+        params: {
+          q: effectiveFilters.q || undefined,
+          fornecedor: effectiveFilters.fornecedor || undefined,
+          fornecedor_ni: effectiveFilters.fornecedor_ni || undefined,
+          orgao_cnpj: effectiveFilters.orgao_cnpj || undefined,
+          uf: effectiveFilters.uf || undefined,
+          tipo: effectiveFilters.tipo || 'todos',
+          pagina: page,
+          tam: 20,
+          refresh: page === 1 ? 'true' : undefined,
+        },
+      });
+      setPncpOutcomeResults(response.data || { items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
+    } catch (error) {
+      console.error('Error searching PNCP outcomes:', error);
+      setPncpOutcomeError(error.response?.data?.error || error.message || 'Erro ao buscar resultados/contratos PNCP.');
+      setPncpOutcomeResults({ items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
+    } finally {
+      setPncpOutcomeLoading(false);
+    }
+  };
+
+  const openPncpOutcomeDossier = async (item) => {
+    const cnpj = String(item?.orgao_cnpj || '').replace(/\D/g, '');
+    const ano = String(item?.ano || '').trim();
+    const sequencial = String(item?.sequencial || '').trim();
+    if (!cnpj || !ano || !sequencial) return;
+    setPncpOutcomeDossierLoading(true);
+    try {
+      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/dossier`, {
+        params: { q: pncpOutcomeFilters.q || undefined },
+      });
+      setPncpOutcomeDossier(response.data);
+    } catch (error) {
+      console.error('Error loading PNCP dossier:', error);
+    } finally {
+      setPncpOutcomeDossierLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Licitações') return;
+    loadPncpSearchJobs({ hydrateActive: true });
+  }, [authStatus.authenticated, activeView]);
+
+  useEffect(() => {
+    try {
+      if (activePncpSearchJobId) {
+        localStorage.setItem('pncp_active_search_job_id', activePncpSearchJobId);
+      } else {
+        localStorage.removeItem('pncp_active_search_job_id');
+      }
+    } catch {}
+  }, [activePncpSearchJobId]);
+
+  useEffect(() => {
+    const q = String(pncpSearchFilters.q || '').trim();
+    if (!authStatus.authenticated || q.length < 3 || !pncpSearchFilters.usar_ia) {
+      setPncpSuggestedTerms({ positivos: [], negativos: [], fonte: null });
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setPncpSuggestionLoading(true);
+      try {
+        const response = await axios.get('/api/licitacoes/termos-correlatos', { params: { q } });
+        if (!cancelled) {
+          setPncpSuggestedTerms({
+            positivos: Array.isArray(response.data?.positivos) ? response.data.positivos.slice(0, 8) : [],
+            negativos: Array.isArray(response.data?.negativos) ? response.data.negativos.slice(0, 8) : [],
+            fonte: response.data?.fonte || null,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) setPncpSuggestedTerms({ positivos: [], negativos: [], fonte: null });
+      } finally {
+        if (!cancelled) setPncpSuggestionLoading(false);
+      }
+    }, 650);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [authStatus.authenticated, pncpSearchFilters.q, pncpSearchFilters.usar_ia]);
+
+  useEffect(() => {
+    if (!activePncpSearchJobId) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const response = await axios.get(`/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}`);
+        if (stopped) return;
+        applyPncpJobSnapshot(response.data);
+        await loadPncpJobResults(activePncpSearchJobId, pncpJobResultsPage);
+        setPncpSearchJobs(prev => prev.map(job => (
+          String(job.id) === String(activePncpSearchJobId)
+            ? {
+                ...job,
+                status: response.data?.status || job.status,
+                progress: response.data?.progress || job.progress,
+                total: Number(response.data?.total || 0),
+                terms: response.data?.terms || job.terms,
+                negative_terms: response.data?.negative_terms || job.negative_terms,
+                summary: response.data?.summary || job.summary,
+                error: response.data?.error || null,
+              }
+            : job
+        )));
+        const status = response.data?.status;
+        if (['completed', 'failed', 'cancelled'].includes(status)) {
+          setPncpSearchLoading(false);
+          loadPncpSearchJobs();
+          return;
+        }
+        setPncpSearchLoading(true);
+        setTimeout(tick, status === 'paused_rate_limit' ? 15000 : 1800);
+      } catch (error) {
+        if (!stopped) setPncpSearchLoading(false);
+      }
+    };
+    tick();
+    return () => {
+      stopped = true;
+    };
+  }, [activePncpSearchJobId]);
 
   const savePncpWatchlist = async () => {
     const term = String(pncpSearchFilters.q || '').trim();
@@ -4766,8 +5180,8 @@ function App() {
     try {
       await axios.post('/api/licitacoes/editais/watchlist', {
         nome: name.trim() || term,
-        palavras_chave: [term],
-        termos_negativos: pncpSearchFilters.negative_terms,
+        palavras_chave: Array.from(new Set([term, ...pncpAcceptedPositiveTerms])).filter(Boolean),
+        termos_negativos: Array.from(new Set([...(splitTermsInput(pncpSearchFilters.negative_terms || '')), ...pncpAcceptedNegativeTerms])).filter(Boolean),
         usar_ia: pncpSearchFilters.usar_ia,
         filtros: {
           tipos_documento: pncpSearchFilters.tipos_documento,
@@ -6092,6 +6506,7 @@ function App() {
                     { name: 'Overview', view: 'Licitações', sub: 'overview', icon: Squares2X2Icon },
                     { name: 'Board', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon },
                     { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: DocumentMagnifyingGlassIcon },
+                    { name: 'Contratos/Resultados', view: 'Licitações', sub: 'resultados', icon: BanknotesIcon },
                     { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ClipboardDocumentListIcon },
                   ],
                 },
@@ -6306,6 +6721,7 @@ function App() {
                   {licitaçãoSubview === 'overview' ? 'Overview'
                     : licitaçãoSubview === 'board' ? 'Board'
                     : licitaçãoSubview === 'editais' || licitaçãoSubview === 'editais_watchlist' ? 'Busca Editais'
+                    : licitaçãoSubview === 'resultados' ? 'Contratos/Resultados'
                     : licitaçãoSubview === 'pca' || licitaçãoSubview === 'sinais' ? 'PCA'
                     : 'Watchlist'}
                 </button>
@@ -6450,6 +6866,7 @@ function App() {
                   { key: 'overview', label: 'Overview' },
                   { key: 'board', label: 'Board' },
                   { key: 'editais', label: 'Busca Editais' },
+                  { key: 'resultados', label: 'Contratos/Resultados' },
                   { key: 'pca', label: 'PCA' },
                 ].map(opt => (
                   <button
@@ -6596,7 +7013,7 @@ function App() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={savePncpWatchlist}
+                      onClick={() => activePncpSearchJobId ? convertPncpSearchJobToWatchlist(activePncpSearchJobId) : savePncpWatchlist()}
                       disabled={!String(pncpSearchFilters.q || '').trim()}
                       className="h-8 rounded-lg border border-border px-3 text-xs font-semibold text-ink disabled:opacity-50"
                     >
@@ -6730,8 +7147,10 @@ function App() {
                         className={input}
                       >
                         <option value="">Todos os Tipos</option>
-                        {tipoInstrumentoOptions.map(item => (
-                          <option key={item.id} value={item.id}>{item.nome}</option>
+                        {pncpEditalTipoInstrumentoOptions.map(item => (
+                          <option key={item.id} value={item.id}>
+                            {item.bucket === 'resultado' ? `${item.nome} (resultado/autorizacao)` : item.nome}
+                          </option>
                         ))}
                       </select>
                       <select
@@ -6744,6 +7163,22 @@ function App() {
                           <option key={item.id} value={item.id}>{item.nome}</option>
                         ))}
                       </select>
+                      {selectedPncpTipoInstrumento?.bucket === 'resultado' && (
+                        <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <span>
+                              Este tipo vem do PNCP e normalmente representa autorizacao/homologacao de contratacao direta, nao uma oportunidade aberta.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setLicitacaoSubview('resultados')}
+                              className="h-7 shrink-0 rounded-lg border border-amber-400/60 px-3 text-[11px] font-semibold text-amber-900 hover:bg-amber-300/10 dark:text-amber-50"
+                            >
+                              Ver Contratos/Resultados
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <div className="space-y-1">
                         <input
                           className="h-8 w-full rounded-lg border border-border bg-cardAlt px-3 text-xs"
@@ -6819,7 +7254,8 @@ function App() {
                           const ordenacao = event.target.value;
                           setPncpSearchFilters(prev => ({ ...prev, ordenacao }));
                           if ((pncpSearchResults.items || []).length > 0) {
-                            runPncpSearch(1, { ordenacao });
+                            if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { ordenacao });
+                            else runPncpSearch(1, { ordenacao });
                           }
                         }}
                         className={input}
@@ -6912,7 +7348,288 @@ function App() {
                       )}
                     </div>
 
-                    {pncpResultsWithVisibility.length > 0 && (
+                    {(!activePncpSearchJobId && pncpSearchLoading) && (
+                      <div className="mt-3 rounded-xl border border-primary/30 bg-primary/10 p-3">
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-ink">
+                              {activePncpSearchJob?.status === 'paused_rate_limit'
+                                ? 'Busca pausada pelo limite do PNCP'
+                                : activePncpSearchJob?.status === 'completed'
+                                  ? 'Busca concluída'
+                                  : activePncpSearchJob?.status === 'failed'
+                                    ? 'Busca falhou'
+                                    : 'Busca profunda rodando'}
+                            </p>
+                            <p className="mt-1 text-xs text-muted">
+                              {activePncpSearchJob?.status === 'paused_rate_limit'
+                                ? 'O app vai tentar retomar automaticamente. Os resultados parciais ficam salvos.'
+                                : `Termo atual: ${activePncpSearchJob?.progress?.current_term || 'preparando'} · ${Number(activePncpSearchJob?.total || pncpSearchResults.total || 0).toLocaleString('pt-BR')} resultado(s) encontrados`}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {activePncpSearchJobId && (
+                              <button type="button" onClick={() => openPncpSearchJob(activePncpSearchJobId)} className="h-8 rounded-lg border border-primary/30 px-3 text-xs font-semibold text-primary hover:bg-primary/10">
+                                Ver progresso
+                              </button>
+                            )}
+                            {activePncpSearchJobId && !['completed', 'failed', 'cancelled'].includes(activePncpSearchJob?.status) && (
+                              <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:bg-card">
+                                Cancelar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-border bg-cardAlt p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-ink">Termos da busca</p>
+                          {pncpSuggestionLoading && <span className="text-[11px] text-muted">IA sugerindo...</span>}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {String(pncpSearchFilters.q || '').trim() && (
+                            <span className="rounded-lg bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary">{pncpSearchFilters.q}</span>
+                          )}
+                          {pncpAcceptedPositiveTerms.map(term => (
+                            <button
+                              key={term}
+                              type="button"
+                              onClick={() => setPncpAcceptedPositiveTerms(prev => prev.filter(item => item !== term))}
+                              className="rounded-lg border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary"
+                              title="Remover termo aceito"
+                            >
+                              {term} x
+                            </button>
+                          ))}
+                          {pncpSuggestedTerms.positivos.filter(term => !pncpAcceptedPositiveTerms.includes(term) && normalizeText(term) !== normalizeText(pncpSearchFilters.q)).map(term => (
+                            <button
+                              key={term}
+                              type="button"
+                              onClick={() => setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, term])))}
+                              className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted hover:border-primary hover:text-primary"
+                              title="Adicionar termo sugerido"
+                            >
+                              + {term}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                          <input
+                            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-card px-2 text-xs"
+                            placeholder="Adicionar termo proprio"
+                            value={pncpCustomTermInput}
+                            onChange={(event) => setPncpCustomTermInput(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                addPncpCustomTerms();
+                              }
+                            }}
+                          />
+                          <button type="button" onClick={addPncpCustomTerms} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-card">
+                            Add
+                          </button>
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted">Cada chip vira uma frente propria da busca profunda.</p>
+                      </div>
+
+                      <div className="rounded-xl border border-border bg-cardAlt p-3">
+                        <p className="text-xs font-semibold text-ink">Exclusões sugeridas</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {pncpAcceptedNegativeTerms.map(term => (
+                            <button
+                              key={term}
+                              type="button"
+                              onClick={() => setPncpAcceptedNegativeTerms(prev => prev.filter(item => item !== term))}
+                              className="rounded-lg border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-semibold text-orange-700 dark:bg-orange-900/20 dark:text-orange-300"
+                              title="Remover exclusão"
+                            >
+                              {term} x
+                            </button>
+                          ))}
+                          {pncpSuggestedTerms.negativos.filter(term => !pncpAcceptedNegativeTerms.includes(term)).map(term => (
+                            <button
+                              key={term}
+                              type="button"
+                              onClick={() => setPncpAcceptedNegativeTerms(prev => Array.from(new Set([...prev, term])))}
+                              className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted hover:border-orange-300 hover:text-orange-600"
+                              title="Adicionar exclusão sugerida"
+                            >
+                              + {term}
+                            </button>
+                          ))}
+                          {pncpSuggestedTerms.negativos.length === 0 && pncpAcceptedNegativeTerms.length === 0 && (
+                            <span className="text-[11px] text-muted">Nenhuma exclusão aplicada automaticamente.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {pncpSearchJobs.length > 0 && (
+                      <div className="mt-3 rounded-xl border border-border bg-cardAlt p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-ink">Buscas recentes</p>
+                          <button type="button" onClick={loadPncpSearchJobs} className="text-xs text-primary hover:underline">Atualizar</button>
+                        </div>
+                        <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                          {pncpSearchJobs.slice(0, 5).map(job => {
+                            const meta = getPncpJobStatusMeta(job.status);
+                            const done = Number(job.progress?.terms_done || 0);
+                            const total = Math.max(Number(job.progress?.terms_total || job.terms?.length || 0), 1);
+                            const pct = ['completed', 'failed', 'cancelled'].includes(job.status) ? 100 : Math.min(98, Math.round((done / total) * 100));
+                            return (
+                            <div key={job.id} className={`rounded-lg border p-2 ${activePncpSearchJobId === job.id ? 'border-primary bg-primary/5' : 'border-border bg-card'}`}>
+                              <div className="flex items-start justify-between gap-2">
+                                <button type="button" onClick={() => openPncpSearchJob(job.id)} className="min-w-0 text-left">
+                                  <p className="truncate text-xs font-semibold text-ink">{job.nome || job.filters?.q || 'Pesquisa PNCP'}</p>
+                                  <p className="mt-0.5 text-[11px] text-muted">
+                                    {String(job.status || 'queued').replace(/_/g, ' ')} · {Number(job.total || 0).toLocaleString('pt-BR')} resultado(s)
+                                  </p>
+                                </button>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>{meta.label}</span>
+                              </div>
+                              <button type="button" onClick={() => openPncpSearchJob(job.id)} className="mt-2 block w-full text-left">
+                                <div className="h-1.5 overflow-hidden rounded-full bg-cardAlt">
+                                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                                </div>
+                                <p className="mt-1 text-[10px] text-muted">{done}/{total} termo(s) · {job.progress?.current_term || 'aguardando'}</p>
+                              </button>
+                              <div className="mt-2 flex gap-1.5">
+                                {!['completed', 'failed', 'cancelled'].includes(job.status) && (
+                                  <button type="button" onClick={() => cancelPncpSearchJob(job.id)} className="h-7 rounded-lg border border-border px-2 text-[11px] text-muted hover:bg-cardAlt">Cancelar</button>
+                                )}
+                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(job.id)} disabled={Boolean(job.watchlist_id)} className="h-7 rounded-lg border border-border px-2 text-[11px] text-muted hover:bg-cardAlt disabled:opacity-50">
+                                  {job.watchlist_id ? 'Watchlist' : 'Virar watchlist'}
+                                </button>
+                              </div>
+                            </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {activePncpSearchJobId && (
+                      <div className="mt-3 rounded-xl border border-primary/25 bg-card p-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-primary">Pagina da busca</p>
+                            <p className="mt-1 truncate text-sm font-semibold text-ink">{activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q || 'Pesquisa PNCP'}</p>
+                            <p className="mt-0.5 text-xs text-muted">
+                              {String(activePncpSearchJob?.status || 'carregando').replace(/_/g, ' ')} · {Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')} resultado(s) carregados aqui
+                            </p>
+                          </div>
+                          <div className="flex min-w-0 flex-1 gap-2 lg:max-w-lg">
+                            <input
+                              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-cardAlt px-2 text-xs"
+                              placeholder="Adicionar termo neste job"
+                              value={pncpActiveJobTermInput}
+                              onChange={(event) => setPncpActiveJobTermInput(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  addTermsToActivePncpJob();
+                                }
+                              }}
+                            />
+                            <button type="button" onClick={addTermsToActivePncpJob} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-cardAlt">
+                              Anexar
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-3 rounded-lg border border-border bg-cardAlt p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-semibold text-ink">Progresso da coleta e classificacao</p>
+                              <p className="mt-0.5 text-[11px] text-muted">
+                                Termo atual: {activePncpJobProgress.currentTerm || 'aguardando'} · pagina {activePncpJobProgress.currentPage || 'n/d'} · {activePncpJobProgress.totalCollected.toLocaleString('pt-BR')} bruto(s)
+                              </p>
+                            </div>
+                            <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getPncpJobStatusMeta(activePncpSearchJob?.status).className}`}>
+                              {getPncpJobStatusMeta(activePncpSearchJob?.status).label} · {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
+                            </span>
+                          </div>
+                          <div className="mt-2 h-2 overflow-hidden rounded-full bg-card">
+                            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${activePncpJobProgress.pct}%` }} />
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                            <div className="rounded-lg border border-border bg-card p-2">
+                              <p className="text-[10px] uppercase text-muted">Classificados</p>
+                              <p className="text-sm font-semibold text-ink">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
+                            </div>
+                            <div className="rounded-lg border border-border bg-card p-2">
+                              <p className="text-[10px] uppercase text-muted">Visiveis</p>
+                              <p className="text-sm font-semibold text-ink">{Number(pncpVisibilityCounts.visible || 0).toLocaleString('pt-BR')}</p>
+                            </div>
+                            <div className="rounded-lg border border-border bg-card p-2">
+                              <p className="text-[10px] uppercase text-muted">Alta aderencia</p>
+                              <p className="text-sm font-semibold text-ink">{Number(pncpSearchSummary.by_adherence?.alta?.count || 0).toLocaleString('pt-BR')}</p>
+                            </div>
+                            <div className="rounded-lg border border-border bg-card p-2">
+                              <p className="text-[10px] uppercase text-muted">Valor visivel</p>
+                              <p className="text-sm font-semibold text-ink">{formatCompactCurrency(visiblePncpSummary.total_value) || 'R$ 0'}</p>
+                            </div>
+                          </div>
+                        </div>
+                        {activePncpSearchJob?.terms?.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {activePncpSearchJob.terms.map(term => (
+                              <span key={term} className="rounded-lg bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary">{term}</span>
+                            ))}
+                          </div>
+                        )}
+                        {pncpSuggestedTerms.positivos?.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {pncpSuggestedTerms.positivos
+                              .filter(term => !(activePncpSearchJob?.terms || []).some(existing => normalizeText(existing) === normalizeText(term)))
+                              .slice(0, 5)
+                              .map(term => (
+                                <button
+                                  key={term}
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await postPncpSearchJobTerms(activePncpSearchJobId, { terms: [term] });
+                                      await openPncpSearchJob(activePncpSearchJobId);
+                                    } catch (error) {
+                                      alert(`Erro: ${error.response?.data?.error || error.message}`);
+                                    }
+                                  }}
+                                  className="rounded-lg border border-border bg-cardAlt px-2 py-1 text-[11px] text-muted hover:border-primary hover:text-primary"
+                                >
+                                  + IA: {term}
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                        {(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).length > 0 && (
+                          <div className="mt-3 rounded-lg border border-border bg-cardAlt p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs font-semibold text-ink">Auditoria dos termos</p>
+                              <span className="text-[11px] text-muted">{(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).length} termo(s)</span>
+                            </div>
+                            <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+                              {(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).slice(-6).map((run, index) => (
+                                <div key={`${run.term || index}-${index}`} className="rounded-lg border border-border bg-card px-2 py-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="truncate text-[11px] font-semibold text-ink">{run.term || 'termo'}</p>
+                                    <span className="text-[10px] text-muted">{run.pages_completed || 0}/{run.pages_requested || 0} pag.</span>
+                                  </div>
+                                  <p className="mt-0.5 text-[10px] text-muted">
+                                    {Number(run.items_collected || 0).toLocaleString('pt-BR')} coletado(s) · {run.stop_reason || 'rodando'}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {activePncpSearchJobId && pncpResultsWithVisibility.length > 0 && (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         {[
                           ['visible', 'Visíveis', pncpVisibilityCounts.visible],
@@ -6926,6 +7643,9 @@ function App() {
                             onClick={() => {
                               setPncpResultScope(scope);
                               setShowPncpHidden(false);
+                              if (activePncpSearchJobId) {
+                                loadPncpJobResults(activePncpSearchJobId, 1, { scope });
+                              }
                             }}
                             className={`h-8 rounded-lg border px-3 text-xs font-semibold ${pncpResultScope === scope ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:bg-cardAlt'}`}
                           >
@@ -6935,7 +7655,7 @@ function App() {
                       </div>
                     )}
 
-                    {pncpSearchResults.items?.length > 0 && (
+                    {activePncpSearchJobId && pncpSearchResults.items?.length > 0 && (
                       <div className="mt-3 rounded-xl border border-border bg-cardAlt p-3">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="grid flex-1 gap-2 md:grid-cols-4">
@@ -7000,7 +7720,7 @@ function App() {
                     )}
 
                     {/* Termos usados na busca */}
-                    {pncpSearchResults.termosUsados && pncpSearchResults.termosUsados.length > 1 && (
+                    {activePncpSearchJobId && pncpSearchResults.termosUsados && pncpSearchResults.termosUsados.length > 1 && (
                       <div className="mt-3 p-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
                         <p className="text-xs text-blue-700 dark:text-blue-300">
                           <strong>Termos buscados{pncpSearchResults.fonteIA ? ` (${pncpSearchResults.fonteIA})` : ''}:</strong>{' '}
@@ -7111,7 +7831,7 @@ function App() {
                     )}
 
                     {/* Lista de itens ocultos */}
-                    {showPncpHidden && pncpHiddenIds.length > 0 && (
+                    {activePncpSearchJobId && showPncpHidden && pncpHiddenIds.length > 0 && (
                       <div className="mt-4 rounded-xl border border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20 p-3">
                         <div className="flex items-center justify-between mb-2">
                           <h4 className="text-sm font-semibold text-orange-700 dark:text-orange-400">Itens Ocultos ({pncpHiddenIds.length})</h4>
@@ -7141,7 +7861,7 @@ function App() {
                     )}
 
                     {/* Resultados da busca PNCP */}
-                    {visiblePncpResults.length > 0 && !showPncpHidden && (
+                    {activePncpSearchJobId && visiblePncpResults.length > 0 && !showPncpHidden && (
                       <div className="mt-4 space-y-3 max-h-[34rem] overflow-y-auto pr-1 scrollbar-theme">
                         {visiblePncpResults.map((item) => (
                           <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 hover:bg-muted/10 transition-colors">
@@ -7261,11 +7981,11 @@ function App() {
                     )}
 
                     {/* Paginação */}
-                    {pncpSearchResults.totalPaginas > 1 && (
+                    {activePncpSearchJobId && pncpSearchResults.totalPaginas > 1 && (
                       <div className="mt-4 flex items-center justify-center gap-2">
                         <button
                           type="button"
-                          onClick={() => runPncpSearch(pncpSearchResults.pagina - 1)}
+                          onClick={() => activePncpSearchJobId ? loadPncpJobResults(activePncpSearchJobId, pncpSearchResults.pagina - 1) : runPncpSearch(pncpSearchResults.pagina - 1)}
                           disabled={pncpSearchResults.pagina <= 1 || pncpSearchLoading}
                           className="h-8 px-3 rounded-lg border border-border text-xs font-semibold disabled:opacity-50 hover:bg-cardAlt"
                         >
@@ -7276,7 +7996,7 @@ function App() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => runPncpSearch(pncpSearchResults.pagina + 1)}
+                          onClick={() => activePncpSearchJobId ? loadPncpJobResults(activePncpSearchJobId, pncpSearchResults.pagina + 1) : runPncpSearch(pncpSearchResults.pagina + 1)}
                           disabled={pncpSearchResults.pagina >= pncpSearchResults.totalPaginas || pncpSearchLoading}
                           className="h-8 px-3 rounded-lg border border-border text-xs font-semibold disabled:opacity-50 hover:bg-cardAlt"
                         >
@@ -7286,12 +8006,12 @@ function App() {
                     )}
 
                     {/* Mensagem quando não há resultados */}
-                    {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total === 0 && (
+                    {!activePncpSearchJobId && !pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total === 0 && (
                       <div className={`mt-4 text-center ${subtle} py-8`}>
                         Use os filtros acima e clique em "Buscar" para encontrar licitações no PNCP.
                       </div>
                     )}
-                    {!pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total > 0 && (
+                    {activePncpSearchJobId && !pncpSearchLoading && visiblePncpResults.length === 0 && pncpSearchResults.total > 0 && (
                       <div className={`mt-4 text-center ${subtle} py-8`}>
                         Todos os resultados desta página já estão no pipeline ou foram ocultados.
                       </div>
@@ -8256,6 +8976,195 @@ function App() {
               </>
               )}
               </>
+              )}
+
+              {licitaçãoSubview === 'resultados' && (
+                <div className="mt-6 space-y-4">
+                  <div className={`${card} p-4`}>
+                    <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
+                      <div>
+                        <h2 className="text-lg font-semibold text-ink">Contratos/Resultados PNCP</h2>
+                        <p className="text-xs text-muted mt-1">Consulte vencedores, valores homologados, contratos e atas por produto, fornecedor ou órgão.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => runPncpOutcomeSearch(1)}
+                        disabled={pncpOutcomeLoading}
+                        className={`${btnPrimary} h-9 px-4`}
+                      >
+                        <MagnifyingGlassIcon className="h-4 w-4" />
+                        {pncpOutcomeLoading ? 'Buscando...' : 'Buscar'}
+                      </button>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-6">
+                      <input
+                        className={`${input} md:col-span-2`}
+                        placeholder="Produto, item ou descrição"
+                        value={pncpOutcomeFilters.q}
+                        onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, q: event.target.value }))}
+                        onKeyDown={(event) => { if (event.key === 'Enter') runPncpOutcomeSearch(1); }}
+                      />
+                      <input
+                        className={input}
+                        placeholder="Fornecedor"
+                        value={pncpOutcomeFilters.fornecedor}
+                        onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, fornecedor: event.target.value }))}
+                      />
+                      <input
+                        className={input}
+                        placeholder="CNPJ/CPF fornecedor"
+                        value={pncpOutcomeFilters.fornecedor_ni}
+                        onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, fornecedor_ni: event.target.value }))}
+                      />
+                      <input
+                        className={input}
+                        placeholder="CNPJ órgão"
+                        value={pncpOutcomeFilters.orgao_cnpj}
+                        onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, orgao_cnpj: event.target.value }))}
+                      />
+                      <select
+                        className={select}
+                        value={pncpOutcomeFilters.tipo}
+                        onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, tipo: event.target.value }))}
+                      >
+                        <option value="todos">Todos</option>
+                        <option value="resultado">Resultado</option>
+                        <option value="contrato">Contrato</option>
+                        <option value="ata">Ata</option>
+                      </select>
+                    </div>
+                    {pncpOutcomeError && (
+                      <div className="mt-3 rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger">
+                        {pncpOutcomeError}
+                      </div>
+                    )}
+                  </div>
+
+                  {pncpOutcomeResults.items.length > 0 && (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className={`${cardAlt} p-3`}>
+                        <p className="text-xs text-muted">Registros exibidos</p>
+                        <p className="mt-1 text-xl font-bold">{pncpOutcomeResults.summary?.count || pncpOutcomeResults.items.length}</p>
+                      </div>
+                      <div className={`${cardAlt} p-3`}>
+                        <p className="text-xs text-muted">Valor encontrado</p>
+                        <p className="mt-1 text-xl font-bold">{formatCurrency(pncpOutcomeResults.summary?.total_value) || 'R$ 0,00'}</p>
+                      </div>
+                      <div className={`${cardAlt} p-3`}>
+                        <p className="text-xs text-muted">Total cache/busca</p>
+                        <p className="mt-1 text-xl font-bold">{Number(pncpOutcomeResults.total || 0).toLocaleString('pt-BR')}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {(pncpOutcomeResults.items || []).map(item => {
+                      const stageLabel = item.etapa_comercial === 'contracted' ? 'Contratada'
+                        : item.etapa_comercial === 'ata_available' ? 'Ata disponível'
+                        : item.etapa_comercial === 'resulted' ? 'Com resultado'
+                        : item.etapa_comercial === 'direct_authorized' ? 'Contratação direta autorizada'
+                        : 'Sem etapa confirmada';
+                      return (
+                        <div key={item.pncp_key} className={`${card} p-4`}>
+                          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">{stageLabel}</span>
+                                {item.uf && <span className="rounded-full bg-cardAlt px-2.5 py-1 text-xs text-muted">{item.uf}</span>}
+                                {item.modalidade && <span className="rounded-full bg-cardAlt px-2.5 py-1 text-xs text-muted">{item.modalidade}</span>}
+                              </div>
+                              <h3 className="text-sm font-semibold text-ink">{item.titulo || item.descricao || item.pncp_key}</h3>
+                              {item.descricao && <p className="mt-1 text-xs text-muted line-clamp-2">{item.descricao}</p>}
+                              <div className="mt-2 grid gap-1 text-xs text-muted md:grid-cols-2">
+                                <p><strong>Órgão:</strong> {item.orgao_nome || item.orgao_cnpj || 'n/d'}</p>
+                                <p><strong>Fornecedor:</strong> {item.fornecedor_nome || item.fornecedor_ni || 'n/d'}</p>
+                                <p><strong>Estimado:</strong> {formatCurrency(item.valor_estimado) || 'n/d'}</p>
+                                <p><strong>Homologado:</strong> {formatCurrency(item.valor_homologado) || 'n/d'}</p>
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 flex-row gap-2 lg:flex-col">
+                              <button
+                                type="button"
+                                onClick={() => openPncpOutcomeDossier(item)}
+                                className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-cardAlt"
+                              >
+                                Dossiê
+                              </button>
+                              {item.url && (
+                                <a href={item.url} target="_blank" rel="noopener noreferrer" className="h-8 rounded-lg border border-border px-3 text-xs font-semibold flex items-center justify-center hover:bg-cardAlt">
+                                  PNCP
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {!pncpOutcomeLoading && pncpOutcomeResults.items.length === 0 && (
+                      <div className={`${subtle} ${card} py-10 text-center`}>Busque por produto, fornecedor ou órgão para consultar resultados e contratos.</div>
+                    )}
+                  </div>
+
+                  {pncpOutcomeResults.totalPaginas > 1 && (
+                    <div className="flex items-center justify-center gap-2">
+                      <button type="button" className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50" disabled={pncpOutcomeResults.pagina <= 1 || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina - 1)}>Anterior</button>
+                      <span className="text-xs text-muted">{pncpOutcomeResults.pagina} / {pncpOutcomeResults.totalPaginas}</span>
+                      <button type="button" className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50" disabled={pncpOutcomeResults.pagina >= pncpOutcomeResults.totalPaginas || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina + 1)}>Próxima</button>
+                    </div>
+                  )}
+
+                  {pncpOutcomeDossier && (
+                    <div className="fixed inset-0 z-modal bg-black/50 flex items-center justify-center p-4">
+                      <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-lift">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-lg font-semibold">Dossiê PNCP</h3>
+                            <p className="text-xs text-muted mt-1">{pncpOutcomeDossier.normalized_item?.titulo || pncpOutcomeDossier.compra?.objetoCompra || 'Compra PNCP'}</p>
+                          </div>
+                          <button type="button" className="h-8 rounded-lg border border-border px-3 text-xs font-semibold" onClick={() => setPncpOutcomeDossier(null)}>Fechar</button>
+                        </div>
+                        {pncpOutcomeDossierLoading ? (
+                          <div className={`${subtle} py-8 text-center`}>Carregando dossiê...</div>
+                        ) : (
+                          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                            <div className={`${cardAlt} p-3`}>
+                              <h4 className="text-sm font-semibold">Totais</h4>
+                              <div className="mt-2 space-y-1 text-xs text-muted">
+                                <p>Valor estimado: <strong className="text-ink">{formatCurrency(pncpOutcomeDossier.totais?.valor_estimado) || 'n/d'}</strong></p>
+                                <p>Valor itens pertinentes: <strong className="text-ink">{formatCurrency(pncpOutcomeDossier.totais?.valor_itens_pertinentes) || 'n/d'}</strong></p>
+                                <p>Valor homologado: <strong className="text-ink">{formatCurrency(pncpOutcomeDossier.totais?.valor_homologado) || 'n/d'}</strong></p>
+                                <p>Itens: <strong className="text-ink">{pncpOutcomeDossier.totais?.total_itens || 0}</strong></p>
+                              </div>
+                            </div>
+                            <div className={`${cardAlt} p-3`}>
+                              <h4 className="text-sm font-semibold">Resultados</h4>
+                              <div className="mt-2 max-h-48 overflow-y-auto space-y-2">
+                                {(pncpOutcomeDossier.resultados || []).slice(0, 30).map((row, index) => (
+                                  <div key={`${row.numeroItem || index}-${row.niFornecedor || index}`} className="rounded-lg border border-border bg-card px-2 py-1.5 text-xs">
+                                    <p className="font-semibold text-ink">{row.nomeRazaoSocialFornecedor || row.niFornecedor || 'Fornecedor n/d'}</p>
+                                    <p className="text-muted">Item {row.numeroItem || 'n/d'} · {formatCurrency(row.valorTotalHomologado) || 'valor n/d'}</p>
+                                  </div>
+                                ))}
+                                {(pncpOutcomeDossier.resultados || []).length === 0 && <p className="text-xs text-muted">Nenhum resultado retornado pelo PNCP.</p>}
+                              </div>
+                            </div>
+                            <div className={`${cardAlt} p-3 lg:col-span-2`}>
+                              <h4 className="text-sm font-semibold">Itens</h4>
+                              <div className="mt-2 max-h-72 overflow-y-auto divide-y divide-border">
+                                {(pncpOutcomeDossier.itens || []).slice(0, 80).map((row, index) => (
+                                  <div key={`${row.numeroItem || index}`} className="py-2 text-xs">
+                                    <p className="font-medium text-ink">#{row.numeroItem || index + 1} {row.descricao || 'Item sem descrição'}</p>
+                                    <p className="text-muted">Qtd. {row.quantidade || 'n/d'} · Estimado {formatCurrency(row.valorTotal) || 'n/d'} · {row.materialOuServicoNome || ''}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {licitaçãoSubview === 'pca' && (
