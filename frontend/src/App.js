@@ -6177,23 +6177,39 @@ function App() {
 
           {activeView === 'Board' && (
             <>
-              <div className="mt-8 flex items-center gap-3">
-                <span className="text-xs font-semibold text-muted">Board view</span>
-                <div className="inline-flex items-center rounded-full border border-border bg-card p-1">
-                  <button
-                    type="button"
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'leads' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
-                    onClick={() => setActiveTab('leads')}
-                  >
-                    Leads (SDR)
-                  </button>
-                  <button
-                    type="button"
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'customers' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
-                    onClick={() => setActiveTab('customers')}
-                  >
-                    Novos Clientes (CS)
-                  </button>
+              <div className="mt-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Board</h2>
+                  <p className="text-sm text-muted mt-1">Pipeline {activeTab === 'leads' ? 'de leads (SDR)' : 'de clientes (CS)'}.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {(() => {
+                    const boardContacts = filteredContacts.filter(c => activeColumns.includes(c.custom_attributes?.Funil_Vendas));
+                    const cnt = boardContacts.length;
+                    const val = boardContacts.reduce((s, c) => s + (parseCurrency(c.custom_attributes?.Valor_Oportunidade) || 0), 0);
+                    return (
+                      <>
+                        <div className={`${cardAlt} px-4 py-2`}><span className={subtle}>Cards</span><p className="text-base font-bold text-ink dark:text-white leading-tight">{cnt}</p></div>
+                        <div className={`${cardAlt} px-4 py-2`}><span className={subtle}>Valor</span><p className="text-base font-bold text-ink dark:text-white leading-tight">{formatCompactCurrency(val) || 'R$ 0'}</p></div>
+                      </>
+                    );
+                  })()}
+                  <div className="inline-flex items-center rounded-full border border-border bg-card p-1">
+                    <button
+                      type="button"
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'leads' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
+                      onClick={() => setActiveTab('leads')}
+                    >
+                      Leads (SDR)
+                    </button>
+                    <button
+                      type="button"
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'customers' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
+                      onClick={() => setActiveTab('customers')}
+                    >
+                      Novos Clientes (CS)
+                    </button>
+                  </div>
                 </div>
               </div>
 
