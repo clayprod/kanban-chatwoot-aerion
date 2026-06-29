@@ -380,11 +380,20 @@ if (process.env.FATURAMENTO_DATABASE_URL) {
   }
 }
 
+// Metas: source of truth is bi.metas_aerion (same table Metabase + the old page use),
+// reached via faturamentoPool. Falls back to a local table when bi is not configured.
 app.get('/api/metas', async (req, res) => {
   const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
   try {
+    if (faturamentoPool) {
+      const { rows } = await faturamentoPool.query(
+        `SELECT ano, mes, meta_valor::float AS receita_meta FROM metas_aerion WHERE ano = $1 ORDER BY mes ASC`,
+        [ano]
+      );
+      return res.json(rows);
+    }
     const { rows } = await pool.query(
-      `SELECT ano, mes, vendedor, receita_meta, vendas_meta, sqls_meta FROM ${METAS_TABLE} WHERE ano = $1 ORDER BY mes ASC`,
+      `SELECT ano, mes, receita_meta FROM ${METAS_TABLE} WHERE ano = $1 ORDER BY mes ASC`,
       [ano]
     );
     res.json(rows);
@@ -397,21 +406,24 @@ app.get('/api/metas', async (req, res) => {
 app.put('/api/metas', requireAdmin, async (req, res) => {
   const ano = Number.parseInt(req.body?.ano, 10);
   const mes = Number.parseInt(req.body?.mes, 10);
-  const vendedor = String(req.body?.vendedor || '');
   if (!Number.isFinite(ano) || !Number.isFinite(mes) || mes < 1 || mes > 12) {
     return res.status(400).json({ error: 'ano/mes inválidos' });
   }
   const receita = Number(req.body?.receita_meta) || 0;
-  const vendas = Number.parseInt(req.body?.vendas_meta, 10) || 0;
-  const sqls = Number.parseInt(req.body?.sqls_meta, 10) || 0;
   try {
+    if (faturamentoPool) {
+      await faturamentoPool.query(
+        `INSERT INTO metas_aerion (ano, mes, meta_valor) VALUES ($1,$2,$3)
+         ON CONFLICT (ano, mes) DO UPDATE SET meta_valor = EXCLUDED.meta_valor`,
+        [ano, mes, receita]
+      );
+      return res.json({ ok: true });
+    }
     await pool.query(
-      `INSERT INTO ${METAS_TABLE} (ano, mes, vendedor, receita_meta, vendas_meta, sqls_meta, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())
-       ON CONFLICT (ano, mes, vendedor) DO UPDATE
-         SET receita_meta = EXCLUDED.receita_meta, vendas_meta = EXCLUDED.vendas_meta,
-             sqls_meta = EXCLUDED.sqls_meta, updated_at = now()`,
-      [ano, mes, vendedor, receita, vendas, sqls]
+      `INSERT INTO ${METAS_TABLE} (ano, mes, vendedor, receita_meta, updated_at)
+       VALUES ($1,$2,'',$3, now())
+       ON CONFLICT (ano, mes, vendedor) DO UPDATE SET receita_meta = EXCLUDED.receita_meta, updated_at = now()`,
+      [ano, mes, receita]
     );
     res.json({ ok: true });
   } catch (error) {
@@ -420,21 +432,27 @@ app.put('/api/metas', requireAdmin, async (req, res) => {
   }
 });
 
-// Realizado (faturamento) for a given month. Pluggable: requires FATURAMENTO_DATABASE_URL
-// and FATURAMENTO_QUERY (parameterized with $1=ano, $2=mes, returning a `receita` column).
+// Realizado (faturamento) for a month, from bi.vendas. The exact "Aerion scope" filter
+// can be overridden with FATURAMENTO_QUERY ($1=ano, $2=mes -> receita[, vendas]); the
+// default sums natureza_nf2='Venda' (group total — may need a narrower scope to match metas).
 app.get('/api/vendas/realizado', async (req, res) => {
   const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
   const mes = Number.parseInt(req.query.mes, 10) || (new Date().getMonth() + 1);
-  if (!faturamentoPool || !process.env.FATURAMENTO_QUERY) {
+  if (!faturamentoPool) {
     return res.json({ configured: false, ano, mes, receita: null, vendas: null });
   }
+  const query = process.env.FATURAMENTO_QUERY
+    || `SELECT COALESCE(SUM(valor_total_nota_item),0)::float AS receita,
+               COUNT(DISTINCT numero_nota)::int AS vendas
+          FROM vendas WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
   try {
-    const { rows } = await faturamentoPool.query(process.env.FATURAMENTO_QUERY, [ano, mes]);
+    const { rows } = await faturamentoPool.query(query, [ano, mes]);
     const row = rows[0] || {};
     res.json({
       configured: true, ano, mes,
       receita: Number(row.receita) || 0,
       vendas: row.vendas != null ? Number(row.vendas) : null,
+      scope: process.env.FATURAMENTO_QUERY ? 'custom' : 'venda_total',
     });
   } catch (error) {
     console.error('Error fetching realizado:', error);
