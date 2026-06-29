@@ -3300,6 +3300,9 @@ function App() {
   const [disparoSending, setDisparoSending] = useState(false);
   const [disparoResult, setDisparoResult] = useState(null);
   const [disparoConfigured, setDisparoConfigured] = useState(null);
+  const [disparoInstancias, setDisparoInstancias] = useState([]);
+  const [disparoInstancia, setDisparoInstancia] = useState('');
+  const [disparoNome, setDisparoNome] = useState('');
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
   const [licitaçãoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
@@ -3609,29 +3612,31 @@ function App() {
     }
   }, []);
 
-  const disparoRecipients = useMemo(() => {
-    const inStage = contacts.filter(c => !disparoStage || c.custom_attributes?.Funil_Vendas === disparoStage);
-    return inStage
-      .map(c => ({ name: c.name || '', phone: c.phone_number || c.custom_attributes?.Telefone || '' }))
-      .filter(r => r.phone);
-  }, [contacts, disparoStage]);
-
   useEffect(() => {
     if (!authStatus.authenticated || activeView !== 'Disparo WhatsApp') return;
     axios.get('/api/disparo/status')
       .then(r => setDisparoConfigured(Boolean(r.data?.configured)))
       .catch(() => setDisparoConfigured(false));
+    axios.get('/api/disparo/instancias')
+      .then(r => {
+        const list = r.data?.instancias || [];
+        setDisparoInstancias(list);
+        setDisparoInstancia(prev => prev || (list[0]?.id != null ? String(list[0].id) : ''));
+      })
+      .catch(() => setDisparoInstancias([]));
   }, [authStatus.authenticated, activeView]);
 
   const sendDisparo = useCallback(async () => {
-    if (!disparoMessage.trim() || !disparoRecipients.length || disparoSending) return;
+    if (!disparoMessage.trim() || !disparoStage || !disparoInstancia || disparoSending) return;
     setDisparoSending(true);
     setDisparoResult(null);
     try {
+      const inst = disparoInstancias.find(i => String(i.id) === String(disparoInstancia));
       const r = await axios.post('/api/disparo/send', {
-        audience: disparoStage || 'Todos os leads',
+        funil_vendas: [disparoStage],
+        instancias: [inst ? (inst.id ?? inst.instancia_nome ?? inst.nome) : disparoInstancia],
         message: disparoMessage,
-        recipients: disparoRecipients,
+        nomeCampanha: disparoNome || null,
       });
       setDisparoResult(r.data);
     } catch (error) {
@@ -3639,7 +3644,7 @@ function App() {
     } finally {
       setDisparoSending(false);
     }
-  }, [disparoMessage, disparoRecipients, disparoStage, disparoSending]);
+  }, [disparoMessage, disparoStage, disparoInstancia, disparoInstancias, disparoNome, disparoSending]);
 
   useEffect(() => {
     const interceptor = axios.interceptors.response.use(
@@ -8511,16 +8516,28 @@ function App() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
                 <div className="lg:col-span-2 space-y-5">
                   <div className={`${card} p-6`}>
-                    <h3 className={`${sectionTitle} text-base mb-4`}>Público</h3>
-                    <label className={`${subtle} block mb-1.5`}>Etapa do funil</label>
-                    <select value={disparoStage} onChange={(e) => setDisparoStage(e.target.value)} className={`${select} w-full sm:w-80`}>
-                      <option value="">Todos os leads</option>
-                      {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
-                    </select>
-                    <p className="mt-4 text-sm text-ink dark:text-white">
-                      <span className="text-2xl font-extrabold">{disparoRecipients.length}</span> destinatário(s) com telefone
-                      <span className={`${subtle} ml-1`}>(de {contacts.filter(c => !disparoStage || c.custom_attributes?.Funil_Vendas === disparoStage).length} na seleção)</span>
-                    </p>
+                    <h3 className={`${sectionTitle} text-base mb-4`}>Público & instância</h3>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Etapa do funil (destinatários)</label>
+                        <select value={disparoStage} onChange={(e) => setDisparoStage(e.target.value)} className={`${select} w-full`}>
+                          <option value="">Selecione a etapa…</option>
+                          {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Instância (WhatsApp)</label>
+                        <select value={disparoInstancia} onChange={(e) => setDisparoInstancia(e.target.value)} className={`${select} w-full`}>
+                          {!disparoInstancias.length && <option value="">—</option>}
+                          {disparoInstancias.map(i => (
+                            <option key={i.id} value={String(i.id)}>{(i.nome || i.instancia_nome)}{i.taxa_sucesso ? ` · ${i.taxa_sucesso}%` : ''}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <label className={`${subtle} block mb-1.5 mt-4`}>Nome da campanha (opcional)</label>
+                    <input value={disparoNome} onChange={(e) => setDisparoNome(e.target.value)} className={`${input} w-full`} placeholder="Ex: Reativação inbox — junho" />
+                    <p className={`${subtle} mt-3`}>O n8n resolve os contatos da etapa selecionada (mesmo motor do disparador atual: Evolution API, ritmo e agendamento).</p>
                   </div>
 
                   <div className={`${card} p-6`}>
@@ -8540,29 +8557,29 @@ function App() {
                   <div className={`${card} p-6`}>
                     <h3 className={`${sectionTitle} text-base mb-3`}>Pré-visualização</h3>
                     <div className="rounded-xl bg-cardAlt p-4 text-sm text-ink dark:text-white whitespace-pre-wrap min-h-[80px]">
-                      {disparoMessage.replace('{nome}', disparoRecipients[0]?.name?.split(' ')[0] || 'Fulano')}
+                      {disparoMessage.replace('{nome}', 'Fulano')}
                     </div>
-                    {disparoRecipients.length > 0 && (
-                      <p className={`${subtle} mt-3`}>Primeiros: {disparoRecipients.slice(0, 3).map(r => r.name || r.phone).join(', ')}{disparoRecipients.length > 3 ? '…' : ''}</p>
-                    )}
+                    <p className={`${subtle} mt-3`}>{disparoStage ? `Etapa: ${disparoStage}` : 'Selecione uma etapa do funil.'}</p>
                   </div>
 
                   <button
                     type="button"
                     onClick={sendDisparo}
-                    disabled={disparoSending || !disparoRecipients.length || !disparoMessage.trim()}
+                    disabled={disparoSending || !disparoStage || !disparoInstancia || !disparoMessage.trim()}
                     className={`${btnPrimary} w-full h-11`}
                   >
-                    {disparoSending ? 'Enviando…' : `Disparar para ${disparoRecipients.length}`}
+                    {disparoSending ? 'Iniciando…' : 'Iniciar disparo'}
                   </button>
 
                   {disparoResult && (
-                    <div className={`rounded-xl border p-4 text-sm ${disparoResult.error ? 'border-status-danger/30 bg-status-danger/10 text-status-danger' : disparoResult.configured ? 'border-status-success/30 bg-status-success/10 text-status-success' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
+                    <div className={`rounded-xl border p-4 text-sm ${disparoResult.error ? 'border-status-danger/30 bg-status-danger/10 text-status-danger' : disparoResult.configured && disparoResult.ok ? 'border-status-success/30 bg-status-success/10 text-status-success' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
                       {disparoResult.error
                         ? disparoResult.error
-                        : disparoResult.configured
-                          ? `Disparo enviado ao n8n para ${disparoResult.queued} contato(s).`
-                          : `Registrado ${disparoResult.queued} contato(s), mas o webhook do n8n ainda não está configurado (DISPARO_WEBHOOK_URL).`}
+                        : !disparoResult.configured
+                          ? 'Registrado, mas o webhook do n8n não está configurado (DISPARO_WEBHOOK_URL).'
+                          : disparoResult.campanhaId
+                            ? `Disparo iniciado! Campanha #${disparoResult.campanhaId}${disparoResult.totalEnfileirados != null ? ` — ${disparoResult.totalEnfileirados} na fila` : ''}.`
+                            : disparoResult.ok ? 'Disparo iniciado no n8n.' : 'O n8n recebeu, mas retornou um aviso.'}
                     </div>
                   )}
                 </div>
