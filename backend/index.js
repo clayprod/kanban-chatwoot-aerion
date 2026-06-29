@@ -6,6 +6,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const bcrypt = require('bcryptjs');
 
 require('dotenv').config();
 
@@ -21,8 +22,9 @@ app.use(express.json());
 const AUTH_EMAIL = process.env.AUTH_EMAIL;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET;
-const parsedAuthTtl = Number.parseInt(process.env.AUTH_TOKEN_TTL || '86400', 10);
-const AUTH_TOKEN_TTL = Number.isFinite(parsedAuthTtl) ? parsedAuthTtl : 86400;
+// Persistent login: default 30 days (override with AUTH_TOKEN_TTL in seconds).
+const parsedAuthTtl = Number.parseInt(process.env.AUTH_TOKEN_TTL || '2592000', 10);
+const AUTH_TOKEN_TTL = Number.isFinite(parsedAuthTtl) ? parsedAuthTtl : 2592000;
 const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'aerion_auth';
 const AUTH_PUBLIC_PATHS = new Set([
   '/auth/login',
@@ -119,9 +121,10 @@ const clearAuthCookie = (res) => {
   res.cookie(AUTH_COOKIE_NAME, '', { ...authCookieOptions, maxAge: 0 });
 };
 
-const issueAuthCookie = (res, email) => {
+const issueAuthCookie = (res, claims) => {
   const exp = Math.floor(Date.now() / 1000) + Math.max(1, AUTH_TOKEN_TTL);
-  const token = signAuthToken({ sub: email, exp });
+  const base = typeof claims === 'string' ? { sub: claims } : (claims || {});
+  const token = signAuthToken({ ...base, exp });
   res.cookie(AUTH_COOKIE_NAME, token, authCookieOptions);
 };
 
@@ -141,19 +144,37 @@ app.use('/api', (req, res, next) => {
   return next();
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   if (!isAuthConfigured()) {
     return res.status(500).json({ error: 'Auth not configured' });
   }
   const email = String(req.body?.email || '').trim();
   const password = String(req.body?.password || '');
+  // 1) Try the users table (real accounts with bcrypt hashes).
+  try {
+    const user = await getUserByEmail(email);
+    if (user) {
+      if (!user.active) {
+        return res.status(403).json({ error: 'Usuario inativo.' });
+      }
+      const ok = await bcrypt.compare(password, user.password_hash || '');
+      if (!ok) {
+        return res.status(401).json({ error: 'Credenciais invalidas.' });
+      }
+      issueAuthCookie(res, { sub: user.email, uid: user.id, role: user.role, name: user.name });
+      return res.json({ authenticated: true, email: user.email, name: user.name, role: user.role, allowed_views: user.allowed_views || [] });
+    }
+  } catch (error) {
+    console.error('login users lookup failed, falling back to env:', error.message);
+  }
+  // 2) Bootstrap fallback: single env credential (acts as admin).
   const emailMatches = safeCompare(email.toLowerCase(), AUTH_EMAIL.toLowerCase());
   const passwordMatches = safeCompare(password, AUTH_PASSWORD);
   if (!emailMatches || !passwordMatches) {
     return res.status(401).json({ error: 'Credenciais invalidas.' });
   }
-  issueAuthCookie(res, AUTH_EMAIL);
-  return res.json({ authenticated: true, email: AUTH_EMAIL });
+  issueAuthCookie(res, { sub: AUTH_EMAIL, role: 'admin', name: 'Admin' });
+  return res.json({ authenticated: true, email: AUTH_EMAIL, name: 'Admin', role: 'admin', allowed_views: null });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -161,7 +182,7 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ authenticated: false });
 });
 
-app.get('/api/auth/status', (req, res) => {
+app.get('/api/auth/status', async (req, res) => {
   if (!isAuthConfigured()) {
     return res.status(500).json({ authenticated: false, error: 'Auth not configured' });
   }
@@ -170,7 +191,25 @@ app.get('/api/auth/status', (req, res) => {
   if (!payload) {
     return res.json({ authenticated: false });
   }
-  return res.json({ authenticated: true, email: payload.sub });
+  // Enrich with fresh role/allowed_views from the DB when we have a user id.
+  let role = payload.role || 'member';
+  let name = payload.name || payload.sub;
+  let allowedViews = null;
+  if (payload.uid) {
+    try {
+      const fresh = await getUserById(payload.uid);
+      if (fresh) {
+        role = fresh.role;
+        name = fresh.name;
+        allowedViews = fresh.allowed_views;
+      }
+    } catch (error) {
+      console.error('auth status enrich failed:', error.message);
+    }
+  } else if (role === 'admin') {
+    allowedViews = null; // bootstrap admin sees everything
+  }
+  return res.json({ authenticated: true, email: payload.sub, name, role, allowed_views: allowedViews });
 });
 
 const pool = new Pool(
@@ -184,6 +223,126 @@ const pool = new Pool(
         port: 5432,
       }
 );
+
+// ===================== Auth / RBAC (Chatwoot-backed) =====================
+// Authenticate against Chatwoot's `users` table (Devise bcrypt) + `account_users`
+// role. Page-level access ('allowed_views') is stored app-side, editable by admin.
+const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '2', 10) || 2;
+const APP_ACCESS_TABLE = 'app_user_access';
+
+async function ensureAppAccessTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ${APP_ACCESS_TABLE} (
+        user_id INTEGER PRIMARY KEY,
+        allowed_views JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+  } catch (error) {
+    console.error('ensureAppAccessTable failed:', error.message);
+  }
+}
+ensureAppAccessTable();
+
+const mapChatwootRole = (cwRole) => (Number(cwRole) === 1 ? 'admin' : 'member');
+
+async function getUserByEmail(email) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.name, u.display_name, u.encrypted_password, u.confirmed_at,
+            au.role AS cw_role, acc.allowed_views
+       FROM users u
+       LEFT JOIN account_users au ON au.user_id = u.id AND au.account_id = $2
+       LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
+      WHERE LOWER(u.email) = LOWER($1)
+      ORDER BY au.role DESC NULLS LAST
+      LIMIT 1`,
+    [String(email || '').trim(), CHATWOOT_ACCOUNT_ID]
+  );
+  const u = rows[0];
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name || u.display_name || u.email,
+    password_hash: u.encrypted_password,
+    role: mapChatwootRole(u.cw_role),
+    allowed_views: Array.isArray(u.allowed_views) ? u.allowed_views : null,
+    active: true,
+  };
+}
+
+async function getUserById(id) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.name, u.display_name, au.role AS cw_role, acc.allowed_views
+       FROM users u
+       LEFT JOIN account_users au ON au.user_id = u.id AND au.account_id = $2
+       LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
+      WHERE u.id = $1
+      ORDER BY au.role DESC NULLS LAST
+      LIMIT 1`,
+    [id, CHATWOOT_ACCOUNT_ID]
+  );
+  const u = rows[0];
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name || u.display_name || u.email,
+    role: mapChatwootRole(u.cw_role),
+    allowed_views: Array.isArray(u.allowed_views) ? u.allowed_views : null,
+  };
+}
+
+const requireAdmin = (req, res, next) => {
+  if (req.auth && req.auth.role === 'admin') return next();
+  return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+};
+
+// List users (Chatwoot account members) + their app-side page access. Admin only.
+app.get('/api/users', requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id, u.email, COALESCE(u.name, u.display_name, u.email) AS name,
+              au.role AS cw_role, acc.allowed_views
+         FROM account_users au
+         JOIN users u ON u.id = au.user_id
+         LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
+        WHERE au.account_id = $1
+        ORDER BY name ASC`,
+      [CHATWOOT_ACCOUNT_ID]
+    );
+    res.json(rows.map(r => ({
+      id: r.id,
+      email: r.email,
+      name: r.name,
+      role: mapChatwootRole(r.cw_role),
+      allowed_views: Array.isArray(r.allowed_views) ? r.allowed_views : null,
+    })));
+  } catch (error) {
+    console.error('Error listing users:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Set the pages a user can see (app-side). Admin only.
+app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
+  const userId = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(userId)) return res.status(400).json({ error: 'Invalid id' });
+  const views = Array.isArray(req.body?.allowed_views) ? req.body.allowed_views.filter(v => typeof v === 'string') : [];
+  try {
+    await pool.query(
+      `INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (user_id) DO UPDATE SET allowed_views = EXCLUDED.allowed_views, updated_at = now()`,
+      [userId, JSON.stringify(views)]
+    );
+    res.json({ ok: true, user_id: userId, allowed_views: views });
+  } catch (error) {
+    console.error('Error updating user access:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 const HISTORY_TABLE = 'kanban_stage_history';
 const LICITACAO_TABLE = 'licitacao_opportunities';
@@ -995,7 +1154,12 @@ const fetchPncp = async (pathName, query = {}) => {
   try {
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+        Connection: 'close',
+        'User-Agent': 'KanbanDashboard/1.0 (+https://pncp.gov.br)',
+      },
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -1017,28 +1181,65 @@ const fetchPncpSearch = async (query = {}) => {
     }
   });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
-  try {
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`PNCP Search error ${response.status}: ${text.slice(0, 300)}`);
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+  return fetchJsonWithCurl(url.toString(), 60);
 };
 
 // Função para buscar detalhes de uma compra específica no PNCP
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchPncpSearchStable = async (query = {}, { retries = 2, minItemsWhenKnown = 1 } = {}) => {
+const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, reject) => {
+  const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  const args = [
+    ...(process.platform === 'win32' ? ['--ssl-no-revoke'] : []),
+    '--fail',
+    '--silent',
+    '--show-error',
+    '--location',
+    '--retry', '2',
+    '--retry-delay', '1',
+    '--retry-all-errors',
+    '--max-time', String(timeoutSeconds),
+    '-H', 'Accept: application/json',
+    '-H', 'Accept-Language: pt-BR,pt;q=0.9',
+    '-H', 'Connection: close',
+    '-H', 'User-Agent: KanbanDashboard/1.0 (+https://pncp.gov.br)',
+    url,
+  ];
+  const child = spawn(curlBin, args, { windowsHide: true });
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', chunk => {
+    stdout += chunk.toString('utf8');
+  });
+  child.stderr.on('data', chunk => {
+    stderr += chunk.toString('utf8');
+  });
+  child.on('error', reject);
+  child.on('close', code => {
+    if (code !== 0) {
+      reject(new Error(`curl exit ${code}: ${stderr.slice(0, 300)}`));
+      return;
+    }
+    try {
+      resolve(JSON.parse(stdout));
+    } catch (error) {
+      reject(new Error(`curl JSON parse error: ${error.message}; body=${stdout.slice(0, 200)}`));
+    }
+  });
+});
+
+const describeFetchError = (error) => {
+  const parts = [
+    error?.message,
+    error?.cause?.code,
+    error?.cause?.errno,
+    error?.cause?.syscall,
+  ].filter(Boolean);
+  return [...new Set(parts)].join(' | ') || 'erro desconhecido';
+};
+
+const fetchPncpSearchStable = async (query = {}, { retries = 4, minItemsWhenKnown = 1 } = {}) => {
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -1051,12 +1252,12 @@ const fetchPncpSearchStable = async (query = {}, { retries = 2, minItemsWhenKnow
     } catch (error) {
       lastError = error;
       if (attempt === retries) {
-        throw error;
+        throw new Error(describeFetchError(error));
       }
     }
-    await sleep(250 * (attempt + 1));
+    await sleep(350 * Math.pow(2, attempt));
   }
-  if (lastError) throw lastError;
+  if (lastError) throw new Error(describeFetchError(lastError));
   return { items: [], total: 0 };
 };
 
@@ -1093,17 +1294,23 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_AI_MODEL = process.env.OPENAI_AI_MODEL || 'gpt-4.1-mini';
 const GROQ_AI_MODEL = process.env.GROQ_AI_MODEL || 'llama-3.3-70b-versatile';
-const AI_RELATIONS_VERSION = 'v3';
+const AI_RELATIONS_VERSION = 'v5';
 
 // Cache simples para termos correlatos (evita chamadas repetidas)
 const termosCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
 const PNCP_SEARCH_RESPONSE_CACHE = new Map();
 const PNCP_SEARCH_RESPONSE_CACHE_TTL = 10 * 60 * 1000; // 10 minutos
+const PNCP_DEEP_SEARCH_JOBS = new Map();
+const PNCP_DEEP_SEARCH_JOB_TTL = 60 * 60 * 1000; // 1 hora
+const PNCP_DEEP_SEARCH_CANCELLED = new Set();
 const pncpCompraDetalheCache = new Map();
 const PNCP_DETALHE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
 const pncpCompraEnrichmentCache = new Map();
 const PNCP_ENRICHMENT_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
+let pncpDetalheRateLimitedUntil = 0;
+const PNCP_SCORE_HIGH_THRESHOLD = 68;
+const PNCP_SCORE_MEDIUM_THRESHOLD = 38;
 
 const removeAcentos = (value = '') => value
   .normalize('NFD')
@@ -1133,6 +1340,46 @@ const POSITIVE_EVIDENCE_HINTS = [
   'material', 'equipamento', 'dispositivo', 'componente', 'peca', 'fixacao', 'vesa', 'braco articulado',
   'ergonomia', 'nr17', 'catalogo', 'codigo item', 'unidade'
 ];
+
+const CONTRACT_FOCUS_PROFILES = {
+  aquisicao: {
+    label: 'Aquisição/compra',
+    positive: [
+      'aquisicao', 'aquisicao de', 'compra', 'compras', 'fornecimento', 'fornecimento de',
+      'material permanente', 'material de consumo', 'equipamento', 'equipamentos', 'produto',
+      'produtos', 'item', 'itens', 'unidade', 'kit', 'lote'
+    ],
+    negative: [
+      'prestacao de servico', 'prestacao de servicos', 'contratacao de empresa especializada',
+      'servico continuado', 'servicos continuados', 'mao de obra', 'manutencao preventiva',
+      'manutencao corretiva', 'locacao', 'aluguel', 'obra', 'reforma'
+    ],
+  },
+  servicos: {
+    label: 'Serviços',
+    positive: [
+      'servico', 'servicos', 'execucao de servico', 'execucao de servicos',
+      'prestacao de servico', 'prestacao de servicos', 'contratacao de empresa especializada',
+      'servico continuado', 'servicos continuados', 'manutencao', 'manutencao preventiva',
+      'manutencao corretiva', 'instalacao', 'suporte tecnico', 'treinamento',
+      'operacao assistida', 'mao de obra'
+    ],
+    negative: [
+      'aquisicao', 'compra', 'fornecimento de equipamento', 'fornecimento de equipamentos',
+      'material permanente', 'material de consumo', 'produto', 'produtos'
+    ],
+  },
+  obras: {
+    label: 'Obras/reformas',
+    positive: ['obra', 'obras', 'reforma', 'construcao', 'engenharia', 'execucao de obra', 'servicos de engenharia'],
+    negative: ['aquisicao', 'compra', 'fornecimento', 'prestacao de servicos continuados'],
+  },
+  locacao: {
+    label: 'Locação/aluguel',
+    positive: ['locacao', 'aluguel', 'cessao de uso', 'comodato', 'disponibilizacao de equipamento'],
+    negative: ['aquisicao', 'compra', 'fornecimento definitivo', 'material permanente'],
+  },
+};
 
 const GENERIC_BROAD_TERMS = new Set([
   'edital', 'editais', 'licitacao', 'licitacoes', 'contratacao', 'contratacoes', 'aquisicao', 'aquisicoes',
@@ -1288,6 +1535,38 @@ const mergeUniqueTerms = (...groups) => {
   return merged;
 };
 
+const rankPositiveSearchTerms = (original, terms = [], limit = 5) => {
+  const normalizedOriginal = normalizeSearchText(original);
+  const originalTokens = new Set(tokenizeSearchTerms(original));
+  const allowlist = getQuerySpecificAllowlist(original).map(term => normalizeSearchText(term));
+  const acronymLike = (term) => /^[a-z0-9]{2,6}$/.test(normalizeSearchText(term).replace(/\s+/g, ''));
+  const scored = sanitizeAiTerms(terms, { removeGeneric: true })
+    .filter(term => normalizeSearchText(term) !== normalizedOriginal)
+    .map((term, index) => {
+      const normalized = normalizeSearchText(term);
+      const words = tokenizeSearchTerms(term);
+      const sharedTokens = words.filter(token => originalTokens.has(token)).length;
+      const isSingleTerm = words.length === 1;
+      const inAllowlist = allowlist.includes(normalized);
+      let score = 0;
+      if (inAllowlist) score += 36 - allowlist.indexOf(normalized);
+      if (sharedTokens > 0) score += Math.min(12, sharedTokens * 6);
+      if (isSingleTerm) score += 24;
+      else if (words.length === 2) score += 14;
+      else if (words.length === 3) score += 6;
+      else score -= 10;
+      if (acronymLike(term) && inAllowlist) score += 8;
+      else if (acronymLike(term)) score += 2;
+      if (normalized.includes('aeronave') || normalized.includes('quadricoptero') || normalized.includes('multirrotor')) score += 12;
+      if (normalized.includes('veiculo aereo')) score += 5;
+      if (OVERBROAD_POSITIVE_TERMS.has(normalized)) score -= 30;
+      return { term, score, index };
+    })
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+
+  return scored.slice(0, limit).map(item => item.term);
+};
+
 const getPncpRawItemKey = (item = {}) => {
   const control = item.numero_controle_pncp || item.numeroControlePNCP;
   if (control) return `control:${control}`;
@@ -1301,11 +1580,53 @@ const getPncpRawItemKey = (item = {}) => {
   return `text:${normalizeSearchText(`${item.title || item.objetoCompra || ''} ${item.orgao_nome || item.nomeOrgao || ''}`).slice(0, 160)}`;
 };
 
+const extractPncpCompraIdentifiers = (item = {}) => {
+  const directCnpj = item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || item.orgaoEntidade?.cnpj || item.cnpjOrgaoEntidade || item.orgao?.cnpj;
+  const directAno = item.ano || item.anoCompra || item.compraAno || item.year;
+  const directSequencial = item.numero_sequencial || item.sequencialCompra || item.numeroSequencial || item.compraSequencial || item.sequencial;
+  if (directCnpj && directAno && directSequencial) {
+    return {
+      cnpj: String(directCnpj).replace(/\D/g, ''),
+      ano: String(directAno),
+      sequencial: String(directSequencial),
+    };
+  }
+
+  const url = normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem || item.links_pncp);
+  const match = String(url || '').match(/\/app\/editais\/(\d{14})\/(\d{4})\/(\d+)/);
+  if (match) {
+    return { cnpj: match[1], ano: match[2], sequencial: match[3] };
+  }
+
+  const control = String(item.numero_controle_pncp || item.numeroControlePNCP || '').trim();
+  const controlMatch = control.match(/^(\d{14})-\d+-\d+\/(\d{4})\/(\d+)$/) || control.match(/^(\d{14}).*?(\d{4}).*?(\d+)$/);
+  if (controlMatch) {
+    return { cnpj: controlMatch[1], ano: controlMatch[2], sequencial: controlMatch[3] };
+  }
+
+  return { cnpj: '', ano: '', sequencial: '' };
+};
+
 const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
 
   if (q.includes('drone')) {
-    return ['uav', 'vant', 'rpa', 'quadricoptero', 'multirrotor', 'aeronave remotamente pilotada', 'veiculo aereo nao tripulado'];
+    return [
+      'vant',
+      'rpa',
+      'uav',
+      'quadricoptero',
+      'aeronave remotamente pilotada',
+      'aeronave nao tripulada',
+      'multirrotor',
+      'veiculo aereo nao tripulado',
+      'arp',
+      'aeronaves remotamente pilotadas',
+      'aeronaves nao tripuladas',
+      'uas',
+      'vants',
+      'rpas',
+    ];
   }
 
   if (q.includes('suporte') && q.includes('monitor')) {
@@ -1479,6 +1800,9 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
   if (!cnpj || !ano || !sequencial) {
     return null;
   }
+  if (Date.now() < pncpDetalheRateLimitedUntil) {
+    return null;
+  }
 
   const cacheKey = `${cnpj}/${ano}/${sequencial}`;
   const cached = pncpCompraDetalheCache.get(cacheKey);
@@ -1499,6 +1823,11 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
     pncpCompraDetalheCache.set(cacheKey, { value, timestamp: Date.now() });
     return value;
   } catch (error) {
+    if (String(error?.message || '').includes('429')) {
+      pncpDetalheRateLimitedUntil = Date.now() + 3 * 60 * 1000;
+      console.warn(`[PNCP Detalhe] rate limit recebido; pausando detalhes ate ${new Date(pncpDetalheRateLimitedUntil).toISOString()}`);
+      return null;
+    }
     if (error?.name !== 'AbortError') {
       console.error(`Erro ao consultar detalhe PNCP (${cacheKey}):`, error.message);
     }
@@ -1647,6 +1976,57 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
   }
 };
 
+const getPncpTotalEstimatedValue = (item) => {
+  const candidates = [
+    item?.valor_total_estimado,
+    item?.valorTotalEstimado,
+    item?.valor_global,
+    item?.valorGlobal,
+    item?.valor_total_homologado,
+    item?.valorTotalHomologado,
+  ];
+  for (const value of candidates) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
+};
+
+const fillPncpMissingEstimatedValues = async (items = [], { limit = 80, delayMs = 250 } = {}) => {
+  const result = [];
+  let checked = 0;
+  for (const item of items) {
+    const currentTotalValue = getPncpTotalEstimatedValue(item);
+    if (currentTotalValue || checked >= limit) {
+      result.push(item);
+      continue;
+    }
+    checked += 1;
+    const ids = extractPncpCompraIdentifiers(item);
+    const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
+    if (!detalhe) {
+      result.push(item);
+      if (Date.now() < pncpDetalheRateLimitedUntil) {
+        result.push(...items.slice(result.length));
+        break;
+      }
+      if (delayMs > 0) await sleep(delayMs);
+      continue;
+    }
+    result.push({
+      ...item,
+      valor_total_estimado: detalhe.valor_total_estimado ?? item?.valor_total_estimado ?? null,
+      valor_total_homologado: detalhe.valor_total_homologado ?? item?.valor_total_homologado ?? null,
+      modo_disputa_id: item?.modo_disputa_id || detalhe.modo_disputa_id,
+      modo_disputa_nome: item?.modo_disputa_nome || detalhe.modo_disputa_nome,
+      tipo_id: item?.tipo_id || detalhe.tipo_instrumento_convocatorio_id,
+      tipo_nome: item?.tipo_nome || detalhe.tipo_instrumento_convocatorio_nome,
+    });
+    if (delayMs > 0) await sleep(delayMs);
+  }
+  return result;
+};
+
 const normalizeOpportunityLinks = (links) => {
   const normalized = { ...asJsonObject(links) };
   const pncpUrl = normalizePncpItemUrl(normalized.pncp || normalized.links_pncp || null);
@@ -1698,6 +2078,10 @@ Regras:
 - NUNCA inclua termos genéricos: edital, licitação, contratação, aquisição, compra, serviço, fornecimento, material, item.
 - NUNCA inclua hipônimos amplos ou vagos: aparelho, equipamento, dispositivo, produto, sistema, maquinário.
 - Positivos devem ser sinônimos diretos, variações técnicas, nomes comerciais usuais e siglas canônicas (máx 8).
+- Como a busca vai usar no máximo 5 positivos, escolha os termos ABSOLUTAMENTE mais correlacionados ao termo pesquisado.
+- Priorize termos únicos de alta correlação, sejam palavras ou siglas. Uma palavra maior pode ser melhor que uma sigla se for mais relevante.
+- Use frases longas só quando a correlação delas for maior que a de qualquer termo único equivalente.
+- Em frases multi-palavra, a ordem das palavras importa; não gere frase cuja utilidade dependa de embaralhar palavras.
 - NÃO use apenas variação lexical rasa da mesma palavra sem ganho semântico.
 - Inclua abreviações e siglas relevantes quando existirem.
 - Negativos devem ser ambiguidades comuns do mesmo radical/palavra (máx 8).
@@ -1766,6 +2150,10 @@ Regras:
 - NUNCA inclua termos genéricos: edital, licitação, contratação, aquisição, compra, serviço, fornecimento, material, item.
 - NUNCA inclua hipônimos amplos ou vagos: aparelho, equipamento, dispositivo, produto, sistema, maquinário.
 - Positivos devem ser sinônimos diretos, variações técnicas, nomes comerciais usuais e siglas canônicas (máx 8).
+- Como a busca vai usar no máximo 5 positivos, escolha os termos ABSOLUTAMENTE mais correlacionados ao termo pesquisado.
+- Priorize termos únicos de alta correlação, sejam palavras ou siglas. Uma palavra maior pode ser melhor que uma sigla se for mais relevante.
+- Use frases longas só quando a correlação delas for maior que a de qualquer termo único equivalente.
+- Em frases multi-palavra, a ordem das palavras importa; não gere frase cuja utilidade dependa de embaralhar palavras.
 - NÃO use apenas variação lexical rasa da mesma palavra sem ganho semântico.
 - Inclua abreviações e siglas relevantes quando existirem.
 - Negativos devem ser ambiguidades comuns do mesmo radical/palavra (máx 8).
@@ -1963,7 +2351,7 @@ const buildIntelligentRelations = (original, aiResult) => {
     buildFallbackNegativeTerms(original)
   );
 
-  const positivos = pickHighPrecisionPositiveTerms(original, positivosRaw);
+  const positivos = rankPositiveSearchTerms(original, pickHighPrecisionPositiveTerms(original, positivosRaw), 8);
   const negativos = pickNegativeTerms(original, negativosRaw);
 
   return { positivos, negativos };
@@ -3498,16 +3886,19 @@ app.get('/api/licitacoes/pncp/orgaos/:cnpj/compras', async (req, res) => {
 
 // Função auxiliar para normalizar item da busca PNCP
 // A API PNCP pode retornar campos com nomes diferentes dependendo do endpoint
-const normalizePncpItem = (item, matchedTermo = null) => ({
+const normalizePncpItem = (item, matchedTermo = null) => {
+  const ids = extractPncpCompraIdentifiers(item);
+  return ({
   id: item.id || getPncpRawItemKey(item),
   titulo: item.title || 'Sem título',
-  descricao: item.description || '',
-  url: normalizePncpItemUrl(item.item_url),
-  numero_controle_pncp: item.numero_controle_pncp,
-  numero_sequencial: item.numero_sequencial,
-  ano: item.ano,
+  descricao: item.description || item.descricao || item.objetoCompra || '',
+  url: normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem),
+  numero_controle_pncp: item.numero_controle_pncp || item.numeroControlePNCP,
+  numero_sequencial: ids.sequencial || item.numero_sequencial,
+  ano: ids.ano || item.ano,
+  orgao_cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
   orgao: {
-    cnpj: item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
+    cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
     nome: item.orgao_nome || item.nomeOrgao || item.orgaoNome || item.razaoSocialOrgao || '',
     id: item.orgao_id || item.idOrgao || item.orgaoId || '',
   },
@@ -3541,16 +3932,16 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
     id: item.municipio_id,
     nome: item.municipio_nome,
   },
-  data_publicacao: item.data_publicacao_pncp,
-  data_atualizacao: item.data_atualizacao_pncp,
-  data_inicio_vigencia: item.data_inicio_vigencia,
-  data_fim_vigencia: item.data_fim_vigencia,
-  valor_global: item.valor_global,
+  data_publicacao: item.data_publicacao_pncp || item.dataPublicacaoPncp || item.data_publicacao || item.dataPublicacao,
+  data_atualizacao: item.data_atualizacao_pncp || item.dataAtualizacaoPncp || item.data_atualizacao || item.dataAtualizacao,
+  data_inicio_vigencia: item.data_inicio_vigencia || item.dataInicioVigencia,
+  data_fim_vigencia: item.data_fim_vigencia || item.dataFimVigencia || item.dataEncerramentoProposta,
+  valor_global: item.valor_global ?? item.valorGlobal ?? item.valorTotalEstimado ?? null,
   valor_itens_pertinentes: item.valor_itens_pertinentes ?? null,
   itens_pertinentes_count: item.itens_pertinentes_count ?? null,
   itens_pertinentes: Array.isArray(item.itens_pertinentes) ? item.itens_pertinentes : [],
-  valor_total_estimado: item.valor_total_estimado ?? null,
-  valor_total_homologado: item.valor_total_homologado ?? null,
+  valor_total_estimado: item.valor_total_estimado ?? item.valorTotalEstimado ?? null,
+  valor_total_homologado: item.valor_total_homologado ?? item.valorTotalHomologado ?? null,
   total_itens: item.total_itens ?? null,
   itens_resumo_texto: item.itens_resumo_texto || item.__itens_resumo_texto || '',
   tem_resultado: item.tem_resultado,
@@ -3560,7 +3951,8 @@ const normalizePncpItem = (item, matchedTermo = null) => ({
     nome: item.modo_disputa_nome || null,
   },
   matched_termo: matchedTermo, // Termo que encontrou este resultado
-});
+  });
+};
 
 // Endpoint principal de busca de editais/contratações no PNCP
 const splitPncpTerms = (value = '') => String(value || '')
@@ -3572,14 +3964,69 @@ const getPncpBestEstimatedValue = (item) => {
   const candidates = [
     item?.valor_itens_pertinentes,
     item?.valor_total_estimado,
+    item?.valorTotalEstimado,
     item?.valor_global,
+    item?.valorGlobal,
     item?.valor_total_homologado,
+    item?.valorTotalHomologado,
   ];
   for (const value of candidates) {
     const numeric = Number(value);
     if (Number.isFinite(numeric) && numeric > 0) return numeric;
   }
   return null;
+};
+
+const getPncpRelevantItemsValue = (item) => {
+  const value = Number(item?.valor_itens_pertinentes);
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
+const getPncpValueScore = (value, { matchedItems = false } = {}) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  const maxPoints = matchedItems ? 16 : 9;
+  const minPoints = matchedItems ? 1 : 0;
+  const scaled = Math.log10(numeric + 1) - 2;
+  const points = Math.max(minPoints, Math.min(maxPoints, Math.round(scaled * (matchedItems ? 3.2 : 1.8))));
+  return points;
+};
+
+const classifyContractFocusMatch = (item, focus = 'aquisicao') => {
+  const normalizedFocus = normalizeSearchText(focus || 'aquisicao');
+  if (!normalizedFocus || normalizedFocus === 'todos') {
+    return null;
+  }
+  const profile = CONTRACT_FOCUS_PROFILES[normalizedFocus] || CONTRACT_FOCUS_PROFILES.aquisicao;
+  const text = [
+    item?.titulo,
+    item?.descricao,
+    item?.itens_resumo_texto,
+    item?.modalidade?.nome,
+    item?.tipo?.nome,
+  ].filter(Boolean).join(' ');
+  const positiveMatches = (profile.positive || []).filter(term => containsTermStrictFlexible(text, term));
+  const explicitNegativeMatches = (profile.negative || []).filter(term => containsTermStrictFlexible(text, term));
+  const offFocusMatches = Object.entries(CONTRACT_FOCUS_PROFILES)
+    .filter(([id]) => id !== normalizedFocus)
+    .flatMap(([, otherProfile]) => (otherProfile.positive || [])
+      .filter(term => containsTermStrictFlexible(text, term))
+      .map(term => ({ term, label: otherProfile.label })));
+
+  if (offFocusMatches.length > 0) {
+    const terms = offFocusMatches.slice(0, 3).map(match => match.term);
+    const labels = [...new Set(offFocusMatches.slice(0, 3).map(match => match.label))];
+    return { profile, status: 'mismatch', terms, delta: -14, offFocusLabels: labels };
+  }
+  if (positiveMatches.length > 0) {
+    return { profile, status: 'match', terms: positiveMatches.slice(0, 3), delta: 8 };
+  }
+  if (explicitNegativeMatches.length > 0) {
+    return { profile, status: 'mismatch', terms: explicitNegativeMatches.slice(0, 3), delta: -12 };
+  }
+  return { profile, status: 'unknown', terms: [], delta: -3 };
 };
 
 const getPncpDeadlineInfo = (item) => {
@@ -3632,60 +4079,86 @@ const decoratePncpSearchItem = (item, context = {}) => {
     item?.modalidade?.nome,
     item?.tipo?.nome,
   ].filter(Boolean).join(' '));
+  const positivePhrases = positiveTerms.filter(term => tokenizeSearchTerms(term).length >= 2);
+  const singlePositiveTerms = positiveTerms.filter(term => tokenizeSearchTerms(term).length <= 1);
   const queryTokens = tokenizeSearchTerms(qText).filter(t => t.length >= 3);
-  const positiveTokens = positiveTerms.flatMap(term => tokenizeSearchTerms(term)).filter(t => t.length >= 3);
+  const positiveTokens = singlePositiveTerms.flatMap(term => tokenizeSearchTerms(term)).filter(t => t.length >= 3);
   const negativeTokens = negativeTerms.flatMap(term => tokenizeSearchTerms(term)).filter(t => t.length >= 3);
   const matchedQueryTokens = [...new Set(queryTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
   const matchedPositiveTokens = [...new Set(positiveTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
+  const matchedPositivePhrases = [...new Set(positivePhrases.filter(term => containsTermStrictFlexible(normalizedText, term)))];
   const matchedNegativeTokens = [...new Set(negativeTokens.filter(token => containsTermStrictFlexible(normalizedText, token)))];
   const deadline = getPncpDeadlineInfo(item);
   const value = getPncpBestEstimatedValue(item);
+  const totalEstimatedValue = getPncpTotalEstimatedValue(item);
+  const relevantItemsValue = getPncpRelevantItemsValue(item);
   const itemCount = Number(item?.itens_pertinentes_count || 0);
   const stage = classifyPncpLegalStage(item);
   const judgement = classifyPncpJudgement(item);
   const source = item?.__from_consulta_uasg ? 'pncp_consulta' : 'pncp_search';
+  const matchedTerm = String(item?.matched_termo || '').trim();
+  const matchedByTechnicalTerm = matchedTerm
+    && normalizeSearchText(matchedTerm) !== normalizeSearchText(qText)
+    && containsTermStrictFlexible(`${item?.titulo || ''} ${item?.descricao || ''}`, matchedTerm);
+  const contractFocusMatch = classifyContractFocusMatch(item, context.contractFocus || 'aquisicao');
 
-  let score = 35;
+  let score = 25;
   const reasons = [];
+  const scoreBreakdown = [{ label: 'Resultado retornado pelo PNCP', value: 25 }];
+  const addScore = (valueDelta, label) => {
+    if (!valueDelta) {
+      return;
+    }
+    score += valueDelta;
+    scoreBreakdown.push({ label, value: valueDelta });
+    reasons.push(label);
+  };
+
   if (qText && containsTermStrictFlexible(item?.titulo || '', qText)) {
-    score += 22;
-    reasons.push('Objeto/titulo contem a busca');
+    addScore(24, 'Objeto/titulo contem a busca');
+  } else if (qText && containsTermStrictFlexible(item?.descricao || '', qText)) {
+    addScore(20, 'Objeto contem a busca');
+  } else if (matchedByTechnicalTerm) {
+    addScore(24, `Objeto contem termo tecnico: ${matchedTerm}`);
   } else if (matchedQueryTokens.length > 0) {
-    score += Math.min(18, matchedQueryTokens.length * 6);
-    reasons.push(`Termos no objeto: ${matchedQueryTokens.slice(0, 3).join(', ')}`);
+    addScore(Math.min(18, matchedQueryTokens.length * 6), `Termos no objeto: ${matchedQueryTokens.slice(0, 3).join(', ')}`);
   }
   if (matchedPositiveTokens.length > 0) {
-    score += Math.min(18, matchedPositiveTokens.length * 4);
-    reasons.push(`Aderencia semantica: ${matchedPositiveTokens.slice(0, 3).join(', ')}`);
+    addScore(Math.min(18, matchedPositiveTokens.length * 4), `Aderencia semantica: ${matchedPositiveTokens.slice(0, 3).join(', ')}`);
+  }
+  if (matchedPositivePhrases.length > 0) {
+    addScore(Math.min(16, matchedPositivePhrases.length * 8), `Frase tecnica exata: ${matchedPositivePhrases.slice(0, 2).join(', ')}`);
   }
   if (itemCount > 0) {
-    score += Math.min(16, 8 + itemCount * 2);
-    reasons.push(`${itemCount} item(ns) pertinente(s)`);
+    addScore(Math.min(14, 7 + itemCount * 2), `${itemCount} item(ns) pertinente(s)`);
+  }
+  if (relevantItemsValue) {
+    addScore(getPncpValueScore(relevantItemsValue, { matchedItems: true }), `Valor dos itens pertinentes: R$ ${relevantItemsValue.toLocaleString('pt-BR')}`);
   }
   if (deadline.urgency === 'ok') {
-    score += 8;
-    reasons.push(deadline.label);
+    addScore(8, deadline.label);
   } else if (deadline.urgency === 'warning') {
-    score += 4;
-    reasons.push(deadline.label);
+    addScore(4, deadline.label);
   } else if (deadline.urgency === 'critical') {
-    score -= 6;
-    reasons.push(deadline.label);
+    addScore(-6, deadline.label);
   } else if (deadline.urgency === 'expired') {
-    score -= 24;
-    reasons.push('Prazo vencido');
+    addScore(-24, 'Prazo vencido');
   }
-  if (value) {
-    score += value >= 100000 ? 8 : 4;
-    reasons.push('Valor estimado informado');
+  if (totalEstimatedValue) {
+    addScore(getPncpValueScore(totalEstimatedValue), `Valor total estimado: R$ ${totalEstimatedValue.toLocaleString('pt-BR')}`);
   }
   if (context.orgaoFilterRaw || context.unidadeFilterRaw) {
-    score += 8;
-    reasons.push('Filtro de orgao/UASG atendido');
+    addScore(8, 'Filtro de orgao/UASG atendido');
+  }
+  if (contractFocusMatch?.status === 'match') {
+    addScore(contractFocusMatch.delta, `Foco ${contractFocusMatch.profile.label}: ${contractFocusMatch.terms.join(', ')}`);
+  } else if (contractFocusMatch?.status === 'mismatch') {
+    addScore(contractFocusMatch.delta, `Fora do foco ${contractFocusMatch.profile.label}: ${contractFocusMatch.terms.join(', ')}`);
+  } else if (contractFocusMatch?.status === 'unknown') {
+    addScore(contractFocusMatch.delta, `Foco ${contractFocusMatch.profile.label} nao identificado`);
   }
   if (matchedNegativeTokens.length > 0) {
-    score -= Math.min(35, matchedNegativeTokens.length * 10);
-    reasons.push(`Possivel ruido: ${matchedNegativeTokens.slice(0, 3).join(', ')}`);
+    addScore(-Math.min(25, matchedNegativeTokens.length * 8), `Possivel ruido: ${matchedNegativeTokens.slice(0, 3).join(', ')}`);
   }
   if (!reasons.length) reasons.push('Resultado PNCP relacionado aos filtros');
 
@@ -3697,10 +4170,12 @@ const decoratePncpSearchItem = (item, context = {}) => {
     criterio_julgamento: judgement,
     prazo_info: deadline,
     score,
-    score_label: score >= 75 ? 'Alta aderencia' : score >= 50 ? 'Media aderencia' : 'Baixa aderencia',
+    score_label: score >= PNCP_SCORE_HIGH_THRESHOLD ? 'Alta aderencia' : score >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'Media aderencia' : 'Baixa aderencia',
+    score_breakdown: scoreBreakdown,
     match_reasons: reasons.slice(0, 5),
     highlights: {
       termos: [...new Set([...matchedQueryTokens, ...matchedPositiveTokens])].slice(0, 8),
+      frases: matchedPositivePhrases.slice(0, 5),
       negativos: matchedNegativeTokens.slice(0, 5),
     },
   };
@@ -3729,7 +4204,7 @@ const createPncpSearchSummary = (items = []) => {
     const value = getPncpBestEstimatedValue(item) || 0;
     summary.total_value += value;
 
-    const adherence = Number(item?.score || 0) >= 75 ? 'alta' : Number(item?.score || 0) >= 50 ? 'media' : 'baixa';
+    const adherence = Number(item?.score || 0) >= PNCP_SCORE_HIGH_THRESHOLD ? 'alta' : Number(item?.score || 0) >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'media' : 'baixa';
     summary.by_adherence[adherence].count += 1;
     summary.by_adherence[adherence].total_value += value;
 
@@ -3781,6 +4256,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       usar_ia = 'false', // Ativa busca inteligente com termos correlatos
       semantic = 'true',
       negative_terms = '',
+      contract_focus = 'aquisicao',
     } = req.query;
 
     const qText = String(q || '').trim();
@@ -3838,7 +4314,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     // Se usar_ia está ativado e há um termo de busca
     const pncpSearchCacheKey = JSON.stringify({
-      version: 4,
+      version: 8,
       q: normalizeSearchText(qText),
       tipos_documento,
       status: mappedStatus,
@@ -3855,6 +4331,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       usar_ia: iaForcada,
       semantic,
       negative_terms: normalizeSearchText(negative_terms),
+      contract_focus: normalizeSearchText(contract_focus || 'aquisicao'),
     });
     const cachedSearch = PNCP_SEARCH_RESPONSE_CACHE.get(pncpSearchCacheKey);
     if (cachedSearch && (Date.now() - cachedSearch.timestamp) < PNCP_SEARCH_RESPONSE_CACHE_TTL) {
@@ -3886,6 +4363,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       pages_completed: 0,
       total_reported: 0,
       items_collected: 0,
+      observed_page_size: null,
       errors: [],
       stop_reason: null,
       duration_ms: 0,
@@ -3895,11 +4373,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       // Buscar termos correlatos com IA
       const termosResult = await getTermosCorrelatos(qText);
       fonteIA = termosResult.fonte;
-      termosNegativos = [...new Set([...termosNegativos, ...(termosResult.negativos || [])])];
-      iaPositivos = mergeUniqueTerms(
+      iaPositivos = rankPositiveSearchTerms(qText, mergeUniqueTerms(
         deterministicPositiveTerms,
         termosResult.positivos || termosResult.correlatos || []
-      ).slice(0, 12);
+      ), 5);
 
       // Usar até 8 termos correlatos (além do original) para ampliar cobertura
       let termosParaBuscar = [qText, ...iaPositivos];
@@ -3919,22 +4396,51 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
       termosUsados = termosParaBuscar;
 
-      const maxItemsPerTerm = Math.min(500, Math.max(250, paginaNum * tamNum * 3));
-      const maxPagesPerTerm = 8;
       const pncpTermPageSize = Math.max(tamNum, 100);
+      const getTermSearchBudget = (term, index) => {
+        const normalized = normalizeSearchText(term).trim();
+        const tokens = tokenizeSearchTerms(term);
+        const isPhrase = tokens.length >= 2;
+        const isVerySpecificPhrase = isPhrase && (
+          normalized.includes('aeronave')
+          || normalized.includes('veiculo aereo')
+          || normalized.includes('quadricoptero')
+          || normalized.includes('multirrotor')
+        );
+        const broadAcronyms = new Set(['uav', 'uas', 'vant', 'vants', 'rpa', 'rpas', 'arp']);
+
+        if (index === 0) {
+          return { maxPages: 6, maxItems: 60, reason: 'termo_original_rapido' };
+        }
+        if (isVerySpecificPhrase) {
+          return { maxPages: 8, maxItems: 80, reason: 'termo_tecnico_preciso_rapido' };
+        }
+        if (broadAcronyms.has(normalized)) {
+          return { maxPages: 4, maxItems: 40, reason: 'sigla_ampla_rapida' };
+        }
+        if (isPhrase) {
+          return { maxPages: 6, maxItems: 60, reason: 'frase_correlata_rapida' };
+        }
+        return { maxPages: 4, maxItems: 40, reason: 'termo_correlato_rapido' };
+      };
 
       // Fazer buscas em paralelo (cada termo pode precisar de várias páginas)
-      const resultados = await mapWithConcurrency(termosParaBuscar, 2, async (termo, index) => {
+      const resultados = await mapWithConcurrency(termosParaBuscar, 1, async (termo, index) => {
         const run = createTermRun(termo, index === 0 ? 'original' : 'ai_or_alias', { tam: pncpTermPageSize });
         const startedAt = Date.now();
         try {
-          const targetForTerm = maxItemsPerTerm;
+          const budget = getTermSearchBudget(termo, index);
+          const targetForTerm = budget.maxItems;
+          run.max_pages = budget.maxPages;
+          run.target_items = targetForTerm;
+          run.budget_reason = budget.reason;
 
           const collected = [];
           let page = 1;
           let totalFromApi = 0;
+          let observedPageSize = 0;
 
-          while (collected.length < targetForTerm && page <= maxPagesPerTerm) {
+          while (collected.length < targetForTerm && page <= budget.maxPages) {
             run.pages_requested += 1;
             const data = await fetchPncpSearchStable({ ...baseParams, q: termo, pagina: page, tam: pncpTermPageSize });
             run.pages_completed += 1;
@@ -3947,11 +4453,15 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
               run.stop_reason = 'empty_page';
               break;
             }
+            if (observedPageSize === 0) {
+              observedPageSize = items.length;
+              run.observed_page_size = observedPageSize;
+            }
 
             collected.push(...items.map(item => ({ ...item, __matched_termo: termo })));
 
             // Se retornou menos itens que o solicitado, não há mais páginas
-            if (items.length < pncpTermPageSize) {
+            if (observedPageSize > 0 && items.length < observedPageSize) {
               run.stop_reason = 'short_page';
               break;
             }
@@ -4242,7 +4752,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
             if (seenIdsSet.has(itemId)) continue;
 
             // Filtro de status local (quando status !== 'todos')
-            if (mappedStatus && mappedStatus !== 'todos') {
+            if (mappedStatus && mappedStatus !== 'todos' && !shouldApplyReceivingProposalLocally) {
               const statusNorm = normalizeSearchText(mappedStatus.replace(/_/g, ' '));
               const itemStatus = normalizeSearchText(item.situacaoCompraDescricao || '');
               if (!itemStatus.includes(statusNorm)) continue;
@@ -4307,7 +4817,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     if (modo_disputa_id) {
       const detailedItems = await Promise.all(allItems.map(async (item) => {
-        const detalhe = await getPncpCompraDetalhe(item?.orgao_cnpj, item?.ano, item?.numero_sequencial);
+        const ids = extractPncpCompraIdentifiers(item);
+        const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
         if (!detalhe) {
           return item;
         }
@@ -4335,7 +4846,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         if (index >= maxEnrichmentItems) {
           return item;
         }
-        const enrichment = await getPncpCompraEnrichment(item?.orgao_cnpj, item?.ano, item?.numero_sequencial, qText);
+        const ids = extractPncpCompraIdentifiers(item);
+        const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, qText);
         if (!enrichment) {
           return item;
         }
@@ -4349,6 +4861,13 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
           itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || '',
         };
+      });
+    }
+
+    if (allItems.length > 0) {
+      allItems = await fillPncpMissingEstimatedValues(allItems, {
+        limit: iaRealmenteUsada ? 80 : Math.max(tamNum, 50),
+        delayMs: 250,
       });
     }
 
@@ -4369,7 +4888,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           return false;
         }
 
-        return !shouldExcludeByNegativeTerms(item, qText, termosUsados.slice(1), termosNegativos);
+        return true;
       })
       .map(item => normalizePncpItem(item, item.__matched_termo || qText || entityQuerySeed));
 
@@ -4451,6 +4970,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       qText,
       positiveTerms: semanticEnabled ? termosUsados : [],
       negativeTerms: termosNegativos,
+      contractFocus: contract_focus,
       orgaoFilterRaw,
       unidadeFilterRaw,
     }));
@@ -4517,6 +5037,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         orgao: orgaoFilterRaw || null,
         unidade: unidadeFilterRaw || null,
         modo_disputa_id: modo_disputa_id || null,
+        contract_focus: contract_focus || 'aquisicao',
       },
       terms: termosUsados,
       negative_terms: termosNegativos,
@@ -4529,6 +5050,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           : null,
       },
       term_runs: termRuns,
+      mode: iaRealmenteUsada ? 'fast_sync' : 'sync',
+      deep_search_available: iaRealmenteUsada,
       cache_hit: false,
     };
 
@@ -4568,6 +5091,270 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 });
 
 // Opções de status disponíveis para busca
+const cleanupPncpDeepJobs = () => {
+  const now = Date.now();
+  for (const [id, job] of PNCP_DEEP_SEARCH_JOBS.entries()) {
+    if (now - Number(job.updated_at || job.started_at || 0) > PNCP_DEEP_SEARCH_JOB_TTL) {
+      PNCP_DEEP_SEARCH_JOBS.delete(id);
+      PNCP_DEEP_SEARCH_CANCELLED.delete(id);
+    }
+  }
+};
+
+const buildDeepSearchItemsSnapshot = async ({
+  rawItems,
+  qText,
+  terms,
+  negativeTerms,
+  filters,
+  mappedStatus,
+  shouldApplyReceivingProposalLocally,
+  enrichValues = false,
+}) => {
+  const sourceItems = enrichValues
+    ? await fillPncpMissingEstimatedValues(rawItems, { limit: 250, delayMs: 400 })
+    : rawItems;
+  let items = sourceItems.map(item => normalizePncpItem(item, item.__matched_termo || qText));
+  if (shouldApplyReceivingProposalLocally) {
+    const now = Date.now();
+    items = items.filter(item => {
+      if (item?.cancelado) return false;
+      const raw = item?.data_fim_vigencia || item?.data_encerramento_proposta || item?.dataFimProposta || null;
+      if (!raw) {
+        const situacao = normalizeSearchText(item?.situacao?.nome || '');
+        return situacao.includes('divulgada') || situacao.includes('recebendo');
+      }
+      const deadline = new Date(raw).getTime();
+      return Number.isFinite(deadline) && deadline >= now;
+    });
+  }
+  items = items.map(item => decoratePncpSearchItem(item, {
+    qText,
+    positiveTerms: terms,
+    negativeTerms,
+    contractFocus: filters.contract_focus || 'aquisicao',
+    orgaoFilterRaw: filters.orgao_cnpj || '',
+    unidadeFilterRaw: filters.unidade_codigo || '',
+  })).sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
+  return {
+    items,
+    summary: createPncpSearchSummary(items),
+    query_plan: {
+      mode: 'deep_background',
+      terms,
+      negative_terms: negativeTerms,
+      raw_unique_collected: rawItems.length,
+      filtered_total: items.length,
+      filters_applied: {
+        status: mappedStatus || null,
+        receiving_proposal_local: shouldApplyReceivingProposalLocally,
+        contract_focus: filters.contract_focus || 'aquisicao',
+      },
+    },
+  };
+};
+
+const runPncpDeepSearchJob = async (jobId) => {
+  const job = PNCP_DEEP_SEARCH_JOBS.get(jobId);
+  if (!job) return;
+  const filters = job.filters || {};
+  const qText = String(filters.q || '').trim();
+  const terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 8);
+  const negativeTerms = mergeUniqueTerms(splitPncpTerms(filters.negative_terms || ''), job.negative_terms || []);
+  const mappedStatus = normalizeSearchText(filters.status) === 'suspenso' ? 'suspensa' : filters.status;
+  const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
+  const baseParams = {
+    tipos_documento: filters.tipos_documento || 'edital',
+    tam: 100,
+  };
+  if (mappedStatus && mappedStatus !== 'todos' && !shouldApplyReceivingProposalLocally) baseParams.status = mappedStatus;
+  if (filters.modalidade_licitacao_id) baseParams.modalidade_licitacao_id = filters.modalidade_licitacao_id;
+  if (filters.tipo_id) baseParams.tipo_id = filters.tipo_id;
+  if (filters.uf) baseParams.uf = filters.uf;
+  if (filters.esfera_id) baseParams.esfera_id = filters.esfera_id;
+
+  const getBudget = (term, index) => {
+    const normalized = normalizeSearchText(term);
+    const broad = new Set(['uav', 'uas', 'vant', 'vants', 'rpa', 'rpas', 'arp']);
+    const isTechnicalPhrase = tokenizeSearchTerms(term).length >= 2 && (normalized.includes('aeronave') || normalized.includes('veiculo aereo'));
+    if (index === 0) return { maxPages: 80, maxItems: 800, reason: 'termo_original_profundo' };
+    if (isTechnicalPhrase) return { maxPages: 100, maxItems: 1000, reason: 'termo_tecnico_profundo' };
+    if (broad.has(normalized.trim())) return { maxPages: 20, maxItems: 200, reason: 'sigla_ampla_profunda' };
+    return { maxPages: 40, maxItems: 400, reason: 'termo_correlato_profundo' };
+  };
+
+  const seen = new Set();
+  const rawItems = [];
+  const termRuns = [];
+  try {
+    job.status = 'running';
+    job.progress = { current_term: '', terms_done: 0, terms_total: terms.length, items_collected: 0 };
+    for (let index = 0; index < terms.length; index += 1) {
+      if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
+      const term = terms[index];
+      const budget = getBudget(term, index);
+      const run = {
+        term,
+        source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
+        endpoint: 'pncp_search',
+        pages_requested: 0,
+        pages_completed: 0,
+        total_reported: 0,
+        items_collected: 0,
+        observed_page_size: null,
+        max_pages: budget.maxPages,
+        target_items: budget.maxItems,
+        budget_reason: budget.reason,
+        errors: [],
+        stop_reason: null,
+        duration_ms: 0,
+      };
+      const startedAt = Date.now();
+      let page = 1;
+      let observedPageSize = 0;
+      let totalFromApi = 0;
+      job.progress.current_term = term;
+      while (run.items_collected < budget.maxItems && page <= budget.maxPages) {
+        if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
+        run.pages_requested += 1;
+        let data;
+        try {
+          data = await fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 2 });
+        } catch (error) {
+          run.errors.push(`pagina ${page}: ${error.message}`);
+          run.stop_reason = run.items_collected > 0 ? 'page_error_partial' : 'page_error';
+          break;
+        }
+        run.pages_completed += 1;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        if (page === 1) {
+          totalFromApi = Number(data?.total) || 0;
+          run.total_reported = totalFromApi;
+        }
+        if (!items.length) {
+          run.stop_reason = 'empty_page';
+          break;
+        }
+        if (!observedPageSize) {
+          observedPageSize = items.length;
+          run.observed_page_size = observedPageSize;
+        }
+        items.forEach(item => {
+          const key = getPncpRawItemKey(item);
+          if (key && !seen.has(key)) {
+            seen.add(key);
+            rawItems.push({ ...item, __matched_termo: term });
+          }
+        });
+        run.items_collected += items.length;
+        job.progress.items_collected = rawItems.length;
+        job.updated_at = Date.now();
+        if (items.length < observedPageSize) {
+          run.stop_reason = 'short_page';
+          break;
+        }
+        if (totalFromApi > 0 && run.items_collected >= totalFromApi) {
+          run.stop_reason = 'total_reached';
+          break;
+        }
+        page += 1;
+      }
+      if (!run.stop_reason) run.stop_reason = run.items_collected >= budget.maxItems ? 'target_reached' : 'max_pages';
+      run.duration_ms = Date.now() - startedAt;
+      termRuns.push(run);
+      job.term_runs = termRuns;
+      job.progress.terms_done = index + 1;
+      const partial = await buildDeepSearchItemsSnapshot({
+        rawItems,
+        qText,
+        terms,
+        negativeTerms,
+        filters,
+        mappedStatus,
+        shouldApplyReceivingProposalLocally,
+        enrichValues: false,
+      });
+      job.items = partial.items;
+      job.total = partial.items.length;
+      job.summary = partial.summary;
+      job.query_plan = { ...partial.query_plan, term_runs: termRuns, partial: true };
+      job.updated_at = Date.now();
+    }
+
+    const finalSnapshot = await buildDeepSearchItemsSnapshot({
+      rawItems,
+      qText,
+      negativeTerms,
+      terms,
+      filters,
+      mappedStatus,
+      shouldApplyReceivingProposalLocally,
+      enrichValues: true,
+    });
+    job.status = 'completed';
+    job.items = finalSnapshot.items;
+    job.total = finalSnapshot.items.length;
+    job.summary = finalSnapshot.summary;
+    job.query_plan = {
+      ...finalSnapshot.query_plan,
+      term_runs: termRuns,
+      partial: false,
+    };
+    job.updated_at = Date.now();
+  } catch (error) {
+    job.status = error.message === 'cancelled' ? 'cancelled' : 'failed';
+    job.error = error.message === 'cancelled' ? null : error.message;
+    job.updated_at = Date.now();
+  } finally {
+    PNCP_DEEP_SEARCH_CANCELLED.delete(jobId);
+  }
+};
+
+app.post('/api/licitacoes/pncp/search/deep-start', (req, res) => {
+  cleanupPncpDeepJobs();
+  const jobId = crypto.randomUUID();
+  PNCP_DEEP_SEARCH_JOBS.set(jobId, {
+    id: jobId,
+    status: 'queued',
+    filters: req.body?.filters || {},
+    terms: Array.isArray(req.body?.terms) ? req.body.terms : [],
+    negative_terms: Array.isArray(req.body?.negative_terms) ? req.body.negative_terms : [],
+    items: [],
+    total: 0,
+    progress: { current_term: '', terms_done: 0, terms_total: 0, items_collected: 0 },
+    term_runs: [],
+    started_at: Date.now(),
+    updated_at: Date.now(),
+  });
+  setImmediate(() => runPncpDeepSearchJob(jobId));
+  res.json({ job_id: jobId, status: 'queued' });
+});
+
+app.get('/api/licitacoes/pncp/search/deep/:jobId', (req, res) => {
+  cleanupPncpDeepJobs();
+  const job = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada ou expirada' });
+  res.json({
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    total: job.total,
+    items: ['running', 'completed'].includes(job.status) ? (job.items || []) : [],
+    summary: job.summary || null,
+    query_plan: job.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
+    error: job.error || null,
+  });
+});
+
+app.post('/api/licitacoes/pncp/search/deep/:jobId/cancel', (req, res) => {
+  const job = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada' });
+  PNCP_DEEP_SEARCH_CANCELLED.add(req.params.jobId);
+  job.status = 'cancelling';
+  job.updated_at = Date.now();
+  res.json({ ok: true, status: job.status });
+});
+
 app.get('/api/licitacoes/pncp/search/status-options', (req, res) => {
   res.json([
     { id: 'recebendo_proposta', nome: 'Recebendo Proposta' },
@@ -4762,7 +5549,6 @@ const runEditalWatchlistMatching = async () => {
       try {
         const r = await getTermosCorrelatos(positivos[0]);
         positivos = Array.from(new Set([...positivos, ...(r.positivos || r.correlatos || [])])).slice(0, 8);
-        negativos = Array.from(new Set([...negativos, ...(r.negativos || [])])).slice(0, 8);
       } catch (e) {
         console.warn('[editais] IA falhou para watchlist', watch.id, e.message);
       }
@@ -4816,9 +5602,6 @@ const runEditalWatchlistMatching = async () => {
           if (!((unidadeDigits.length >= 4 && itemUnidadeDigits.includes(unidadeDigits)) || itemUnidadeText.includes(unidadeText))) {
             continue;
           }
-        }
-        if (shouldExcludeByNegativeTerms(normalized, term, positivos, negativos)) {
-          continue;
         }
         const decorated = decoratePncpSearchItem(normalized, {
           qText: term,
@@ -5704,7 +6487,6 @@ const runPcaWatchlistMatching = async () => {
       try {
         const r = await getTermosCorrelatos(positivos[0]);
         positivos = Array.from(new Set([...positivos, ...(r.positivos || [])]));
-        negativos = Array.from(new Set([...negativos, ...(r.negativos || [])]));
       } catch (e) {
         console.warn('[pca] IA falhou para watchlist', watch.id, e.message);
       }
@@ -5834,7 +6616,6 @@ app.get('/api/licitacoes/pca/search', async (req, res) => {
     } else if (usarIa && q.length >= 3) {
       const r = await getTermosCorrelatos(q);
       positivos = Array.from(new Set([q, ...(r.positivos || [])])).filter(Boolean);
-      negativos = r.negativos || [];
       fonte = r.fonte;
     } else if (q) {
       positivos = [q];
