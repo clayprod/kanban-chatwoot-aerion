@@ -29,6 +29,8 @@ import {
   DocumentTextIcon,
   BuildingLibraryIcon,
   ArrowRightOnRectangleIcon,
+  PlusIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import {
   btnPrimary,
@@ -8013,488 +8015,185 @@ function App() {
           )}
 
           {activeView === 'Overview' && (
-            <div className="mt-6 space-y-12">
-              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {[
-                  {
-                    label: 'Total de leads', iconWrap: 'bg-primary/10 text-primary',
-                    value: overviewData.summary?.leads_count ?? 0,
-                    icon: UsersIcon,
-                  },
-                  {
-                    label: 'Total de clientes', iconWrap: 'bg-status-success/10 text-status-success',
-                    value: overviewData.summary?.customers_count ?? 0,
-                    icon: CheckBadgeIcon,
-                  },
-                  {
-                    label: 'Oportunidade total', iconWrap: 'bg-secondary/10 text-secondary',
-                    value: formatCurrency(overviewData.summary?.total_value) || 'R$ 0,00',
-                    icon: BanknotesIcon,
-                  },
-                  {
-                    label: 'Oportunidade licitações', iconWrap: 'bg-status-warning/10 text-status-warning',
-                    value: formatCurrency(overviewData.licitaçãoSummary?.total_value) || 'R$ 0,00',
-                    icon: DocumentTextIcon,
-                  },
-                  {
-                    label: 'Oportunidades licitatórias', iconWrap: 'bg-status-info/10 text-status-info',
-                    value: overviewData.licitaçãoSummary?.opportunities_count ?? 0,
-                    icon: BuildingLibraryIcon,
-                    sub: (
-                      <span className="flex items-center gap-3">
-                        <span className="inline-flex items-center gap-1 text-status-warning"><span className="h-1.5 w-1.5 rounded-full bg-status-warning" />48h: {overviewData.licitaçãoSummary?.due_48h ?? 0}</span>
-                        <span className="inline-flex items-center gap-1 text-status-danger"><span className="h-1.5 w-1.5 rounded-full bg-status-danger" />Atrasadas: {overviewData.licitaçãoSummary?.overdue_count ?? 0}</span>
-                      </span>
-                    ),
-                  },
-                ].map((kpi, i) => {
-                  const Icon = kpi.icon;
-                  return (
-                  <div key={i} className={`${card} group p-5 transition hover:border-primary/30`}>
-                    <div className="flex items-center gap-3">
-                      <span className={`shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-full ${kpi.iconWrap}`}>
-                        <Icon className="h-[18px] w-[18px]" />
-                      </span>
-                      <p className={`${subtle} font-medium`}>{kpi.label}</p>
-                    </div>
-                    <p className="mt-4 text-[1.7rem] font-bold leading-tight text-ink dark:text-[#e5e7eb] truncate">{kpi.value}</p>
-                    {kpi.sub && <div className={`${subtle} mt-2`}>{kpi.sub}</div>}
-                  </div>
-                  );
-                })}
+            <div className="mt-6">
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+                <div>
+                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">
+                    {(() => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; })()}, {((authStatus.email || 'time').split('@')[0])} <span className="align-middle">👋</span>
+                  </h2>
+                  <p className="text-sm text-muted mt-1 capitalize">{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                </div>
+                <button type="button" onClick={() => setActiveView('Busca Lead B2B')} className={`${btnPrimary} h-10 px-4`}>
+                  <PlusIcon className="h-4 w-4" /> Novo lead
+                </button>
               </div>
 
               {overviewLoading && (
-                <div className={`${subtle} py-8 text-center`}>Carregando dados do overview...</div>
+                <div className={`${subtle} py-10 text-center`}>Carregando overview…</div>
               )}
 
               {!overviewLoading && (
-                <div className="space-y-12">
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Grupos do funil</h2>
-                  <div className="grid gap-8 lg:grid-cols-2">
-                    <div className={`${card} p-5`}>
-                      <div className="flex items-center justify-between">
-                        <h3 className={sectionTitle}>Quantidade por grupo</h3>
-                      </div>
-                      <div className="h-64">
-                        {stageGroupData.length ? (
-                        <ResponsiveBar
-                          data={stageGroupData}
-                          keys={['count']}
-                          indexBy="group"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 60 }}
-                          padding={0.35}
-                          colors={({ data }) => data.color}
-                          enableLabel={true}
-                          label={d => formatCompactNumber(d.value) || d.value}
-                          labelTextColor="#ffffff"
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
-                          theme={chartTheme}
-                          tooltip={({ data }) => (
-                            <div className="rounded-lg border border-border bg-card p-3 shadow-lg text-xs">
-                              <div className="font-semibold mb-2" style={{ color: data.color }}>{data.group}</div>
-                              <div className="text-muted mb-1">Total: <span className="font-semibold text-ink">{formatCompactNumber(data.count) || data.count}</span></div>
-                              {data.detalhes.length > 0 && (
-                                <div className="border-t border-border pt-2 mt-1 space-y-0.5">
-                                  {data.detalhes.map(d => (
-                                    <div key={d.stage} className="flex justify-between gap-3">
-                                      <span className="text-muted">{d.stageNumber}. {d.stageLabel}</span>
-                                      <span className="font-medium text-ink">{d.count}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Oportunidade por grupo</h3>
-                      <div className="h-64">
-                        {stageGroupData.length ? (
-                        <ResponsiveBar
-                          data={stageGroupData}
-                          keys={['totalValue']}
-                          indexBy="group"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 70 }}
-                          padding={0.35}
-                          colors={({ data }) => data.color}
-                          enableLabel={true}
-                          label={d => formatCompactCurrency(d.value) || 'R$ 0'}
-                          labelTextColor="#ffffff"
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactCurrency(value) || value }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
-                          theme={chartTheme}
-                          tooltip={({ data }) => (
-                            <div className="rounded-lg border border-border bg-card p-3 shadow-lg text-xs">
-                              <div className="font-semibold mb-2" style={{ color: data.color }}>{data.group}</div>
-                              <div className="text-muted mb-1">Total: <span className="font-semibold text-ink">{formatCompactCurrency(data.totalValue) || 'R$ 0'}</span></div>
-                              {data.detalhes.length > 0 && (
-                                <div className="border-t border-border pt-2 mt-1 space-y-0.5">
-                                  {data.detalhes.map(d => (
-                                    <div key={d.stage} className="flex justify-between gap-3">
-                                      <span className="text-muted">{d.stageNumber}. {d.stageLabel}</span>
-                                      <span className="font-medium text-ink">{formatCompactCurrency(d.totalValue) || 'R$ 0'}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por etiqueta</h2>
-                  <div className="grid gap-8 lg:grid-cols-2">
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Leads por etiqueta</h3>
-                      <div className="h-64">
-                        {labelCountData.length ? (
-                        <ResponsiveBar
-                          data={labelCountData}
-                          keys={['value']}
-                          indexBy="label"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors={({ data }) => data.color || '#2563eb'}
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6 }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Oportunidade por etiqueta</h3>
-                      <div className="h-64">
-                        {labelValueData.length ? (
-                        <ResponsiveBar
-                          data={labelValueData}
-                          keys={['value']}
-                          indexBy="label"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors={({ data }) => data.color || '#1d4ed8'}
-                          enableLabel={false}
-                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por estado</h2>
-                  <div className="grid gap-8 lg:grid-cols-2">
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Leads por estado</h3>
-                      <div className="h-96">
-                        {stateCountData.length ? (
-                        <ResponsiveBar
-                          data={stateCountData}
-                          keys={['value']}
-                          indexBy="state"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 80 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#2563eb"
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Oportunidade por estado</h3>
-                      <div className="h-96">
-                        {stateValueData.length ? (
-                        <ResponsiveBar
-                          data={stateValueData}
-                          keys={['value']}
-                          indexBy="state"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 80 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#1d4ed8"
-                          enableLabel={false}
-                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Por agente</h2>
-                  <div className="grid gap-8 lg:grid-cols-2">
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Leads por agente</h3>
-                      <div className="h-96">
-                        {agentCountData.length ? (
-                        <ResponsiveBar
-                          data={agentCountData}
-                          keys={['value']}
-                          indexBy="agent"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#2563eb"
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Oportunidade por agente</h3>
-                      <div className="h-96">
-                        {agentValueData.length ? (
-                        <ResponsiveBar
-                          data={agentValueData}
-                          keys={['value']}
-                          indexBy="agent"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#1d4ed8"
-                          enableLabel={false}
-                          valueFormat={value => formatCurrency(value) || 'R$ 0,00'}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Origem e perfil</h2>
-                  <div className="grid gap-8 lg:grid-cols-2">
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Leads por canal</h3>
-                      <div className="h-96">
-                        {channelCountData.length ? (
-                        <ResponsiveBar
-                          data={channelCountData}
-                          keys={['value']}
-                          indexBy="channel"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 140 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#2563eb"
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`${card} p-5`}>
-                      <h3 className={sectionTitle}>Leads por tipo de cliente</h3>
-                      <div className="h-96">
-                        {customerTypeCountData.length ? (
-                        <ResponsiveBar
-                          data={customerTypeCountData}
-                          keys={['value']}
-                          indexBy="customerType"
-                          margin={{ top: 20, right: 20, bottom: 40, left: 160 }}
-                          padding={0.3}
-                          layout="horizontal"
-                          colors="#2563eb"
-                          enableLabel={false}
-                          axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                          axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactNumber(value) || value }}
-                          theme={chartTheme}
-                        />
-                        ) : (
-                          <div className="flex h-full items-center justify-center">
-                            <span className={subtle}>Sem dados para exibir</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Probabilidade de fechamento</h2>
-                  <div className={`${card} p-5`}>
-                    <h3 className={sectionTitle}>Oportunidade por probabilidade de fechamento</h3>
-                    <div className="h-96">
-                      {probabilityValueData.length ? (
-                      <ResponsiveBar
-                        data={probabilityValueData}
-                        keys={['value']}
-                        indexBy="probability"
-                        margin={{ top: 20, right: 20, bottom: 40, left: 220 }}
-                        padding={0.3}
-                        layout="horizontal"
-                        colors="#1d4ed8"
-                        enableLabel={false}
-                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => truncateAxisLabel(value) }}
-                        axisBottom={{ tickSize: 0, tickPadding: 6, tickValues: 5, format: value => formatCompactCurrency(value) || value }}
-                        theme={{
-                          ...chartTheme,
-                          legends: {
-                            text: {
-                              fill: isDarkMode ? '#ffffff' : chartTheme.textColor,
-                            },
-                          },
-                        }}
-                      />
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                          <span className={subtle}>Sem dados para exibir</span>
+                <>
+                  <div className="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
+                    {[
+                      { label: 'Leads ativos', value: formatCompactNumber(overviewData.summary?.leads_count ?? 0) || (overviewData.summary?.leads_count ?? 0), icon: UsersIcon, wrap: 'bg-primary/10 text-primary' },
+                      { label: 'Clientes ativos', value: overviewData.summary?.customers_count ?? 0, icon: CheckBadgeIcon, wrap: 'bg-status-success/10 text-status-success' },
+                      { label: 'Pipeline aberto', value: formatCompactCurrency(overviewData.summary?.total_value) || 'R$ 0', icon: BanknotesIcon, wrap: 'bg-secondary/10 text-secondary' },
+                      { label: 'Em negociação', value: stageGroupData.filter(g => ['Meio', 'Fundo'].includes(g.group)).reduce((s, g) => s + (g.count || 0), 0), icon: ChartBarIcon, wrap: 'bg-status-info/10 text-status-info' },
+                    ].map((kpi, i) => {
+                      const Icon = kpi.icon;
+                      return (
+                        <div key={i} className={`${card} p-5 transition hover:border-primary/30`}>
+                          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${kpi.wrap}`}>
+                            <Icon className="h-[18px] w-[18px]" />
+                          </span>
+                          <p className={`${subtle} mt-4`}>{kpi.label}</p>
+                          <p className="text-[26px] font-extrabold leading-none mt-1 text-ink dark:text-white truncate">{kpi.value}</p>
                         </div>
-                      )}
-                    </div>
+                      );
+                    })}
                   </div>
 
-                  <h2 className="text-base font-semibold text-ink dark:text-[#e5e7eb] -mb-6">Evolução no tempo</h2>
-                  <div className={`${card} p-5`}>
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className={sectionTitle}>Evolução por quantidade (por grupo)</h3>
-                      <select
-                        value={historyGranularity}
-                        onChange={(event) => setHistoryGranularity(event.target.value)}
-                        className={select}
-                      >
-                        <option value="day">Diario</option>
-                        <option value="week">Semanal</option>
-                        <option value="month">Mensal</option>
-                      </select>
-                    </div>
-                    <div className="h-80">
-                      {historySeries.length ? (
-                      <ResponsiveLine
-                        data={historySeries}
-                        margin={{ top: 20, right: 40, bottom: 70, left: 50 }}
-                        xScale={{ type: 'point' }}
-                        yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
-                        curve="monotoneX"
-                        axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
-                        axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
-                        colors={({ id }) => colorForGroupLabel(id)}
-                        enableArea
-                        areaOpacity={0.55}
-                        enableGridX={false}
-                        lineWidth={2}
-                        pointSize={6}
-                        pointBorderWidth={1.5}
-                        pointBorderColor={{ from: 'serieColor' }}
-                        pointColor={isDarkMode ? '#0f172a' : '#ffffff'}
-                        useMesh
-                        crosshairType="x"
-                        sliceTooltip={({ slice }) => {
-                          const total = slice.points.reduce((a, p) => a + (p.data.y || 0), 0);
-                          return (
-                            <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card min-w-[160px]">
-                              <div className="font-semibold mb-1">{formatHistoryTooltipDate(slice.points[0].data.x)}</div>
-                              <div className="space-y-0.5">
-                                {[...slice.points].reverse().map(point => (
-                                  <div key={point.id} className="flex items-center justify-between gap-3">
-                                    <span className="flex items-center gap-1.5">
-                                      <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
-                                      <span>{point.serieId}</span>
-                                    </span>
-                                    <span className="font-medium">{formatCompactNumber(point.data.y) || point.data.y}</span>
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                    <div className="xl:col-span-2 space-y-5">
+                      <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base`}>Funil de vendas</h3>
+                        <p className={`${subtle} mt-0.5 mb-5`}>Distribuição de leads por estágio</p>
+                        {stageGroupData.length ? (
+                          <div className="space-y-3.5">
+                            {(() => {
+                              const max = Math.max(...stageGroupData.map(g => g.count || 0), 1);
+                              return stageGroupData.map(g => (
+                                <div key={g.group} className="flex items-center gap-4">
+                                  <span className="w-24 sm:w-28 shrink-0 text-[13px] text-muted truncate">{g.group}</span>
+                                  <div className="flex-1 h-7 rounded-lg bg-cardAlt overflow-hidden">
+                                    <div className="h-full rounded-lg transition-all" style={{ width: `${Math.max((g.count / max) * 100, 2)}%`, backgroundColor: g.color }} />
                                   </div>
-                                ))}
-                                <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
-                                  <span>Total</span>
-                                  <span>{formatCompactNumber(total) || total}</span>
+                                  <span className="w-14 text-right text-[13px] font-bold text-ink dark:text-white">{formatCompactNumber(g.count) || g.count}</span>
+                                  <span className="w-24 text-right text-[13px] text-muted hidden sm:block">{formatCompactCurrency(g.totalValue) || 'R$ 0'}</span>
                                 </div>
-                              </div>
-                            </div>
-                          );
-                        }}
-                        enableSlices="x"
-                        legends={[
-                          {
-                            anchor: 'bottom',
-                            direction: 'row',
-                            justify: false,
-                            translateX: 0,
-                            translateY: 58,
-                            itemsSpacing: 12,
-                            itemDirection: 'left-to-right',
-                            itemWidth: 120,
-                            itemHeight: 18,
-                            itemOpacity: 0.85,
-                            itemTextColor: isDarkMode ? '#ffffff' : '#1f2937',
-                            symbolSize: 12,
-                            symbolShape: 'square',
-                            textColor: isDarkMode ? '#f8fafc' : '#1f2937',
-                            effects: [
-                              {
-                                on: 'hover',
-                                style: { itemOpacity: 1 },
-                              },
-                            ],
-                          },
-                        ]}
-                        theme={chartTheme}
-                      />
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                          <span className={subtle}>Sem dados para exibir</span>
+                              ));
+                            })()}
+                          </div>
+                        ) : (
+                          <div className={`${subtle} py-8 text-center`}>Sem dados para exibir</div>
+                        )}
+                      </div>
+
+                      <div className={`${card} p-6`}>
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <h3 className={`${sectionTitle} text-base`}>Evolução do funil</h3>
+                          <select value={historyGranularity} onChange={(event) => setHistoryGranularity(event.target.value)} className={select}>
+                            <option value="day">Diário</option>
+                            <option value="week">Semanal</option>
+                            <option value="month">Mensal</option>
+                          </select>
                         </div>
-                      )}
+                        <div className="h-72">
+                          {historySeries.length ? (
+                            <ResponsiveLine
+                              data={historySeries}
+                              margin={{ top: 16, right: 24, bottom: 64, left: 44 }}
+                              xScale={{ type: 'point' }}
+                              yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
+                              curve="monotoneX"
+                              axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
+                              axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
+                              colors={({ id }) => colorForGroupLabel(id)}
+                              enableArea
+                              areaOpacity={0.5}
+                              enableGridX={false}
+                              lineWidth={2}
+                              pointSize={5}
+                              pointBorderWidth={1.5}
+                              pointBorderColor={{ from: 'serieColor' }}
+                              pointColor={isDarkMode ? '#0f172a' : '#ffffff'}
+                              useMesh
+                              enableSlices="x"
+                              sliceTooltip={({ slice }) => {
+                                const total = slice.points.reduce((a, p) => a + (p.data.y || 0), 0);
+                                return (
+                                  <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card min-w-[160px]">
+                                    <div className="font-semibold mb-1">{formatHistoryTooltipDate(slice.points[0].data.x)}</div>
+                                    <div className="space-y-0.5">
+                                      {[...slice.points].reverse().map(point => (
+                                        <div key={point.id} className="flex items-center justify-between gap-3">
+                                          <span className="flex items-center gap-1.5">
+                                            <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
+                                            <span>{point.serieId}</span>
+                                          </span>
+                                          <span className="font-medium">{formatCompactNumber(point.data.y) || point.data.y}</span>
+                                        </div>
+                                      ))}
+                                      <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
+                                        <span>Total</span>
+                                        <span>{formatCompactNumber(total) || total}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              }}
+                              theme={chartTheme}
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center"><span className={subtle}>Sem dados para exibir</span></div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-5">
+                      <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base mb-4`}>Desempenho por agente</h3>
+                        {overviewData.byAgent.length ? (
+                          <div className="space-y-4">
+                            {(() => {
+                              const sorted = [...overviewData.byAgent].sort((a, b) => (Number(b.total_value) || 0) - (Number(a.total_value) || 0)).slice(0, 5);
+                              const max = Math.max(...sorted.map(a => Number(a.total_value) || 0), 1);
+                              const palette = ['#6366f1', '#22c55e', '#f59e0b', '#a855f7', '#38bdf8'];
+                              return sorted.map((a, idx) => (
+                                <div key={a.agent || idx} className="flex items-center gap-3">
+                                  <div className="h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: palette[idx % palette.length] }}>
+                                    {String(a.agent || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-[13px] font-semibold text-ink dark:text-white truncate">{a.agent || 'Sem agente'}</p>
+                                      <span className="text-[12px] font-bold text-ink dark:text-white">{formatCompactCurrency(a.total_value) || 'R$ 0'}</span>
+                                    </div>
+                                    <div className="h-1.5 rounded-full bg-cardAlt mt-1.5 overflow-hidden">
+                                      <div className="h-full rounded-full" style={{ width: `${Math.max(((Number(a.total_value) || 0) / max) * 100, 3)}%`, background: palette[idx % palette.length] }} />
+                                    </div>
+                                  </div>
+                                </div>
+                              ));
+                            })()}
+                          </div>
+                        ) : (
+                          <div className={`${subtle} py-6 text-center`}>Sem dados</div>
+                        )}
+                      </div>
+
+                      <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base mb-4`}>Distribuição por grupo</h3>
+                        {stageGroupData.length ? (
+                          <div className="space-y-3">
+                            {stageGroupData.map(g => (
+                              <div key={g.group} className="flex items-center gap-3">
+                                <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color }} />
+                                <span className="text-[13px] text-ink dark:text-white flex-1 truncate">{g.group}</span>
+                                <span className="text-[13px] text-muted">{formatCompactNumber(g.count) || g.count}</span>
+                                <span className="text-[13px] font-semibold text-ink dark:text-white w-20 text-right">{formatCompactCurrency(g.totalValue) || 'R$ 0'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={`${subtle} py-6 text-center`}>Sem dados</div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
+                </>
               )}
             </div>
           )}
