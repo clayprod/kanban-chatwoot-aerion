@@ -344,6 +344,104 @@ app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
   }
 });
 
+// ===================== Metas (sales goals) + Realizado (faturamento) =====================
+// Metas live in our app DB (admin-editable). Realizado comes from the external
+// faturamento base that n8n populates — pluggable via FATURAMENTO_DATABASE_URL.
+const METAS_TABLE = 'sales_metas';
+
+async function ensureMetasTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ${METAS_TABLE} (
+        id SERIAL PRIMARY KEY,
+        ano INTEGER NOT NULL,
+        mes INTEGER NOT NULL,
+        vendedor TEXT NOT NULL DEFAULT '',
+        receita_meta NUMERIC NOT NULL DEFAULT 0,
+        vendas_meta INTEGER NOT NULL DEFAULT 0,
+        sqls_meta INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (ano, mes, vendedor)
+      )
+    `);
+  } catch (error) {
+    console.error('ensureMetasTable failed:', error.message);
+  }
+}
+ensureMetasTable();
+
+// Optional separate connection to the faturamento (Sankhya->Drive->n8n->Postgres) base.
+let faturamentoPool = null;
+if (process.env.FATURAMENTO_DATABASE_URL) {
+  try {
+    faturamentoPool = new Pool({ connectionString: process.env.FATURAMENTO_DATABASE_URL });
+  } catch (error) {
+    console.error('faturamento pool init failed:', error.message);
+  }
+}
+
+app.get('/api/metas', async (req, res) => {
+  const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  try {
+    const { rows } = await pool.query(
+      `SELECT ano, mes, vendedor, receita_meta, vendas_meta, sqls_meta FROM ${METAS_TABLE} WHERE ano = $1 ORDER BY mes ASC`,
+      [ano]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching metas:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/metas', requireAdmin, async (req, res) => {
+  const ano = Number.parseInt(req.body?.ano, 10);
+  const mes = Number.parseInt(req.body?.mes, 10);
+  const vendedor = String(req.body?.vendedor || '');
+  if (!Number.isFinite(ano) || !Number.isFinite(mes) || mes < 1 || mes > 12) {
+    return res.status(400).json({ error: 'ano/mes inválidos' });
+  }
+  const receita = Number(req.body?.receita_meta) || 0;
+  const vendas = Number.parseInt(req.body?.vendas_meta, 10) || 0;
+  const sqls = Number.parseInt(req.body?.sqls_meta, 10) || 0;
+  try {
+    await pool.query(
+      `INSERT INTO ${METAS_TABLE} (ano, mes, vendedor, receita_meta, vendas_meta, sqls_meta, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6, now())
+       ON CONFLICT (ano, mes, vendedor) DO UPDATE
+         SET receita_meta = EXCLUDED.receita_meta, vendas_meta = EXCLUDED.vendas_meta,
+             sqls_meta = EXCLUDED.sqls_meta, updated_at = now()`,
+      [ano, mes, vendedor, receita, vendas, sqls]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error saving meta:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Realizado (faturamento) for a given month. Pluggable: requires FATURAMENTO_DATABASE_URL
+// and FATURAMENTO_QUERY (parameterized with $1=ano, $2=mes, returning a `receita` column).
+app.get('/api/vendas/realizado', async (req, res) => {
+  const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  const mes = Number.parseInt(req.query.mes, 10) || (new Date().getMonth() + 1);
+  if (!faturamentoPool || !process.env.FATURAMENTO_QUERY) {
+    return res.json({ configured: false, ano, mes, receita: null, vendas: null });
+  }
+  try {
+    const { rows } = await faturamentoPool.query(process.env.FATURAMENTO_QUERY, [ano, mes]);
+    const row = rows[0] || {};
+    res.json({
+      configured: true, ano, mes,
+      receita: Number(row.receita) || 0,
+      vendas: row.vendas != null ? Number(row.vendas) : null,
+    });
+  } catch (error) {
+    console.error('Error fetching realizado:', error);
+    res.status(500).json({ configured: true, error: 'Falha ao consultar faturamento' });
+  }
+});
+
 const HISTORY_TABLE = 'kanban_stage_history';
 const LICITACAO_TABLE = 'licitacao_opportunities';
 const LICITACAO_REQUIREMENTS_TABLE = 'licitacao_requirements';
