@@ -3291,6 +3291,9 @@ function App() {
   const [licSummary, setLicSummary] = useState(null);
   const [usersList, setUsersList] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [metasYear, setMetasYear] = useState(new Date().getFullYear());
+  const [metasRows, setMetasRows] = useState([]);
+  const [metasLoading, setMetasLoading] = useState(false);
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
   const [licitaçãoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
@@ -3548,6 +3551,39 @@ function App() {
       setUsersList(prev => prev.map(u => (u.id === userId ? { ...u, allowed_views: allowedViews } : u)));
     } catch (error) {
       console.error('Error saving user access:', error);
+    }
+  }, []);
+
+  const loadMetas = useCallback((year) => {
+    setMetasLoading(true);
+    axios.get('/api/metas', { params: { ano: year } })
+      .then(r => setMetasRows(r.data || []))
+      .catch(() => setMetasRows([]))
+      .finally(() => setMetasLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || authStatus.role !== 'admin' || activeView !== 'Metas') return;
+    loadMetas(metasYear);
+  }, [authStatus.authenticated, authStatus.role, activeView, metasYear, loadMetas]);
+
+  const saveMeta = useCallback(async (ano, mes, patch, prevRow) => {
+    const merged = {
+      ano, mes, vendedor: '',
+      receita_meta: Number(prevRow?.receita_meta) || 0,
+      vendas_meta: Number(prevRow?.vendas_meta) || 0,
+      sqls_meta: Number(prevRow?.sqls_meta) || 0,
+      ...patch,
+    };
+    setMetasRows(prev => {
+      const idx = prev.findIndex(r => r.mes === mes && (r.vendedor || '') === '');
+      if (idx >= 0) { const copy = [...prev]; copy[idx] = { ...copy[idx], ...merged }; return copy; }
+      return [...prev, merged];
+    });
+    try {
+      await axios.put('/api/metas', merged);
+    } catch (error) {
+      console.error('Error saving meta:', error);
     }
   }, []);
 
@@ -6009,6 +6045,7 @@ function App() {
                   label: 'Administração',
                   adminOnly: true,
                   items: [
+                    { name: 'Metas', view: 'Metas', icon: ChartBarIcon, adminOnly: true },
                     { name: 'Usuários', view: 'Usuários', icon: UsersIcon, adminOnly: true },
                   ],
                 },
@@ -8377,6 +8414,41 @@ function App() {
                     </div>
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {activeView === 'Metas' && authStatus.role === 'admin' && (
+            <div className="mt-6">
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+                <div>
+                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Metas comerciais</h2>
+                  <p className="text-sm text-muted mt-1">Defina as metas mensais. O realizado é comparado automaticamente quando a base de faturamento estiver conectada.</p>
+                </div>
+                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} h-10`}>
+                  {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              {metasLoading ? (
+                <div className={`${subtle} py-10 text-center`}>Carregando metas…</div>
+              ) : (
+                <div className={`${card} overflow-hidden`}>
+                  <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 px-4 py-3 border-b border-border dark:border-[#1f2937] text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    <span>Mês</span><span>Receita meta (R$)</span><span>Vendas meta</span><span>SQLs meta</span>
+                  </div>
+                  {['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'].map((nome, i) => {
+                    const mes = i + 1;
+                    const row = metasRows.find(r => r.mes === mes && (r.vendedor || '') === '') || {};
+                    return (
+                      <div key={mes} className="grid grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 px-4 py-2 items-center border-b border-border/60 dark:border-[#1f2937]/60 last:border-0">
+                        <span className="text-sm font-medium text-ink dark:text-white">{nome}</span>
+                        <input type="number" defaultValue={Number(row.receita_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { receita_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
+                        <input type="number" defaultValue={Number(row.vendas_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { vendas_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
+                        <input type="number" defaultValue={Number(row.sqls_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { sqls_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
