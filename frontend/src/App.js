@@ -3294,6 +3294,7 @@ function App() {
   const [metasYear, setMetasYear] = useState(new Date().getFullYear());
   const [metasRows, setMetasRows] = useState([]);
   const [metasLoading, setMetasLoading] = useState(false);
+  const [vendaMeta, setVendaMeta] = useState(null);
   const [disparoStage, setDisparoStage] = useState('');
   const [disparoMessage, setDisparoMessage] = useState('Olá {nome}, tudo bem? Aqui é da Aerion.');
   const [disparoSending, setDisparoSending] = useState(false);
@@ -3558,6 +3559,22 @@ function App() {
       console.error('Error saving user access:', error);
     }
   }, []);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return;
+    const now = new Date();
+    const ano = now.getFullYear();
+    const mes = now.getMonth() + 1;
+    Promise.all([
+      axios.get('/api/metas', { params: { ano } }),
+      axios.get('/api/vendas/realizado', { params: { ano, mes } }),
+    ])
+      .then(([m, r]) => {
+        const metaRow = (m.data || []).find(x => Number(x.mes) === mes);
+        setVendaMeta({ meta: metaRow ? Number(metaRow.receita_meta) : null, ...r.data });
+      })
+      .catch(() => setVendaMeta(null));
+  }, [authStatus.authenticated, activeView]);
 
   const loadMetas = useCallback((year) => {
     setMetasLoading(true);
@@ -8402,6 +8419,28 @@ function App() {
 
                     <div className="space-y-5">
                       <div className={`${card} p-6`}>
+                        <h3 className={`${sectionTitle} text-base`}>Meta do mês</h3>
+                        <p className={`${subtle} mt-0.5 mb-4`}>Realizado vs. objetivo</p>
+                        {vendaMeta && vendaMeta.meta != null ? (
+                          <>
+                            <div className="flex items-end justify-between mb-2">
+                              <span className="text-2xl font-extrabold text-ink dark:text-white">{vendaMeta.configured && vendaMeta.receita != null ? (formatCompactCurrency(vendaMeta.receita) || 'R$ 0') : '—'}</span>
+                              <span className={subtle}>de {formatCompactCurrency(vendaMeta.meta) || 'R$ 0'}</span>
+                            </div>
+                            <div className="h-2.5 rounded-full bg-cardAlt overflow-hidden">
+                              <div className="h-full rounded-full bg-gradient-to-r from-primary to-violet" style={{ width: `${Math.min((vendaMeta.configured && vendaMeta.receita ? vendaMeta.receita / vendaMeta.meta : 0) * 100, 100)}%` }} />
+                            </div>
+                            <p className={`${subtle} mt-2`}>
+                              {vendaMeta.configured && vendaMeta.receita != null
+                                ? `${Math.round((vendaMeta.receita / vendaMeta.meta) * 100)}% da meta`
+                                : 'Conecte a base de faturamento para ver o realizado'}
+                            </p>
+                          </>
+                        ) : (
+                          <p className={`${subtle} py-1`}>Defina a meta em Administração › Metas.</p>
+                        )}
+                      </div>
+                      <div className={`${card} p-6`}>
                         <h3 className={`${sectionTitle} text-base mb-4`}>Desempenho por agente</h3>
                         {overviewData.byAgent.length ? (
                           <div className="space-y-4">
@@ -8546,18 +8585,16 @@ function App() {
                 <div className={`${subtle} py-10 text-center`}>Carregando metas…</div>
               ) : (
                 <div className={`${card} overflow-hidden`}>
-                  <div className="grid grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 px-4 py-3 border-b border-border dark:border-[#1f2937] text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    <span>Mês</span><span>Receita meta (R$)</span><span>Vendas meta</span><span>SQLs meta</span>
+                  <div className="grid grid-cols-[1fr_2fr] gap-2 px-4 py-3 border-b border-border dark:border-[#1f2937] text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    <span>Mês</span><span>Meta de receita (R$)</span>
                   </div>
-                  {['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'].map((nome, i) => {
+                  {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((nome, i) => {
                     const mes = i + 1;
-                    const row = metasRows.find(r => r.mes === mes && (r.vendedor || '') === '') || {};
+                    const row = metasRows.find(r => r.mes === mes) || {};
                     return (
-                      <div key={mes} className="grid grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 px-4 py-2 items-center border-b border-border/60 dark:border-[#1f2937]/60 last:border-0">
+                      <div key={mes} className="grid grid-cols-[1fr_2fr] gap-2 px-4 py-2 items-center border-b border-border/60 dark:border-[#1f2937]/60 last:border-0">
                         <span className="text-sm font-medium text-ink dark:text-white">{nome}</span>
-                        <input type="number" defaultValue={Number(row.receita_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { receita_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
-                        <input type="number" defaultValue={Number(row.vendas_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { vendas_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
-                        <input type="number" defaultValue={Number(row.sqls_meta) || ''} placeholder="0" onBlur={(e) => saveMeta(metasYear, mes, { sqls_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
+                        <input type="number" step="0.01" defaultValue={Number(row.receita_meta) || ''} placeholder="0,00" onBlur={(e) => saveMeta(metasYear, mes, { receita_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
                       </div>
                     );
                   })}
