@@ -31,6 +31,11 @@ import {
   ArrowRightOnRectangleIcon,
   PlusIcon,
   ChartBarIcon,
+  BellIcon,
+  ViewfinderCircleIcon,
+  ScaleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 import {
   btnPrimary,
@@ -86,11 +91,11 @@ const customerColumns = [
   '26. Inativo',
 ];
 const STAGE_GROUPS = [
-  { id: 'topo',     label: 'Topo',            color: '#3B82F6', range: [1, 5] },
-  { id: 'meio',     label: 'Meio',            color: '#8B5CF6', range: [6, 8] },
-  { id: 'fundo',    label: 'Fundo',           color: '#F59E0B', range: [9, 12] },
-  { id: 'outros',   label: 'Outros',          color: '#6B7280', range: [13, 17] },
-  { id: 'recompra', label: 'Recompra/Upsell', color: '#10B981', range: [18, 26] },
+  { id: 'topo',     label: 'Topo',            color: '#5a93ff', range: [1, 5] },
+  { id: 'meio',     label: 'Meio',            color: '#a78bff', range: [6, 8] },
+  { id: 'fundo',    label: 'Fundo',           color: '#ffb24d', range: [9, 12] },
+  { id: 'outros',   label: 'Outros',          color: '#7b87a3', range: [13, 17] },
+  { id: 'recompra', label: 'Recompra/Upsell', color: '#36d39a', range: [18, 26] },
 ];
 const groupForStageNum = (n) => STAGE_GROUPS.find(g => n >= g.range[0] && n <= g.range[1]);
 const colorForGroupLabel = (label) => (STAGE_GROUPS.find(g => g.label === label) || {}).color || '#6B7280';
@@ -111,8 +116,77 @@ const licitaçãoColumns = [
   '14. Não Atendido',
   '15. Descartado',
 ];
+// Groupings for the Licitações board group-bar (Lei 14.133 phases → 4 macro stages).
+const LIC_STAGE_GROUPS = [
+  { id: 'inteligencia', label: 'Inteligência', color: '#38d6e6', range: [1, 6] },
+  { id: 'disputa',      label: 'Disputa',      color: '#7c5cff', range: [7, 9] },
+  { id: 'recursal',     label: 'Recursal',     color: '#ffb24d', range: [10, 12] },
+  { id: 'encerrado',    label: 'Encerrado',    color: '#7b87a3', range: [13, 15] },
+];
+const licGroupForStageNum = (n) => LIC_STAGE_GROUPS.find(g => n >= g.range[0] && n <= g.range[1]);
 const PNCP_SCORE_HIGH_THRESHOLD = 68;
 const PNCP_SCORE_MEDIUM_THRESHOLD = 38;
+
+// Labels for the Licitações subviews — used by the header breadcrumb/title.
+const LIC_SUB_LABELS = {
+  overview: 'Overview',
+  editais: 'Busca Editais',
+  editais_watchlist: 'Busca Editais',
+  board: 'Board',
+  resultados: 'Contratos/Resultados',
+  pca: 'PCA',
+  sinais: 'PCA',
+};
+const licSubLabel = (sub) => LIC_SUB_LABELS[sub] || 'Overview';
+
+// DDDs brasileiros com região, para o seletor de público do Disparo.
+const DDD_REGIONS = [
+  ['11', 'São Paulo – SP'], ['12', 'Vale do Paraíba – SP'], ['13', 'Baixada Santista – SP'], ['14', 'Bauru/Marília – SP'],
+  ['15', 'Sorocaba – SP'], ['16', 'Ribeirão Preto – SP'], ['17', 'S. J. do Rio Preto – SP'], ['18', 'Presidente Prudente – SP'], ['19', 'Campinas – SP'],
+  ['21', 'Rio de Janeiro – RJ'], ['22', 'Campos/Macaé – RJ'], ['24', 'Volta Redonda/Petrópolis – RJ'],
+  ['27', 'Vitória – ES'], ['28', 'Cachoeiro – ES'],
+  ['31', 'Belo Horizonte – MG'], ['32', 'Juiz de Fora – MG'], ['33', 'Gov. Valadares – MG'], ['34', 'Uberlândia – MG'],
+  ['35', 'Poços de Caldas – MG'], ['37', 'Divinópolis – MG'], ['38', 'Montes Claros – MG'],
+  ['41', 'Curitiba – PR'], ['42', 'Ponta Grossa – PR'], ['43', 'Londrina – PR'], ['44', 'Maringá – PR'], ['45', 'Foz do Iguaçu – PR'], ['46', 'Pato Branco – PR'],
+  ['47', 'Joinville/Blumenau – SC'], ['48', 'Florianópolis – SC'], ['49', 'Chapecó – SC'],
+  ['51', 'Porto Alegre – RS'], ['53', 'Pelotas – RS'], ['54', 'Caxias do Sul – RS'], ['55', 'Santa Maria – RS'],
+  ['61', 'Brasília – DF'], ['62', 'Goiânia – GO'], ['64', 'Rio Verde – GO'], ['63', 'Palmas – TO'],
+  ['65', 'Cuiabá – MT'], ['66', 'Rondonópolis – MT'], ['67', 'Campo Grande – MS'],
+  ['68', 'Rio Branco – AC'], ['69', 'Porto Velho – RO'],
+  ['71', 'Salvador – BA'], ['73', 'Ilhéus – BA'], ['74', 'Juazeiro – BA'], ['75', 'Feira de Santana – BA'], ['77', 'Barreiras – BA'],
+  ['79', 'Aracaju – SE'],
+  ['81', 'Recife – PE'], ['87', 'Petrolina – PE'],
+  ['82', 'Maceió – AL'], ['83', 'João Pessoa – PB'], ['84', 'Natal – RN'],
+  ['85', 'Fortaleza – CE'], ['88', 'Juazeiro do Norte – CE'],
+  ['86', 'Teresina – PI'], ['89', 'Picos – PI'],
+  ['91', 'Belém – PA'], ['93', 'Santarém – PA'], ['94', 'Marabá – PA'],
+  ['92', 'Manaus – AM'], ['97', 'Coari – AM'],
+  ['95', 'Boa Vista – RR'], ['96', 'Macapá – AP'],
+  ['98', 'São Luís – MA'], ['99', 'Imperatriz – MA'],
+];
+
+// Brazil tile-grid (statebins) — [uf, col, row] 0-indexed on a 6×8 grid, geographic-ish
+// silhouette matching the design prototype's buildSegments().
+const BR_STATE_BINS = [
+  ['RR', 2, 0], ['AP', 3, 0],
+  ['AM', 1, 1], ['PA', 2, 1], ['MA', 3, 1], ['CE', 4, 1], ['RN', 5, 1],
+  ['AC', 0, 2], ['RO', 1, 2], ['TO', 2, 2], ['PI', 3, 2], ['PE', 4, 2], ['PB', 5, 2],
+  ['MT', 1, 3], ['GO', 2, 3], ['BA', 3, 3], ['AL', 4, 3], ['SE', 5, 3],
+  ['MS', 1, 4], ['DF', 2, 4], ['MG', 3, 4], ['ES', 4, 4],
+  ['PR', 2, 5], ['SP', 3, 5], ['RJ', 4, 5],
+  ['SC', 2, 6],
+  ['RS', 2, 7],
+];
+
+const BR_STATE_COORDS = {
+  AC: [-9.02, -70.81], AL: [-9.57, -36.78], AM: [-3.47, -65.10], AP: [1.41, -51.77],
+  BA: [-12.58, -41.70], CE: [-5.20, -39.53], DF: [-15.78, -47.93], ES: [-19.19, -40.34],
+  GO: [-15.98, -49.86], MA: [-5.42, -45.44], MG: [-18.10, -44.38], MS: [-20.51, -54.54],
+  MT: [-12.64, -55.42], PA: [-3.79, -52.48], PB: [-7.28, -36.72], PE: [-8.38, -37.86],
+  PI: [-7.72, -42.73], PR: [-24.89, -51.55], RJ: [-22.25, -42.66], RN: [-5.81, -36.59],
+  RO: [-10.83, -63.34], RR: [1.99, -61.33], RS: [-30.17, -53.50], SC: [-27.45, -50.95],
+  SE: [-10.57, -37.45], SP: [-22.19, -48.79], TO: [-10.18, -48.33],
+};
 
 const processBlueprint = {
   stats: [
@@ -937,24 +1011,25 @@ const getStageNumber = (stage) => {
   return Number.isNaN(num) ? 999 : num;
 };
 
-const buildGroupedHistorySeries = (historyRows) => {
+const buildGroupedHistorySeries = (historyRows, metric = 'count') => {
   if (!Array.isArray(historyRows) || historyRows.length === 0) {
     return [];
   }
   const periods = Array.from(new Set(historyRows.map(row => row.period_start))).sort();
-  const groupCounts = new Map();
+  const groupValues = new Map();
   historyRows.forEach(row => {
     const num = getStageNumber(row.stage);
     const grp = groupForStageNum(num);
     if (!grp) return;
     const key = `${grp.id}|${row.period_start}`;
-    groupCounts.set(key, (groupCounts.get(key) || 0) + (Number(row.count) || 0));
+    const value = metric === 'value' ? Number(row.total_value) || 0 : Number(row.count) || 0;
+    groupValues.set(key, (groupValues.get(key) || 0) + value);
   });
   return STAGE_GROUPS.map(g => ({
     id: g.label,
     data: periods.map(period => ({
       x: period,
-      y: groupCounts.get(`${g.id}|${period}`) || 0,
+      y: groupValues.get(`${g.id}|${period}`) || 0,
     })),
   }));
 };
@@ -1249,7 +1324,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
       {...listeners}
       role="button"
       tabIndex={0}
-      className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition hover:border-primary/30 hover:shadow-lift focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
+      className={`kanban-card rounded-[13px] border border-line bg-surf px-[13px] py-3 shadow-card transition hover:-translate-y-0.5 hover:bg-surf2 hover:border-line2 hover:shadow-lift focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between">
         <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted dark:text-[#94a3b8]">
@@ -1344,7 +1419,7 @@ const KanbanCard = ({ contact, columnId, showMenu, menuLabel, onMenuAction, onMo
           </p>
         )}
         {formattedOpportunity && (
-          <p className="text-[15px] font-bold text-ink dark:text-[#e5e7eb] mt-2.5 truncate">{formattedOpportunity}</p>
+          <p className="font-mono text-[16px] font-bold text-ink dark:text-[#e5e7eb] mt-2.5 truncate">{formattedOpportunity}</p>
         )}
       </div>
       <div className="mt-3 flex flex-wrap gap-1.5 max-w-full">
@@ -1404,7 +1479,7 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
   return (
     <div
       ref={setNodeRef}
-      className={`kanban-column w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 rounded-2xl border border-border bg-cardAlt p-3 snap-start flex flex-col min-h-0 max-h-[300vh] transition ${isOver ? 'is-over' : ''}`}
+      className={`kanban-column w-[296px] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-3 snap-start flex flex-col min-h-0 max-h-[calc(100vh-280px)] transition ${isOver ? 'is-over' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
         <div className="flex flex-col gap-2">
@@ -1416,7 +1491,7 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
             </span>
           </div>
           {formattedTotal && (
-            <span className="text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
+            <span className="font-mono text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -1453,7 +1528,7 @@ const KanbanColumn = ({ title, contacts, dotClass, showMenu, menuLabel, onMenuAc
           )}
         </div>
       </div>
-      <div className="mt-3 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 kanban-column-scroll scrollbar-theme">
+      <div className="mt-3 flex flex-col gap-[9px] flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 kanban-column-scroll scrollbar-theme">
         <SortableContext items={contacts.map(c => String(c.id))}>
           {contacts.length === 0 && (
             <div className="rounded-xl border border-dashed border-border bg-card p-4 text-xs text-muted">
@@ -1574,7 +1649,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       role="button"
       tabIndex={0}
       onClick={() => onOpen?.(opportunity)}
-      className={`kanban-card rounded-[14px] border border-border bg-card p-3.5 shadow-card transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
+      className={`kanban-card rounded-[13px] border border-line bg-surf px-[13px] py-3 shadow-card transition hover:-translate-y-0.5 hover:bg-surf2 hover:border-line2 hover:shadow-lift focus:outline-none focus:ring-2 focus:ring-primary/30 ${isDragging ? 'is-dragging' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
           <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full leading-tight whitespace-nowrap ${prazoClass}`}>
@@ -1627,7 +1702,7 @@ const LicitacaoCard = ({ opportunity, columnId, onOpen, onEdit }) => {
       </div>
       <div className="mt-2 pt-2 border-t border-border flex items-center justify-between text-xs">
         <span className="text-muted truncate">Edital: {opportunity.numero_edital || 'n/d'}</span>
-        <span className="font-semibold text-ink">{formattedValue || 'R$ 0,00'}</span>
+          <span className="font-mono font-semibold text-ink">{formattedValue || 'R$ 0,00'}</span>
       </div>
       <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
         <span className={`px-2 py-0.5 rounded-full font-semibold leading-tight ${technicalBadge.className}`}>{technicalBadge.label}</span>
@@ -1645,19 +1720,19 @@ const LicitacaoColumn = ({ title, opportunities, onOpen, onEdit }) => {
   return (
     <div
       ref={setNodeRef}
-      className={`kanban-column w-[280px] sm:w-[300px] lg:w-[320px] flex-shrink-0 rounded-2xl border border-border bg-cardAlt p-3 snap-start flex flex-col min-h-0 max-h-[300vh] transition ${isOver ? 'is-over' : ''}`}
+      className={`kanban-column w-[296px] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-3 snap-start flex flex-col min-h-0 max-h-[calc(100vh-280px)] transition ${isOver ? 'is-over' : ''}`}
     >
-      <div className="flex items-start justify-between gap-2 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
+      <div className="flex items-start justify-between gap-2 pb-2 border-b border-line bg-bg2 sticky top-0 z-10">
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-secondary" />
             <h3 className="text-sm font-semibold text-ink">{title}</h3>
-            <span className="text-xs px-2 py-0.5 rounded-full border border-border bg-card text-muted">{opportunities.length}</span>
+            <span className="font-mono text-xs px-2 py-0.5 rounded-full border border-line bg-surf text-muted">{opportunities.length}</span>
           </div>
-          <span className="text-xs font-semibold text-ink">{formatCurrency(totalValue) || 'R$ 0,00'}</span>
+          <span className="font-mono text-xs font-semibold text-ink">{formatCurrency(totalValue) || 'R$ 0,00'}</span>
         </div>
       </div>
-      <div className="mt-3 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 kanban-column-scroll scrollbar-theme">
+      <div className="mt-3 flex flex-col gap-[9px] flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 kanban-column-scroll scrollbar-theme">
         <SortableContext items={opportunities.map(o => `opp:${o.id}`)}>
           {opportunities.length === 0 && (
             <div className="rounded-xl border border-dashed border-border bg-card p-4 text-xs text-muted">
@@ -1880,21 +1955,34 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
     return () => clearInterval(id);
   }, [fetchBootstrapStatus]);
 
-  const rodarBootstrap = async () => {
+  const rodarBootstrap = async ({ silent = false } = {}) => {
     if (bootstrapStatus?.running) return;
-    if (!window.confirm(`Vai baixar todos os PCAs publicados/atualizados em ${filtros.ano_pca || new Date().getFullYear()} (12 janelas mensais). Pode levar vários minutos. Continuar?`)) return;
+    if (!silent && !window.confirm(`Vai baixar todos os PCAs publicados/atualizados em ${filtros.ano_pca || new Date().getFullYear()} (12 janelas mensais). Pode levar vários minutos. Continuar?`)) return;
     try {
       await axios.post('/api/licitacoes/pca/bootstrap', { ano: Number(filtros.ano_pca) || new Date().getFullYear() });
       fetchBootstrapStatus();
     } catch (e) {
       if (e.response?.status === 409) {
-        alert('Já existe um bootstrap em andamento.');
+        if (!silent) alert('Já existe um bootstrap em andamento.');
         fetchBootstrapStatus();
-      } else {
+      } else if (!silent) {
         setError(`Bootstrap falhou: ${e.response?.data?.error || e.message}`);
       }
     }
   };
+
+  // Bootstrap automático: se a base está vazia, incompleta ou o último run falhou,
+  // dispara sozinho (idempotente — re-rodar não duplica). Uma vez por sessão.
+  const autoBootstrapRef = useRef(false);
+  useEffect(() => {
+    if (!bootstrapStatus || bootstrapStatus.running || autoBootstrapRef.current) return;
+    const incomplete = !bootstrapStatus.total_planos_db || bootstrapStatus.error || !bootstrapStatus.finishedAt;
+    if (incomplete) {
+      autoBootstrapRef.current = true;
+      rodarBootstrap({ silent: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapStatus]);
 
   const runSearch = async (overridePositivos, overrideNegativos) => {
     if (!q.trim() && !overridePositivos?.length) {
@@ -2090,26 +2178,32 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       {/* SEARCH BAR — uma linha, sem ruído */}
       <div className={`${card} p-3`}>
         <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="text"
-            placeholder='Buscar PCAs — ex: "drone", "raio-x", "veículo blindado"...'
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && runSearch()}
-            className={`${input} flex-1 min-w-[260px]`}
-          />
+          <div className="relative flex h-[42px] min-w-[260px] flex-1 items-center rounded-[11px] border border-line bg-bg2">
+            <input
+              type="text"
+              placeholder='Buscar PCAs — ex: "drone", "raio-x", "veículo blindado"...'
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && runSearch()}
+              className="h-full w-full rounded-[11px] bg-transparent pl-4 pr-32 text-sm font-semibold text-ink outline-none placeholder:text-muted"
+            />
+            <button
+              type="button"
+              onClick={() => setUsarIa(v => !v)}
+              title={usarIa ? 'Busca IA ativada — expande termos correlatos' : 'Busca IA desativada'}
+              className={`absolute right-2 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${usarIa ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
+            >
+              ✦ Busca IA
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => runSearch()}
             disabled={loading}
-            className={btnPrimary}
+            className={`${btnPrimary} h-[42px] px-6`}
           >
             {loading ? 'Buscando...' : 'Buscar'}
           </button>
-          <label className="inline-flex items-center gap-1.5 text-xs text-muted ml-1">
-            <input type="checkbox" checked={usarIa} onChange={e => setUsarIa(e.target.checked)} />
-            IA
-          </label>
           <button
             type="button"
             onClick={() => setShowFilters(v => !v)}
@@ -2422,18 +2516,16 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                 </p>
                 <button
                   type="button"
-                  onClick={rodarBootstrap}
-                  className="h-9 rounded-xl bg-primary text-white px-4 text-sm font-semibold"
+                  onClick={() => rodarBootstrap()}
+                  className={`${btnPrimary} h-9 px-4`}
                 >
                   {bootstrapStatus?.total_planos_db
-                    ? `Continuar bootstrap (${filtros.ano_pca || new Date().getFullYear()})`
+                    ? `Atualizar base agora (${filtros.ano_pca || new Date().getFullYear()})`
                     : `Carregar PCAs do PNCP (${filtros.ano_pca || new Date().getFullYear()})`}
                 </button>
-                {bootstrapStatus?.total_planos_db > 0 && (
-                  <p className="text-[11px] text-muted">
-                    Bootstrap é idempotente (re-rodar não duplica). PNCP às vezes faz timeout — clicar "Continuar" preenche o que faltou.
-                  </p>
-                )}
+                <p className="text-[11px] text-muted">
+                  A base completa sozinha quando detecta dados faltando (idempotente — não duplica). O botão força uma atualização imediata.
+                </p>
                 {bootstrapStatus?.finishedAt && !bootstrapStatus.error && (
                   <p className="text-xs text-muted">
                     Último bootstrap: {bootstrapStatus.planos_upserted} planos / {bootstrapStatus.itens_upserted} itens em {new Date(bootstrapStatus.finishedAt).toLocaleString('pt-BR')}.
@@ -3307,16 +3399,23 @@ function App() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [metasYear, setMetasYear] = useState(new Date().getFullYear());
   const [metasRows, setMetasRows] = useState([]);
+  const [realizadoRows, setRealizadoRows] = useState([]);
+  const [realizadoVendedores, setRealizadoVendedores] = useState([]);
   const [metasLoading, setMetasLoading] = useState(false);
   const [vendaMeta, setVendaMeta] = useState(null);
-  const [disparoStage, setDisparoStage] = useState('');
-  const [disparoMessage, setDisparoMessage] = useState('Olá {nome}, tudo bem? Aqui é da Aerion.');
+  const [disparoModo, setDisparoModo] = useState('funil');
+  const [disparoFunil, setDisparoFunil] = useState([]);
+  const [disparoTags, setDisparoTags] = useState([]);
+  const [disparoCanais, setDisparoCanais] = useState([]);
+  const [disparoDDDs, setDisparoDDDs] = useState([]);
+  const [disparoMensagens, setDisparoMensagens] = useState([{ tipo: 'texto', texto: 'Olá {nome}, tudo bem? Aqui é da Aerion.' }]);
   const [disparoSending, setDisparoSending] = useState(false);
   const [disparoResult, setDisparoResult] = useState(null);
   const [disparoConfigured, setDisparoConfigured] = useState(null);
   const [disparoInstancias, setDisparoInstancias] = useState([]);
-  const [disparoInstancia, setDisparoInstancia] = useState('');
+  const [disparoInstanciasSel, setDisparoInstanciasSel] = useState([]);
   const [disparoNome, setDisparoNome] = useState('');
+  const [disparoConfig, setDisparoConfig] = useState({ maxPerDay: 30, minInterval: 30, maxInterval: 60, sendPeriod: 'integral', diasSemana: [1, 2, 3, 4, 5] });
   const [licitaçãoLoading, setLicitacaoLoading] = useState(false);
   const [licitaçãoSearch, setLicitacaoSearch] = useState('');
   const [licitaçãoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
@@ -3396,7 +3495,7 @@ function App() {
   const [pncpUasgOptions, setPncpUasgOptions] = useState([]);
   const [pncpOrgaoLookupLoading, setPncpOrgaoLookupLoading] = useState(false);
   const [pncpUasgLookupLoading, setPncpUasgLookupLoading] = useState(false);
-  const [pncpSearchExpanded, setPncpSearchExpanded] = useState(true);
+  const [pncpSearchExpanded, setPncpSearchExpanded] = useState(false);
   const [pncpSummaryExpanded, setPncpSummaryExpanded] = useState(false);
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpResultScope, setPncpResultScope] = useState('visible');
@@ -3491,13 +3590,13 @@ function App() {
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
-  const [activeView, setActiveView] = useState('Board');
+  const [activeView, setActiveView] = useState('Overview');
   const [processCurrentStep, setProcessCurrentStep] = useState(0);
   const [processMaxUnlockedStep, setProcessMaxUnlockedStep] = useState(0);
   const [processCompletedSteps, setProcessCompletedSteps] = useState({});
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const stored = getCookieValue('theme');
-    return stored === 'dark';
+    return stored ? stored === 'dark' : true;
   });
   const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '', name: '', role: 'member', allowedViews: null });
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
@@ -3510,9 +3609,16 @@ function App() {
   const [sortOption, setSortOption] = useState('opportunity-desc');
   const [historyGranularity, setHistoryGranularity] = useState('week');
   const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewMetric, setOverviewMetric] = useState('count'); // 'count' | 'value' — alterna os gráficos entre quantidade e R$
+  const [globalSearchQ, setGlobalSearchQ] = useState('');
+  const [rfbPendingSearch, setRfbPendingSearch] = useState(false);
+  const rfbSearchTriggerRef = useRef(null);
+  const [showNotifications, setShowNotifications] = useState(false);
+  // Cross-filter da segmentação do Overview: cada dimensão selecionada filtra as outras.
+  const [segFilter, setSegFilter] = useState({ uf: null, channel: null, label: null });
   const [overviewData, setOverviewData] = useState({
     summary: null,
-    licitaçãoSummary: null,
+    licitacaoSummary: null,
     byStage: [],
     byLabel: [],
     byState: [],
@@ -3520,6 +3626,7 @@ function App() {
     byChannel: [],
     byCustomerType: [],
     byProbability: [],
+    faturamentoVendedores: [],
     history: [],
   });
   const [boardScrollMetrics, setBoardScrollMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
@@ -3623,9 +3730,16 @@ function App() {
 
   const loadMetas = useCallback((year) => {
     setMetasLoading(true);
-    axios.get('/api/metas', { params: { ano: year } })
-      .then(r => setMetasRows(r.data || []))
-      .catch(() => setMetasRows([]))
+    Promise.all([
+      axios.get('/api/metas', { params: { ano: year } }).then(r => r.data || []).catch(() => []),
+      axios.get('/api/vendas/realizado/ano', { params: { ano: year } })
+        .then(r => (r.data && r.data.configured ? (r.data.meses || []) : []))
+        .catch(() => []),
+      axios.get('/api/vendas/realizado/vendedores/ano', { params: { ano: year } })
+        .then(r => (r.data && r.data.configured ? (r.data.vendedores || []) : []))
+        .catch(() => []),
+    ])
+      .then(([metas, meses, vendedores]) => { setMetasRows(metas); setRealizadoRows(meses); setRealizadoVendedores(vendedores); })
       .finally(() => setMetasLoading(false));
   }, []);
 
@@ -3663,21 +3777,54 @@ function App() {
       .then(r => {
         const list = r.data?.instancias || [];
         setDisparoInstancias(list);
-        setDisparoInstancia(prev => prev || (list[0]?.id != null ? String(list[0].id) : ''));
+        setDisparoInstanciasSel(prev => (prev.length ? prev : (list[0] != null ? [String(list[0].id ?? list[0].instancia_nome ?? list[0].nome)] : [])));
       })
       .catch(() => setDisparoInstancias([]));
   }, [authStatus.authenticated, activeView]);
 
   const sendDisparo = useCallback(async () => {
-    if (!disparoMessage.trim() || !disparoStage || !disparoInstancia || disparoSending) return;
+    if (disparoSending) return;
+    const msgs = disparoMensagens
+      .filter(m => (m.texto || '').trim() || m.arquivo_base64)
+      .map(m => {
+        const tipo = m.tipo || 'texto';
+        const txt = (m.texto || '').trim() || null;
+        // Contrato do disparo-wpp: mídia usa `legenda`; só texto usa `texto`.
+        return {
+          tipo,
+          texto: tipo === 'texto' ? txt : null,
+          legenda: tipo === 'texto' ? null : txt,
+          arquivo_nome: m.arquivo_nome || null,
+          arquivo_tipo: m.arquivo_tipo || null,
+          arquivo_base64: m.arquivo_base64 || null,
+        };
+      });
+    const ddds = disparoDDDs;
+    const instSel = disparoInstanciasSel.map(id => {
+      const inst = disparoInstancias.find(i => String(i.id ?? i.instancia_nome ?? i.nome) === String(id));
+      return inst ? (inst.id ?? inst.instancia_nome ?? inst.nome) : id;
+    });
+    const selectorGroups = [disparoFunil, disparoTags, disparoCanais, ddds].filter(group => group.length > 0);
+    if (!selectorGroups.length) { setDisparoResult({ error: 'Selecione ao menos um item do público.' }); return; }
+    if (!msgs.length) { setDisparoResult({ error: 'Escreva ao menos uma mensagem.' }); return; }
+    if (!instSel.length) { setDisparoResult({ error: 'Selecione ao menos uma instância.' }); return; }
+    const destinatarios = {
+      modo: disparoModo,
+      funil_vendas: disparoFunil,
+      tags: disparoTags,
+      canais: disparoCanais,
+      ddds,
+      contatos: [],
+      combinar: selectorGroups.length > 1,
+    };
     setDisparoSending(true);
     setDisparoResult(null);
     try {
-      const inst = disparoInstancias.find(i => String(i.id) === String(disparoInstancia));
       const r = await axios.post('/api/disparo/send', {
-        funil_vendas: [disparoStage],
-        instancias: [inst ? (inst.id ?? inst.instancia_nome ?? inst.nome) : disparoInstancia],
-        message: disparoMessage,
+        destinatarios,
+        mensagens: msgs,
+        instancias: instSel,
+        config: disparoConfig,
         nomeCampanha: disparoNome || null,
       });
       setDisparoResult(r.data);
@@ -3686,7 +3833,17 @@ function App() {
     } finally {
       setDisparoSending(false);
     }
-  }, [disparoMessage, disparoStage, disparoInstancia, disparoInstancias, disparoNome, disparoSending]);
+  }, [disparoModo, disparoFunil, disparoTags, disparoCanais, disparoDDDs, disparoMensagens, disparoInstanciasSel, disparoInstancias, disparoConfig, disparoNome, disparoSending]);
+
+  // Busca global do header: depois de navegar até a Busca B2B, dispara a pesquisa.
+  useEffect(() => {
+    if (!rfbPendingSearch || activeView !== 'Busca Lead B2B') return;
+    const id = setTimeout(() => {
+      setRfbPendingSearch(false);
+      rfbSearchTriggerRef.current?.(1);
+    }, 80);
+    return () => clearTimeout(id);
+  }, [rfbPendingSearch, activeView]);
 
   useEffect(() => {
     const interceptor = axios.interceptors.response.use(
@@ -4166,11 +4323,12 @@ function App() {
       axios.get('/api/overview/by-probability'),
       axios.get('/api/overview/history', { params: { granularity: historyGranularity, range } }),
       axios.get('/api/licitacoes/overview/summary'),
+      axios.get('/api/vendas/realizado/vendedores/ano', { params: { ano: new Date().getFullYear() } }).catch(() => ({ data: { vendedores: [] } })),
     ])
-      .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history, licitaçãoSummary]) => {
+      .then(([summary, byStage, byLabel, byState, byAgent, byChannel, byCustomerType, byProbability, history, licitacaoSummary, faturamentoVendedores]) => {
         setOverviewData({
           summary: summary.data,
-          licitaçãoSummary: licitaçãoSummary.data,
+          licitacaoSummary: licitacaoSummary.data,
           byStage: byStage.data,
           byLabel: byLabel.data,
           byState: byState.data,
@@ -4178,6 +4336,7 @@ function App() {
           byChannel: byChannel.data,
           byCustomerType: byCustomerType.data,
           byProbability: byProbability.data,
+          faturamentoVendedores: faturamentoVendedores.data?.vendedores || [],
           history: history.data,
         });
       })
@@ -5930,6 +6089,13 @@ function App() {
     }))
   ), [overviewData.byChannel]);
 
+  const channelValueData = useMemo(() => sortByValueAsc(
+    overviewData.byChannel.map(item => ({
+      channel: item.channel,
+      value: Number(item.total_value) || 0,
+    }))
+  ), [overviewData.byChannel]);
+
   const customerTypeCountData = useMemo(() => sortByValueAsc(
     overviewData.byCustomerType.map(item => ({
       customerType: item.customer_type,
@@ -5944,7 +6110,41 @@ function App() {
     }))
   ), [overviewData.byProbability]);
 
-  const historySeries = useMemo(() => buildGroupedHistorySeries(overviewData.history), [overviewData.history]);
+  const historySeries = useMemo(() => buildGroupedHistorySeries(overviewData.history, overviewMetric), [overviewData.history, overviewMetric]);
+
+  // Segmentação cross-filtrada: computada dos contatos em memória para que
+  // selecionar UF/canal/etiqueta reduza as demais dimensões na hora.
+  const segData = useMemo(() => {
+    const rows = contacts.map(c => ({
+      uf: String(c.custom_attributes?.Estado || '').toUpperCase().trim(),
+      channel: String(c.custom_attributes?.Canal || '').trim(),
+      labels: Array.isArray(c.labels) ? c.labels.map(l => (typeof l === 'string' ? l : l?.name)).filter(Boolean) : [],
+      value: parseCurrency(c.custom_attributes?.Valor_Oportunidade) || 0,
+    }));
+    const match = (r, dims) => (!dims.uf || r.uf === dims.uf)
+      && (!dims.channel || r.channel === dims.channel)
+      && (!dims.label || r.labels.includes(dims.label));
+    const agg = (list, keyFn) => {
+      const map = new Map();
+      list.forEach(r => {
+        const keys = keyFn(r);
+        (Array.isArray(keys) ? keys : [keys]).forEach(k => {
+          if (!k) return;
+          const cur = map.get(k) || { count: 0, value: 0 };
+          cur.count += 1;
+          cur.value += r.value;
+          map.set(k, cur);
+        });
+      });
+      return map;
+    };
+    return {
+      byUf: agg(rows.filter(r => match(r, { channel: segFilter.channel, label: segFilter.label })), r => r.uf),
+      byChannel: agg(rows.filter(r => match(r, { uf: segFilter.uf, label: segFilter.label })), r => r.channel || 'Sem canal'),
+      byLabel: agg(rows.filter(r => match(r, { uf: segFilter.uf, channel: segFilter.channel })), r => r.labels),
+      active: Boolean(segFilter.uf || segFilter.channel || segFilter.label),
+    };
+  }, [contacts, segFilter]);
 
   const moveContactToStage = (contactId, targetStage) => {
     const previousContacts = contacts;
@@ -6259,17 +6459,27 @@ function App() {
   };
 
   const handleBoardScroll = () => {
-    if (!boardScrollRef.current || !boardScrollbarRef.current || isSyncingRef.current) {
+    if (!boardScrollRef.current || isSyncingRef.current) {
       return;
     }
     isSyncingRef.current = true;
-    boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
+    if (boardScrollbarRef.current) {
+      boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
+    }
     if (groupBarRef.current) {
       groupBarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
     }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
+  };
+
+  const scrollBoardBy = (direction) => {
+    if (!boardScrollRef.current) {
+      return;
+    }
+    const delta = Math.max(boardScrollRef.current.clientWidth * 0.78, 320) * direction;
+    boardScrollRef.current.scrollBy({ left: delta, behavior: 'smooth' });
   };
 
   const collisionDetectionStrategy = useCallback((args) => {
@@ -6485,43 +6695,48 @@ function App() {
 
       {authStatus.authenticated && (
         <div className="min-h-screen flex bg-surface text-ink">
-          <aside className="hidden md:flex w-60 shrink-0 sticky top-0 h-screen flex-col bg-[#0b0d14] border-r border-[#1b1f2a] text-[#9aa3b2]">
-            <div className="flex items-center px-6 h-[72px] shrink-0 border-b border-[#1b1f2a]">
-              <img src="/logo_aerion.png" alt="Aerion" className="h-10 w-auto object-contain [filter:brightness(0)_invert(1)]" />
+          <aside className="hidden md:flex w-[248px] shrink-0 sticky top-0 h-screen flex-col bg-bg2 border-r border-line text-muted">
+            <div className="flex h-16 shrink-0 items-center gap-3 border-b border-line px-5">
+              <img
+                src="/logo_aerion.png"
+                alt="Aerion Technologies"
+                className="h-9 w-auto object-contain [filter:brightness(0)_invert(1)] opacity-95"
+              />
+              <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted2">SALES COMMAND</p>
             </div>
             <nav className="flex-1 overflow-y-auto scrollbar-theme px-3 py-5 space-y-6">
               {[
                 {
-                  label: 'Vendas',
+                  label: 'Workspace',
                   items: [
                     { name: 'Overview', view: 'Overview', icon: Squares2X2Icon },
-                    { name: 'Board', view: 'Board', icon: ViewColumnsIcon },
-                    { name: 'Busca Lead B2B', view: 'Busca Lead B2B', icon: MagnifyingGlassIcon },
-                    { name: 'Disparo WhatsApp', view: 'Disparo WhatsApp', icon: ChatBubbleLeftRightIcon },
+                    { name: 'Funil (Board)', view: 'Board', icon: ViewColumnsIcon, badge: '312' },
+                    { name: 'Metas', view: 'Metas', icon: ViewfinderCircleIcon, adminOnly: true },
                   ],
                 },
                 {
                   label: 'Licitações',
                   items: [
-                    { name: 'Overview', view: 'Licitações', sub: 'overview', icon: Squares2X2Icon },
-                    { name: 'Board', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon },
-                    { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: DocumentMagnifyingGlassIcon },
+                    { name: 'Overview', view: 'Licitações', sub: 'overview', icon: ScaleIcon },
+                    { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: MagnifyingGlassIcon, badge: '126' },
+                    { name: 'Board', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon, badge: '48' },
                     { name: 'Contratos/Resultados', view: 'Licitações', sub: 'resultados', icon: BanknotesIcon },
-                    { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ClipboardDocumentListIcon },
+                    { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ViewfinderCircleIcon },
                   ],
                 },
                 {
-                  label: 'Operação',
+                  label: 'Prospecção',
                   items: [
-                    { name: 'Processo', view: 'Processo', icon: BookOpenIcon },
+                    { name: 'Busca Lead B2B', view: 'Busca Lead B2B', icon: MagnifyingGlassIcon },
+                    { name: 'Disparo WhatsApp', view: 'Disparo WhatsApp', icon: ChatBubbleLeftRightIcon },
                   ],
                 },
                 {
                   label: 'Administração',
                   adminOnly: true,
                   items: [
-                    { name: 'Metas', view: 'Metas', icon: ChartBarIcon, adminOnly: true },
                     { name: 'Usuários', view: 'Usuários', icon: UsersIcon, adminOnly: true },
+                    { name: 'Processo', view: 'Processo', icon: BookOpenIcon },
                   ],
                 },
               ].filter(group => !group.adminOnly || authStatus.role === 'admin').map(group => {
@@ -6535,7 +6750,7 @@ function App() {
                 if (!groupItems.length) return null;
                 return (
                 <div key={group.label} className="space-y-1">
-                  <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#5b6273]">{group.label}</p>
+                  <p className="px-3 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.13em] text-muted2">{group.label}</p>
                   {groupItems.map(item => {
                     const active = item.sub
                       ? activeView === item.view && (licitaçãoSubview === item.sub || (item.sub === 'editais' && licitaçãoSubview === 'editais_watchlist'))
@@ -6549,11 +6764,11 @@ function App() {
                           setActiveView(item.view);
                           if (item.sub) setLicitacaoSubview(item.sub);
                         }}
-                        className={`group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition ${active ? 'bg-white/[0.07] text-white' : 'text-[#8b93a4] hover:bg-white/[0.04] hover:text-white'}`}
+                        className={`group relative flex h-[39px] w-full items-center gap-3 rounded-[11px] px-3 text-[13px] transition ${active ? 'bg-[linear-gradient(135deg,rgba(124,92,255,.22),rgba(56,214,230,.10))] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(124,92,255,.45),0_0_0_1px_rgba(238,241,248,.28)]' : 'font-medium text-muted hover:bg-white/[0.04] hover:text-white'}`}
                       >
-                        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-primary" />}
-                        <Icon className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-[#6b7280] group-hover:text-[#cbd2dd]'}`} />
+                        <Icon className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-muted group-hover:text-[#cbd2dd]'}`} />
                         <span className="truncate">{item.name}</span>
+                        {item.badge && <span className={`ml-auto rounded-full px-2 py-0.5 font-mono text-[10.5px] font-semibold ${active ? 'bg-primary/30 text-[#cbbcff]' : 'bg-surf text-muted2'}`}>{item.badge}</span>}
                       </button>
                     );
                   })}
@@ -6561,24 +6776,62 @@ function App() {
                 );
               })}
             </nav>
-            <div className="shrink-0 border-t border-[#1b1f2a] p-3">
-              <a href="https://chatwoot.tenryu.com.br/app/accounts/2" target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-[#8b93a4] hover:bg-white/[0.04] hover:text-white transition">
-                <ChatBubbleLeftRightIcon className="h-[18px] w-[18px] shrink-0" />
-                <span className="truncate">Chatwoot</span>
-              </a>
+            <div className="shrink-0 border-t border-line p-3">
+              <div className="flex items-center gap-3 rounded-xl border border-line bg-bg px-3 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffb24d,#ff5d72)] font-display text-sm font-bold text-white">
+                  {(authStatus.name || authStatus.email || 'A').slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-semibold text-ink">{authStatus.name || 'Aerion'}</p>
+                  <p className="truncate text-[11px] text-muted" title={authStatus.email}>{authStatus.email || (authStatus.role === 'admin' ? 'Administrador' : 'Operação comercial')}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  title="Sair"
+                  aria-label="Sair"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition hover:bg-surf2 hover:text-red"
+                >
+                  <ArrowRightOnRectangleIcon className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </aside>
           <div className="flex-1 min-w-0 flex flex-col px-4 md:px-6 lg:px-8 pb-12">
             <header>
-              <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-border bg-surface/90 dark:bg-[#0b0f1a]/85 backdrop-blur">
+              <div className="sticky top-0 z-header -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 border-b border-line bg-bg/80 backdrop-blur-[14px]">
                 <div className="min-w-0 flex items-center gap-3">
                   <img src="/logo_aerion.png" alt="Aerion" className="logo-image md:hidden h-6 w-auto object-contain" />
                   <div className="min-w-0">
-                    <p className="text-[11px] text-muted leading-none">Funil de Vendas · Aerion</p>
-                    <h1 className="text-lg font-semibold leading-tight truncate mt-1">{activeView}</h1>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted leading-none">
+                      {activeView === 'Licitações' ? `Aerion / Licitações / ${licSubLabel(licitaçãoSubview)}` : `Aerion / ${activeView}`}
+                    </p>
+                    <h1 className="font-display text-[21px] font-semibold leading-tight truncate mt-1">
+                      {activeView === 'Licitações' ? `Licitações — ${licSubLabel(licitaçãoSubview)}` : activeView}
+                    </h1>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <div className="relative hidden lg:flex h-9 w-[230px] items-center rounded-xl border border-line bg-bg2">
+                    <MagnifyingGlassIcon className="absolute left-3 h-4 w-4 text-muted" />
+                    <input
+                      type="text"
+                      placeholder="Buscar empresa ou CNPJ…"
+                      value={globalSearchQ}
+                      onChange={(event) => setGlobalSearchQ(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') return;
+                        const term = globalSearchQ.trim();
+                        if (!term) return;
+                        const isCnpj = /^[\d./-]{11,}$/.test(term);
+                        setRfbFilters(prev => ({ ...prev, cnpj: isCnpj ? term : '', nome: isCnpj ? '' : term }));
+                        setActiveView('Busca Lead B2B');
+                        setRfbPendingSearch(true);
+                      }}
+                      className="h-full w-full rounded-xl bg-transparent pl-9 pr-3 text-sm text-ink outline-none placeholder:text-muted"
+                      aria-label="Busca global"
+                    />
+                  </div>
                   <select
                     value={activeView}
                     onChange={(event) => setActiveView(event.target.value)}
@@ -6587,21 +6840,85 @@ function App() {
                   >
                     {viewTabs.map(tab => <option key={tab} value={tab}>{tab}</option>)}
                   </select>
+                  <div className="relative">
+                    {(() => {
+                      const overdue = Number(licSummary?.overdue_count) || 0;
+                      const due48 = Number(licSummary?.due_48h) || 0;
+                      const doneJobs = pncpSearchJobs.filter(j => j.status === 'completed').slice(0, 3);
+                      const notifCount = (overdue ? 1 : 0) + (due48 ? 1 : 0) + doneJobs.length;
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setShowNotifications(v => !v)}
+                            className={`${iconBtn} relative border border-line bg-bg2 ${showNotifications ? 'text-ink' : ''}`}
+                            aria-label="Notificações"
+                          >
+                            <BellIcon className="h-[18px] w-[18px]" />
+                            {(overdue > 0 || due48 > 0) && (
+                              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red ring-2 ring-bg2" />
+                            )}
+                          </button>
+                          {showNotifications && (
+                            <div className="absolute right-0 top-11 z-dropdown w-80 rounded-[15px] border border-line bg-surf p-2 shadow-lift">
+                              <p className="px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">Notificações</p>
+                              {notifCount === 0 && (
+                                <p className="px-2 pb-2 text-xs text-muted">Nada urgente por aqui.</p>
+                              )}
+                              {overdue > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
+                                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
+                                >
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red/15 font-mono text-xs font-bold text-red">{overdue}</span>
+                                  licitações atrasadas exigem ação
+                                </button>
+                              )}
+                              {due48 > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
+                                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
+                                >
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber/15 font-mono text-xs font-bold text-amber">{due48}</span>
+                                  vencendo nas próximas 48h
+                                </button>
+                              )}
+                              {doneJobs.map(job => (
+                                <button
+                                  key={job.id}
+                                  type="button"
+                                  onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('editais'); openPncpSearchJob(job.id); }}
+                                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
+                                >
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green/15 font-mono text-[10px] font-bold text-green">✓</span>
+                                  <span className="min-w-0 flex-1 truncate">Busca "{job.nome || job.filters?.q || 'PNCP'}" concluída · {Number(job.total || 0).toLocaleString('pt-BR')} resultados</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
                   <button
                     type="button"
                     onClick={() => setIsDarkMode(prev => !prev)}
-                    className={`${iconBtn} border border-border bg-card`}
+                    className={`${iconBtn} border border-line bg-bg2`}
                     aria-label="Alternar tema"
                   >
                     {isDarkMode ? <SunIcon className="h-[18px] w-[18px]" /> : <MoonIcon className="h-[18px] w-[18px]" />}
                   </button>
-                  {authStatus.email && (
-                    <span className="hidden lg:inline text-xs text-muted max-w-[180px] truncate">{authStatus.email}</span>
-                  )}
-                  <button type="button" onClick={handleLogout} className={`${btnSecondary} px-3 gap-1.5`}>
-                    <ArrowRightOnRectangleIcon className="h-4 w-4" />
-                    <span className="hidden sm:inline">Sair</span>
-                  </button>
+                  <a
+                    href="https://chatwoot.tenryu.com.br/app/accounts/2/contacts"
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`${btnPrimary} px-3 gap-1.5`}
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    <span className="hidden sm:inline">Novo lead</span>
+                  </a>
                 </div>
               </div>
 
@@ -6702,75 +7019,37 @@ function App() {
               )}
             </header>
 
-          <nav className="mt-3 flex flex-wrap items-center gap-1 text-xs text-muted">
-            <button type="button" onClick={() => setActiveView('Overview')} className="hover:text-primary">Início</button>
-            <span>/</span>
-            <button type="button" onClick={() => setActiveView(activeView)} className="font-semibold text-ink hover:text-primary">{activeView}</button>
-            {activeView === 'Licitações' && (
-              <>
-                <span>/</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (licitaçãoSubview === 'editais_watchlist') setLicitacaoSubview('editais');
-                    else if (licitaçãoSubview === 'sinais') setLicitacaoSubview('pca');
-                    else setLicitacaoSubview(licitaçãoSubview);
-                  }}
-                  className="font-semibold text-ink hover:text-primary"
-                >
-                  {licitaçãoSubview === 'overview' ? 'Overview'
-                    : licitaçãoSubview === 'board' ? 'Board'
-                    : licitaçãoSubview === 'editais' || licitaçãoSubview === 'editais_watchlist' ? 'Busca Editais'
-                    : licitaçãoSubview === 'resultados' ? 'Contratos/Resultados'
-                    : licitaçãoSubview === 'pca' || licitaçãoSubview === 'sinais' ? 'PCA'
-                    : 'Watchlist'}
-                </button>
-                {(licitaçãoSubview === 'sinais' || licitaçãoSubview === 'editais_watchlist') && (
-                  <>
-                    <span>/</span>
-                    <span className="font-semibold text-primary">Watchlist</span>
-                  </>
-                )}
-              </>
-            )}
-          </nav>
-
           {activeView === 'Board' && (
             <>
-              <div className="mt-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-                <div>
-                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Board</h2>
-                  <p className="text-sm text-muted mt-1">Pipeline {activeTab === 'leads' ? 'de leads (SDR)' : 'de clientes (CS)'}.</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {(() => {
-                    const boardContacts = filteredContacts.filter(c => activeColumns.includes(c.custom_attributes?.Funil_Vendas));
-                    const cnt = boardContacts.length;
-                    const val = boardContacts.reduce((s, c) => s + (parseCurrency(c.custom_attributes?.Valor_Oportunidade) || 0), 0);
-                    return (
-                      <>
-                        <div className={`${cardAlt} px-4 py-2`}><span className={subtle}>Cards</span><p className="text-base font-bold text-ink dark:text-white leading-tight">{cnt}</p></div>
-                        <div className={`${cardAlt} px-4 py-2`}><span className={subtle}>Valor</span><p className="text-base font-bold text-ink dark:text-white leading-tight">{formatCompactCurrency(val) || 'R$ 0'}</p></div>
-                      </>
-                    );
-                  })()}
-                  <div className="inline-flex items-center rounded-full border border-border bg-card p-1">
+              <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="inline-flex items-center gap-1 rounded-xl border border-line bg-bg2 p-1">
                     <button
                       type="button"
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'leads' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
                       onClick={() => setActiveTab('leads')}
+                      className={`h-[34px] rounded-[10px] px-4 text-[13px] font-semibold transition ${activeTab === 'leads' ? 'bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] text-white shadow-[0_4px_12px_rgba(124,92,255,.4)]' : 'text-muted hover:text-ink'}`}
                     >
-                      Leads (SDR)
+                      Leads · SDR
                     </button>
                     <button
                       type="button"
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${activeTab === 'customers' ? 'bg-primary/10 text-primary' : 'text-muted hover:text-ink'}`}
                       onClick={() => setActiveTab('customers')}
+                      className={`h-[34px] rounded-[10px] px-4 text-[13px] font-semibold transition ${activeTab === 'customers' ? 'bg-[#36d39a] text-white shadow-[0_4px_12px_rgba(54,211,154,.35)]' : 'text-muted hover:text-ink'}`}
                     >
-                      Novos Clientes (CS)
+                      Clientes · CS
                     </button>
                   </div>
+                  <p className="hidden md:block text-[13px] text-muted">{activeTab === 'leads' ? 'Pipeline de leads · SDR' : 'Pipeline de clientes · Customer Success'}</p>
                 </div>
+                {(() => {
+                  const boardContacts = filteredContacts.filter(c => activeColumns.includes(c.custom_attributes?.Funil_Vendas));
+                  const val = boardContacts.reduce((s, c) => s + (parseCurrency(c.custom_attributes?.Valor_Oportunidade) || 0), 0);
+                  return (
+                    <span className="inline-flex items-center gap-2 self-start rounded-xl bg-amber/[0.16] px-3.5 py-2 font-mono text-sm font-semibold text-amber">
+                      Pipeline {formatCompactCurrency(val) || 'R$ 0'}
+                    </span>
+                  );
+                })()}
               </div>
 
           <div ref={groupBarRef} className="kanban-group-bar mt-4 mb-2">
@@ -6791,7 +7070,7 @@ function App() {
                     key={s.id}
                     className="kanban-group-span"
                     style={{
-                      width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * 16px)`,
+                      width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * 14px)`,
                       background: `${s.color}1f`,
                       borderColor: `${s.color}55`,
                     }}
@@ -6803,35 +7082,55 @@ function App() {
             </div>
           </div>
           {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-            <div className="kanban-scrollbar scrollbar-theme" ref={boardScrollbarRef} onScroll={handleTopScroll}>
-              <div style={{ width: boardScrollMetrics.scrollWidth }} />
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => scrollBoardBy(-1)}
+                aria-label="Rolar board para a esquerda"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+              >
+                <ChevronLeftIcon className="h-4 w-4" />
+              </button>
+              <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
+                <div style={{ width: boardScrollMetrics.scrollWidth }} />
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollBoardBy(1)}
+                aria-label="Rolar board para a direita"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+              >
+                <ChevronRightIcon className="h-4 w-4" />
+              </button>
             </div>
           )}
-          <div
-            className={`kanban-board-scroll mt-2 flex gap-2 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
-            ref={boardScrollRef}
-            onScroll={handleBoardScroll}
-          >
-            {activeColumns.map(column => (
-              <KanbanColumn
-                key={column}
-                title={column}
-                contacts={getContactsForColumn(column)}
-                dotClass={dotClass}
-                showMenu={showMenu}
-                menuLabel={menuLabel}
-                onMenuAction={activeTab === 'leads' ? sendToCustomersStage : sendToLeadsInbox}
-                onMoveToColumn={(contactId, targetStage) => moveContactToStage(contactId, targetStage)}
-                availableColumns={activeColumns}
-                showHeaderMenu={showHeaderMenu}
-                newContactUrl={newContactUrl}
-                isDarkMode={isDarkMode}
-              />
-            ))}
+          <div className="relative">
+            <div
+              className={`kanban-board-scroll mt-2 flex gap-2 overflow-x-auto pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
+              ref={boardScrollRef}
+              onScroll={handleBoardScroll}
+            >
+              {activeColumns.map(column => (
+                <KanbanColumn
+                  key={column}
+                  title={column}
+                  contacts={getContactsForColumn(column)}
+                  dotClass={dotClass}
+                  showMenu={showMenu}
+                  menuLabel={menuLabel}
+                  onMenuAction={activeTab === 'leads' ? sendToCustomersStage : sendToLeadsInbox}
+                  onMoveToColumn={(contactId, targetStage) => moveContactToStage(contactId, targetStage)}
+                  availableColumns={activeColumns}
+                  showHeaderMenu={showHeaderMenu}
+                  newContactUrl={newContactUrl}
+                  isDarkMode={isDarkMode}
+                />
+              ))}
+            </div>
           </div>
           <DragOverlay
             dropAnimation={{
-              duration: 240,
+              duration: 180,
               easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
               sideEffects: defaultDropAnimationSideEffects({
                 styles: {
@@ -6861,56 +7160,24 @@ function App() {
 
           {activeView === 'Licitações' && (
             <>
-              <div className="mt-4 inline-flex items-center rounded-full border border-border bg-card p-1">
-                {[
-                  { key: 'overview', label: 'Overview' },
-                  { key: 'board', label: 'Board' },
-                  { key: 'editais', label: 'Busca Editais' },
-                  { key: 'resultados', label: 'Contratos/Resultados' },
-                  { key: 'pca', label: 'PCA' },
-                ].map(opt => (
-                  <button
-                    key={opt.key}
-                    type="button"
-                    onClick={() => setLicitacaoSubview(opt.key)}
-                    className={`px-4 py-1.5 text-xs font-semibold rounded-full transition ${
-                      licitaçãoSubview === opt.key || (opt.key === 'editais' && licitaçãoSubview === 'editais_watchlist')
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted hover:text-ink'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
               {licitaçãoSubview === 'overview' && (
                 <div className="mt-6">
-                  <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
-                    <div>
-                      <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Licitações</h2>
-                      <p className="text-sm text-muted mt-1">Panorama de editais, prazos e oportunidades públicas.</p>
-                    </div>
-                    <button type="button" onClick={() => setLicitacaoSubview('editais')} className={`${btnPrimary} h-10 px-4`}>
-                      <PlusIcon className="h-4 w-4" /> Buscar editais
-                    </button>
-                  </div>
-
                   <div className="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
                     {[
-                      { label: 'Oportunidades', value: licSummary?.opportunities_count ?? licitaçãoOpportunities.length ?? 0, icon: BuildingLibraryIcon, wrap: 'bg-primary/10 text-primary' },
-                      { label: 'Valor em aberto', value: formatCompactCurrency(licSummary?.total_value) || 'R$ 0', icon: BanknotesIcon, wrap: 'bg-secondary/10 text-secondary' },
-                      { label: 'Vencendo em 48h', value: licSummary?.due_48h ?? 0, icon: ChartBarIcon, wrap: 'bg-status-warning/10 text-status-warning' },
-                      { label: 'Atrasadas', value: licSummary?.overdue_count ?? 0, icon: DocumentTextIcon, wrap: 'bg-status-danger/10 text-status-danger' },
+                      { label: 'Oportunidades', value: licSummary?.opportunities_count ?? licitaçãoOpportunities.length ?? 0, icon: BuildingLibraryIcon, glow: 'rgba(124,92,255,.5)' },
+                      { label: 'Valor em aberto', value: formatCompactCurrency(licSummary?.total_value) || 'R$ 0', icon: BanknotesIcon, glow: 'rgba(255,178,77,.4)' },
+                      { label: 'Vencendo em 48h', value: licSummary?.due_48h ?? 0, icon: ChartBarIcon, glow: 'rgba(255,178,77,.4)' },
+                      { label: 'Atrasadas', value: licSummary?.overdue_count ?? 0, icon: DocumentTextIcon, glow: 'rgba(255,93,114,.4)' },
                     ].map((kpi, i) => {
                       const Icon = kpi.icon;
                       return (
-                        <div key={i} className={`${card} p-5 transition hover:border-primary/30`}>
-                          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${kpi.wrap}`}>
-                            <Icon className="h-[18px] w-[18px]" />
-                          </span>
-                          <p className={`${subtle} mt-4`}>{kpi.label}</p>
-                          <p className="text-[26px] font-extrabold leading-none mt-1 text-ink dark:text-white truncate">{kpi.value}</p>
+                        <div key={i} className={`${card} relative overflow-hidden p-[18px] transition hover:border-primary/30`}>
+                          <div className="pointer-events-none absolute -right-8 -top-8 h-[90px] w-[90px] rounded-full blur-[26px] opacity-50" style={{ background: kpi.glow }} />
+                          <div className="relative flex items-center justify-between">
+                            <Icon className="h-[18px] w-[18px] text-ink/90" />
+                          </div>
+                          <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">{kpi.value}</p>
+                          <p className="text-[12.5px] text-muted mt-1.5">{kpi.label}</p>
                         </div>
                       );
                     })}
@@ -6925,13 +7192,15 @@ function App() {
                           const groups = {};
                           licitaçãoOpportunities.forEach(o => {
                             const key = o.fase || o.status || 'Sem fase';
+                            // Monitoramento de PCA é etapa pré-edital: vive no Board/PCA, não no funil do overview.
+                            if (/^1\./.test(key)) return;
                             if (!groups[key]) groups[key] = { fase: key, count: 0, value: 0 };
                             groups[key].count += 1;
                             groups[key].value += Number(o.valor_oportunidade) || 0;
                           });
                           const list = Object.values(groups).sort((a, b) => b.count - a.count);
                           const max = Math.max(...list.map(g => g.count), 1);
-                          const palette = ['#6366f1', '#8b5cf6', '#a855f7', '#f59e0b', '#22c55e', '#38bdf8', '#6b7280'];
+                          const palette = ['#38d6e6', '#5a93ff', '#7c5cff', '#a78bff', '#ffb24d', '#36d39a', '#7b87a3'];
                           return list.length ? (
                             <div className="space-y-3.5">
                               {list.map((g, idx) => (
@@ -6954,7 +7223,7 @@ function App() {
 
                     <div className="space-y-5">
                       <div className={`${card} p-6`}>
-                        <h3 className={`${sectionTitle} text-base mb-4`}>Prazos</h3>
+                        <h3 className={`${sectionTitle} text-base mb-4`}>Prazos críticos</h3>
                         <div className="space-y-3">
                           <div className="flex items-center gap-3 rounded-xl bg-status-danger/[0.08] border border-status-danger/20 p-3">
                             <span className="h-9 w-9 rounded-lg bg-status-danger/15 text-status-danger flex items-center justify-center shrink-0 font-bold">{licSummary?.overdue_count ?? 0}</span>
@@ -7004,133 +7273,147 @@ function App() {
               {licitaçãoSubview === 'editais' && (
               <>
               {/* PNCP Search - Busca de Editais/Licitações */}
-              <div className="mt-6 rounded-2xl border border-border bg-card p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-base font-semibold text-ink flex items-center gap-2">
-                    <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-primary/10 text-primary text-xs font-bold">P</span>
-                    Buscar Licitações no PNCP
-                  </h3>
-                  <div className="flex items-center gap-2">
+              <div className="mt-6 space-y-4">
+                <div className="rounded-[18px] border border-line bg-surf p-4 md:p-5 space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                    <div className="flex min-h-[42px] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[11px] border border-line bg-bg2 py-1.5 pl-3 pr-2">
+                      <MagnifyingGlassIcon className="h-4 w-4 shrink-0 text-muted" />
+                      {pncpAcceptedPositiveTerms.map(term => (
+                        <button
+                          key={term}
+                          type="button"
+                          onClick={() => setPncpAcceptedPositiveTerms(prev => prev.filter(item => item !== term))}
+                          title="Remover termo (cada chip é uma frente da busca profunda)"
+                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11.5px] font-semibold text-primary hover:bg-primary/20"
+                        >
+                          {term} <span className="text-primary/70">×</span>
+                        </button>
+                      ))}
+                      <input
+                        type="text"
+                        placeholder={pncpAcceptedPositiveTerms.length ? 'outro termo… (vírgula adiciona)' : 'drones para mapeamento topográfico — vírgula adiciona termo'}
+                        value={pncpSearchFilters.q}
+                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, q: event.target.value }))}
+                        onKeyDown={(event) => {
+                          const value = String(pncpSearchFilters.q || '').trim();
+                          if (event.key === ',') {
+                            event.preventDefault();
+                            if (value) {
+                              setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, value])));
+                              setPncpSearchFilters(prev => ({ ...prev, q: '' }));
+                            }
+                          } else if (event.key === 'Enter') {
+                            runPncpSearch(1);
+                          } else if (event.key === 'Backspace' && !value && pncpAcceptedPositiveTerms.length) {
+                            setPncpAcceptedPositiveTerms(prev => prev.slice(0, -1));
+                          }
+                        }}
+                        className="h-7 min-w-[140px] flex-1 bg-transparent text-sm font-semibold text-ink outline-none placeholder:text-muted"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPncpSearchFilters(prev => ({ ...prev, usar_ia: !prev.usar_ia }))}
+                        title={pncpSearchFilters.usar_ia ? 'Busca inteligente ligada — IA expande termos correlatos' : 'Busca inteligente desligada'}
+                        className={`ml-auto shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${pncpSearchFilters.usar_ia ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
+                      >
+                        ✦ IA expande termos
+                      </button>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => activePncpSearchJobId ? convertPncpSearchJobToWatchlist(activePncpSearchJobId) : savePncpWatchlist()}
-                      disabled={!String(pncpSearchFilters.q || '').trim()}
-                      className="h-8 rounded-lg border border-border px-3 text-xs font-semibold text-ink disabled:opacity-50"
+                      onClick={() => runPncpSearch(1)}
+                      disabled={pncpSearchLoading}
+                      className={`${btnPrimary} h-[42px] px-8`}
                     >
-                      Salvar watchlist
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLicitacaoSubview('editais_watchlist')}
-                      className="h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-white"
-                    >
-                      Watchlist
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)}
-                      className="text-xs text-muted hover:text-ink"
-                    >
-                      {pncpSearchExpanded ? 'Recolher' : 'Expandir'}
+                      {pncpSearchLoading ? 'Buscando...' : 'Buscar'}
                     </button>
                   </div>
+                  {(pncpSuggestedTerms.positivos.length > 0 || pncpSuggestedTerms.negativos.length > 0 || pncpAcceptedNegativeTerms.length > 0 || pncpSuggestionLoading) && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted2">IA sugere</span>
+                      {pncpSuggestionLoading && <span>pensando…</span>}
+                      {pncpSuggestedTerms.positivos.filter(term => !pncpAcceptedPositiveTerms.includes(term) && normalizeText(term) !== normalizeText(pncpSearchFilters.q)).slice(0, 6).map(term => (
+                        <button
+                          key={term}
+                          type="button"
+                          onClick={() => setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, term])))}
+                          className="rounded-lg border border-line bg-bg2 px-2 py-0.5 hover:border-primary hover:text-primary"
+                        >
+                          + {term}
+                        </button>
+                      ))}
+                      {pncpAcceptedNegativeTerms.map(term => (
+                        <button
+                          key={`neg-${term}`}
+                          type="button"
+                          onClick={() => setPncpAcceptedNegativeTerms(prev => prev.filter(item => item !== term))}
+                          title="Exclusão ativa — clique para remover"
+                          className="rounded-lg bg-amber/15 px-2 py-0.5 font-semibold text-amber hover:bg-amber/25"
+                        >
+                          − {term} ×
+                        </button>
+                      ))}
+                      {pncpSuggestedTerms.negativos.filter(term => !pncpAcceptedNegativeTerms.includes(term)).slice(0, 4).map(term => (
+                        <button
+                          key={`negsug-${term}`}
+                          type="button"
+                          onClick={() => setPncpAcceptedNegativeTerms(prev => Array.from(new Set([...prev, term])))}
+                          title="Excluir este termo dos resultados"
+                          className="rounded-lg border border-line bg-bg2 px-2 py-0.5 hover:border-amber hover:text-amber"
+                        >
+                          − {term}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select value={pncpSearchFilters.tipos_documento} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))} className={`${select} h-8 rounded-[10px] text-xs`}>
+                      <option value="edital">Editais</option>
+                      <option value="ata">Atas de Registro</option>
+                      <option value="contrato">Contratos</option>
+                      <option value="edital,ata">Editais e Atas</option>
+                      <option value="edital,ata,contrato">Todos</option>
+                    </select>
+                    <select value={pncpSearchFilters.status} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))} className={`${select} h-8 rounded-[10px] text-xs`}>
+                      <option value="recebendo_proposta">Recebendo proposta</option>
+                      <option value="encerrada">Encerrada</option>
+                      <option value="suspensa">Suspensa</option>
+                      <option value="todos">Todos os status</option>
+                    </select>
+                    <select value={pncpSearchFilters.modalidade_licitacao_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))} className={`${select} h-8 rounded-[10px] text-xs`}>
+                      <option value="">Todas modalidades</option>
+                      {modalidadeOptions.map(item => (
+                        <option key={item.id} value={item.id}>{item.nome}</option>
+                      ))}
+                    </select>
+                    <select value={pncpSearchFilters.uf} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))} className={`${select} h-8 rounded-[10px] text-xs`}>
+                      <option value="">Todos os estados</option>
+                      {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (
+                        <option key={uf} value={uf}>{uf}</option>
+                      ))}
+                    </select>
+                    <input value={pncpSearchFilters.negative_terms} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))} onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)} placeholder="Excluir termos" className={`${input} h-8 w-36 rounded-[10px] text-xs`} />
+                    <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondary} h-8 px-3 text-xs`}>
+                      {pncpSearchExpanded ? 'Menos filtros' : 'Mais filtros'}
+                    </button>
+                    <button type="button" onClick={() => activePncpSearchJobId ? convertPncpSearchJobToWatchlist(activePncpSearchJobId) : savePncpWatchlist()} disabled={!String(pncpSearchFilters.q || '').trim()} className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>
+                      Salvar watchlist
+                    </button>
+                    <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondary} h-8 px-3 text-xs`}>
+                      Watchlist
+                    </button>
+                  </div>
+                  {Array.isArray(pncpSearchResults.termosUsados) && pncpSearchResults.termosUsados.length > 0 && (
+                    <div className="flex flex-wrap gap-2 text-xs text-muted">
+                      <span>Termos:</span>
+                      {pncpSearchResults.termosUsados.slice(0, 8).map(termo => <span key={termo} className="font-semibold text-cyan">{termo}</span>)}
+                    </div>
+                  )}
                 </div>
 
                 {pncpSearchExpanded && (
                   <>
-                    <div className="grid gap-3 md:grid-cols-6">
-                      <input
-                        type="text"
-                        placeholder="Objeto, item, solução ou problema..."
-                        value={pncpSearchFilters.q}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, q: event.target.value }))}
-                        onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
-                        className={`${input} md:col-span-2`}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Excluir termos (opcional)"
-                        value={pncpSearchFilters.negative_terms}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))}
-                        onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)}
-                        className={input}
-                      />
-                      <select
-                        value={pncpSearchFilters.tipos_documento}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))}
-                        className={input}
-                      >
-                        <option value="edital">Editais</option>
-                        <option value="ata">Atas de Registro</option>
-                        <option value="contrato">Contratos</option>
-                        <option value="edital,ata">Editais e Atas</option>
-                        <option value="edital,ata,contrato">Todos</option>
-                      </select>
-                      <select
-                        value={pncpSearchFilters.status}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))}
-                        className={input}
-                      >
-                        <option value="recebendo_proposta">Recebendo Proposta</option>
-                        <option value="encerrada">Encerrada</option>
-                        <option value="suspensa">Suspensa</option>
-                        <option value="todos">Todos os Status</option>
-                      </select>
-                      <select
-                        value={pncpSearchFilters.modalidade_licitacao_id}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))}
-                        className={input}
-                      >
-                        <option value="">Todas Modalidades</option>
-                        {modalidadeOptions.map(item => (
-                          <option key={item.id} value={item.id}>{item.nome}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => runPncpSearch(1)}
-                        disabled={pncpSearchLoading}
-                        className={btnPrimary}
-                      >
-                        {pncpSearchLoading ? 'Buscando...' : 'Buscar'}
-                      </button>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-6 mt-3">
-                      <select
-                        value={pncpSearchFilters.uf}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))}
-                        className={input}
-                      >
-                        <option value="">Todos os Estados</option>
-                        <option value="AC">Acre</option>
-                        <option value="AL">Alagoas</option>
-                        <option value="AP">Amapá</option>
-                        <option value="AM">Amazonas</option>
-                        <option value="BA">Bahia</option>
-                        <option value="CE">Ceará</option>
-                        <option value="DF">Distrito Federal</option>
-                        <option value="ES">Espírito Santo</option>
-                        <option value="GO">Goiás</option>
-                        <option value="MA">Maranhão</option>
-                        <option value="MT">Mato Grosso</option>
-                        <option value="MS">Mato Grosso do Sul</option>
-                        <option value="MG">Minas Gerais</option>
-                        <option value="PA">Pará</option>
-                        <option value="PB">Paraíba</option>
-                        <option value="PR">Paraná</option>
-                        <option value="PE">Pernambuco</option>
-                        <option value="PI">Piauí</option>
-                        <option value="RJ">Rio de Janeiro</option>
-                        <option value="RN">Rio Grande do Norte</option>
-                        <option value="RS">Rio Grande do Sul</option>
-                        <option value="RO">Rondônia</option>
-                        <option value="RR">Roraima</option>
-                        <option value="SC">Santa Catarina</option>
-                        <option value="SP">São Paulo</option>
-                        <option value="SE">Sergipe</option>
-                        <option value="TO">Tocantins</option>
-                      </select>
+                    <div className="grid gap-3 rounded-[18px] border border-line bg-surf p-4 md:grid-cols-6 md:p-5">
                       <select
                         value={pncpSearchFilters.esfera_id}
                         onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, esfera_id: event.target.value }))}
@@ -7328,26 +7611,6 @@ function App() {
                       </div>
                     )}
 
-                    {/* Busca inteligente com IA */}
-                    <div className="mt-3 flex items-center flex-wrap gap-3">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={pncpSearchFilters.usar_ia}
-                          onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, usar_ia: event.target.checked }))}
-                          className="w-4 h-4 rounded border-border text-primary focus:ring-primary"
-                        />
-                        <span className="text-ink">Busca inteligente</span>
-                        <span className="text-xs text-muted">(usa IA para encontrar termos correlatos)</span>
-                      </label>
-                      {pncpSearchResults.diagnostics && (
-                        <span className="text-xs text-muted">
-                          IA {pncpSearchResults.diagnostics.aiUsed ? 'usada' : pncpSearchResults.diagnostics.aiRequested ? 'pulada' : 'desligada'}
-                          {pncpSearchResults.diagnostics.aiSkippedReason ? `: ${pncpSearchResults.diagnostics.aiSkippedReason}` : ''}
-                        </span>
-                      )}
-                    </div>
-
                     {(!activePncpSearchJobId && pncpSearchLoading) && (
                       <div className="mt-3 rounded-xl border border-primary/30 bg-primary/10 p-3">
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -7383,128 +7646,77 @@ function App() {
                       </div>
                     )}
 
-                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                      <div className="rounded-xl border border-border bg-cardAlt p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-ink">Termos da busca</p>
-                          {pncpSuggestionLoading && <span className="text-[11px] text-muted">IA sugerindo...</span>}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {String(pncpSearchFilters.q || '').trim() && (
-                            <span className="rounded-lg bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary">{pncpSearchFilters.q}</span>
-                          )}
-                          {pncpAcceptedPositiveTerms.map(term => (
-                            <button
-                              key={term}
-                              type="button"
-                              onClick={() => setPncpAcceptedPositiveTerms(prev => prev.filter(item => item !== term))}
-                              className="rounded-lg border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary"
-                              title="Remover termo aceito"
-                            >
-                              {term} x
-                            </button>
-                          ))}
-                          {pncpSuggestedTerms.positivos.filter(term => !pncpAcceptedPositiveTerms.includes(term) && normalizeText(term) !== normalizeText(pncpSearchFilters.q)).map(term => (
-                            <button
-                              key={term}
-                              type="button"
-                              onClick={() => setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, term])))}
-                              className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted hover:border-primary hover:text-primary"
-                              title="Adicionar termo sugerido"
-                            >
-                              + {term}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="mt-2 flex gap-2">
-                          <input
-                            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-card px-2 text-xs"
-                            placeholder="Adicionar termo proprio"
-                            value={pncpCustomTermInput}
-                            onChange={(event) => setPncpCustomTermInput(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                addPncpCustomTerms();
-                              }
-                            }}
-                          />
-                          <button type="button" onClick={addPncpCustomTerms} className="h-8 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-card">
-                            Add
-                          </button>
-                        </div>
-                        <p className="mt-2 text-[11px] text-muted">Cada chip vira uma frente propria da busca profunda.</p>
-                      </div>
-
-                      <div className="rounded-xl border border-border bg-cardAlt p-3">
-                        <p className="text-xs font-semibold text-ink">Exclusões sugeridas</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {pncpAcceptedNegativeTerms.map(term => (
-                            <button
-                              key={term}
-                              type="button"
-                              onClick={() => setPncpAcceptedNegativeTerms(prev => prev.filter(item => item !== term))}
-                              className="rounded-lg border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-semibold text-orange-700 dark:bg-orange-900/20 dark:text-orange-300"
-                              title="Remover exclusão"
-                            >
-                              {term} x
-                            </button>
-                          ))}
-                          {pncpSuggestedTerms.negativos.filter(term => !pncpAcceptedNegativeTerms.includes(term)).map(term => (
-                            <button
-                              key={term}
-                              type="button"
-                              onClick={() => setPncpAcceptedNegativeTerms(prev => Array.from(new Set([...prev, term])))}
-                              className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted hover:border-orange-300 hover:text-orange-600"
-                              title="Adicionar exclusão sugerida"
-                            >
-                              + {term}
-                            </button>
-                          ))}
-                          {pncpSuggestedTerms.negativos.length === 0 && pncpAcceptedNegativeTerms.length === 0 && (
-                            <span className="text-[11px] text-muted">Nenhuma exclusão aplicada automaticamente.</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
                     {pncpSearchJobs.length > 0 && (
-                      <div className="mt-3 rounded-xl border border-border bg-cardAlt p-3">
+                      <div className="mt-4">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-ink">Buscas recentes</p>
-                          <button type="button" onClick={loadPncpSearchJobs} className="text-xs text-primary hover:underline">Atualizar</button>
+                          <div>
+                            <h3 className={`${sectionTitle} text-[15px]`}>Minhas buscas</h3>
+                            <p className={subtle}>Cada busca fica salva aqui e continua rodando até terminar. Clique para abrir os resultados.</p>
+                          </div>
+                          <button type="button" onClick={loadPncpSearchJobs} className={`${btnSecondary} h-8 px-3 text-xs`}>Atualizar</button>
                         </div>
-                        <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                          {pncpSearchJobs.slice(0, 5).map(job => {
+                        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          {pncpSearchJobs.slice(0, 12).map(job => {
                             const meta = getPncpJobStatusMeta(job.status);
                             const done = Number(job.progress?.terms_done || 0);
                             const total = Math.max(Number(job.progress?.terms_total || job.terms?.length || 0), 1);
-                            const pct = ['completed', 'failed', 'cancelled'].includes(job.status) ? 100 : Math.min(98, Math.round((done / total) * 100));
+                            const finished = ['completed', 'failed', 'cancelled'].includes(job.status);
+                            const running = !finished;
+                            const pct = finished ? 100 : Math.min(98, Math.round((done / total) * 100));
+                            const isActive = activePncpSearchJobId === job.id;
                             return (
-                            <div key={job.id} className={`rounded-lg border p-2 ${activePncpSearchJobId === job.id ? 'border-primary bg-primary/5' : 'border-border bg-card'}`}>
-                              <div className="flex items-start justify-between gap-2">
-                                <button type="button" onClick={() => openPncpSearchJob(job.id)} className="min-w-0 text-left">
-                                  <p className="truncate text-xs font-semibold text-ink">{job.nome || job.filters?.q || 'Pesquisa PNCP'}</p>
-                                  <p className="mt-0.5 text-[11px] text-muted">
-                                    {String(job.status || 'queued').replace(/_/g, ' ')} · {Number(job.total || 0).toLocaleString('pt-BR')} resultado(s)
-                                  </p>
-                                </button>
-                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>{meta.label}</span>
-                              </div>
-                              <button type="button" onClick={() => openPncpSearchJob(job.id)} className="mt-2 block w-full text-left">
-                                <div className="h-1.5 overflow-hidden rounded-full bg-cardAlt">
-                                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                            <div key={job.id} className={`rounded-[15px] border p-3.5 transition ${isActive ? 'border-primary/60 bg-primary/[0.06] shadow-[inset_0_0_0_1px_rgba(124,92,255,.2)]' : 'border-line bg-surf hover:border-line2 hover:bg-surf2'}`}>
+                              <button type="button" onClick={() => openPncpSearchJob(job.id)} className="block w-full min-w-0 text-left">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="truncate text-[13px] font-semibold text-ink">{job.nome || job.filters?.q || 'Pesquisa PNCP'}</p>
+                                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+                                    {running && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current align-middle" />}
+                                    {meta.label}
+                                  </span>
                                 </div>
-                                <p className="mt-1 text-[10px] text-muted">{done}/{total} termo(s) · {job.progress?.current_term || 'aguardando'}</p>
+                                <p className="mt-1 font-mono text-[11px] text-muted">
+                                  {Number(job.total || 0).toLocaleString('pt-BR')} resultado(s){job.watchlist_id ? ' · watchlist ativa' : ''}
+                                </p>
+                                <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-bg2">
+                                  <div className={`h-full rounded-full transition-all ${running ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`} style={{ width: `${pct}%` }} />
+                                </div>
+                                <p className="mt-1.5 font-mono text-[10px] text-muted2">{done}/{total} termo(s){running ? ` · ${job.progress?.current_term || 'aguardando'}` : ''}</p>
                               </button>
-                              <div className="mt-2 flex gap-1.5">
-                                {!['completed', 'failed', 'cancelled'].includes(job.status) && (
-                                  <button type="button" onClick={() => cancelPncpSearchJob(job.id)} className="h-7 rounded-lg border border-border px-2 text-[11px] text-muted hover:bg-cardAlt">Cancelar</button>
+                              <div className="mt-2.5 flex gap-1.5 border-t border-line/60 pt-2.5">
+                                {running && (
+                                  <button type="button" onClick={() => cancelPncpSearchJob(job.id)} className="h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] text-muted transition hover:text-red">Cancelar</button>
                                 )}
-                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(job.id)} disabled={Boolean(job.watchlist_id)} className="h-7 rounded-lg border border-border px-2 text-[11px] text-muted hover:bg-cardAlt disabled:opacity-50">
-                                  {job.watchlist_id ? 'Watchlist' : 'Virar watchlist'}
+                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(job.id)} disabled={Boolean(job.watchlist_id)} className="h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] font-semibold text-cyan transition hover:bg-cyan/10 disabled:opacity-50 disabled:text-muted">
+                                  {job.watchlist_id ? 'Watchlist ✓' : 'Virar watchlist'}
                                 </button>
                               </div>
+                              <details className="mt-2">
+                                <summary className="cursor-pointer list-none font-mono text-[10px] uppercase tracking-[0.1em] text-muted2 hover:text-muted">▸ Auditoria da busca</summary>
+                                <div className="mt-2 space-y-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {(job.terms || []).map(term => (
+                                      <span key={term} className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{term}</span>
+                                    ))}
+                                    {(job.negative_terms || []).map(term => (
+                                      <span key={`n-${term}`} className="rounded-md bg-amber/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber">− {term}</span>
+                                    ))}
+                                  </div>
+                                  {(job.term_runs || []).length > 0 ? (
+                                    <div className="space-y-1">
+                                      {(job.term_runs || []).slice(-6).map((run, index) => (
+                                        <div key={`${run.term || index}-${index}`} className="flex items-center justify-between gap-2 rounded-md bg-bg px-2 py-1">
+                                          <span className="truncate text-[10.5px] font-semibold text-ink">{run.term || 'termo'}</span>
+                                          <span className="shrink-0 font-mono text-[10px] text-muted">
+                                            {run.pages_completed || 0}/{run.pages_requested || 0} pág · {Number(run.items_collected || 0).toLocaleString('pt-BR')} coletados · {run.stop_reason || 'rodando'}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[10.5px] text-muted">Sem execuções registradas ainda.</p>
+                                  )}
+                                </div>
+                              </details>
                             </div>
                             );
                           })}
@@ -7513,13 +7725,12 @@ function App() {
                     )}
 
                     {activePncpSearchJobId && (
-                      <div className="mt-3 rounded-xl border border-primary/25 bg-card p-3">
+                      <div className="mt-4 rounded-[15px] border border-primary/30 bg-surf p-4">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-primary">Pagina da busca</p>
-                            <p className="mt-1 truncate text-sm font-semibold text-ink">{activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q || 'Pesquisa PNCP'}</p>
-                            <p className="mt-0.5 text-xs text-muted">
-                              {String(activePncpSearchJob?.status || 'carregando').replace(/_/g, ' ')} · {Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')} resultado(s) carregados aqui
+                            <p className="truncate text-[15px] font-semibold text-ink">{activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q || 'Pesquisa PNCP'}</p>
+                            <p className="mt-0.5 font-mono text-xs text-muted">
+                              {String(activePncpSearchJob?.status || 'carregando').replace(/_/g, ' ')} · {Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')} resultado(s)
                             </p>
                           </div>
                           <div className="flex min-w-0 flex-1 gap-2 lg:max-w-lg">
@@ -7603,27 +7814,6 @@ function App() {
                                   + IA: {term}
                                 </button>
                               ))}
-                          </div>
-                        )}
-                        {(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).length > 0 && (
-                          <div className="mt-3 rounded-lg border border-border bg-cardAlt p-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-xs font-semibold text-ink">Auditoria dos termos</p>
-                              <span className="text-[11px] text-muted">{(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).length} termo(s)</span>
-                            </div>
-                            <div className="mt-2 grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
-                              {(pncpSearchResults.query_plan?.term_runs || activePncpSearchJob?.term_runs || []).slice(-6).map((run, index) => (
-                                <div key={`${run.term || index}-${index}`} className="rounded-lg border border-border bg-card px-2 py-1.5">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="truncate text-[11px] font-semibold text-ink">{run.term || 'termo'}</p>
-                                    <span className="text-[10px] text-muted">{run.pages_completed || 0}/{run.pages_requested || 0} pag.</span>
-                                  </div>
-                                  <p className="mt-0.5 text-[10px] text-muted">
-                                    {Number(run.items_collected || 0).toLocaleString('pt-BR')} coletado(s) · {run.stop_reason || 'rodando'}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
                           </div>
                         )}
                       </div>
@@ -7864,24 +8054,24 @@ function App() {
                     {activePncpSearchJobId && visiblePncpResults.length > 0 && !showPncpHidden && (
                       <div className="mt-4 space-y-3 max-h-[34rem] overflow-y-auto pr-1 scrollbar-theme">
                         {visiblePncpResults.map((item) => (
-                          <div key={item.id} className="rounded-xl border border-border bg-cardAlt p-3 hover:border-primary/50 hover:bg-muted/10 transition-colors">
-                            <div className="flex items-start justify-between gap-3">
+                          <div key={item.id} className="rounded-[15px] border border-line bg-surf p-4 transition hover:border-primary/50 hover:shadow-lift">
+                            <div className="grid gap-4 lg:grid-cols-[1fr_172px]">
                               <div className="flex-1 min-w-0">
                                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${getPncpScoreClass(item.score)}`}>
+                                  <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 font-mono text-xs font-bold ${getPncpScoreClass(item.score)}`}>
                                     {Number(item.score || 0)} · {item.score_label || 'Aderência'}
                                   </span>
-                                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
+                                  <span className={`inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
                                     {item.prazo_info?.label || 'Prazo n/d'}
                                   </span>
-                                  <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
-                                    {item.legal_stage?.label || 'Edital publicado'}
+                                  <span className="inline-flex items-center rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                                    {item.modalidade?.nome || 'Modalidade n/d'}
                                   </span>
-                                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs text-muted dark:bg-gray-800">
-                                    {item.source === 'pncp_consulta' ? 'PNCP Consulta' : 'PNCP Search'}
+                                  <span className="inline-flex items-center rounded-lg border border-line bg-bg2 px-2.5 py-1 text-xs text-muted">
+                                    {item.esfera?.nome ? `${item.esfera.nome} · ` : ''}{item.uf || 'BR'}
                                   </span>
                                   {item.__visibility !== 'visible' && (
-                                    <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                                    <span className="inline-flex items-center rounded-lg bg-amber/15 px-2.5 py-1 text-xs font-semibold text-amber">
                                       {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Oculto'}
                                     </span>
                                   )}
@@ -7894,55 +8084,24 @@ function App() {
                                   ) : item.titulo}
                                 </h4>
                                 <p className="text-xs text-muted mt-1 line-clamp-2">{item.descricao}</p>
-                                <div className="flex flex-wrap gap-2 mt-2 text-xs">
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                    {item.modalidade?.nome || 'Modalidade n/d'}
-                                  </span>
-                                  {item.criterio_julgamento && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-card border border-border text-muted">
-                                      {item.criterio_julgamento}
-                                    </span>
-                                  )}
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-800 text-muted">
-                                    {item.esfera?.nome} | {item.uf}
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
-                                    {item.situacao?.nome || 'Status n/d'}
-                                  </span>
-                                  {item.matched_termo && pncpSearchResults.termosUsados?.length > 1 && item.matched_termo !== pncpSearchFilters.q && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400" title="Encontrado via busca inteligente">
-                                      via: {item.matched_termo}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-muted mt-2">
-                                  <strong>Órgão:</strong> {item.orgao?.nome || 'n/d'} | <strong>Unidade:</strong> {item.unidade?.nome || 'n/d'}
+                                <p className="text-xs text-muted mt-2.5 leading-relaxed">
+                                  <strong className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted2">Órgão</strong> {item.orgao?.nome || 'n/d'}
+                                  {item.criterio_julgamento ? <> <span className="text-line2">·</span> <strong className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted2">Critério</strong> {item.criterio_julgamento}</> : null}
+                                  {Number(item.itens_pertinentes_count) > 0 ? <> <span className="text-line2">·</span> <strong className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted2">Itens pert.</strong> {item.itens_pertinentes_count}</> : null}
                                 </p>
-                                <p className="text-xs text-muted">
-                                  <strong>Publicação:</strong> {item.data_publicacao ? new Date(item.data_publicacao).toLocaleDateString('pt-BR') : 'n/d'} |
-                                  <strong> Vigência até:</strong> {item.data_fim_vigencia ? new Date(item.data_fim_vigencia).toLocaleDateString('pt-BR') : 'n/d'}
-                                </p>
-                                <p className="text-xs text-muted mt-1">
-                                  <strong>Valor estimado:</strong> {getBestEstimatedValue(item) ? formatCurrency(getBestEstimatedValue(item)) : 'n/d'}
-                                  {Number(item.itens_pertinentes_count) > 0 ? ` | ${item.itens_pertinentes_count} item(ns) pertinente(s)` : ''}
-                                  {item.total_itens ? ` | ${item.total_itens} item(ns)` : ''}
-                                </p>
-                                {Array.isArray(item.match_reasons) && item.match_reasons.length > 0 && (
-                                  <div className="mt-3 flex flex-wrap gap-1.5">
-                                    {item.match_reasons.map(reason => (
-                                      <span key={reason} className="rounded-lg border border-border bg-card px-2 py-1 text-[11px] text-muted">
-                                        {reason}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
                               </div>
-                              <div className="flex flex-col gap-2">
+                              <div className="flex flex-col gap-2 border-line lg:border-l lg:pl-4">
+                                <div>
+                                  <p className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">Valor estimado</p>
+                                  <p className="mt-1 font-mono text-lg font-bold text-ink">
+                                    {getBestEstimatedValue(item) ? formatCurrency(getBestEstimatedValue(item)) : 'n/d'}
+                                  </p>
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => importPncpLicitacao(item)}
                                   disabled={pncpImportingId === item.id || item.__visibility === 'pipeline'}
-                                  className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary/90 disabled:opacity-60"
+                                  className="h-9 px-3 rounded-[10px] bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] text-white text-xs font-semibold hover:brightness-110 disabled:opacity-60"
                                 >
                                   {pncpImportingId === item.id ? 'Importando...' : 'Importar'}
                                 </button>
@@ -7951,16 +8110,16 @@ function App() {
                                     href={item.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="h-8 px-3 rounded-lg border border-border text-xs font-semibold flex items-center justify-center hover:bg-cardAlt"
+                                    className="h-8 px-3 rounded-[10px] border border-line bg-bg2 text-xs font-semibold flex items-center justify-center hover:bg-surf2"
                                   >
-                                    Ver no PNCP
+                                    PNCP ↗
                                   </a>
                                 )}
                                 {item.__visibility === 'hidden' ? (
                                   <button
                                     type="button"
                                     onClick={() => restorePncpItem(item.id)}
-                                    className="h-8 px-3 rounded-lg border border-orange-300 text-orange-600 text-xs font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                                    className="h-8 px-3 rounded-[10px] border border-line bg-bg2 text-muted text-xs font-semibold hover:bg-surf2"
                                   >
                                     Restaurar
                                   </button>
@@ -7968,7 +8127,7 @@ function App() {
                                   <button
                                     type="button"
                                     onClick={() => hidePncpItem(item.id)}
-                                    className="h-8 px-3 rounded-lg border border-orange-300 text-orange-600 text-xs font-semibold hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                                    className="h-8 px-3 rounded-[10px] border border-line bg-bg2 text-muted text-xs font-semibold hover:bg-surf2"
                                   >
                                     Ocultar
                                   </button>
@@ -8459,14 +8618,67 @@ function App() {
                 <div className={`mt-4 ${subtle}`}>Carregando licitações...</div>
               )}
 
+              <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <p className="text-[13px] text-muted">Pipeline de licitações · 15 fases (Lei 14.133)</p>
+                <span className="inline-flex items-center gap-2 self-start rounded-xl bg-amber/[0.16] px-3.5 py-2 font-mono text-sm font-semibold text-amber">
+                  Valor em aberto {formatCompactCurrency(licSummary?.total_value) || 'R$ 0'}
+                </span>
+              </div>
+
+              <div ref={groupBarRef} className="kanban-group-bar mt-4 mb-2">
+                <div className="kanban-group-bar-track">
+                  {(() => {
+                    const spans = [];
+                    licitaçãoColumns.forEach((column) => {
+                      const g = licGroupForStageNum(getStageNumber(column)) || { id: 'outros', label: 'Outros', color: '#7b87a3' };
+                      const last = spans[spans.length - 1];
+                      if (last && last.id === g.id) last.colCount += 1;
+                      else spans.push({ id: g.id, label: g.label, color: g.color, colCount: 1 });
+                    });
+                    return spans.map((s) => (
+                      <div
+                        key={s.id}
+                        className="kanban-group-span"
+                        style={{
+                          width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * 14px)`,
+                          background: `${s.color}1f`,
+                          borderColor: `${s.color}55`,
+                        }}
+                      >
+                        <span className="kanban-group-label" style={{ color: s.color }}>{s.label}</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
               {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-                <div className="kanban-scrollbar scrollbar-theme" ref={boardScrollbarRef} onScroll={handleTopScroll}>
-                  <div style={{ width: boardScrollMetrics.scrollWidth }} />
+                <div className="mt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => scrollBoardBy(-1)}
+                    aria-label="Rolar board para a esquerda"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                  >
+                    <ChevronLeftIcon className="h-4 w-4" />
+                  </button>
+                  <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
+                    <div style={{ width: boardScrollMetrics.scrollWidth }} />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => scrollBoardBy(1)}
+                    aria-label="Rolar board para a direita"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                  >
+                    <ChevronRightIcon className="h-4 w-4" />
+                  </button>
                 </div>
               )}
 
-              <div
-                className={`kanban-board-scroll mt-2 flex gap-2 overflow-x-hidden pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
+              <div className="relative">
+                <div
+                className={`kanban-board-scroll mt-2 flex gap-3.5 overflow-x-auto pb-4 ${activeDragId ? 'snap-none' : 'snap-x snap-mandatory'}`}
                 ref={boardScrollRef}
                 onScroll={handleBoardScroll}
               >
@@ -8479,6 +8691,7 @@ function App() {
                     onEdit={openOpportunity}
                   />
                 ))}
+              </div>
               </div>
 
               {selectedOpportunity && (
@@ -8983,7 +9196,7 @@ function App() {
                   <div className={`${card} p-4`}>
                     <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
                       <div>
-                        <h2 className="text-lg font-semibold text-ink">Contratos/Resultados PNCP</h2>
+                        <h2 className="font-display text-lg font-semibold text-ink">Contratos/Resultados PNCP</h2>
                         <p className="text-xs text-muted mt-1">Consulte vencedores, valores homologados, contratos e atas por produto, fornecedor ou órgão.</p>
                       </div>
                       <button
@@ -9044,15 +9257,15 @@ function App() {
                     <div className="grid gap-3 sm:grid-cols-3">
                       <div className={`${cardAlt} p-3`}>
                         <p className="text-xs text-muted">Registros exibidos</p>
-                        <p className="mt-1 text-xl font-bold">{pncpOutcomeResults.summary?.count || pncpOutcomeResults.items.length}</p>
+                        <p className="mt-1 font-mono text-xl font-bold">{pncpOutcomeResults.summary?.count || pncpOutcomeResults.items.length}</p>
                       </div>
                       <div className={`${cardAlt} p-3`}>
                         <p className="text-xs text-muted">Valor encontrado</p>
-                        <p className="mt-1 text-xl font-bold">{formatCurrency(pncpOutcomeResults.summary?.total_value) || 'R$ 0,00'}</p>
+                        <p className="mt-1 font-mono text-xl font-bold">{formatCurrency(pncpOutcomeResults.summary?.total_value) || 'R$ 0,00'}</p>
                       </div>
                       <div className={`${cardAlt} p-3`}>
                         <p className="text-xs text-muted">Total cache/busca</p>
-                        <p className="mt-1 text-xl font-bold">{Number(pncpOutcomeResults.total || 0).toLocaleString('pt-BR')}</p>
+                        <p className="mt-1 font-mono text-xl font-bold">{Number(pncpOutcomeResults.total || 0).toLocaleString('pt-BR')}</p>
                       </div>
                     </div>
                   )}
@@ -9205,18 +9418,6 @@ function App() {
 
           {activeView === 'Overview' && (
             <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">
-                    {(() => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; })()}, {(authStatus.name || (authStatus.email || 'time').split('@')[0]).split(' ')[0]} <span className="align-middle">👋</span>
-                  </h2>
-                  <p className="text-sm text-muted mt-1 capitalize">{new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
-                </div>
-                <button type="button" onClick={() => setActiveView('Busca Lead B2B')} className={`${btnPrimary} h-10 px-4`}>
-                  <PlusIcon className="h-4 w-4" /> Novo lead
-                </button>
-              </div>
-
               {overviewLoading && (
                 <div className={`${subtle} py-10 text-center`}>Carregando overview…</div>
               )}
@@ -9225,41 +9426,57 @@ function App() {
                 <>
                   <div className="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
                     {[
-                      { label: 'Leads ativos', value: formatCompactNumber(overviewData.summary?.leads_count ?? 0) || (overviewData.summary?.leads_count ?? 0), icon: UsersIcon, wrap: 'bg-primary/10 text-primary' },
-                      { label: 'Clientes ativos', value: overviewData.summary?.customers_count ?? 0, icon: CheckBadgeIcon, wrap: 'bg-status-success/10 text-status-success' },
-                      { label: 'Pipeline aberto', value: formatCompactCurrency(overviewData.summary?.total_value) || 'R$ 0', icon: BanknotesIcon, wrap: 'bg-secondary/10 text-secondary' },
-                      { label: 'Em negociação', value: stageGroupData.filter(g => ['Meio', 'Fundo'].includes(g.group)).reduce((s, g) => s + (g.count || 0), 0), icon: ChartBarIcon, wrap: 'bg-status-info/10 text-status-info' },
+                      { label: 'Leads ativos', value: formatCompactNumber(overviewData.summary?.leads_count ?? 0) || (overviewData.summary?.leads_count ?? 0), icon: UsersIcon, glow: 'rgba(124,92,255,.5)' },
+                      { label: 'Clientes ativos', value: overviewData.summary?.customers_count ?? 0, icon: CheckBadgeIcon, glow: 'rgba(54,211,154,.45)' },
+                      { label: 'Pipeline aberto', value: formatCompactCurrency(overviewData.summary?.total_value) || 'R$ 0', icon: BanknotesIcon, glow: 'rgba(255,178,77,.4)' },
+                      { label: 'Em negociação', value: stageGroupData.filter(g => ['Meio', 'Fundo'].includes(g.group)).reduce((s, g) => s + (g.count || 0), 0), icon: ChartBarIcon, glow: 'rgba(56,214,230,.4)' },
                     ].map((kpi, i) => {
                       const Icon = kpi.icon;
                       return (
-                        <div key={i} className={`${card} p-5 transition hover:border-primary/30`}>
-                          <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${kpi.wrap}`}>
-                            <Icon className="h-[18px] w-[18px]" />
-                          </span>
-                          <p className={`${subtle} mt-4`}>{kpi.label}</p>
-                          <p className="text-[26px] font-extrabold leading-none mt-1 text-ink dark:text-white truncate">{kpi.value}</p>
+                        <div key={i} className={`${card} relative overflow-hidden p-[18px] transition hover:border-primary/30`}>
+                          <div className="pointer-events-none absolute -right-8 -top-8 h-[90px] w-[90px] rounded-full blur-[26px] opacity-50" style={{ background: kpi.glow }} />
+                          <div className="relative flex items-center justify-between">
+                            <Icon className="h-[18px] w-[18px] text-ink/90" />
+                          </div>
+                          <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">{kpi.value}</p>
+                          <p className="text-[12.5px] text-muted mt-1.5">{kpi.label}</p>
                         </div>
                       );
                     })}
                   </div>
 
+                  <div className="mb-4 flex items-center justify-end">
+                    <div className="inline-flex items-center gap-1 rounded-xl border border-line bg-bg2 p-1">
+                      {[['count', 'Quantidade'], ['value', 'Valor R$']].map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setOverviewMetric(key)}
+                          className={`h-8 rounded-[9px] px-3.5 text-xs font-semibold transition ${overviewMetric === key ? 'bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] text-white' : 'text-muted hover:text-ink'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-                    <div className="xl:col-span-2 space-y-5">
+                    <div className="xl:col-span-2 flex flex-col-reverse gap-5">
                       <div className={`${card} p-6`}>
                         <h3 className={`${sectionTitle} text-base`}>Funil de vendas</h3>
-                        <p className={`${subtle} mt-0.5 mb-5`}>Distribuição de leads por estágio</p>
+                        <p className={`${subtle} mt-0.5 mb-5`}>{overviewMetric === 'count' ? 'Distribuição de leads por estágio' : 'Valor de oportunidades por estágio'}</p>
                         {stageGroupData.length ? (
                           <div className="space-y-3.5">
                             {(() => {
-                              const max = Math.max(...stageGroupData.map(g => g.count || 0), 1);
+                              const metricOf = (g) => overviewMetric === 'count' ? (g.count || 0) : (g.totalValue || 0);
+                              const max = Math.max(...stageGroupData.map(metricOf), 1);
                               return stageGroupData.map(g => (
                                 <div key={g.group} className="flex items-center gap-4">
                                   <span className="w-24 sm:w-28 shrink-0 text-[13px] text-muted truncate">{g.group}</span>
                                   <div className="flex-1 h-7 rounded-lg bg-cardAlt overflow-hidden">
-                                    <div className="h-full rounded-lg transition-all" style={{ width: `${Math.max((g.count / max) * 100, 2)}%`, backgroundColor: g.color }} />
+                                    <div className="h-full rounded-lg transition-all" style={{ width: `${Math.max((metricOf(g) / max) * 100, 2)}%`, backgroundColor: g.color }} />
                                   </div>
-                                  <span className="w-14 text-right text-[13px] font-bold text-ink dark:text-white">{formatCompactNumber(g.count) || g.count}</span>
-                                  <span className="w-24 text-right text-[13px] text-muted hidden sm:block">{formatCompactCurrency(g.totalValue) || 'R$ 0'}</span>
+                                  <span className={`w-14 text-right font-mono text-[13px] ${overviewMetric === 'count' ? 'font-bold text-ink dark:text-white' : 'text-muted hidden sm:block'}`}>{formatCompactNumber(g.count) || g.count}</span>
+                                  <span className={`w-24 text-right font-mono text-[13px] ${overviewMetric === 'value' ? 'font-bold text-ink dark:text-white' : 'text-muted hidden sm:block'}`}>{formatCompactCurrency(g.totalValue) || 'R$ 0'}</span>
                                 </div>
                               ));
                             })()}
@@ -9271,12 +9488,27 @@ function App() {
 
                       <div className={`${card} p-6`}>
                         <div className="flex items-center justify-between gap-3 mb-2">
-                          <h3 className={`${sectionTitle} text-base`}>Evolução do funil</h3>
-                          <select value={historyGranularity} onChange={(event) => setHistoryGranularity(event.target.value)} className={select}>
-                            <option value="day">Diário</option>
-                            <option value="week">Semanal</option>
-                            <option value="month">Mensal</option>
-                          </select>
+                          <div>
+                            <h3 className={`${sectionTitle} text-base`}>Evolução do funil</h3>
+                            <p className={`${subtle} mt-0.5`}>
+                              {overviewMetric === 'count' ? 'Série histórica registra quantidade' : 'Série histórica por valor de pipeline'}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="hidden items-center gap-3 md:flex">
+                              {historySeries.map(serie => (
+                                <span key={serie.id} className="flex items-center gap-1.5 text-[11.5px] text-muted">
+                                  <span className="h-[9px] w-[9px] rounded-[3px]" style={{ background: colorForGroupLabel(serie.id) }} />
+                                  {serie.id}
+                                </span>
+                              ))}
+                            </div>
+                            <select value={historyGranularity} onChange={(event) => setHistoryGranularity(event.target.value)} className={select}>
+                              <option value="day">Diário</option>
+                              <option value="week">Semanal</option>
+                              <option value="month">Mensal</option>
+                            </select>
+                          </div>
                         </div>
                         <div className="h-72">
                           {historySeries.length ? (
@@ -9285,18 +9517,24 @@ function App() {
                               margin={{ top: 16, right: 24, bottom: 64, left: 44 }}
                               xScale={{ type: 'point' }}
                               yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
-                              curve="monotoneX"
-                              axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: -35, tickValues: historyTicks, format: historyTickFormat }}
-                              axisLeft={{ tickSize: 0, tickPadding: 6, format: value => formatCompactNumber(value) || value }}
+                              curve="linear"
+                              axisBottom={{ tickSize: 0, tickPadding: 10, tickRotation: 0, tickValues: historyTicks, format: historyTickFormat }}
+                              axisLeft={{ tickSize: 0, tickPadding: 6, tickValues: 4, format: value => overviewMetric === 'value' ? (formatCompactCurrency(value) || 'R$ 0') : (formatCompactNumber(value) || value) }}
                               colors={({ id }) => colorForGroupLabel(id)}
                               enableArea
-                              areaOpacity={0.5}
+                              defs={[{
+                                id: 'areaFade',
+                                type: 'linearGradient',
+                                colors: [
+                                  { offset: 0, color: 'inherit', opacity: 0.42 },
+                                  { offset: 100, color: 'inherit', opacity: 0 },
+                                ],
+                              }]}
+                              fill={[{ match: '*', id: 'areaFade' }]}
                               enableGridX={false}
+                              gridYValues={4}
                               lineWidth={2}
-                              pointSize={5}
-                              pointBorderWidth={1.5}
-                              pointBorderColor={{ from: 'serieColor' }}
-                              pointColor={isDarkMode ? '#0f172a' : '#ffffff'}
+                              enablePoints={false}
                               useMesh
                               enableSlices="x"
                               sliceTooltip={({ slice }) => {
@@ -9311,12 +9549,12 @@ function App() {
                                             <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
                                             <span>{point.serieId}</span>
                                           </span>
-                                          <span className="font-medium">{formatCompactNumber(point.data.y) || point.data.y}</span>
+                                          <span className="font-medium">{overviewMetric === 'value' ? (formatCompactCurrency(point.data.y) || 'R$ 0') : (formatCompactNumber(point.data.y) || point.data.y)}</span>
                                         </div>
                                       ))}
                                       <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
                                         <span>Total</span>
-                                        <span>{formatCompactNumber(total) || total}</span>
+                                        <span>{overviewMetric === 'value' ? (formatCompactCurrency(total) || 'R$ 0') : (formatCompactNumber(total) || total)}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -9341,13 +9579,13 @@ function App() {
                               <span className="text-2xl font-extrabold text-ink dark:text-white">{vendaMeta.configured && vendaMeta.receita != null ? (formatCompactCurrency(vendaMeta.receita) || 'R$ 0') : '—'}</span>
                               <span className={subtle}>de {formatCompactCurrency(vendaMeta.meta) || 'R$ 0'}</span>
                             </div>
-                            <div className="h-2.5 rounded-full bg-cardAlt overflow-hidden">
-                              <div className="h-full rounded-full bg-gradient-to-r from-primary to-violet" style={{ width: `${Math.min((vendaMeta.configured && vendaMeta.receita ? vendaMeta.receita / vendaMeta.meta : 0) * 100, 100)}%` }} />
+                            <div className="h-2.5 rounded-full bg-bg2 overflow-hidden">
+                              <div className="h-full rounded-full bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]" style={{ width: `${Math.min((vendaMeta.configured && vendaMeta.receita ? vendaMeta.receita / vendaMeta.meta : 0) * 100, 100)}%` }} />
                             </div>
-                            <p className={`${subtle} mt-2`}>
+                            <p className="mt-2 font-mono text-[12px] text-cyan">
                               {vendaMeta.configured && vendaMeta.receita != null
                                 ? `${Math.round((vendaMeta.receita / vendaMeta.meta) * 100)}% da meta`
-                                : 'Conecte a base de faturamento para ver o realizado'}
+                                : <span className="text-muted">Conecte a base de faturamento para ver o realizado</span>}
                             </p>
                           </>
                         ) : (
@@ -9359,9 +9597,11 @@ function App() {
                         {overviewData.byAgent.length ? (
                           <div className="space-y-4">
                             {(() => {
-                              const sorted = [...overviewData.byAgent].sort((a, b) => (Number(b.total_value) || 0) - (Number(a.total_value) || 0)).slice(0, 5);
-                              const max = Math.max(...sorted.map(a => Number(a.total_value) || 0), 1);
-                              const palette = ['#6366f1', '#22c55e', '#f59e0b', '#a855f7', '#38bdf8'];
+                              const metricOf = (a) => overviewMetric === 'count' ? (Number(a.count) || 0) : (Number(a.total_value) || 0);
+                              const fmtMetric = (n) => overviewMetric === 'count' ? (formatCompactNumber(n) || n) : (formatCompactCurrency(n) || 'R$ 0');
+                              const sorted = [...overviewData.byAgent].sort((a, b) => metricOf(b) - metricOf(a)).slice(0, 5);
+                              const max = Math.max(...sorted.map(metricOf), 1);
+                              const palette = ['#7c5cff', '#36d39a', '#ffb24d', '#38d6e6', '#ff5d72'];
                               return sorted.map((a, idx) => (
                                 <div key={a.agent || idx} className="flex items-center gap-3">
                                   <div className="h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0" style={{ background: palette[idx % palette.length] }}>
@@ -9370,10 +9610,10 @@ function App() {
                                   <div className="min-w-0 flex-1">
                                     <div className="flex items-center justify-between gap-2">
                                       <p className="text-[13px] font-semibold text-ink dark:text-white truncate">{a.agent || 'Sem agente'}</p>
-                                      <span className="text-[12px] font-bold text-ink dark:text-white">{formatCompactCurrency(a.total_value) || 'R$ 0'}</span>
+                                      <span className="font-mono text-[12px] font-bold text-ink dark:text-white">{fmtMetric(metricOf(a))}</span>
                                     </div>
                                     <div className="h-1.5 rounded-full bg-cardAlt mt-1.5 overflow-hidden">
-                                      <div className="h-full rounded-full" style={{ width: `${Math.max(((Number(a.total_value) || 0) / max) * 100, 3)}%`, background: palette[idx % palette.length] }} />
+                                      <div className="h-full rounded-full" style={{ width: `${Math.max((metricOf(a) / max) * 100, 3)}%`, background: palette[idx % palette.length] }} />
                                     </div>
                                   </div>
                                 </div>
@@ -9384,24 +9624,214 @@ function App() {
                           <div className={`${subtle} py-6 text-center`}>Sem dados</div>
                         )}
                       </div>
-
                       <div className={`${card} p-6`}>
-                        <h3 className={`${sectionTitle} text-base mb-4`}>Distribuição por grupo</h3>
-                        {stageGroupData.length ? (
-                          <div className="space-y-3">
-                            {stageGroupData.map(g => (
-                              <div key={g.group} className="flex items-center gap-3">
-                                <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: g.color }} />
-                                <span className="text-[13px] text-ink dark:text-white flex-1 truncate">{g.group}</span>
-                                <span className="text-[13px] text-muted">{formatCompactNumber(g.count) || g.count}</span>
-                                <span className="text-[13px] font-semibold text-ink dark:text-white w-20 text-right">{formatCompactCurrency(g.totalValue) || 'R$ 0'}</span>
-                              </div>
-                            ))}
+                        <h3 className={`${sectionTitle} text-base mb-4`}>Faturamento por vendedor</h3>
+                        {overviewData.faturamentoVendedores.length ? (
+                          <div className="space-y-4">
+                            {(() => {
+                              const rows = [...overviewData.faturamentoVendedores]
+                                .map(row => ({
+                                  vendedor: row.vendedor || 'Sem vendedor',
+                                  receita: Number(row.receita) || 0,
+                                  vendas: Number(row.vendas) || 0,
+                                }))
+                                .filter(row => row.receita > 0 || row.vendas > 0)
+                                .sort((a, b) => b.receita - a.receita)
+                                .slice(0, 5);
+                              const max = Math.max(...rows.map(row => row.receita), 1);
+                              return rows.map((row, idx) => (
+                                <div key={row.vendedor || idx} className="min-w-0">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <p className="truncate text-[13px] font-semibold text-ink dark:text-white">{row.vendedor}</p>
+                                    <span className="shrink-0 font-mono text-[12px] font-bold text-ink dark:text-white">{formatCompactCurrency(row.receita) || 'R$ 0'}</span>
+                                  </div>
+                                  <div className="mt-1.5 flex items-center gap-2">
+                                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cardAlt">
+                                      <div className="h-full rounded-full bg-[linear-gradient(90deg,#36d39a,#38d6e6)]" style={{ width: `${Math.max((row.receita / max) * 100, 3)}%` }} />
+                                    </div>
+                                    <span className="font-mono text-[11px] text-muted">{row.vendas}</span>
+                                  </div>
+                                </div>
+                              ));
+                            })()}
                           </div>
                         ) : (
-                          <div className={`${subtle} py-6 text-center`}>Sem dados</div>
+                          <div className={`${subtle} py-6 text-center`}>Sem faturamento</div>
                         )}
                       </div>
+                    </div>
+                  </div>
+                  <div className="mt-5">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <p className={subtle}>Clique em estado, canal ou etiqueta para cruzar os filtros.</p>
+                      {segData.active && (
+                        <button
+                          type="button"
+                          onClick={() => setSegFilter({ uf: null, channel: null, label: null })}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+                        >
+                          {[segFilter.uf, segFilter.channel, segFilter.label].filter(Boolean).join(' · ')} ×
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2 2xl:grid-cols-3">
+                    {(() => {
+                      const metricKey = overviewMetric === 'count' ? 'count' : 'value';
+                      const fmtMetric = (n) => overviewMetric === 'count'
+                        ? (formatCompactNumber(n) || n)
+                        : (formatCompactCurrency(n) || 'R$ 0');
+                      const toRows = (map) => Array.from(map.entries())
+                        .map(([key, v]) => ({ key, metric: v[metricKey] || 0 }))
+                        .filter(row => row.metric > 0)
+                        .sort((a, b) => b.metric - a.metric);
+                      const ufRows = toRows(segData.byUf);
+                      const channelRows = toRows(segData.byChannel).slice(0, 6);
+                      const labelRows = toRows(segData.byLabel).slice(0, 7);
+                      const ufMax = Math.max(...ufRows.map(r => r.metric), 1);
+                      const chMax = Math.max(...channelRows.map(r => r.metric), 1);
+                      const lbMax = Math.max(...labelRows.map(r => r.metric), 1);
+                      const chPalette = ['#38d6e6', '#5a93ff', '#7c5cff', '#a78bff', '#ffb24d', '#36d39a'];
+                      const lbPalette = ['#ff5d72', '#a78bff', '#ffb24d', '#7b87a3', '#36d39a', '#5a93ff', '#38d6e6'];
+                      const plotUf = (uf) => {
+                        const coords = BR_STATE_COORDS[uf];
+                        if (!coords) return null;
+                        const [lat, lon] = coords;
+                        return {
+                          left: 12 + ((lon + 73.99) / 40.2) * 76,
+                          top: 8 + ((5.3 - lat) / 39.2) * 84,
+                        };
+                      };
+                      return (
+                        <>
+                    <div className={`${card} p-6 xl:col-span-2 2xl:col-span-2`}>
+                      <div className="mb-5 flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className={`${sectionTitle} text-base`}>Leads por estado</h3>
+                          <p className={`${subtle} mt-0.5`}>Mapa geográfico por {overviewMetric === 'count' ? 'volume' : 'valor'}</p>
+                        </div>
+                        <span className="font-mono text-[11px] text-muted">{ufRows.length} UFs com dados</span>
+                      </div>
+                      {ufRows.length ? (
+                        <div>
+                          <div className="relative mx-auto h-[390px] w-full max-w-[640px] overflow-hidden">
+                            <img
+                              src="/brazil-state-map-clean.svg"
+                              alt="Mapa do Brasil"
+                              className="absolute inset-0 h-full w-full object-contain opacity-95"
+                            />
+                            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_52%_52%,rgba(124,92,255,.14),transparent_48%)]" />
+                            {ufRows.map(item => {
+                              const pos = plotUf(item.key);
+                              if (!pos) return null;
+                              const intensity = Math.max(item.metric / ufMax, 0.08);
+                              const size = 34 + Math.sqrt(intensity) * 92;
+                              return (
+                                <span
+                                  key={`heat-${item.key}`}
+                                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
+                                  style={{
+                                    left: `${pos.left}%`,
+                                    top: `${pos.top}%`,
+                                    width: `${size}px`,
+                                    height: `${size}px`,
+                                    opacity: 0.22 + intensity * 0.48,
+                                    background: intensity > 0.55
+                                      ? 'radial-gradient(circle, rgba(56,214,230,.95), rgba(124,92,255,.45) 46%, transparent 72%)'
+                                      : 'radial-gradient(circle, rgba(124,92,255,.7), rgba(90,147,255,.28) 48%, transparent 72%)',
+                                    mixBlendMode: 'screen',
+                                  }}
+                                />
+                              );
+                            })}
+                            {ufRows.map(item => {
+                              const pos = plotUf(item.key);
+                              if (!pos) return null;
+                              const selected = segFilter.uf === item.key;
+                              const intensity = Math.max(item.metric / ufMax, 0.08);
+                              return (
+                                <button
+                                  key={item.key}
+                                  type="button"
+                                  title={`${item.key}: ${fmtMetric(item.metric)}`}
+                                  onClick={() => setSegFilter(prev => ({ ...prev, uf: selected ? null : item.key }))}
+                                  className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold leading-none shadow-card transition ${selected ? 'border-cyan bg-cyan text-bg' : 'border-line bg-bg/85 text-ink hover:border-primary hover:text-primary'}`}
+                                  style={{
+                                    left: `${pos.left}%`,
+                                    top: `${pos.top}%`,
+                                    boxShadow: selected
+                                      ? '0 0 0 4px rgba(56,214,230,.18), 0 10px 24px rgba(56,214,230,.28)'
+                                      : `0 0 0 1px rgba(124,92,255,${0.15 + intensity * 0.35}), 0 8px 18px rgba(0,0,0,.28)`,
+                                  }}
+                                >
+                                  {item.key} {fmtMetric(item.metric)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`${subtle} py-8 text-center`}>Sem dados por estado</div>
+                      )}
+                    </div>
+
+                    <div className={`${card} p-6`}>
+                      <h3 className={`${sectionTitle} text-base`}>Por canal</h3>
+                      <p className={`${subtle} mt-0.5 mb-5`}>{overviewMetric === 'count' ? 'Origem comercial dos leads' : 'Valor em pipeline por origem'}</p>
+                      {channelRows.length ? (
+                        <div className="space-y-2">
+                          {channelRows.map((row, idx) => {
+                            const selected = segFilter.channel === row.key;
+                            return (
+                              <button
+                                key={row.key}
+                                type="button"
+                                onClick={() => setSegFilter(prev => ({ ...prev, channel: selected ? null : row.key }))}
+                                className={`grid w-full items-center gap-3 rounded-lg px-1.5 py-1 text-left transition hover:bg-surf2 ${overviewMetric === 'value' ? 'grid-cols-[96px_1fr_64px]' : 'grid-cols-[96px_1fr_44px]'} ${selected ? 'bg-primary/10' : ''}`}
+                              >
+                                <span className={`truncate text-[13px] ${selected ? 'font-semibold text-primary' : 'text-muted'}`}>{row.key}</span>
+                                <div className="h-2.5 rounded-full bg-bg2">
+                                  <div className="h-full rounded-full" style={{ width: `${Math.max((row.metric / chMax) * 100, 4)}%`, background: chPalette[idx % chPalette.length] }} />
+                                </div>
+                                <span className="text-right font-mono text-[12px] text-ink">{fmtMetric(row.metric)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className={`${subtle} py-8 text-center`}>Sem dados por canal</div>
+                      )}
+                    </div>
+
+                    <div className={`${card} p-6`}>
+                      <h3 className={`${sectionTitle} text-base`}>Por etiqueta</h3>
+                      <p className={`${subtle} mt-0.5 mb-5`}>{overviewMetric === 'count' ? 'Tags mais recorrentes no funil' : 'Valor em pipeline por tag'}</p>
+                      {labelRows.length ? (
+                        <div className="space-y-2">
+                          {labelRows.map((row, idx) => {
+                            const selected = segFilter.label === row.key;
+                            return (
+                              <button
+                                key={row.key}
+                                type="button"
+                                onClick={() => setSegFilter(prev => ({ ...prev, label: selected ? null : row.key }))}
+                                className={`grid w-full items-center gap-3 rounded-lg px-1.5 py-1 text-left transition hover:bg-surf2 ${overviewMetric === 'value' ? 'grid-cols-[minmax(76px,1fr)_1.4fr_64px]' : 'grid-cols-[minmax(76px,1fr)_1.4fr_44px]'} ${selected ? 'bg-primary/10' : ''}`}
+                              >
+                                <span className={`truncate text-[13px] ${selected ? 'font-semibold text-primary' : 'text-muted'}`}>{row.key}</span>
+                                <div className="h-2.5 rounded-full bg-bg2">
+                                  <div className="h-full rounded-full" style={{ width: `${Math.max((row.metric / lbMax) * 100, 4)}%`, background: lbPalette[idx % lbPalette.length] }} />
+                                </div>
+                                <span className="text-right font-mono text-[12px] text-ink">{fmtMetric(row.metric)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className={`${subtle} py-8 text-center`}>Sem dados por etiqueta</div>
+                      )}
+                    </div>
+                        </>
+                      );
+                    })()}
                     </div>
                   </div>
                 </>
@@ -9409,139 +9839,598 @@ function App() {
             </div>
           )}
 
-          {activeView === 'Disparo WhatsApp' && (
-            <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Disparo WhatsApp</h2>
-                  <p className="text-sm text-muted mt-1">Selecione o público a partir dos leads, componha a mensagem e dispare via n8n.</p>
+          {activeView === 'Disparo WhatsApp' && (() => {
+            const audienceCount = disparoFunil.length + disparoTags.length + disparoCanais.length + disparoDDDs.length;
+            const activeAudienceGroups = [
+              disparoFunil.length ? 'Funil' : null,
+              disparoTags.length ? 'Tags' : null,
+              disparoCanais.length ? 'Canal' : null,
+              disparoDDDs.length ? 'DDD' : null,
+            ].filter(Boolean);
+            const getContactLabels = (contact) => (
+              Array.isArray(contact.labels)
+                ? contact.labels.map(label => (typeof label === 'string' ? label : label?.name)).filter(Boolean)
+                : []
+            );
+            const getContactDdd = (contact) => {
+              const attrs = contact.custom_attributes || {};
+              const add = contact.additional_attributes || {};
+              const raw = contact.phone_number
+                || attrs.Telefone
+                || attrs.WhatsApp
+                || attrs.whatsapp
+                || attrs.ddd_telefone_1
+                || attrs.ddd_telefone_2
+                || add.phone_number
+                || add.phone
+                || '';
+              const digits = String(raw).replace(/\D/g, '');
+              if (digits.startsWith('55') && digits.length >= 12) return digits.slice(2, 4);
+              if (digits.length >= 10) return digits.slice(0, 2);
+              return '';
+            };
+            const matchesAudience = (contact, exceptGroup) => {
+              const attrs = contact.custom_attributes || {};
+              if (exceptGroup !== 'funil' && disparoFunil.length && !disparoFunil.includes(attrs.Funil_Vendas)) return false;
+              if (exceptGroup !== 'tags' && disparoTags.length) {
+                const labels = getContactLabels(contact);
+                if (!disparoTags.some(tag => labels.includes(tag))) return false;
+              }
+              if (exceptGroup !== 'canal' && disparoCanais.length && !disparoCanais.includes(String(attrs.Canal || '').trim())) return false;
+              if (exceptGroup !== 'ddd' && disparoDDDs.length && !disparoDDDs.includes(getContactDdd(contact))) return false;
+              return true;
+            };
+            const countAudienceOption = (group, value) => contacts.filter(contact => {
+              if (!matchesAudience(contact, group)) return false;
+              const attrs = contact.custom_attributes || {};
+              if (group === 'funil') return attrs.Funil_Vendas === value;
+              if (group === 'tags') return getContactLabels(contact).includes(value);
+              if (group === 'canal') return String(attrs.Canal || '').trim() === value;
+              if (group === 'ddd') return getContactDdd(contact) === value;
+              return false;
+            }).length;
+            const messageCount = disparoMensagens.filter(m => (m.texto || '').trim() || m.arquivo_base64).length;
+            const readyToLaunch = audienceCount > 0 && messageCount > 0 && disparoInstanciasSel.length > 0 && !disparoSending;
+            const firstMessage = disparoMensagens.find(m => (m.texto || '').trim())?.texto || '';
+            return (
+            <div className="mt-6 space-y-5">
+              <div className="rounded-[18px] border border-line bg-surf p-5 shadow-card flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                <div className="max-w-3xl">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted">Prospeccao / Campanhas</p>
+                  <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink">Disparo WhatsApp</h2>
                 </div>
+                <p className="hidden max-w-xl text-sm text-muted lg:block">Público segmentado, pool de mensagens, instâncias e ritmo via n8n.</p>
                 <span className={`inline-flex items-center gap-2 h-8 px-3 rounded-full text-[12px] font-semibold ${disparoConfigured ? 'bg-status-success/10 text-status-success' : 'bg-status-warning/10 text-status-warning'}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${disparoConfigured ? 'bg-status-success' : 'bg-status-warning'}`} />
                   {disparoConfigured ? 'n8n conectado' : 'webhook não configurado'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                <div className="lg:col-span-2 space-y-5">
-                  <div className={`${card} p-6`}>
-                    <h3 className={`${sectionTitle} text-base mb-4`}>Público & instância</h3>
-                    <div className="grid sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-5">
+                  <div className={`${card} p-5`}>
+                    <div className="flex items-center justify-between gap-3 mb-4">
                       <div>
-                        <label className={`${subtle} block mb-1.5`}>Etapa do funil (destinatários)</label>
-                        <select value={disparoStage} onChange={(e) => setDisparoStage(e.target.value)} className={`${select} w-full`}>
-                          <option value="">Selecione a etapa…</option>
-                          {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
-                        </select>
+                        <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted">01 / Público</p>
+                        <h3 className={`${sectionTitle} mt-1 text-base`}>Segmentação da campanha</h3>
                       </div>
-                      <div>
-                        <label className={`${subtle} block mb-1.5`}>Instância (WhatsApp)</label>
-                        <select value={disparoInstancia} onChange={(e) => setDisparoInstancia(e.target.value)} className={`${select} w-full`}>
-                          {!disparoInstancias.length && <option value="">—</option>}
-                          {disparoInstancias.map(i => (
-                            <option key={i.id} value={String(i.id)}>{(i.nome || i.instancia_nome)}{i.taxa_sucesso ? ` · ${i.taxa_sucesso}%` : ''}</option>
-                          ))}
-                        </select>
-                      </div>
+                      {activeAudienceGroups.length > 0 && (
+                        <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 font-mono text-[11px] text-primary">
+                          {activeAudienceGroups.join(' + ')}
+                        </span>
+                      )}
                     </div>
-                    <label className={`${subtle} block mb-1.5 mt-4`}>Nome da campanha (opcional)</label>
-                    <input value={disparoNome} onChange={(e) => setDisparoNome(e.target.value)} className={`${input} w-full`} placeholder="Ex: Reativação inbox — junho" />
-                    <p className={`${subtle} mt-3`}>O n8n resolve os contatos da etapa selecionada (mesmo motor do disparador atual: Evolution API, ritmo e agendamento).</p>
+                    <div className="grid grid-cols-4 gap-1 rounded-xl border border-line bg-bg2 p-1 mb-4">
+                      {[['funil', 'Funil'], ['tags', 'Tags'], ['canal', 'Canal'], ['ddd', 'DDD']].map(([key, label]) => (
+                        <button key={key} type="button" onClick={() => setDisparoModo(key)} className={`h-9 rounded-[9px] px-2 text-xs font-semibold transition ${disparoModo === key ? 'bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] text-white shadow-[0_4px_12px_rgba(124,92,255,.35)]' : 'text-muted hover:bg-surf2 hover:text-ink'}`}>{label}</button>
+                      ))}
+                    </div>
+                    {disparoModo === 'funil' && (
+                      <div className="max-h-64 overflow-y-auto pr-1 scrollbar-theme">
+                        <div className="flex flex-wrap gap-1.5">
+                          {leadColumns.map(col => {
+                            const on = disparoFunil.includes(col);
+                            const count = countAudienceOption('funil', col);
+                            if (!count && !on) return null;
+                            return (
+                              <button
+                                key={col}
+                                type="button"
+                                onClick={() => setDisparoFunil(prev => on ? prev.filter(x => x !== col) : [...prev, col])}
+                                className={`max-w-full truncate rounded-lg border px-2.5 py-1 text-xs transition ${on ? 'border-primary bg-primary/10 text-primary' : 'border-line bg-bg2 text-muted hover:text-ink'}`}
+                              >
+                                {col} <span className="font-mono">({count})</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {disparoModo === 'tags' && (
+                      labelCountData.length ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {[...labelCountData].reverse().map(row => {
+                            const on = disparoTags.includes(row.label);
+                            const count = countAudienceOption('tags', row.label);
+                            if (!count && !on) return null;
+                            return <button key={row.label} type="button" onClick={() => setDisparoTags(prev => on ? prev.filter(x => x !== row.label) : [...prev, row.label])} className={`max-w-full truncate rounded-lg border px-2.5 py-1 text-xs transition ${on ? 'border-primary bg-primary/10 text-primary' : 'border-line bg-bg2 text-muted hover:text-ink'}`}>{row.label} <span className="font-mono">({count})</span></button>;
+                          })}
+                        </div>
+                      ) : <p className={subtle}>Sem etiquetas disponíveis.</p>
+                    )}
+                    {disparoModo === 'canal' && (
+                      channelCountData.length ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {[...channelCountData].reverse().map(row => {
+                            const on = disparoCanais.includes(row.channel);
+                            const count = countAudienceOption('canal', row.channel);
+                            if (!count && !on) return null;
+                            return <button key={row.channel || '—'} type="button" onClick={() => setDisparoCanais(prev => on ? prev.filter(x => x !== row.channel) : [...prev, row.channel])} className={`max-w-full truncate rounded-lg border px-2.5 py-1 text-xs transition ${on ? 'border-primary bg-primary/10 text-primary' : 'border-line bg-bg2 text-muted hover:text-ink'}`}>{row.channel || 'Sem canal'} <span className="font-mono">({count})</span></button>;
+                          })}
+                        </div>
+                      ) : <p className={subtle}>Sem canais disponíveis.</p>
+                    )}
+                    {disparoModo === 'ddd' && (
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <label className={subtle}>Selecione um ou mais DDDs</label>
+                          {disparoDDDs.length > 0 && (
+                            <button type="button" onClick={() => setDisparoDDDs([])} className="text-[11px] text-muted hover:text-red">Limpar ({disparoDDDs.length})</button>
+                          )}
+                        </div>
+                        <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1 scrollbar-theme sm:grid-cols-2 xl:grid-cols-3">
+                          {DDD_REGIONS.map(([ddd, regiao]) => {
+                            const on = disparoDDDs.includes(ddd);
+                            const count = countAudienceOption('ddd', ddd);
+                            if (!count && !on) return null;
+                            return (
+                              <button
+                                key={ddd}
+                                type="button"
+                                onClick={() => setDisparoDDDs(prev => on ? prev.filter(d => d !== ddd) : [...prev, ddd])}
+                                className={`flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition ${on ? 'border-primary bg-primary/10 text-ink' : 'border-line bg-bg2 text-muted hover:text-ink'}`}
+                              >
+                                <span className={`font-mono font-bold ${on ? 'text-primary' : 'text-muted2'}`}>{ddd}</span>
+                                <span className="min-w-0 flex-1 truncate">{regiao}</span>
+                                <span className="font-mono text-[11px] text-muted2">({count})</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className={`${card} p-6`}>
-                    <h3 className={`${sectionTitle} text-base mb-1`}>Mensagem</h3>
-                    <p className={`${subtle} mb-3`}>Use <code className="px-1 rounded bg-cardAlt">{'{nome}'}</code> para personalizar com o nome do contato.</p>
-                    <textarea
-                      value={disparoMessage}
-                      onChange={(e) => setDisparoMessage(e.target.value)}
-                      rows={5}
-                      className={`${textarea} w-full`}
-                      placeholder="Escreva a mensagem…"
-                    />
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <h3 className={`${sectionTitle} text-base`}>2 · Pool de mensagens</h3>
+                      <button type="button" onClick={() => setDisparoMensagens(prev => [...prev, { tipo: 'texto', texto: '' }])} className={`${btnSecondary} h-8 px-3 text-xs`}>+ Mensagem</button>
+                    </div>
+                    <p className={`${subtle} mb-3`}>Use <code className="px-1 rounded bg-bg2">{'{nome}'}</code> para personalizar. Várias mensagens = rodízio anti-spam. Imagem/áudio/vídeo/documento anexam mídia como no disparo-wpp.</p>
+                    <div className="space-y-3">
+                      {disparoMensagens.map((m, idx) => {
+                        const setMsg = (patch) => setDisparoMensagens(prev => prev.map((x, i) => i === idx ? { ...x, ...patch } : x));
+                        const isMedia = m.tipo && m.tipo !== 'texto';
+                        const accept = { imagem: 'image/*', audio: 'audio/*', video: 'video/*', documento: '*/*' }[m.tipo] || '*/*';
+                        return (
+                        <div key={idx} className="rounded-xl border border-line bg-bg2 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[11px] text-muted2">Mensagem {idx + 1}</span>
+                              <select
+                                value={m.tipo || 'texto'}
+                                onChange={(e) => setMsg({ tipo: e.target.value, arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null })}
+                                className={`${select} h-7 rounded-lg px-2 text-[11px]`}
+                              >
+                                <option value="texto">Texto</option>
+                                <option value="imagem">Imagem</option>
+                                <option value="audio">Áudio</option>
+                                <option value="video">Vídeo</option>
+                                <option value="documento">Documento</option>
+                              </select>
+                            </div>
+                            {disparoMensagens.length > 1 && (
+                              <button type="button" onClick={() => setDisparoMensagens(prev => prev.filter((_, i) => i !== idx))} className="text-xs text-red hover:underline">Remover</button>
+                            )}
+                          </div>
+                          {isMedia && (
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <label className={`${btnSecondary} h-8 cursor-pointer px-3 text-xs`}>
+                                {m.arquivo_nome ? 'Trocar arquivo' : 'Escolher arquivo'}
+                                <input
+                                  type="file"
+                                  accept={accept}
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    if (file.size > 16 * 1024 * 1024) { alert('Arquivo acima de 16MB — use um menor.'); return; }
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      const base64 = String(reader.result || '').split(',')[1] || null;
+                                      setMsg({ arquivo_nome: file.name, arquivo_tipo: file.type, arquivo_base64: base64 });
+                                    };
+                                    reader.readAsDataURL(file);
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                              {m.arquivo_nome ? (
+                                <span className="inline-flex items-center gap-2 rounded-lg border border-line bg-surf px-2.5 py-1 font-mono text-[11px] text-ink">
+                                  {m.arquivo_nome}
+                                  <button type="button" onClick={() => setMsg({ arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null })} className="text-muted hover:text-red">×</button>
+                                </span>
+                              ) : (
+                                <span className={subtle}>Nenhum arquivo selecionado.</span>
+                              )}
+                            </div>
+                          )}
+                          <textarea
+                            value={m.texto || ''}
+                            onChange={(e) => setMsg({ texto: e.target.value })}
+                            rows={isMedia ? 2 : 3}
+                            className={`${textarea} w-full`}
+                            placeholder={isMedia ? 'Legenda (opcional)…' : 'Escreva a mensagem…'}
+                          />
+                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className={`${card} p-6`}>
+                    <h3 className={`${sectionTitle} text-base mb-4`}>3 · Configurações de envio</h3>
+                    <div className="grid sm:grid-cols-3 gap-4">
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Máx. por dia / instância</label>
+                        <input type="number" min="1" value={disparoConfig.maxPerDay} onChange={(e) => setDisparoConfig(c => ({ ...c, maxPerDay: Number(e.target.value) || 0 }))} className={`${input} w-full font-mono`} />
+                      </div>
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Intervalo mín. (s)</label>
+                        <input type="number" min="30" value={disparoConfig.minInterval} onChange={(e) => setDisparoConfig(c => ({ ...c, minInterval: Number(e.target.value) || 30 }))} className={`${input} w-full font-mono`} />
+                      </div>
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Intervalo máx. (s)</label>
+                        <input type="number" min="30" value={disparoConfig.maxInterval} onChange={(e) => setDisparoConfig(c => ({ ...c, maxInterval: Number(e.target.value) || 60 }))} className={`${input} w-full font-mono`} />
+                      </div>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-4 mt-4">
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Período de envio</label>
+                        <select value={disparoConfig.sendPeriod} onChange={(e) => setDisparoConfig(c => ({ ...c, sendPeriod: e.target.value }))} className={`${select} w-full`}>
+                          <option value="integral">Integral (24h)</option>
+                          <option value="comercial">Comercial (8h–18h)</option>
+                          <option value="tarde">Tarde (12h–18h)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={`${subtle} block mb-1.5`}>Dias da semana</label>
+                        <div className="flex flex-wrap gap-1">
+                          {[['Seg', 1], ['Ter', 2], ['Qua', 3], ['Qui', 4], ['Sex', 5], ['Sáb', 6], ['Dom', 7]].map(([lbl, val]) => {
+                            const on = disparoConfig.diasSemana.includes(val);
+                            return <button key={val} type="button" onClick={() => setDisparoConfig(c => ({ ...c, diasSemana: on ? c.diasSemana.filter(d => d !== val) : [...c.diasSemana, val] }))} className={`h-8 w-10 rounded-lg border text-xs font-semibold transition ${on ? 'border-primary bg-primary/10 text-primary' : 'border-line bg-bg2 text-muted'}`}>{lbl}</button>;
+                          })}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-5">
-                  <div className={`${card} p-6`}>
-                    <h3 className={`${sectionTitle} text-base mb-3`}>Pré-visualização</h3>
-                    <div className="rounded-xl bg-cardAlt p-4 text-sm text-ink dark:text-white whitespace-pre-wrap min-h-[80px]">
-                      {disparoMessage.replace('{nome}', 'Fulano')}
-                    </div>
-                    <p className={`${subtle} mt-3`}>{disparoStage ? `Etapa: ${disparoStage}` : 'Selecione uma etapa do funil.'}</p>
+                <div className="space-y-5 2xl:sticky 2xl:top-24">
+                  <div className={`${card} p-5`}>
+                    <h3 className={`${sectionTitle} text-base mb-3`}>Instâncias</h3>
+                    {disparoInstancias.length ? (
+                      <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-theme pr-1">
+                        {disparoInstancias.map(i => {
+                          const id = String(i.id ?? i.instancia_nome ?? i.nome);
+                          const on = disparoInstanciasSel.includes(id);
+                          return (
+                            <label key={id} className="flex items-center gap-2 rounded-lg border border-line bg-bg2 px-2.5 py-1.5 text-xs text-ink cursor-pointer hover:border-primary/40">
+                              <input type="checkbox" checked={on} onChange={() => setDisparoInstanciasSel(prev => on ? prev.filter(x => x !== id) : [...prev, id])} className="accent-primary" />
+                              <span className="truncate flex-1">{i.nome || i.instancia_nome || id}</span>
+                              {i.taxa_sucesso != null && <span className="font-mono text-muted2">{i.taxa_sucesso}%</span>}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ) : <p className={subtle}>Nenhuma instância. Verifique a conexão com o n8n.</p>}
+                    <label className={`${subtle} block mb-1.5 mt-4`}>Nome da campanha (opcional)</label>
+                    <input value={disparoNome} onChange={(e) => setDisparoNome(e.target.value)} className={`${input} w-full`} placeholder="Ex: Reativação inbox — junho" />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={sendDisparo}
-                    disabled={disparoSending || !disparoStage || !disparoInstancia || !disparoMessage.trim()}
-                    className={`${btnPrimary} w-full h-11`}
-                  >
-                    {disparoSending ? 'Iniciando…' : 'Iniciar disparo'}
-                  </button>
-
-                  {disparoResult && (
-                    <div className={`rounded-xl border p-4 text-sm ${disparoResult.error ? 'border-status-danger/30 bg-status-danger/10 text-status-danger' : disparoResult.configured && disparoResult.ok ? 'border-status-success/30 bg-status-success/10 text-status-success' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
-                      {disparoResult.error
-                        ? disparoResult.error
-                        : !disparoResult.configured
-                          ? 'Registrado, mas o webhook do n8n não está configurado (DISPARO_WEBHOOK_URL).'
-                          : disparoResult.campanhaId
-                            ? `Disparo iniciado! Campanha #${disparoResult.campanhaId}${disparoResult.totalEnfileirados != null ? ` — ${disparoResult.totalEnfileirados} na fila` : ''}.`
-                            : disparoResult.ok ? 'Disparo iniciado no n8n.' : 'O n8n recebeu, mas retornou um aviso.'}
+                  <div className={`${card} p-6`}>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted">04 / Envio</p>
+                    <h3 className={`${sectionTitle} mt-1 text-base mb-3`}>Resumo da campanha</h3>
+                    <div className="space-y-1.5 text-[13px] text-muted">
+                      <div className="flex justify-between gap-2"><span>Cruzamento</span><span className="text-ink">{activeAudienceGroups.length > 1 ? 'Automático' : activeAudienceGroups[0] || '—'}</span></div>
+                      <div className="flex justify-between gap-2"><span>Seleção</span><span className="text-ink font-mono">{audienceCount}</span></div>
+                      <div className="flex justify-between gap-2"><span>Mensagens</span><span className="text-ink font-mono">{messageCount}</span></div>
+                      <div className="flex justify-between gap-2"><span>Instâncias</span><span className="text-ink font-mono">{disparoInstanciasSel.length}</span></div>
+                      <div className="flex justify-between gap-2"><span>Ritmo</span><span className="text-ink font-mono">{disparoConfig.maxPerDay}/dia</span></div>
                     </div>
-                  )}
+                    <button type="button" onClick={sendDisparo} disabled={!readyToLaunch} className={`${btnPrimary} w-full h-11 mt-4 disabled:opacity-45 disabled:shadow-none`}>
+                      {disparoSending ? 'Iniciando…' : readyToLaunch ? 'Iniciar disparo' : 'Complete a campanha'}
+                    </button>
+                    {disparoResult && (
+                      <div className={`mt-3 rounded-xl border p-3 text-sm ${disparoResult.error ? 'border-status-danger/30 bg-status-danger/10 text-status-danger' : disparoResult.configured && disparoResult.ok ? 'border-status-success/30 bg-status-success/10 text-status-success' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
+                        {disparoResult.error
+                          ? disparoResult.error
+                          : !disparoResult.configured
+                            ? 'Registrado, mas o webhook do n8n não está configurado (DISPARO_WEBHOOK_URL).'
+                            : disparoResult.campanhaId
+                              ? `Disparo iniciado! Campanha #${disparoResult.campanhaId}${disparoResult.totalEnfileirados != null ? ` — ${disparoResult.totalEnfileirados} na fila` : ''}.`
+                              : disparoResult.ok ? 'Disparo iniciado no n8n.' : 'O n8n recebeu, mas retornou um aviso.'}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={`${card} p-5`}>
+                    <h3 className={`${sectionTitle} text-base`}>Prévia da mensagem</h3>
+                    <div className="mt-3 rounded-[16px] border border-line bg-bg2 p-4 text-sm text-ink">
+                      <div className="mb-2 flex items-center gap-2 text-[11px] text-muted">
+                        <span className="h-2 w-2 rounded-full bg-status-success" />
+                        WhatsApp
+                      </div>
+                      <p className="whitespace-pre-wrap leading-relaxed">{firstMessage ? firstMessage.replace('{nome}', 'Rafael') : 'A primeira mensagem válida aparece aqui.'}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {activeView === 'Metas' && authStatus.role === 'admin' && (
             <div className="mt-6">
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
                 <div>
-                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Metas comerciais</h2>
-                  <p className="text-sm text-muted mt-1">Defina as metas mensais. O realizado é comparado automaticamente quando a base de faturamento estiver conectada.</p>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted">Workspace / Metas</p>
+                  <h2 className="font-display text-2xl font-semibold tracking-tight text-ink dark:text-white">Metas comerciais</h2>
+                  <p className="text-sm text-muted mt-1">Meta, realizado e prospecção em uma visão de comando.</p>
                 </div>
-                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} h-10`}>
+                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} h-10 font-mono`}>
                   {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
+
               {metasLoading ? (
-                <div className={`${subtle} py-10 text-center`}>Carregando metas…</div>
-              ) : (
-                <div className={`${card} overflow-hidden`}>
-                  <div className="grid grid-cols-[1fr_2fr] gap-2 px-4 py-3 border-b border-border dark:border-[#1f2937] text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    <span>Mês</span><span>Meta de receita (R$)</span>
-                  </div>
-                  {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((nome, i) => {
-                    const mes = i + 1;
-                    const row = metasRows.find(r => r.mes === mes) || {};
-                    return (
-                      <div key={mes} className="grid grid-cols-[1fr_2fr] gap-2 px-4 py-2 items-center border-b border-border/60 dark:border-[#1f2937]/60 last:border-0">
-                        <span className="text-sm font-medium text-ink dark:text-white">{nome}</span>
-                        <input type="number" step="0.01" defaultValue={Number(row.receita_meta) || ''} placeholder="0,00" onBlur={(e) => saveMeta(metasYear, mes, { receita_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full`} />
+                <div className={`${subtle} py-10 text-center`}>Carregando metas...</div>
+              ) : (() => {
+                const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+                const currentMonth = new Date().getMonth() + 1;
+                const isCurrentYear = metasYear === new Date().getFullYear();
+                // Real data: meta por mês (metas_aerion) e realizado por mês (recorte Aerion, dashboard 34).
+                const hasRealizado = realizadoRows.length > 0;
+                const realizadoByMes = new Map(realizadoRows.map(r => [Number(r.mes), r]));
+                const monthlyRows = months.map((name, index) => {
+                  const mes = index + 1;
+                  const metaRow = metasRows.find(r => r.mes === mes) || {};
+                  const realRow = realizadoByMes.get(mes) || {};
+                  return {
+                    name,
+                    mes,
+                    meta: Number(metaRow.receita_meta) || 0,
+                    done: Number(realRow.receita) || 0,
+                    vendas: Number(realRow.vendas) || 0,
+                  };
+                });
+                const annualMeta = monthlyRows.reduce((sum, row) => sum + row.meta, 0);
+                const annualReal = monthlyRows.reduce((sum, row) => sum + row.done, 0);
+                const totalVendas = monthlyRows.reduce((sum, row) => sum + row.vendas, 0);
+                const sellerRows = [...realizadoVendedores]
+                  .map(row => ({
+                    vendedor: row.vendedor || 'Sem vendedor',
+                    receita: Number(row.receita) || 0,
+                    vendas: Number(row.vendas) || 0,
+                  }))
+                  .filter(row => row.receita > 0 || row.vendas > 0)
+                  .sort((a, b) => b.receita - a.receita);
+                const sellerMax = Math.max(...sellerRows.map(row => row.receita), 1);
+                const annualProgress = annualMeta ? annualReal / annualMeta : 0;
+                const gap = Math.max(annualMeta - annualReal, 0);
+                // Projeção run-rate: realizado acumulado nos meses decorridos, extrapolado para 12.
+                const elapsedMonths = isCurrentYear ? currentMonth : 12;
+                const remainingMonths = Math.max(12 - elapsedMonths, 0);
+                const elapsedReal = monthlyRows
+                  .filter(row => !isCurrentYear || row.mes <= currentMonth)
+                  .reduce((sum, row) => sum + row.done, 0);
+                const expectedToDate = monthlyRows
+                  .filter(row => !isCurrentYear || row.mes <= currentMonth)
+                  .reduce((sum, row) => sum + row.meta, 0);
+                const projection = elapsedMonths ? (elapsedReal / elapsedMonths) * 12 : annualReal;
+                const paceProgress = expectedToDate ? elapsedReal / expectedToDate : 0;
+                const requiredPerRemainingMonth = remainingMonths ? gap / remainingMonths : gap;
+                const projectionGap = Math.max(annualMeta - projection, 0);
+                const ticket = totalVendas ? annualReal / totalVendas : 0;
+                const maxMonthly = Math.max(...monthlyRows.map(row => Math.max(row.meta, row.done)), 1);
+                const bestMonth = monthlyRows
+                  .filter(row => row.done > 0)
+                  .sort((a, b) => b.done - a.done)[0];
+                const goalFunnel = [
+                  { label: 'Meta anual', value: annualMeta, note: 'Plano configurado', color: '#7c5cff' },
+                  { label: isCurrentYear ? 'Meta ate hoje' : 'Meta do ano', value: expectedToDate, note: `${elapsedMonths} mes${elapsedMonths === 1 ? '' : 'es'} considerados`, color: '#38d6e6' },
+                  { label: 'Realizado', value: annualReal, note: `${Math.round(paceProgress * 100)}% do ritmo esperado`, color: '#36d39a' },
+                  { label: 'Run-rate', value: projection, note: projectionGap > 0 ? `Faltariam ${formatCompactCurrency(projectionGap) || 'R$ 0'}` : 'Acima da meta anual', color: '#ffb24d' },
+                ];
+                const maxFunnelValue = Math.max(...goalFunnel.map(step => step.value), 1);
+                return (
+                  <div className="space-y-5">
+                    <div className="grid gap-4 grid-cols-2 xl:grid-cols-4">
+                      {[
+                        { label: 'Receita realizada', value: hasRealizado ? (formatCompactCurrency(annualReal) || 'R$ 0') : '—', note: hasRealizado ? `${Math.round(annualProgress * 100)}% da meta` : 'Base não conectada', tone: 'text-green' },
+                        { label: 'Gap', value: hasRealizado ? (formatCompactCurrency(gap) || 'R$ 0') : '—', note: 'Para bater o ano', tone: 'text-amber' },
+                        { label: 'Projeção', value: hasRealizado ? (formatCompactCurrency(projection) || 'R$ 0') : '—', note: 'Run-rate anual', tone: 'text-cyan' },
+                        { label: 'Ticket médio', value: hasRealizado && totalVendas ? (formatCompactCurrency(ticket) || 'R$ 0') : '—', note: hasRealizado ? `${totalVendas} vendas` : 'Oportunidades ganhas', tone: 'text-primary' },
+                      ].map(item => (
+                        <div key={item.label} className={`${card} p-5`}>
+                          <p className="text-[12px] text-muted">{item.label}</p>
+                          <p className="mt-3 font-mono text-[27px] font-bold leading-none text-ink">{item.value}</p>
+                          <p className={`mt-2 font-mono text-[11px] ${item.tone}`}>{item.note}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_.9fr] gap-5">
+                      <div className={`${card} p-6`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className={`${sectionTitle} text-base`}>Meta × realizado mensal</h3>
+                            <p className={`${subtle} mt-0.5`}>Realizado por mês com a meta tracejada (recorte Aerion).</p>
+                          </div>
+                          <div className="flex items-center gap-4 pt-1">
+                            <span className="flex items-center gap-1.5 text-[11px] text-muted"><span className="h-2 w-2 rounded-sm bg-primary" />Realizado</span>
+                            <span className="flex items-center gap-1.5 text-[11px] text-muted"><span className="h-0 w-3 border-t border-dashed border-muted2" />Meta</span>
+                          </div>
+                        </div>
+                        <div className="mt-6 flex h-72 items-end gap-3">
+                          {monthlyRows.map(row => {
+                            const donePct = Math.max((row.done / maxMonthly) * 100, row.done > 0 ? 3 : 0);
+                            const metaPct = Math.max((row.meta / maxMonthly) * 100, 3);
+                            const beat = row.done >= row.meta && row.meta > 0;
+                            return (
+                              <div key={row.name} className="flex min-w-0 flex-1 flex-col items-center gap-2">
+                                <div className="relative flex h-56 w-full items-end rounded-xl bg-bg2 px-1.5">
+                                  <div className="absolute left-1 right-1 border-t border-dashed border-muted2 opacity-70" style={{ bottom: `${metaPct}%` }} />
+                                  <div className={`w-full rounded-t-lg ${beat ? 'bg-green' : 'bg-primary'}`} style={{ height: `${donePct}%` }} />
+                                </div>
+                                <span className="font-mono text-[11px] text-muted">{row.name}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+
+                      <div className="space-y-5">
+                        <div className={`${card} overflow-hidden p-6`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className={`${sectionTitle} text-base`}>Ritmo anual</h3>
+                              <p className={`${subtle} mt-0.5`}>Comparacao entre plano, realizado e run-rate.</p>
+                            </div>
+                            <span className={`rounded-full border px-2.5 py-1 font-mono text-[11px] ${paceProgress >= 1 ? 'border-green/30 bg-green/10 text-green' : 'border-amber/30 bg-amber/10 text-amber'}`}>
+                              {Math.round(paceProgress * 100)}%
+                            </span>
+                          </div>
+                          <p className="mt-5 font-mono text-[30px] font-bold text-ink">{hasRealizado ? (formatCompactCurrency(annualReal) || 'R$ 0') : '—'}</p>
+                          <p className={`${subtle} mt-1`}>de {formatCompactCurrency(expectedToDate) || 'R$ 0'} esperados ate agora</p>
+                          <div className="mt-5 h-3 rounded-full bg-bg2">
+                            <div className={`h-full rounded-full ${paceProgress >= 1 ? 'bg-green' : 'bg-amber'}`} style={{ width: `${Math.min(paceProgress * 100, 100)}%` }} />
+                          </div>
+                          <div className="mt-4 grid grid-cols-2 gap-3">
+                            <div className="rounded-xl border border-line bg-bg2 px-3 py-2">
+                              <p className="text-[11px] text-muted">Necessario/mes</p>
+                              <p className="mt-1 font-mono text-sm font-semibold text-ink">{formatCompactCurrency(requiredPerRemainingMonth) || 'R$ 0'}</p>
+                            </div>
+                            <div className="rounded-xl border border-line bg-bg2 px-3 py-2">
+                              <p className="text-[11px] text-muted">Melhor mes</p>
+                              <p className="mt-1 font-mono text-sm font-semibold text-ink">{bestMonth ? `${bestMonth.name} ${formatCompactCurrency(bestMonth.done) || ''}` : '—'}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className={`${card} p-6`}>
+                          <h3 className={`${sectionTitle} text-base`}>Funil de metas</h3>
+                          <p className={`${subtle} mt-0.5 mb-5`}>Somente dados reais: metas configuradas e faturamento realizado.</p>
+                          <div className="space-y-3">
+                            {goalFunnel.map((step) => {
+                              const width = 44 + (step.value / maxFunnelValue) * 56;
+                              const pct = annualMeta ? Math.round((step.value / annualMeta) * 100) : 0;
+                              return (
+                                <div key={step.label} className="mx-auto rounded-xl border border-line bg-bg2 px-3 py-3" style={{ width: `${Math.min(width, 100)}%` }}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
+                                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: step.color }} />
+                                      <span className="truncate">{step.label}</span>
+                                    </span>
+                                    <span className="font-mono text-[12px] text-ink">{pct}%</span>
+                                  </div>
+                                  <div className="mt-2 flex items-center justify-between gap-3 font-mono text-[11px] text-muted">
+                                    <span>{formatCompactCurrency(step.value) || 'R$ 0'}</span>
+                                    <span className="truncate text-right">{step.note}</span>
+                                  </div>
+                                  <div className="mt-2 h-1.5 rounded-full bg-bg">
+                                    <div className="h-full rounded-full" style={{ width: `${Math.min(pct, 100)}%`, background: step.color }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={`${card} p-6`}>
+                      <div className="mb-5 flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className={`${sectionTitle} text-base`}>Realizado por vendedor</h3>
+                          <p className={`${subtle} mt-0.5`}>Mesmo faturamento do Metabase, agrupado por vendedor.</p>
+                        </div>
+                        <span className="font-mono text-[11px] text-muted">{sellerRows.length} vendedor{sellerRows.length === 1 ? '' : 'es'}</span>
+                      </div>
+                      {sellerRows.length ? (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          {sellerRows.slice(0, 9).map((row, idx) => (
+                            <div key={row.vendedor || idx} className="rounded-xl border border-line bg-bg2 p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="min-w-0 truncate text-sm font-semibold text-ink">{row.vendedor}</p>
+                                <span className="font-mono text-[11px] text-muted">{row.vendas} venda{row.vendas === 1 ? '' : 's'}</span>
+                              </div>
+                              <p className="mt-2 font-mono text-base font-bold text-ink">{formatCompactCurrency(row.receita) || 'R$ 0'}</p>
+                              <div className="mt-3 h-2 rounded-full bg-bg">
+                                <div className="h-full rounded-full bg-[linear-gradient(90deg,#36d39a,#38d6e6)]" style={{ width: `${Math.max((row.receita / sellerMax) * 100, 3)}%` }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className={`${subtle} rounded-xl border border-line bg-bg2 py-6 text-center`}>Sem faturamento por vendedor para este ano.</div>
+                      )}
+                    </div>
+
+                    <div className={`${card} overflow-hidden`}>
+                      <div className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
+                        <div>
+                          <h3 className={`${sectionTitle} text-base`}>Configuração mensal</h3>
+                          <p className={subtle}>Edição administrativa preservada.</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-[1fr_1.4fr_1.4fr_.9fr_.8fr] gap-3 px-4 py-3 border-b border-line text-[11px] font-mono font-semibold uppercase tracking-wide text-muted">
+                        <span>Mês</span><span>Meta (R$)</span><span>Realizado</span><span>Ating.</span><span>Vendas</span>
+                      </div>
+                      {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((nome, i) => {
+                        const mes = i + 1;
+                        const row = metasRows.find(r => r.mes === mes) || {};
+                        const real = realizadoByMes.get(mes) || {};
+                        const metaValue = Number(row.receita_meta) || 0;
+                        const realValue = Number(real.receita) || 0;
+                        const monthPct = metaValue ? Math.round((realValue / metaValue) * 100) : 0;
+                        return (
+                          <div key={mes} className="grid grid-cols-[1fr_1.4fr_1.4fr_.9fr_.8fr] gap-3 px-4 py-2 items-center border-b border-line/60 last:border-0">
+                            <span className="text-sm font-medium text-ink dark:text-white">{nome}</span>
+                            <input type="number" step="0.01" defaultValue={metaValue || ''} placeholder="0,00" onBlur={(e) => saveMeta(metasYear, mes, { receita_meta: Number(e.target.value) || 0 }, row)} className={`${input} h-9 w-full font-mono`} />
+                            <span className="font-mono text-sm text-ink">{hasRealizado ? (formatCompactCurrency(realValue) || 'R$ 0') : '—'}</span>
+                            <span className={`font-mono text-sm ${monthPct >= 100 ? 'text-green' : monthPct >= 70 ? 'text-amber' : 'text-muted'}`}>{metaValue ? `${monthPct}%` : '—'}</span>
+                            <span className="font-mono text-sm text-muted">{hasRealizado ? (Number(real.vendas) || 0) : '—'}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
           {activeView === 'Usuários' && authStatus.role === 'admin' && (
             <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-2xl font-extrabold tracking-tight text-ink dark:text-white">Usuários</h2>
-                  <p className="text-sm text-muted mt-1">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
-                </div>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                <p className="text-sm text-muted">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
                 <button type="button" onClick={loadUsers} className={`${btnSecondary} h-10 px-4`}>Atualizar</button>
               </div>
               {usersLoading ? (
                 <div className={`${subtle} py-10 text-center`}>Carregando usuários…</div>
               ) : (
-                <div className={`${card} divide-y divide-border dark:divide-[#1f2937]`}>
+                <div className={`${card} divide-y divide-line`}>
                   {usersList.map(u => {
                     const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
                     const isAdminUser = u.role === 'admin';
@@ -9557,7 +10446,7 @@ function App() {
                             <p className={`${subtle} truncate`}>{u.email}</p>
                           </div>
                         </div>
-                        <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-semibold shrink-0 ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-cardAlt text-muted border border-border'}`}>
+                        <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-semibold shrink-0 ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-bg2 text-muted border border-line'}`}>
                           {isAdminUser ? 'Admin' : 'Membro'}
                         </span>
                         <div className="flex flex-wrap gap-1.5">
@@ -9777,6 +10666,8 @@ function App() {
               if (!rfbOnlyMatriz) fp.set('only_matriz', 'false');
               return fp;
             };
+            // Exposta para a busca global do header disparar a pesquisa após navegar até aqui.
+            rfbSearchTriggerRef.current = (...args) => handleRfbSearch(...args);
             const handleRfbSearch = async (pageOverride, pageSizeOverride, orderByOverride) => {
               const pg = pageOverride     != null ? pageOverride     : rfbPage;
               const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
@@ -9902,7 +10793,7 @@ function App() {
                 <div className="mt-6">
                   <div className="rounded-3xl border border-border bg-card p-8 shadow-card max-w-2xl">
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary mb-2">Prospecção</p>
-                    <h2 className="text-2xl font-semibold mb-2">Busca de Leads</h2>
+                    <h2 className="font-display text-2xl font-semibold mb-2">Busca de Leads</h2>
 
                     {isError ? (
                       <div className="mb-4">
@@ -9983,11 +10874,11 @@ function App() {
             return (
               <div className="mt-6">
                 {/* Header */}
-                <div className="rounded-3xl border border-border bg-card p-6 lg:p-8 shadow-card mb-5">
+                <div className="rounded-[18px] border border-line bg-surf p-5 shadow-card mb-5">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Prospecção</p>
-                      <h2 className="mt-1 text-2xl md:text-3xl font-semibold">Busca de Leads</h2>
+                      <h2 className="mt-1 font-display text-2xl md:text-3xl font-semibold">Busca de Leads</h2>
                       <p className="mt-1 text-sm text-muted">
                         Dados abertos da Receita Federal — uso local
                         {rfbStatus?.dev_limit > 0 && (
@@ -9997,10 +10888,10 @@ function App() {
                         )}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-4 text-sm text-muted">
-                      <span><span className="font-semibold text-ink">{(rfbStatus?.records?.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
-                      <span><span className="font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
-                      <span><span className={`font-semibold ${Math.max(0, rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{Math.max(0, rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+                      <span className="rounded-xl border border-line bg-bg2 px-3 py-2"><span className="font-mono font-semibold text-ink">{(rfbStatus?.records?.estabelecimentos || 0).toLocaleString('pt-BR')}</span> estabelecimentos</span>
+                      <span className="rounded-xl border border-line bg-bg2 px-3 py-2"><span className="font-mono font-semibold text-ink">{(rfbStatus?.records?.empresas || 0).toLocaleString('pt-BR')}</span> empresas</span>
+                      <span className="rounded-xl border border-line bg-bg2 px-3 py-2"><span className={`font-mono font-semibold ${Math.max(0, rfbStatus?.records?.socios || 0) === 0 ? 'text-status-warning' : 'text-ink'}`}>{Math.max(0, rfbStatus?.records?.socios || 0).toLocaleString('pt-BR')}</span> sócios</span>
                       <button
                         onClick={() => setRfbUpdateConfirm(true)}
                         className="text-xs px-3 py-1.5 rounded-xl border border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40 transition"
@@ -10276,28 +11167,60 @@ function App() {
                   </div>
                 )}
 
-                {/* Two-column layout */}
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+                {/* Filtros no topo: faixa compacta sempre visível + painel completo expansível */}
+                <div className="flex flex-col gap-4">
 
-                  {/* Mobile filter toggle */}
-                  <div className="lg:hidden flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5 rounded-[18px] border border-line bg-surf p-3 shadow-card">
+                    {!rfbShowFilters && (
+                      <>
+                        <div className="relative flex h-[38px] min-w-[220px] flex-1 items-center rounded-[11px] border border-line bg-bg2">
+                          <MagnifyingGlassIcon className="absolute left-3 h-4 w-4 text-muted" />
+                          <input
+                            type="text"
+                            placeholder="Nome ou razão social…"
+                            value={rfbFilters.nome}
+                            onChange={e => setRfbFilters(p => ({ ...p, nome: e.target.value }))}
+                            onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
+                            className="h-full w-full rounded-[11px] bg-transparent pl-9 pr-3 text-sm text-ink outline-none placeholder:text-muted"
+                          />
+                        </div>
+                        <select
+                          value={rfbFilters.uf}
+                          onChange={e => setRfbFilters(p => ({ ...p, uf: e.target.value, municipio: '' }))}
+                          className={`${select} h-[38px] rounded-[11px] text-xs`}
+                        >
+                          <option value="">Todas UFs</option>
+                          {UF_LIST.map(uf => <option key={uf} value={uf}>{uf}</option>)}
+                        </select>
+                        <button
+                          onClick={() => handleRfbSearch(1)}
+                          disabled={rfbLoading}
+                          className={`${btnPrimary} h-[38px] px-6`}
+                        >
+                          {rfbLoading ? 'Buscando…' : 'Buscar'}
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={() => setRfbShowFilters(p => !p)}
-                      className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border border-border bg-card shadow-card text-ink hover:border-primary/40 transition"
+                      className={`${btnSecondary} h-[38px] px-3.5 text-xs ${rfbShowFilters ? 'ml-auto' : ''}`}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 12h10M10 20h4"/></svg>
-                      {rfbShowFilters ? 'Ocultar filtros' : 'Mostrar filtros'}
+                      {rfbShowFilters ? 'Recolher filtros' : 'Todos os filtros'}
                     </button>
                     {rfbResults.length > 0 && (
-                      <span className="text-xs text-muted">
+                      <span className="font-mono text-xs text-muted">
                         {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
 
-                  {/* ── Sidebar de filtros ─────────────────────────────── */}
-                  <div className={`${rfbShowFilters ? 'block' : 'hidden'} lg:block w-full lg:w-52 lg:flex-shrink-0 rounded-2xl border border-border bg-card shadow-card p-4 space-y-4 lg:sticky lg:top-20`}>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">Filtros de Busca</p>
+                  {/* ── Painel completo de filtros (expansível, largura total) ── */}
+                  <div className={`${rfbShowFilters ? 'grid' : 'hidden'} w-full grid-cols-1 items-start gap-4 rounded-[18px] border border-line bg-surf p-4 shadow-card md:grid-cols-2 xl:grid-cols-4`}>
+                    <div className="md:col-span-2 xl:col-span-4">
+                      <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.13em] text-muted">Filtros de Busca</p>
+                      <p className="mt-1 text-xs text-muted">Refine antes de importar para manter o CRM limpo.</p>
+                    </div>
 
                     {/* CNPJ */}
                     <div>
@@ -10744,30 +11667,32 @@ function App() {
                     </div>
 
                     {/* Buttons */}
-                    <button
-                      onClick={() => handleRfbSearch(1)}
-                      disabled={rfbLoading}
-                      className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary/90 active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {rfbLoading ? 'Buscando…' : 'Buscar'}
-                    </button>
-                    <button
-                      onClick={handleClear}
-                      className="w-full py-1.5 rounded-xl text-xs text-muted hover:text-ink border border-border hover:border-primary/40 transition"
-                    >
-                      Limpar filtros
-                    </button>
+                    <div className="flex items-center gap-2.5 md:col-span-2 xl:col-span-4">
+                      <button
+                        onClick={() => handleRfbSearch(1)}
+                        disabled={rfbLoading}
+                        className={`${btnPrimary} h-10 px-8`}
+                      >
+                        {rfbLoading ? 'Buscando…' : 'Buscar'}
+                      </button>
+                      <button
+                        onClick={handleClear}
+                        className={`${btnSecondary} h-10 px-4 text-xs`}
+                      >
+                        Limpar filtros
+                      </button>
+                    </div>
 
                     {/* Filtros salvos */}
-                    <div className="pt-2 border-t border-border">
+                    <div className="pt-2 border-t border-border md:col-span-2 xl:col-span-4">
                       <p className="text-xs font-semibold text-muted mb-2">Filtros Salvos</p>
                       {rfbSavedFilters.length > 0 && (
-                        <div className="space-y-1 mb-2">
+                        <div className="mb-2 flex flex-wrap gap-1.5">
                           {rfbSavedFilters.map((sf, i) => (
                             <div key={i} className="flex items-center gap-1">
                               <button
                                 onClick={() => applyRfbSavedFilter(sf)}
-                                className="flex-1 text-left text-xs px-2 py-1 rounded-lg border border-border bg-cardAlt text-ink hover:border-primary/40 hover:text-primary transition truncate"
+                                className="max-w-[220px] truncate rounded-lg border border-border bg-cardAlt px-2 py-1 text-left text-xs text-ink transition hover:border-primary/40 hover:text-primary"
                                 title={sf.name}
                               >{sf.name}</button>
                               <button
@@ -10783,7 +11708,7 @@ function App() {
                           ))}
                         </div>
                       )}
-                      <div className="flex gap-1">
+                      <div className="flex max-w-md gap-1">
                         <input
                           type="text"
                           className="flex-1 min-w-0 rounded-lg border border-border bg-cardAlt px-2 py-1.5 text-xs text-ink placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
@@ -10802,7 +11727,7 @@ function App() {
                   </div>
 
                   {/* ── Painel de resultados ───────────────────────────── */}
-                  <div className="flex-1 min-w-0 space-y-3">
+                  <div className="min-w-0 space-y-3">
 
                     {rfbError && (
                       <div className="rounded-2xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">{rfbError}</div>
@@ -10821,7 +11746,7 @@ function App() {
 
                     {/* Results header */}
                     {rfbTotal > 0 && (
-                      <div className="flex flex-wrap items-center gap-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-line bg-surf p-3 text-sm shadow-card">
                         <span className="text-muted">
                           Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbTotal)}</span> de <span className="font-semibold text-ink">{rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')}</span> resultados
                         </span>
@@ -10991,9 +11916,9 @@ function App() {
                       };
 
                       return (
-                        <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
+                        <div className="overflow-hidden rounded-[18px] border border-line bg-surf shadow-card">
                           {/* Desktop header */}
-                          <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_116px] gap-x-3 px-4 py-2.5 border-b border-border bg-cardAlt text-xs font-semibold text-muted uppercase tracking-wide">
+                          <div className="hidden lg:grid grid-cols-[2fr_3fr_2fr_1fr_1fr_1fr_116px] gap-x-3 border-b border-line bg-bg2 px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
                             <span>CNPJ</span>
                             <span>Razão Social</span>
                             <span>Nome Fantasia</span>
@@ -11029,7 +11954,7 @@ function App() {
                               </div>
                             );
                             return (
-                              <div key={cleanCNPJ || idx} className={`border-b border-border/60 last:border-0 transition-colors ${isExp ? 'bg-primary/8 border-l-[3px] border-l-primary' : 'hover:bg-cardAlt'}`}>
+                              <div key={cleanCNPJ || idx} className={`border-b border-line/70 last:border-0 transition-colors ${isExp ? 'bg-primary/10 border-l-[3px] border-l-primary' : 'hover:bg-surf2'}`}>
                                 {/* Mobile card row */}
                                 <div className="lg:hidden px-4 py-3 flex items-start gap-3">
                                   <div className="flex-1 min-w-0" onClick={toggleExpand}>

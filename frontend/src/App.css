@@ -33,43 +33,41 @@
 }
 
 .kanban-column {
-  width: 250px;
-  background-color: #f4f5f7;
-  border-radius: 3px;
-  padding: 10px;
   margin: 0;
 }
 
+/* Sem animação de entrada nos cards: o "rise" re-disparava a cada re-render
+   durante o drag (o board inteiro re-renderiza), deixando o arraste pesado. */
 .kanban-card {
-  background-color: #fff;
-  border-radius: 3px;
-  padding: 10px;
   margin-bottom: 10px;
-  box-shadow: 0 1px 0 rgba(9,30,66,.25);
   cursor: grab;
+  transition: transform .15s ease-out, box-shadow .15s ease-out, border-color .15s ease-out, background-color .15s ease-out, opacity .15s ease-out;
 }
 
 .kanban-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 22px rgba(0,0,0,.35);
 }
 
 .kanban-card.is-dragging {
   cursor: grabbing;
-  opacity: 0.92;
-  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.2);
-  border-color: rgba(37, 99, 235, 0.35);
+  opacity: 0.4;
+  transform: rotate(2deg) scale(.97);
+  box-shadow: 0 16px 30px rgba(0,0,0,.5);
+  border-color: rgba(124, 92, 255, 0.45);
 }
 
 .kanban-card.is-overlay {
   cursor: grabbing;
-  box-shadow: 0 20px 36px rgba(15, 23, 42, 0.25);
-  border-color: rgba(37, 99, 235, 0.35);
+  transform: rotate(2deg) scale(1.02);
+  box-shadow: 0 16px 30px rgba(0,0,0,.5);
+  border-color: rgba(124, 92, 255, 0.45);
 }
 
 .kanban-column.is-over {
-  border-color: rgba(37, 99, 235, 0.25);
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.1);
+  border-color: rgba(124, 92, 255, 0.55);
+  background: rgba(124,92,255,.08);
+  box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.2);
 }
 
 .kanban-column {
@@ -78,6 +76,22 @@
 
 .theme-dark .logo-image {
   filter: brightness(0) invert(1);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glowpulse {
+  0%, 100% { opacity: .5; }
+  50% { opacity: .85; }
 }
 
 :root {
@@ -147,41 +161,58 @@ body::-webkit-scrollbar-thumb:hover {
 }
 
 body.theme-dark {
-  --scrollbar-track: #0f172a;
-  --scrollbar-thumb: #334155;
-  --scrollbar-thumb-hover: #475569;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #2a3550;
+  --scrollbar-thumb-hover: #3a4663;
   /* Brighten funnel gradients slightly so bars stay legible on the dark surface. */
   --funnel-count-from: #3b82f6;
   --funnel-count-to: #93c5fd;
   --funnel-value-from: #2563eb;
   --funnel-value-to: #60a5fa;
   --funnel-inside-text: #0b1220;
-  background-color: #0b0f1a;
-  color: #e5e7eb;
+  background-color: #0a0d14;
+  color: #eef1f8;
+}
+
+body.theme-dark::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(620px 420px at 8% -4%, rgba(124,92,255,.16), transparent 60%),
+    radial-gradient(560px 420px at 100% 0%, rgba(56,214,230,.10), transparent 55%);
+  animation: glowpulse 9s ease-in-out infinite;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 .theme-dark .bg-surface {
-  background-color: #0b0f1a;
+  background-color: #0a0d14;
 }
 
 .theme-dark .text-ink {
-  color: #e5e7eb;
+  color: #eef1f8;
 }
 
 .theme-dark .text-muted {
-  color: #94a3b8;
+  color: #8b95ad;
 }
 
 .theme-dark .bg-card {
-  background-color: #111827;
+  background-color: #141a28;
 }
 
 .theme-dark .bg-cardAlt {
-  background-color: #0f172a;
+  background-color: #0e1220;
 }
 
 .theme-dark .border-border {
-  border-color: #1f2937;
+  border-color: #232c40;
 }
 
 .theme-dark .shadow-card {
@@ -235,33 +266,46 @@ body.theme-dark {
 
 html.theme-dark,
 body.theme-dark {
-  scrollbar-color: #475569 #0f172a;
+  scrollbar-color: #2a3550 transparent;
 }
 
 html.theme-dark::-webkit-scrollbar-track,
 body.theme-dark::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: transparent;
 }
 
 html.theme-dark::-webkit-scrollbar-thumb,
 body.theme-dark::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-color: #0f172a;
+  background: #2a3550;
+  border-color: transparent;
 }
 
 html.theme-dark::-webkit-scrollbar-thumb:hover,
 body.theme-dark::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #3a4663;
 }
 
 .kanban-scrollbar {
   overflow-x: auto;
   overflow-y: hidden;
-  height: 14px;
+  height: 18px;
+  padding: 4px 0;
 }
 
 .kanban-scrollbar > div {
   height: 1px;
+}
+
+.kanban-scrollbar::-webkit-scrollbar {
+  height: 10px;
+}
+
+.kanban-scrollbar::-webkit-scrollbar-thumb {
+  border-width: 1px;
+}
+
+.kanban-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
 }
 
 .kanban-board-scroll {
@@ -269,9 +313,7 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   overflow-x: hidden;
 }
 
-:root { --kanban-col-w: 280px; }
-@media (min-width: 640px) { :root { --kanban-col-w: 300px; } }
-@media (min-width: 1024px) { :root { --kanban-col-w: 320px; } }
+:root { --kanban-col-w: 296px; }
 
 .kanban-group-bar {
   overflow-x: hidden;

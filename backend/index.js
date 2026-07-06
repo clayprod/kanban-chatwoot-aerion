@@ -17,7 +17,8 @@ app.use(cors({
   origin: true,
   credentials: true,
 }));
-app.use(express.json());
+// Limite alto para o pool de mensagens do disparo (mídia em base64).
+app.use(express.json({ limit: '30mb' }));
 
 const AUTH_EMAIL = process.env.AUTH_EMAIL;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
@@ -380,6 +381,14 @@ if (process.env.FATURAMENTO_DATABASE_URL) {
   }
 }
 
+const quoteIdent = (value, fallback) => {
+  const raw = String(value || fallback || '').trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(raw)) return fallback;
+  return `"${raw.replace(/"/g, '""')}"`;
+};
+
+const FATURAMENTO_VENDEDOR_COLUMN = quoteIdent(process.env.FATURAMENTO_VENDEDOR_COLUMN, 'vendedor');
+
 // Metas: source of truth is bi.metas_aerion (same table Metabase + the old page use),
 // reached via faturamentoPool. Falls back to a local table when bi is not configured.
 app.get('/api/metas', async (req, res) => {
@@ -447,8 +456,7 @@ app.get('/api/vendas/realizado', async (req, res) => {
     || `SELECT COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
           FROM vendas
-         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
-           AND ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
+         WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
   try {
     const { rows } = await faturamentoPool.query(query, [ano, mes]);
     const row = rows[0] || {};
@@ -461,6 +469,84 @@ app.get('/api/vendas/realizado', async (req, res) => {
   } catch (error) {
     console.error('Error fetching realizado:', error);
     res.status(500).json({ configured: true, error: 'Falha ao consultar faturamento' });
+  }
+});
+
+// Realizado for all 12 months of a year, grouped by mes — same Aerion scope as the
+// single-month route above (dashboard 34 recorte), but GROUP BY mes so the Metas page
+// can plot meta x realizado in one call. Optional override: FATURAMENTO_QUERY_ANUAL ($1=ano).
+app.get('/api/vendas/realizado/ano', async (req, res) => {
+  const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  if (!faturamentoPool) {
+    return res.json({ configured: false, ano, meses: [] });
+  }
+  const query = process.env.FATURAMENTO_QUERY_ANUAL
+    || `SELECT mes,
+               COALESCE(SUM(valor_total_prod),0)::float AS receita,
+               COUNT(DISTINCT numero_nota)::int AS vendas
+          FROM vendas
+         WHERE ano = $1 AND natureza_nf2 = 'Venda'
+         GROUP BY mes
+         ORDER BY mes ASC`;
+  try {
+    const { rows } = await faturamentoPool.query(query, [ano]);
+    const byMes = new Map(rows.map(r => [Number(r.mes), r]));
+    const meses = Array.from({ length: 12 }, (_, i) => {
+      const r = byMes.get(i + 1) || {};
+      return { mes: i + 1, receita: Number(r.receita) || 0, vendas: r.vendas != null ? Number(r.vendas) : 0 };
+    });
+    res.json({
+      configured: true, ano, meses,
+      scope: process.env.FATURAMENTO_QUERY_ANUAL ? 'custom' : 'aerion',
+    });
+  } catch (error) {
+    console.error('Error fetching realizado anual:', error);
+    res.status(500).json({ configured: true, error: 'Falha ao consultar faturamento anual' });
+  }
+});
+
+app.get('/api/vendas/realizado/vendedores', async (req, res) => {
+  const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  const mes = Number.parseInt(req.query.mes, 10) || (new Date().getMonth() + 1);
+  if (!faturamentoPool) {
+    return res.json({ configured: false, ano, mes, vendedores: [] });
+  }
+  const query = process.env.FATURAMENTO_QUERY_VENDEDORES
+    || `SELECT COALESCE(NULLIF(TRIM(${FATURAMENTO_VENDEDOR_COLUMN}::text), ''), 'Sem vendedor') AS vendedor,
+               COALESCE(SUM(valor_total_prod),0)::float AS receita,
+               COUNT(DISTINCT numero_nota)::int AS vendas
+          FROM vendas
+         WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'
+         GROUP BY 1
+         ORDER BY receita DESC`;
+  try {
+    const { rows } = await faturamentoPool.query(query, [ano, mes]);
+    res.json({ configured: true, ano, mes, vendedores: rows });
+  } catch (error) {
+    console.error('Error fetching realizado vendedores:', error);
+    res.status(500).json({ configured: true, error: 'Falha ao consultar faturamento por vendedor' });
+  }
+});
+
+app.get('/api/vendas/realizado/vendedores/ano', async (req, res) => {
+  const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  if (!faturamentoPool) {
+    return res.json({ configured: false, ano, vendedores: [] });
+  }
+  const query = process.env.FATURAMENTO_QUERY_VENDEDORES_ANUAL
+    || `SELECT COALESCE(NULLIF(TRIM(${FATURAMENTO_VENDEDOR_COLUMN}::text), ''), 'Sem vendedor') AS vendedor,
+               COALESCE(SUM(valor_total_prod),0)::float AS receita,
+               COUNT(DISTINCT numero_nota)::int AS vendas
+          FROM vendas
+         WHERE ano = $1 AND natureza_nf2 = 'Venda'
+         GROUP BY 1
+         ORDER BY receita DESC`;
+  try {
+    const { rows } = await faturamentoPool.query(query, [ano]);
+    res.json({ configured: true, ano, vendedores: rows });
+  } catch (error) {
+    console.error('Error fetching realizado vendedores anual:', error);
+    res.status(500).json({ configured: true, error: 'Falha ao consultar faturamento anual por vendedor' });
   }
 });
 
@@ -507,24 +593,67 @@ app.get('/api/disparo/instancias', async (req, res) => {
   }
 });
 
-// Start a campaign via the existing n8n flow (modo funil — n8n resolves the
-// contacts from the selected pipeline stages). Mirrors disparo-wpp /iniciar-disparo.
+// Start a campaign via the existing n8n flow. Mirrors the full disparo-wpp
+// /iniciar-disparo contract: rich destinatarios (funil/tags/canal/ddd/contatos),
+// a pool of mensagens (texto/mídia) and pacing/scheduling config. Legacy single
+// message + funil_vendas body is still accepted for backward compatibility.
 app.post('/api/disparo/send', async (req, res) => {
-  const message = String(req.body?.message || '').trim();
-  const stages = Array.isArray(req.body?.funil_vendas)
-    ? req.body.funil_vendas
-    : (req.body?.stage ? [req.body.stage] : []);
-  const instancias = Array.isArray(req.body?.instancias) ? req.body.instancias : [];
-  const nomeCampanha = req.body?.nomeCampanha ? String(req.body.nomeCampanha) : null;
-  if (!message) return res.status(400).json({ error: 'Mensagem vazia.' });
-  if (!stages.length) return res.status(400).json({ error: 'Selecione ao menos uma etapa.' });
-  if (!instancias.length) return res.status(400).json({ error: 'Selecione uma instância.' });
+  const body = req.body || {};
+  // Messages: accept rich `mensagens` array or legacy single `message`.
+  const mensagens = (Array.isArray(body.mensagens) && body.mensagens.length)
+    ? body.mensagens.map(m => ({
+        tipo: m.tipo || 'texto',
+        texto: m.texto || null,
+        legenda: m.legenda || null,
+        arquivo_nome: m.arquivo_nome || null,
+        arquivo_tipo: m.arquivo_tipo || null,
+        arquivo_base64: m.arquivo_base64 || null,
+      }))
+    : (String(body.message || '').trim()
+        ? [{ tipo: 'texto', texto: String(body.message).trim(), legenda: null, arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null }]
+        : []);
+  // Recipients: accept rich `destinatarios` object or legacy funil_vendas/stage.
+  let destinatarios = (body.destinatarios && typeof body.destinatarios === 'object') ? body.destinatarios : null;
+  if (!destinatarios) {
+    const stages = Array.isArray(body.funil_vendas) ? body.funil_vendas : (body.stage ? [body.stage] : []);
+    destinatarios = { modo: 'funil', funil_vendas: stages, tags: [], canais: [], ddds: [], contatos: [], combinar: false };
+  }
+  destinatarios = {
+    modo: destinatarios.modo || 'funil',
+    funil_vendas: Array.isArray(destinatarios.funil_vendas) ? destinatarios.funil_vendas : [],
+    tags: Array.isArray(destinatarios.tags) ? destinatarios.tags : [],
+    canais: Array.isArray(destinatarios.canais) ? destinatarios.canais : [],
+    ddds: Array.isArray(destinatarios.ddds) ? destinatarios.ddds : [],
+    contatos: Array.isArray(destinatarios.contatos) ? destinatarios.contatos : [],
+    combinar: Boolean(destinatarios.combinar),
+  };
+  const instancias = Array.isArray(body.instancias) ? body.instancias : [];
+  const nomeCampanha = body.nomeCampanha ? String(body.nomeCampanha) : null;
+  const cfg = (body.config && typeof body.config === 'object') ? body.config : {};
+  const config = {
+    maxPerDay: Number(cfg.maxPerDay) || 30,
+    minInterval: Math.max(30, Number(cfg.minInterval) || 30),
+    maxInterval: Math.max(30, Number(cfg.maxInterval) || 60),
+    sendPeriod: cfg.sendPeriod || 'integral',
+    diasSemana: (Array.isArray(cfg.diasSemana) && cfg.diasSemana.length) ? cfg.diasSemana.map(Number) : [1, 2, 3, 4, 5],
+  };
+  const hasSelector = destinatarios.funil_vendas.length || destinatarios.tags.length
+    || destinatarios.canais.length || destinatarios.ddds.length || destinatarios.contatos.length;
+  if (!mensagens.length || !mensagens.some(m => m.texto || m.arquivo_base64)) {
+    return res.status(400).json({ error: 'Adicione ao menos uma mensagem.' });
+  }
+  if (!hasSelector) {
+    return res.status(400).json({ error: 'Selecione ao menos um público (funil, tags, canal, DDD ou contatos).' });
+  }
+  if (!instancias.length) return res.status(400).json({ error: 'Selecione ao menos uma instância.' });
+  const audienceLabel = `${destinatarios.modo}: ${[...destinatarios.funil_vendas, ...destinatarios.canais, ...destinatarios.ddds].join(', ') || `${destinatarios.contatos.length} contato(s)`}`;
+  const firstText = (mensagens.find(m => m.texto)?.texto) || '(mídia)';
   let logId = null;
   try {
     const { rows } = await pool.query(
       `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
        VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [req.auth?.sub || null, stages.join(', '), 0, message, disparoBase() ? 'sent' : 'unconfigured']
+      [req.auth?.sub || null, audienceLabel, destinatarios.contatos.length, firstText, disparoBase() ? 'sent' : 'unconfigured']
     );
     logId = rows[0]?.id;
   } catch (error) {
@@ -533,13 +662,7 @@ app.post('/api/disparo/send', async (req, res) => {
   if (!disparoBase()) {
     return res.json({ configured: false, log_id: logId });
   }
-  const payload = {
-    destinatarios: { modo: 'funil', funil_vendas: stages, tags: [], canais: [], ddds: [], contatos: [], combinar: false },
-    nomeCampanha,
-    mensagens: [{ tipo: 'texto', texto: message, legenda: null, arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null }],
-    instancias,
-    config: { maxPerDay: 30, minInterval: 30, maxInterval: 60, sendPeriod: 'integral', diasSemana: [1, 2, 3, 4, 5] },
-  };
+  const payload = { destinatarios, nomeCampanha, mensagens, instancias, config };
   try {
     const resp = await fetch(`${disparoBase()}/iniciar-disparo`, {
       method: 'POST',
@@ -551,6 +674,19 @@ app.post('/api/disparo/send', async (req, res) => {
   } catch (error) {
     console.error('disparo webhook failed:', error.message);
     return res.status(502).json({ configured: true, error: 'Falha ao acionar o n8n.' });
+  }
+});
+
+// Real-time campaign dashboard passthrough (read-only) from the n8n flow.
+app.get('/api/disparo/dashboard', async (req, res) => {
+  if (!disparoBase()) return res.json({ configured: false });
+  try {
+    const resp = await fetch(`${disparoBase()}/dashboard`);
+    const data = await resp.json().catch(() => ({}));
+    res.json({ configured: true, ...data });
+  } catch (error) {
+    console.error('disparo dashboard failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao consultar o dashboard.' });
   }
 });
 
@@ -3025,7 +3161,7 @@ app.get('/api/licitacoes/termos-correlatos', async (req, res) => {
 app.get('/api/contacts', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT c.id, c.name, c.location, c.custom_attributes, c.additional_attributes, c.account_id, c.additional_attributes->>'company_name' AS company_name, c.company_id, conv.assignee_id AS agent_id, COALESCE(u.display_name, u.name, u.email) AS agent_name, COALESCE(jsonb_agg(DISTINCT jsonb_build_object('name', t.name, 'color', l.color)) FILTER (WHERE t.name IS NOT NULL), '[]'::jsonb) AS labels FROM contacts c LEFT JOIN LATERAL (SELECT assignee_id FROM conversations WHERE contact_id = c.id AND assignee_id IS NOT NULL ORDER BY last_activity_at DESC NULLS LAST, updated_at DESC NULLS LAST, created_at DESC LIMIT 1) conv ON true LEFT JOIN users u ON u.id = conv.assignee_id LEFT JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = c.id LEFT JOIN tags t ON t.id = tg.tag_id LEFT JOIN labels l ON l.title = t.name AND l.account_id = c.account_id GROUP BY c.id, conv.assignee_id, u.display_name, u.name, u.email"
+      "SELECT c.id, c.name, c.location, c.phone_number, c.custom_attributes, c.additional_attributes, c.account_id, c.additional_attributes->>'company_name' AS company_name, c.company_id, conv.assignee_id AS agent_id, COALESCE(u.display_name, u.name, u.email) AS agent_name, COALESCE(jsonb_agg(DISTINCT jsonb_build_object('name', t.name, 'color', l.color)) FILTER (WHERE t.name IS NOT NULL), '[]'::jsonb) AS labels FROM contacts c LEFT JOIN LATERAL (SELECT assignee_id FROM conversations WHERE contact_id = c.id AND assignee_id IS NOT NULL ORDER BY last_activity_at DESC NULLS LAST, updated_at DESC NULLS LAST, created_at DESC LIMIT 1) conv ON true LEFT JOIN users u ON u.id = conv.assignee_id LEFT JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = c.id LEFT JOIN tags t ON t.id = tg.tag_id LEFT JOIN labels l ON l.title = t.name AND l.account_id = c.account_id GROUP BY c.id, conv.assignee_id, u.display_name, u.name, u.email"
     );
     const normalized = rows.map(row => ({
       ...row,
@@ -3203,7 +3339,8 @@ app.get('/api/overview/by-channel', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT
         custom_attributes->>'Canal' AS channel,
-        COUNT(*)::int AS count
+        COUNT(*)::int AS count,
+        COALESCE(SUM(${valueNumExpr()}), 0)::float AS total_value
       FROM contacts
       WHERE custom_attributes->>'Canal' IS NOT NULL
       GROUP BY channel
@@ -3320,6 +3457,7 @@ app.get('/api/overview/history', async (req, res) => {
         ),
         period_contacts AS (
           SELECT c.id AS contact_id,
+                 COALESCE(${valueNumExpr('c.')}, 0)::float AS value_num,
                  p.period_start,
                  p.period_start + ('1 ' || $1)::interval AS period_end
           FROM contacts c
@@ -3327,6 +3465,7 @@ app.get('/api/overview/history', async (req, res) => {
         ),
         latest_stage AS (
           SELECT pc.period_start,
+                 pc.value_num,
                  h.to_stage AS stage
           FROM period_contacts pc
           JOIN LATERAL (
@@ -3341,7 +3480,8 @@ app.get('/api/overview/history', async (req, res) => {
         SELECT
           period_start::date AS period_start,
           stage,
-          COUNT(*)::int AS count
+          COUNT(*)::int AS count,
+          COALESCE(SUM(value_num), 0)::float AS total_value
         FROM latest_stage
         WHERE stage IS NOT NULL
         GROUP BY period_start, stage
@@ -6346,6 +6486,11 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, getAccountId(req));
   const job = memoryJob || dbJob;
   if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada ou expirada' });
+  // Job órfão: ficou queued/running no banco mas o worker (em memória) morreu num
+  // restart. Ao abrir o job, retoma o processamento de onde parou (idempotente).
+  if (!memoryJob && ['queued', 'running', 'paused_rate_limit'].includes(job.status)) {
+    startPersistedPncpSearchJob(job).catch(err => console.warn('[PNCP Search Job] resume on open falhou:', err.message));
+  }
   res.json({
     id: job.id,
     status: job.status,
@@ -10771,6 +10916,22 @@ const startServer = async () => {
     });
   } catch (err) {
     console.error('Error initializing history tracking:', err);
+  }
+
+  // Retoma buscas profundas que ficaram órfãs (queued/running no banco) após um restart.
+  try {
+    const { rows } = await pool.query(
+      `SELECT id FROM ${PNCP_SEARCH_JOBS_TABLE}
+        WHERE status IN ('queued', 'running', 'paused_rate_limit')
+        ORDER BY updated_at DESC
+        LIMIT 10`
+    );
+    for (const row of rows) {
+      startPersistedPncpSearchJob(row.id).catch(() => {});
+    }
+    if (rows.length) console.log(`[PNCP Search Job] retomando ${rows.length} busca(s) órfã(s) após restart.`);
+  } catch (err) {
+    console.warn('[PNCP Search Job] varredura de órfãos falhou:', err.message);
   }
 
   app.listen(port, () => {
