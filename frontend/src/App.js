@@ -5410,6 +5410,9 @@ function App() {
   const [rfbPendingSearch, setRfbPendingSearch] = useState(false);
   const rfbSearchTriggerRef = useRef(null);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [notifPos, setNotifPos] = useState(null);
+  const notifBtnRef = useRef(null);
+  const notifPanelRef = useRef(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Cross-filter da segmentação do Overview: cada dimensão selecionada filtra as outras.
   const [segFilter, setSegFilter] = useState({ uf: null, channel: null, label: null });
@@ -9341,6 +9344,55 @@ function App() {
     };
   }, [globalSearchOpen, updateGlobalSearchPos]);
 
+  const updateNotifPos = useCallback(() => {
+    const btn = notifBtnRef.current;
+    if (!btn) {
+      setNotifPos(null);
+      return;
+    }
+    const rect = btn.getBoundingClientRect();
+    const pad = 8;
+    const width = Math.min(320, Math.max(260, window.innerWidth - pad * 2));
+    // Prefer align to button right; clamp so panel stays fully on-screen.
+    let right = Math.max(pad, window.innerWidth - rect.right);
+    if (right + width > window.innerWidth - pad) {
+      right = pad;
+    }
+    const top = rect.bottom + 8;
+    const maxHeight = Math.max(160, Math.min(360, window.innerHeight - top - pad));
+    setNotifPos({ top, right, width, maxHeight });
+  }, []);
+
+  useEffect(() => {
+    if (!showNotifications) {
+      setNotifPos(null);
+      return undefined;
+    }
+    updateNotifPos();
+    const onPointerDown = (event) => {
+      const target = event.target;
+      const inBtn = notifBtnRef.current?.contains(target);
+      const inPanel = notifPanelRef.current?.contains(target);
+      if (!inBtn && !inPanel) {
+        setShowNotifications(false);
+      }
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') setShowNotifications(false);
+    };
+    const onReposition = () => updateNotifPos();
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [showNotifications, updateNotifPos]);
+
   useEffect(() => {
     setGlobalSearchHighlight(0);
   }, [globalSearchQ]);
@@ -9972,73 +10024,104 @@ function App() {
                         document.body
                       )}
                   </div>
-                  <div className="relative">
-                    {(() => {
-                      const overdue = Number(licSummary?.overdue_count) || 0;
-                      const due48 = Number(licSummary?.due_48h) || 0;
-                      const doneJobs = pncpSearchJobs.filter(j => j.status === 'completed').slice(0, 3);
-                      const notifCount = (overdue ? 1 : 0) + (due48 ? 1 : 0) + doneJobs.length;
-                      return (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMobileNavOpen(false);
-                              setShowNotifications(v => !v);
-                            }}
-                            className={`${iconBtn} relative h-10 w-10 border border-line bg-bg2 ${showNotifications ? 'text-ink' : ''}`}
-                            aria-label="Notificações"
-                          >
-                            <BellIcon className="h-[18px] w-[18px]" />
-                            {(overdue > 0 || due48 > 0) && (
-                              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red ring-2 ring-bg2" />
-                            )}
-                          </button>
-                          {showNotifications && (
-                            <div className="absolute right-0 top-12 z-dropdown flex max-h-[min(70dvh,24rem)] w-[min(20rem,calc(100vw-1.25rem))] max-w-[calc(100vw-1.25rem)] flex-col overflow-hidden rounded-[15px] border border-line bg-surf p-2 shadow-lift">
-                              <p className="shrink-0 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">Notificações</p>
-                              <VerticalScrollArrows className="min-h-0 flex-1" remeasureKey={notifCount}>
+                  {(() => {
+                    const overdue = Number(licSummary?.overdue_count) || 0;
+                    const due48 = Number(licSummary?.due_48h) || 0;
+                    const doneJobs = pncpSearchJobs.filter(j => j.status === 'completed').slice(0, 3);
+                    const notifCount = (overdue ? 1 : 0) + (due48 ? 1 : 0) + doneJobs.length;
+                    return (
+                      <>
+                        <button
+                          ref={notifBtnRef}
+                          type="button"
+                          onClick={() => {
+                            setMobileNavOpen(false);
+                            setGlobalSearchOpen(false);
+                            setShowNotifications(v => !v);
+                          }}
+                          className={`${iconBtn} relative h-10 w-10 shrink-0 border border-line bg-bg2 ${showNotifications ? 'text-ink ring-2 ring-primary/25' : ''}`}
+                          aria-label="Notificações"
+                          aria-expanded={showNotifications}
+                          aria-controls="notifications-panel"
+                        >
+                          <BellIcon className="h-[18px] w-[18px]" />
+                          {(overdue > 0 || due48 > 0) && (
+                            <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red ring-2 ring-bg2" />
+                          )}
+                        </button>
+                        {showNotifications
+                          && notifPos
+                          && createPortal(
+                            <div
+                              ref={notifPanelRef}
+                              id="notifications-panel"
+                              role="menu"
+                              aria-label="Notificações"
+                              style={{
+                                position: 'fixed',
+                                top: notifPos.top,
+                                right: notifPos.right,
+                                width: notifPos.width,
+                                maxHeight: notifPos.maxHeight,
+                                zIndex: 50,
+                              }}
+                              className="flex flex-col overflow-hidden rounded-[15px] border border-line bg-surf p-2 shadow-[0_18px_48px_rgba(0,0,0,.55),0_0_0_1px_rgba(255,255,255,.04)]"
+                            >
+                              <p className="shrink-0 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
+                                Notificações
+                              </p>
+                              <VerticalScrollArrows
+                                className="min-h-0 flex-1"
+                                remeasureKey={notifCount}
+                                style={{ maxHeight: Math.max(100, (notifPos.maxHeight || 280) - 40) }}
+                              >
                                 {notifCount === 0 && (
                                   <p className="px-2 pb-2 text-xs text-muted">Nada urgente por aqui.</p>
                                 )}
                                 {overdue > 0 && (
                                   <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
                                     className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
                                   >
                                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red/15 font-mono text-xs font-bold text-red">{overdue}</span>
-                                    licitações atrasadas exigem ação
+                                    <span className="min-w-0 flex-1 leading-snug">licitações atrasadas exigem ação</span>
                                   </button>
                                 )}
                                 {due48 > 0 && (
                                   <button
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
                                     className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
                                   >
                                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber/15 font-mono text-xs font-bold text-amber">{due48}</span>
-                                    vencendo nas próximas 48h
+                                    <span className="min-w-0 flex-1 leading-snug">vencendo nas próximas 48h</span>
                                   </button>
                                 )}
                                 {doneJobs.map(job => (
                                   <button
                                     key={job.id}
                                     type="button"
+                                    role="menuitem"
                                     onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('editais'); openPncpSearchJob(job.id); }}
                                     className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
                                   >
                                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green/15 font-mono text-[10px] font-bold text-green">✓</span>
-                                    <span className="min-w-0 flex-1 truncate">Busca <span className="font-display font-semibold uppercase tracking-wide">"{job.nome || job.filters?.q || 'PNCP'}"</span> concluída · {Number(job.total || 0).toLocaleString('pt-BR')} resultados</span>
+                                    <span className="min-w-0 flex-1 truncate">
+                                      Busca <span className="font-display font-semibold uppercase tracking-wide">"{job.nome || job.filters?.q || 'PNCP'}"</span>
+                                      {' '}concluída · {Number(job.total || 0).toLocaleString('pt-BR')} resultados
+                                    </span>
                                   </button>
                                 ))}
                               </VerticalScrollArrows>
-                            </div>
+                            </div>,
+                            document.body
                           )}
-                        </>
-                      );
-                    })()}
-                  </div>
+                      </>
+                    );
+                  })()}
                   <a
                     href="https://chatwoot.tenryu.com.br/app/accounts/2/contacts"
                     target="_blank"
