@@ -10122,15 +10122,17 @@ function App() {
                       </>
                     );
                   })()}
-                  <a
-                    href="https://chatwoot.tenryu.com.br/app/accounts/2/contacts"
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`${btnPrimary} h-10 shrink-0 px-2.5 sm:px-3 gap-1.5`}
-                  >
-                    <PlusIcon className="h-4 w-4" />
-                    <span className="hidden sm:inline">Novo lead</span>
-                  </a>
+                  {['Overview', 'Board', 'Metas', 'Processo'].includes(activeView) && (
+                    <a
+                      href="https://chatwoot.tenryu.com.br/app/accounts/2/contacts"
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`${btnPrimary} h-10 shrink-0 px-2.5 sm:px-3 gap-1.5`}
+                    >
+                      <PlusIcon className="h-4 w-4" />
+                      <span className="hidden sm:inline">Novo lead</span>
+                    </a>
+                  )}
                 </div>
               </div>
 
