@@ -36,38 +36,91 @@
   margin: 0;
 }
 
-/* Sem animação de entrada nos cards: o "rise" re-disparava a cada re-render
-   durante o drag (o board inteiro re-renderiza), deixando o arraste pesado. */
+/* Transform transitions are owned by dnd-kit (useSortable). CSS must not
+   animate transform/opacity or it fights the Trello-like gap animation. */
 .kanban-card {
-  margin-bottom: 10px;
+  margin-bottom: 0;
   cursor: grab;
-  transition: transform .15s ease-out, box-shadow .15s ease-out, border-color .15s ease-out, background-color .15s ease-out, opacity .15s ease-out;
+  touch-action: manipulation;
+  transition: box-shadow .18s ease-out, border-color .18s ease-out, background-color .18s ease-out;
+  will-change: transform;
+  contain: layout style;
+}
+
+/* During drag, skip hover paint work and child pointer targets on non-active cards. */
+.kanban-board-scroll.is-dnd-active .kanban-card:not(.is-dragging) {
+  pointer-events: auto;
+}
+.kanban-board-scroll.is-dnd-active .kanban-card:not(.is-dragging) a,
+.kanban-board-scroll.is-dnd-active .kanban-card:not(.is-dragging) button {
+  pointer-events: none;
+}
+
+/* Virtualized column rows: avoid paint outside the card box. */
+.kanban-column-scroll {
+  overscroll-behavior: contain;
 }
 
 .kanban-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 22px rgba(0,0,0,.35);
+  box-shadow: 0 10px 22px rgba(0,0,0,.28);
 }
 
 .kanban-card.is-dragging {
   cursor: grabbing;
-  opacity: 0.4;
-  transform: rotate(2deg) scale(.97);
-  box-shadow: 0 16px 30px rgba(0,0,0,.5);
-  border-color: rgba(124, 92, 255, 0.45);
+  /* Invisible slot — DragOverlay is the floating card; keep layout height. */
+  opacity: 0 !important;
+  box-shadow: none;
+  pointer-events: none;
+  border-color: transparent;
+  background: transparent;
 }
 
 .kanban-card.is-overlay {
   cursor: grabbing;
-  transform: rotate(2deg) scale(1.02);
-  box-shadow: 0 16px 30px rgba(0,0,0,.5);
-  border-color: rgba(124, 92, 255, 0.45);
+  /* Light lift only — avoid scale so the drop animation lands cleanly. */
+  transform: rotate(1deg);
+  box-shadow: 0 22px 44px rgba(0,0,0,.42), 0 0 0 1px rgba(124, 92, 255, 0.35);
+  border-color: rgba(124, 92, 255, 0.5);
+  opacity: 1;
+  pointer-events: none;
 }
 
 .kanban-column.is-over {
   border-color: rgba(124, 92, 255, 0.55);
   background: rgba(124,92,255,.08);
   box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.2);
+}
+
+.kanban-column.is-search-focus-column {
+  border-color: rgba(124, 92, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.22);
+}
+
+.kanban-card.is-search-focus {
+  border-color: rgba(124, 92, 255, 0.65) !important;
+  background: rgba(124, 92, 255, 0.12) !important;
+  box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.28), 0 10px 22px rgba(0, 0, 0, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kanban-card.is-search-focus {
+    transition: none;
+  }
+}
+
+/* Custom match nav (1/3 ◀ ▶ ✕) owns clear/nav — hide browser search decorations. */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+input[type="search"]::-ms-clear {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .kanban-column {
@@ -131,33 +184,66 @@
   background: var(--scrollbar-thumb-hover);
 }
 
+/* Vertical lists use chevron arrows instead of a visible scrollbar. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.scroll-y-arrow {
+  color: var(--scrollbar-thumb-hover, #94a3b8);
+}
+
+.scroll-y-arrow:hover:not(:disabled) {
+  color: inherit;
+}
+
+.theme-dark .scroll-y-arrow {
+  color: #6b7690;
+}
+
+.theme-dark .scroll-y-arrow:hover:not(:disabled) {
+  color: #e2e8f0;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
-body {
-  scrollbar-width: thin;
+body,
+#root {
+  height: 100%;
+  max-width: 100%;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* Authenticated shell is h-dvh; keep document free of native bars. */
+html.aerion-shell-lock,
+html.aerion-shell-lock body {
+  overflow: hidden;
+}
+
+.app-shell {
+  max-width: 100vw;
+  width: 100%;
 }
 
 html::-webkit-scrollbar,
 body::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-html::-webkit-scrollbar-track,
-body::-webkit-scrollbar-track {
-  background: #eef2f7;
-}
-
-html::-webkit-scrollbar-thumb,
-body::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 999px;
-  border: 2px solid var(--scrollbar-track);
-}
-
-html::-webkit-scrollbar-thumb:hover,
-body::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 body.theme-dark {
@@ -288,8 +374,10 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 .kanban-scrollbar {
   overflow-x: auto;
   overflow-y: hidden;
-  height: 18px;
-  padding: 4px 0;
+  height: 28px;
+  padding: 5px 0;
+  /* Firefox: auto is thicker than thin — easier to grab */
+  scrollbar-width: auto;
 }
 
 .kanban-scrollbar > div {
@@ -297,11 +385,12 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 }
 
 .kanban-scrollbar::-webkit-scrollbar {
-  height: 10px;
+  height: 18px;
 }
 
 .kanban-scrollbar::-webkit-scrollbar-thumb {
-  border-width: 1px;
+  border-width: 2px;
+  min-height: 18px;
 }
 
 .kanban-scrollbar::-webkit-scrollbar-track {
@@ -310,10 +399,28 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 
 .kanban-board-scroll {
   overflow-y: hidden;
-  overflow-x: hidden;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
 }
 
-:root { --kanban-col-w: 296px; }
+.kanban-column {
+  box-sizing: border-box;
+}
+
+:root {
+  --kanban-col-w: 296px;
+  --kanban-col-gap: 12px;
+  --app-pad-x: 1rem;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --kanban-col-w: min(288px, calc(100vw - 2.75rem));
+    --kanban-col-gap: 10px;
+    --app-pad-x: 0.75rem;
+  }
+}
 
 .kanban-group-bar {
   overflow-x: hidden;
@@ -321,7 +428,7 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 
 .kanban-group-bar-track {
   display: flex;
-  gap: 8px;
+  gap: var(--kanban-col-gap);
   width: max-content;
 }
 
@@ -471,8 +578,33 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 @media (max-width: 900px) {
   .funnel-row {
     grid-template-columns: 1fr;
+    gap: 8px;
   }
   .funnel-bar-wrap {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .funnel-label {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .kanban-group-label {
+    left: 10px;
+    right: 10px;
+    padding: 0 10px;
+    font-size: 0.6875rem;
+  }
+
+  .kanban-group-span {
+    height: 30px;
+  }
+
+  .funnel-text {
+    white-space: normal;
   }
 }

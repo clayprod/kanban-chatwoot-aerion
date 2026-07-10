@@ -58,8 +58,9 @@ module.exports = {
         },
       },
       zIndex: {
-        header: '10',
-        dropdown: '20',
+        // Keep header above board sticky chrome (column titles use z-10).
+        header: '30',
+        dropdown: '35',
         overlay: '40',
         modal: '50',
         toast: '60',

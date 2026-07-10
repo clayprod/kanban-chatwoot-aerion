@@ -213,17 +213,31 @@ app.get('/api/auth/status', async (req, res) => {
   return res.json({ authenticated: true, email: payload.sub, name, role, allowed_views: allowedViews });
 });
 
+// Resiliência do pool: sem isso, se as conexões saturarem (ex.: um job pesado
+// em background) as queries ficam presas para sempre e o nginx devolve 504.
+// connectionTimeoutMillis faz a query falhar rápido (500 claro) em vez de pendurar.
+const POOL_TUNING = {
+  max: Number.parseInt(process.env.PG_POOL_MAX || '20', 10) || 20,
+  connectionTimeoutMillis: Number.parseInt(process.env.PG_CONNECT_TIMEOUT_MS || '10000', 10) || 10000,
+  idleTimeoutMillis: 30000,
+  keepAlive: true,
+};
 const pool = new Pool(
   process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL }
+    ? { connectionString: process.env.DATABASE_URL, ...POOL_TUNING }
     : {
         user: 'postgres',
         host: '10.0.1.11',
         database: 'tenryu',
         password: 'REDACTED_PG_PASSWORD',
         port: 5432,
+        ...POOL_TUNING,
       }
 );
+// Um erro num client ocioso (ex.: Postgres reiniciou) não pode derrubar o processo.
+pool.on('error', (err) => {
+  console.error('[pg] idle client error:', err.message);
+});
 
 // ===================== Auth / RBAC (Chatwoot-backed) =====================
 // Authenticate against Chatwoot's `users` table (Devise bcrypt) + `account_users`
@@ -387,7 +401,7 @@ const quoteIdent = (value, fallback) => {
   return `"${raw.replace(/"/g, '""')}"`;
 };
 
-const FATURAMENTO_VENDEDOR_COLUMN = quoteIdent(process.env.FATURAMENTO_VENDEDOR_COLUMN, 'vendedor');
+const FATURAMENTO_VENDEDOR_COLUMN = quoteIdent(process.env.FATURAMENTO_VENDEDOR_COLUMN, 'descricao_vendedor');
 
 // Metas: source of truth is bi.metas_aerion (same table Metabase + the old page use),
 // reached via faturamentoPool. Falls back to a local table when bi is not configured.
@@ -443,7 +457,7 @@ app.put('/api/metas', requireAdmin, async (req, res) => {
 
 // Realizado (faturamento) for a month, from bi.vendas. The exact "Aerion scope" filter
 // can be overridden with FATURAMENTO_QUERY ($1=ano, $2=mes -> receita[, vendas]); the
-// default sums natureza_nf2='Venda' (group total — may need a narrower scope to match metas).
+// default uses the dashboard-34 Aerion recorte (grupo_produto 'AERION%').
 app.get('/api/vendas/realizado', async (req, res) => {
   const ano = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
   const mes = Number.parseInt(req.query.mes, 10) || (new Date().getMonth() + 1);
@@ -456,7 +470,8 @@ app.get('/api/vendas/realizado', async (req, res) => {
     || `SELECT COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
           FROM vendas
-         WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
+         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
+           AND ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'`;
   try {
     const { rows } = await faturamentoPool.query(query, [ano, mes]);
     const row = rows[0] || {};
@@ -485,7 +500,8 @@ app.get('/api/vendas/realizado/ano', async (req, res) => {
                COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
           FROM vendas
-         WHERE ano = $1 AND natureza_nf2 = 'Venda'
+         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
+           AND ano = $1 AND natureza_nf2 = 'Venda'
          GROUP BY mes
          ORDER BY mes ASC`;
   try {
@@ -516,7 +532,8 @@ app.get('/api/vendas/realizado/vendedores', async (req, res) => {
                COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
           FROM vendas
-         WHERE ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'
+         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
+           AND ano = $1 AND mes = $2 AND natureza_nf2 = 'Venda'
          GROUP BY 1
          ORDER BY receita DESC`;
   try {
@@ -538,7 +555,8 @@ app.get('/api/vendas/realizado/vendedores/ano', async (req, res) => {
                COALESCE(SUM(valor_total_prod),0)::float AS receita,
                COUNT(DISTINCT numero_nota)::int AS vendas
           FROM vendas
-         WHERE ano = $1 AND natureza_nf2 = 'Venda'
+         WHERE cod_grupoprod IN (SELECT cod_grupoprod FROM grupo_produto WHERE descricao LIKE 'AERION%')
+           AND ano = $1 AND natureza_nf2 = 'Venda'
          GROUP BY 1
          ORDER BY receita DESC`;
   try {
@@ -575,29 +593,439 @@ ensureDisparoTable();
 
 // Base of the existing n8n disparo flow (e.g. https://n8n.tenryu.com.br/webhook).
 const disparoBase = () => String(process.env.DISPARO_WEBHOOK_URL || '').replace(/\/+$/, '');
+const disparoToken = () => String(process.env.DISPARO_WEBHOOK_TOKEN || '').trim();
+const disparoAllowUnverifiedSend = () => process.env.DISPARO_ALLOW_UNVERIFIED_SEND === 'true';
+const disparoRequireOptIn = () => process.env.DISPARO_REQUIRE_OPT_IN === 'true';
+
+// Os workflows legados retornam envelopes diferentes (array puro, {data: []},
+// {instancias: []} ou {items: []}). Centralizar a leitura evita que uma
+// alteração no Respond to Webhook faça a UI parecer sem instâncias.
+const disparoArray = (value, keys = []) => {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  for (const key of keys) {
+    if (Array.isArray(value[key])) return value[key];
+  }
+  if (value.data && value.data !== value) return disparoArray(value.data, keys);
+  // n8n às vezes devolve um único registro (não array) em detalhes-campanha.
+  if (
+    value.phone_number != null
+    || value.contact_name != null
+    || value.telefone != null
+    || (value.status != null && (value.id != null || value.data_envio != null || value.data_erro != null))
+  ) {
+    return [value];
+  }
+  return [];
+};
+
+const disparoIdentityKeys = (item) => [...new Set([
+  item?.id,
+  item?.instanceId,
+  item?.instance_id,
+  item?.instancia_id,
+  item?.name,
+  item?.instanceName,
+  item?.instancia_nome,
+  item?.nome,
+  item?.instance?.id,
+  item?.instance?.instanceId,
+  item?.instance?.instanceName,
+].filter(value => value !== undefined && value !== null && String(value).trim() !== '')
+  .map(value => String(value)))]
+;
+
+// Mesmo teto do disparo-wpp (LIMITE_POR_INSTANCIA): mensagens/dia por instância.
+const DISPARO_MAX_POR_DIA_INSTANCIA = 30;
+
+async function disparoFetch(path, { method = 'GET', body, timeoutMs = 25000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const token = disparoToken();
+    const headers = {
+      Accept: 'application/json',
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? {
+        Authorization: `Bearer ${token}`,
+        'X-Webhook-Token': token,
+      } : {}),
+    };
+    const resp = await fetch(`${disparoBase()}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      const detail = data?.error || data?.message || `HTTP ${resp.status}`;
+      throw new Error(`Webhook ${path}: ${detail}`);
+    }
+    return { ok: true, status: resp.status, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Inboxes do Chatwoot (Channel::Api) ↔ instâncias Evolution. Os nomes nem sempre
+// coincidem (inbox "comercial_aerion" x instância "Comercial - Aerion Technologies"),
+// então o match exige que todos os tokens do nome do inbox existam no da instância.
+const disparoTokens = (value) => String(value || '')
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[̀-ͯ]/g, '')
+  .split(/[^a-z0-9]+/)
+  .filter(Boolean);
+
+async function disparoInboxesPorInstancia(instancias) {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM inboxes WHERE account_id = $1 AND channel_type = 'Channel::Api'`,
+    [CHATWOOT_ACCOUNT_ID]
+  );
+  const inboxParaInstancia = new Map();
+  for (const inbox of rows) {
+    const inboxTokens = disparoTokens(inbox.name);
+    if (!inboxTokens.length) continue;
+    const inst = instancias.find(i => {
+      const instTokens = new Set([...disparoTokens(i.instancia_nome), ...disparoTokens(i.nome)]);
+      return inboxTokens.every(token => instTokens.has(token));
+    });
+    if (inst) inboxParaInstancia.set(Number(inbox.id), inst);
+  }
+  return inboxParaInstancia;
+}
+
+// Junta o cadastro (/listar-instancias) com o estado real de conexão no Evolution
+// (/verificar-instancias): connection_state open|close|connecting, profile_name.
+async function listarInstanciasVerificadas() {
+  const [lista, verificacao] = await Promise.all([
+    disparoFetch('/listar-instancias'),
+    disparoFetch('/verificar-instancias', { method: 'POST', body: {}, timeoutMs: 30000 }),
+  ]);
+  const cadastradas = disparoArray(lista.data, ['instancias', 'instances', 'items'])
+    .map(item => item?.instance && typeof item.instance === 'object' ? { ...item.instance, ...item } : item)
+    .filter(item => item && typeof item === 'object');
+  const verificadas = disparoArray(verificacao.data, ['instancias', 'instances', 'items'])
+    .map(item => item?.instance && typeof item.instance === 'object' ? { ...item.instance, ...item } : item)
+    .filter(item => item && typeof item === 'object');
+  const estados = new Map();
+  for (const item of verificadas) {
+    for (const key of disparoIdentityKeys(item)) estados.set(key, item);
+  }
+  const instancias = [...cadastradas];
+  const known = new Set(cadastradas.flatMap(disparoIdentityKeys));
+  for (const item of verificadas) {
+    if (!disparoIdentityKeys(item).some(key => known.has(key))) instancias.push(item);
+  }
+  const findState = (item) => disparoIdentityKeys(item)
+    .map(key => estados.get(key))
+    .find(Boolean) || {};
+  return {
+    verificado: verificacao.data?.success !== false,
+    instancias: instancias.map(i => ({
+      ...i,
+      connection_state: findState(i)?.connection_state
+        ?? findState(i)?.connectionState
+        ?? findState(i)?.state
+        ?? i.connection_state ?? i.connectionState ?? i.status ?? null,
+      profile_name: findState(i)?.profile_name
+        || findState(i)?.profileName
+        || i.profile_name || i.profileName || null,
+      disponivel: findState(i)?.disponivel ?? null,
+    })),
+  };
+}
 
 app.get('/api/disparo/status', (req, res) => {
   res.json({ configured: Boolean(disparoBase()) });
 });
 
-// List Evolution instances via the n8n flow (read-only).
+// List Evolution instances via the n8n flow, enriched with live connection state.
 app.get('/api/disparo/instancias', async (req, res) => {
   if (!disparoBase()) return res.json({ configured: false, instancias: [] });
   try {
-    const resp = await fetch(`${disparoBase()}/listar-instancias`);
-    const instancias = await resp.json().catch(() => []);
-    res.json({ configured: true, instancias: Array.isArray(instancias) ? instancias : [] });
+    const { verificado, instancias } = await listarInstanciasVerificadas();
+    res.json({
+      configured: true,
+      verificado,
+      instancias,
+      conectadas: instancias.filter(i => i.connection_state === 'open').length,
+    });
   } catch (error) {
     console.error('listar-instancias failed:', error.message);
     res.status(502).json({ configured: true, error: 'Falha ao listar instâncias.' });
   }
 });
 
+// Campaign monitor passthroughs (same contract as the disparo-wpp SPA).
+app.get('/api/disparo/campanhas', async (req, res) => {
+  if (!disparoBase()) return res.json({ configured: false, campanhas: [] });
+  try {
+    const resp = await disparoFetch('/campanhas');
+    const campanhas = disparoArray(resp.data, ['campanhas', 'items', 'data']);
+    res.json({ configured: true, campanhas });
+  } catch (error) {
+    console.error('listar campanhas failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao listar campanhas.', campanhas: [] });
+  }
+});
+
+// Destinatários da campanha: status, horário de envio/erro, motivo e instância.
+app.get('/api/disparo/campanhas/:id', async (req, res) => {
+  if (!disparoBase()) return res.json({ configured: false, envios: [] });
+  if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
+  try {
+    const id = Number(req.params.id);
+    let resp;
+    try {
+      resp = await disparoFetch(`/detalhes-campanha?campanhaId=${id}`);
+    } catch (firstErr) {
+      // fallback: alguns workflows aceitam POST
+      resp = await disparoFetch('/detalhes-campanha', {
+        method: 'POST',
+        body: { campanhaId: id },
+      });
+    }
+    const envios = disparoArray(resp.data, ['envios', 'transmissoes', 'items', 'data', 'detalhes', 'rows']);
+    res.json({
+      configured: true,
+      campanhaId: id,
+      total: envios.length,
+      envios,
+    });
+  } catch (error) {
+    console.error('detalhes campanha failed:', error.message);
+    res.status(502).json({
+      configured: true,
+      error: error.message || 'Falha ao carregar detalhes da campanha.',
+      envios: [],
+    });
+  }
+});
+
+app.post('/api/disparo/campanhas/:id/pausar', requireAdmin, async (req, res) => {
+  if (!disparoBase()) return res.status(400).json({ configured: false, error: 'Webhook não configurado.' });
+  if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
+  try {
+    const resp = await disparoFetch('/pausar-campanha', { method: 'POST', body: { campanhaId: Number(req.params.id) } });
+    res.json({ configured: true, ok: resp.ok, ...(resp.data || {}) });
+  } catch (error) {
+    console.error('pausar campanha failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao pausar campanha.' });
+  }
+});
+
+app.post('/api/disparo/campanhas/:id/retomar', requireAdmin, async (req, res) => {
+  if (!disparoBase()) return res.status(400).json({ configured: false, error: 'Webhook não configurado.' });
+  if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
+  try {
+    const resp = await disparoFetch(`/retomar-campanha?campanhaId=${Number(req.params.id)}`);
+    res.json({ configured: true, ok: resp.ok, ...(resp.data || {}) });
+  } catch (error) {
+    console.error('retomar campanha failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao retomar campanha.' });
+  }
+});
+
+app.post('/api/disparo/campanhas/:id/cancelar', requireAdmin, async (req, res) => {
+  if (!disparoBase()) return res.status(400).json({ configured: false, error: 'Webhook não configurado.' });
+  if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
+  try {
+    const resp = await disparoFetch('/cancelar-campanha', { method: 'POST', body: { campanhaId: Number(req.params.id) } });
+    res.json({ configured: true, ok: resp.ok, ...(resp.data || {}) });
+  } catch (error) {
+    console.error('cancelar campanha failed:', error.message);
+    res.status(502).json({ configured: true, error: 'Falha ao cancelar campanha.' });
+  }
+});
+
+// ---------- Resolução de público + proteção anti-ban (dados do Chatwoot) ----------
+const disparoDdd = (phone) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('55') && digits.length >= 12) return digits.slice(2, 4);
+  if (digits.length >= 10) return digits.slice(0, 2);
+  return '';
+};
+
+const disparoEmbaralhar = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+// Personalização de template: {nome} = primeiro nome do contacts.name do Chatwoot.
+// Também suporta {nome_completo} e {empresa}.
+const disparoPrimeiroNome = (nome) => {
+  const full = String(nome || '').trim();
+  if (!full) return 'cliente';
+  const first = full.split(/\s+/).filter(Boolean)[0];
+  return first || full;
+};
+
+const personalizarTextoDisparo = (texto, contato) => {
+  if (texto == null || texto === '') return texto;
+  const nomeCompleto = String(contato?.nome_completo || contato?.nome || '').trim() || 'cliente';
+  const primeiro = String(contato?.primeiro_nome || '').trim() || disparoPrimeiroNome(nomeCompleto);
+  const empresa = String(contato?.empresa || '').trim() || nomeCompleto;
+  return String(texto)
+    .replace(/\{nome_completo\}/gi, nomeCompleto)
+    .replace(/\{empresa\}/gi, empresa)
+    .replace(/\{nome\}/gi, primeiro);
+};
+
+const personalizarMensagemDisparo = (msg, contato) => ({
+  ...msg,
+  texto: personalizarTextoDisparo(msg.texto, contato),
+  legenda: personalizarTextoDisparo(msg.legenda, contato),
+});
+
+// Enriquecer contatos para o n8n: nome legível + campos já resolvidos (fallback se o
+// workflow não fizer replace de {nome} no pool de mensagens).
+const enriquecerContatosDisparo = (contatos, mensagens) => contatos.map((c, i) => {
+  const nomeCompleto = String(c.nome || '').trim();
+  const primeiro = disparoPrimeiroNome(nomeCompleto);
+  const ctx = {
+    nome: nomeCompleto,
+    nome_completo: nomeCompleto,
+    primeiro_nome: primeiro,
+    empresa: c.empresa || null,
+  };
+  const base = mensagens[i % Math.max(mensagens.length, 1)] || { tipo: 'texto', texto: null };
+  const resolvida = personalizarMensagemDisparo(base, ctx);
+  const textoFinal = resolvida.texto || resolvida.legenda || null;
+  return {
+    id: c.id,
+    telefone: c.telefone,
+    // `nome` = primeiro nome: é o que o n8n costuma injetar em {nome}
+    nome: primeiro,
+    nome_completo: nomeCompleto || null,
+    primeiro_nome: primeiro,
+    empresa: c.empresa || null,
+    // Campos pré-resolvidos (rodízio do pool) para workflows que leem do contato
+    mensagem: textoFinal,
+    texto: resolvida.texto,
+    legenda: resolvida.legenda,
+    tipo: resolvida.tipo || 'texto',
+    arquivo_nome: resolvida.arquivo_nome || null,
+    arquivo_tipo: resolvida.arquivo_tipo || null,
+    arquivo_base64: resolvida.arquivo_base64 || null,
+    // Pool inteiro já personalizado (se o n8n iterar mensagens por contato)
+    mensagens: mensagens.map(m => personalizarMensagemDisparo(m, ctx)),
+  };
+});
+
+// Resolve o público direto no banco do Chatwoot com os mesmos seletores da UI
+// (funil/tags/canal/ddd em AND entre grupos preenchidos), deduplicado por telefone.
+async function resolverPublicoDisparo(destinatarios) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.name, c.phone_number,
+            c.custom_attributes->>'Funil_Vendas' AS funil,
+            TRIM(COALESCE(c.custom_attributes->>'Canal', '')) AS canal,
+            c.additional_attributes->>'company_name' AS empresa,
+            c.custom_attributes AS atributos,
+            COALESCE(array_agg(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL), '{}') AS labels
+       FROM contacts c
+       LEFT JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = c.id
+       LEFT JOIN tags t ON t.id = tg.tag_id
+      WHERE c.account_id = $1 AND COALESCE(c.phone_number, '') <> ''
+      GROUP BY c.id`,
+    [CHATWOOT_ACCOUNT_ID]
+  );
+  const idsFixos = new Set((destinatarios.contatos || [])
+    .map(c => Number(typeof c === 'object' && c !== null ? c.id : c))
+    .filter(Number.isFinite));
+  const telefonesVistos = new Set();
+  const publico = [];
+  for (const row of rows) {
+    if (destinatarios.funil_vendas.length && !destinatarios.funil_vendas.includes(row.funil)) continue;
+    if (destinatarios.tags.length && !destinatarios.tags.some(tag => (row.labels || []).includes(tag))) continue;
+    if (destinatarios.canais.length && !destinatarios.canais.includes(row.canal)) continue;
+    if (destinatarios.ddds.length && !destinatarios.ddds.includes(disparoDdd(row.phone_number))) continue;
+    if (idsFixos.size && !idsFixos.has(Number(row.id))) continue;
+    const atributos = row.atributos && typeof row.atributos === 'object' ? row.atributos : {};
+    const boolAttr = (keys) => keys.some(key => ['true', '1', 'yes', 'sim'].includes(String(atributos[key]).trim().toLowerCase()));
+    if (boolAttr(['whatsapp_opt_out', 'opt_out', 'nao_contatar', 'não_contatar', 'bloqueado'])) continue;
+    if (disparoRequireOptIn() && !boolAttr(['whatsapp_opt_in', 'opt_in', 'consentimento_whatsapp', 'consentimento'])) continue;
+    const telefone = String(row.phone_number).trim();
+    const chave = telefone.replace(/\D/g, '');
+    if (!chave || telefonesVistos.has(chave)) continue;
+    telefonesVistos.add(chave);
+    // `nome` = contacts.name do Chatwoot (pessoa ou razão social cadastrada no contato)
+    publico.push({ id: Number(row.id), nome: row.name, telefone, empresa: row.empresa || null });
+  }
+  return publico;
+}
+
+// Filtros anti-spam ligados ao Chatwoot: cooldown de quem já recebeu mensagem
+// nossa há pouco tempo e contatos com conversa aberta (já em atendimento).
+async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbertas, inboxIds }) {
+  const descartados = { cooldown: 0, conversas_abertas: 0 };
+  const ids = publico.map(c => c.id);
+  if (!ids.length || !inboxIds.length) return { publico, descartados };
+  const excluir = new Set();
+  if (cooldownDias > 0) {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT conv.contact_id
+         FROM messages m
+         JOIN conversations conv ON conv.id = m.conversation_id
+        WHERE m.account_id = $1 AND m.message_type = 1
+          AND m.created_at >= NOW() - make_interval(days => $2)
+          AND conv.inbox_id = ANY($3) AND conv.contact_id = ANY($4)`,
+      [CHATWOOT_ACCOUNT_ID, cooldownDias, inboxIds, ids]
+    );
+    for (const r of rows) excluir.add(Number(r.contact_id));
+    descartados.cooldown = excluir.size;
+  }
+  if (pularConversasAbertas) {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT contact_id FROM conversations
+        WHERE account_id = $1 AND status = 0 AND inbox_id = ANY($2) AND contact_id = ANY($3)`,
+      [CHATWOOT_ACCOUNT_ID, inboxIds, ids]
+    );
+    for (const r of rows) {
+      const id = Number(r.contact_id);
+      if (!excluir.has(id)) descartados.conversas_abertas += 1;
+      excluir.add(id);
+    }
+  }
+  return { publico: publico.filter(c => !excluir.has(c.id)), descartados };
+}
+
+// Última conversa WhatsApp de cada contato → instância "dona" do lead, para que
+// ele sempre receba do mesmo número entre campanhas.
+async function ultimaInstanciaPorContato(ids, inboxParaInstancia) {
+  if (!ids.length || !inboxParaInstancia.size) return new Map();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (contact_id) contact_id, inbox_id,
+            COALESCE(last_activity_at, updated_at, created_at) AS last_at
+       FROM conversations
+      WHERE account_id = $1 AND contact_id = ANY($2) AND inbox_id = ANY($3)
+      ORDER BY contact_id, COALESCE(last_activity_at, updated_at, created_at) DESC`,
+    [CHATWOOT_ACCOUNT_ID, ids, [...inboxParaInstancia.keys()]]
+  );
+  const porContato = new Map();
+  for (const r of rows) {
+    const inst = inboxParaInstancia.get(Number(r.inbox_id));
+    if (inst) porContato.set(Number(r.contact_id), { instanciaId: inst.id, lastAt: r.last_at });
+  }
+  return porContato;
+}
+
 // Start a campaign via the existing n8n flow. Mirrors the full disparo-wpp
 // /iniciar-disparo contract: rich destinatarios (funil/tags/canal/ddd/contatos),
 // a pool of mensagens (texto/mídia) and pacing/scheduling config. Legacy single
 // message + funil_vendas body is still accepted for backward compatibility.
-app.post('/api/disparo/send', async (req, res) => {
+//
+// Camada anti-ban (config): fixarNumero (lead recebe sempre da instância da sua
+// última conversa), cooldownDias (pula quem já recebeu mensagem há pouco tempo),
+// pularConversasAbertas (não interrompe atendimento em curso), priorizarRecentes
+// (leads quentes primeiro, resto embaralhado). Quando ativa, o público é resolvido
+// no banco do Chatwoot e vira uma campanha em modo `contatos` por instância.
+app.post('/api/disparo/send', requireAdmin, async (req, res) => {
   const body = req.body || {};
   // Messages: accept rich `mensagens` array or legacy single `message`.
   const mensagens = (Array.isArray(body.mensagens) && body.mensagens.length)
@@ -630,12 +1058,32 @@ app.post('/api/disparo/send', async (req, res) => {
   const instancias = Array.isArray(body.instancias) ? body.instancias : [];
   const nomeCampanha = body.nomeCampanha ? String(body.nomeCampanha) : null;
   const cfg = (body.config && typeof body.config === 'object') ? body.config : {};
+  const minInterval = Math.max(30, Number(cfg.minInterval) || 30);
   const config = {
-    maxPerDay: Number(cfg.maxPerDay) || 30,
-    minInterval: Math.max(30, Number(cfg.minInterval) || 30),
-    maxInterval: Math.max(30, Number(cfg.maxInterval) || 60),
+    maxPerDay: Math.max(1, Math.min(DISPARO_MAX_POR_DIA_INSTANCIA, Number(cfg.maxPerDay) || 30)),
+    minInterval,
+    maxInterval: Math.max(minInterval, Number(cfg.maxInterval) || 60),
     sendPeriod: cfg.sendPeriod || 'integral',
     diasSemana: (Array.isArray(cfg.diasSemana) && cfg.diasSemana.length) ? cfg.diasSemana.map(Number) : [1, 2, 3, 4, 5],
+  };
+  // Lista só de contatos manuais (sem funil/tags/canal/ddd): o usuário escolheu
+  // cada lead de propósito (ex.: teste para si). Anti-spam de cooldown/conversa
+  // aberta é para campanhas em massa — aqui fica desligado de propósito.
+  const soContatosManuais = destinatarios.contatos.length > 0
+    && !destinatarios.funil_vendas.length
+    && !destinatarios.tags.length
+    && !destinatarios.canais.length
+    && !destinatarios.ddds.length;
+  const antiBan = {
+    fixarNumero: cfg.fixarNumero !== false,
+    priorizarRecentes: cfg.priorizarRecentes !== false,
+    cooldownDias: soContatosManuais
+      ? 0
+      : (Number.isFinite(Number(cfg.cooldownDias)) ? Math.max(0, Math.floor(Number(cfg.cooldownDias))) : 7),
+    pularConversasAbertas: soContatosManuais
+      ? false
+      : cfg.pularConversasAbertas !== false,
+    soContatosManuais,
   };
   const hasSelector = destinatarios.funil_vendas.length || destinatarios.tags.length
     || destinatarios.canais.length || destinatarios.ddds.length || destinatarios.contatos.length;
@@ -646,44 +1094,232 @@ app.post('/api/disparo/send', async (req, res) => {
     return res.status(400).json({ error: 'Selecione ao menos um público (funil, tags, canal, DDD ou contatos).' });
   }
   if (!instancias.length) return res.status(400).json({ error: 'Selecione ao menos uma instância.' });
-  const audienceLabel = `${destinatarios.modo}: ${[...destinatarios.funil_vendas, ...destinatarios.canais, ...destinatarios.ddds].join(', ') || `${destinatarios.contatos.length} contato(s)`}`;
+  const audienceLabel = `${destinatarios.modo}: ${[...destinatarios.funil_vendas, ...destinatarios.tags, ...destinatarios.canais, ...destinatarios.ddds].join(', ') || `${destinatarios.contatos.length} contato(s)`}`;
   const firstText = (mensagens.find(m => m.texto)?.texto) || '(mídia)';
-  let logId = null;
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [req.auth?.sub || null, audienceLabel, destinatarios.contatos.length, firstText, disparoBase() ? 'sent' : 'unconfigured']
-    );
-    logId = rows[0]?.id;
-  } catch (error) {
-    console.error('disparo log failed:', error.message);
-  }
+
   if (!disparoBase()) {
+    const logId = await registrarDisparoLog(req, audienceLabel, destinatarios.contatos.length, firstText, 'unconfigured');
     return res.json({ configured: false, log_id: logId });
   }
-  const payload = { destinatarios, nomeCampanha, mensagens, instancias, config };
+
+  // 1) Estado real das instâncias: nunca disparar por número desconectado.
+  let instanciasInfo = [];
   try {
-    const resp = await fetch(`${disparoBase()}/iniciar-disparo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+    const verificado = await listarInstanciasVerificadas();
+    if (!verificado.verificado && !disparoAllowUnverifiedSend()) {
+      return res.status(503).json({
+        configured: true,
+        error: 'Não foi possível verificar o estado das instâncias. A campanha foi bloqueada por segurança.',
+      });
+    }
+    instanciasInfo = verificado.instancias;
+  } catch (error) {
+    console.error('disparo send: verificação de instâncias indisponível:', error.message);
+    return res.status(503).json({
+      configured: true,
+      error: 'Não foi possível consultar as instâncias no n8n/Evolution. A campanha foi bloqueada por segurança.',
     });
-    const data = await resp.json().catch(() => ({}));
-    return res.json({ configured: true, ok: resp.ok, status: resp.status, log_id: logId, ...data });
+  }
+  const selecionadas = instanciasInfo.filter(i =>
+    instancias.some(sel => String(sel) === String(i.id) || String(sel) === String(i.instancia_nome) || String(sel) === String(i.nome)));
+  const aptas = selecionadas.filter(i => i.connection_state === 'open'
+    || (i.connection_state == null && disparoAllowUnverifiedSend()));
+  const instanciasDescartadas = selecionadas
+    .filter(i => !aptas.includes(i))
+    .map(i => i.nome || i.instancia_nome || String(i.id));
+  if (!selecionadas.length) {
+    return res.status(409).json({
+      configured: true,
+      error: 'Nenhuma das instâncias selecionadas foi encontrada na resposta atual do n8n/Evolution. Atualize a lista e tente novamente.',
+    });
+  }
+  if (!aptas.length) {
+    return res.status(409).json({
+      configured: true,
+      error: `Nenhuma instância selecionada está conectada (${instanciasDescartadas.join(', ')}). Reconecte no Evolution antes de disparar.`,
+      instancias_descartadas: instanciasDescartadas,
+    });
+  }
+
+  // 2) Público resolvido no Chatwoot + filtros anti-spam + roteamento por instância.
+  let plano = null;
+  let resumo = null;
+  if (aptas.length) {
+    try {
+      const inboxParaInstancia = await disparoInboxesPorInstancia(aptas);
+      if (!inboxParaInstancia.size) {
+        return res.status(409).json({
+          configured: true,
+          error: 'Não existe mapeamento seguro entre as instâncias selecionadas e os inboxes do Chatwoot. Configure o vínculo antes de disparar.',
+        });
+      }
+      const publicoBruto = await resolverPublicoDisparo(destinatarios);
+      const { publico, descartados } = await aplicarFiltrosChatwoot(publicoBruto, {
+        cooldownDias: antiBan.cooldownDias,
+        pularConversasAbertas: antiBan.pularConversasAbertas,
+        inboxIds: [...inboxParaInstancia.keys()],
+      });
+      if (!publico.length) {
+        const partes = [];
+        if (descartados.cooldown > 0) {
+          partes.push(`${descartados.cooldown} em cooldown (${antiBan.cooldownDias} dia${antiBan.cooldownDias === 1 ? '' : 's'})`);
+        }
+        if (descartados.conversas_abertas > 0) {
+          partes.push(`${descartados.conversas_abertas} com conversa aberta`);
+        }
+        const detalhe = partes.length ? ` Descartados: ${partes.join('; ')}.` : '';
+        const dica = antiBan.cooldownDias > 0 || antiBan.pularConversasAbertas
+          ? ' Para um teste pontual, na etapa Ritmo defina cooldown = 0 e desative “Pular conversas abertas”.'
+          : ' Ajuste o público e tente de novo.';
+        return res.status(400).json({
+          configured: true,
+          error: `Nenhum contato restante após os filtros anti-spam.${detalhe}${dica}`,
+          resumo: {
+            publico: publicoBruto.length,
+            apos_filtros: 0,
+            descartados,
+            filtros: {
+              cooldownDias: antiBan.cooldownDias,
+              pularConversasAbertas: antiBan.pularConversasAbertas,
+            },
+          },
+        });
+      }
+      const historico = (antiBan.fixarNumero || antiBan.priorizarRecentes)
+        ? await ultimaInstanciaPorContato(publico.map(c => c.id), inboxParaInstancia)
+        : new Map();
+      const grupos = new Map(aptas.map(i => [i.id, []]));
+      const semDono = [];
+      let fixados = 0;
+      for (const contato of publico) {
+        const ultimo = historico.get(contato.id);
+        if (antiBan.fixarNumero && ultimo && grupos.has(ultimo.instanciaId)) {
+          grupos.get(ultimo.instanciaId).push({ ...contato, lastAt: ultimo.lastAt });
+          fixados += 1;
+        } else {
+          semDono.push({ ...contato, lastAt: ultimo ? ultimo.lastAt : null });
+        }
+      }
+      // Sem histórico: distribui aleatório mantendo os grupos equilibrados.
+      for (const contato of disparoEmbaralhar(semDono)) {
+        const [, menorGrupo] = [...grupos.entries()].sort((a, b) => a[1].length - b[1].length)[0];
+        menorGrupo.push(contato);
+      }
+      plano = aptas
+        .map(inst => {
+          const doGrupo = grupos.get(inst.id) || [];
+          const quentes = doGrupo.filter(c => c.lastAt).sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
+          const frios = disparoEmbaralhar(doGrupo.filter(c => !c.lastAt));
+          const ordenados = antiBan.priorizarRecentes ? [...quentes, ...frios] : disparoEmbaralhar(doGrupo);
+          return { instancia: inst, contatos: ordenados.map(({ lastAt, ...c }) => c) };
+        })
+        .filter(g => g.contatos.length);
+      resumo = {
+        publico: publicoBruto.length,
+        apos_filtros: publico.length,
+        fixados_por_historico: fixados,
+        descartados,
+        so_contatos_manuais: soContatosManuais,
+        filtros: {
+          cooldownDias: antiBan.cooldownDias,
+          pularConversasAbertas: antiBan.pularConversasAbertas,
+        },
+      };
+    } catch (error) {
+      console.error('disparo send: resolução via Chatwoot falhou:', error.message);
+      return res.status(502).json({
+        configured: true,
+        error: 'Não foi possível aplicar os filtros do Chatwoot. A campanha foi bloqueada por segurança.',
+      });
+    }
+  }
+
+  const totalDestinatarios = plano
+    ? plano.reduce((sum, g) => sum + g.contatos.length, 0)
+    : destinatarios.contatos.length;
+  const logId = await registrarDisparoLog(req, audienceLabel, totalDestinatarios, firstText, 'sent');
+
+  try {
+    // 3a) Caminho anti-ban: uma campanha em modo `contatos` por instância.
+    // Contatos saem enriquecidos com nome do Chatwoot + texto já personalizado
+    // ({nome} → primeiro nome). O pool `mensagens` mantém o template para o n8n
+    // que ainda faz replace; os campos no contato cobrem o caso em que não faz.
+    if (plano) {
+      const campanhas = [];
+      for (const grupo of plano) {
+        const rotulo = grupo.instancia.nome || grupo.instancia.instancia_nome || String(grupo.instancia.id);
+        const contatosEnriquecidos = enriquecerContatosDisparo(grupo.contatos, mensagens);
+        const payload = {
+          destinatarios: {
+            modo: 'contatos',
+            funil_vendas: [],
+            tags: [],
+            canais: [],
+            ddds: [],
+            contatos: contatosEnriquecidos,
+            combinar: false,
+          },
+          nomeCampanha: nomeCampanha
+            ? (plano.length > 1 ? `${nomeCampanha} · ${rotulo}` : nomeCampanha)
+            : null,
+          mensagens,
+          instancias: [grupo.instancia.id],
+          config,
+        };
+        const resp = await disparoFetch('/iniciar-disparo', { method: 'POST', body: payload, timeoutMs: 90000 });
+        campanhas.push({
+          instancia: rotulo,
+          instancia_id: grupo.instancia.id,
+          ok: resp.ok,
+          campanhaId: resp.data?.campanhaId ?? null,
+          totalEnfileirados: resp.data?.totalEnfileirados ?? grupo.contatos.length,
+          contatos: grupo.contatos.length,
+          erro: resp.ok ? null : (resp.data?.error || `HTTP ${resp.status}`),
+        });
+      }
+      const ok = campanhas.some(c => c.ok);
+      return res.json({
+        configured: true,
+        ok,
+        log_id: logId,
+        campanhas,
+        resumo,
+        instancias_descartadas: instanciasDescartadas,
+        campanhaId: campanhas.length === 1 ? campanhas[0].campanhaId : undefined,
+        totalEnfileirados: campanhas.reduce((sum, c) => sum + (Number(c.totalEnfileirados) || 0), 0),
+      });
+    }
+
+    // 3b) Fallback: contrato original — o próprio n8n resolve o público.
+    const payload = { destinatarios, nomeCampanha, mensagens, instancias, config };
+    const resp = await disparoFetch('/iniciar-disparo', { method: 'POST', body: payload, timeoutMs: 90000 });
+    return res.json({ configured: true, ok: resp.ok, status: resp.status, log_id: logId, ...(resp.data || {}) });
   } catch (error) {
     console.error('disparo webhook failed:', error.message);
     return res.status(502).json({ configured: true, error: 'Falha ao acionar o n8n.' });
   }
 });
 
+async function registrarDisparoLog(req, audience, recipients, message, status) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [req.auth?.sub || null, audience, recipients, message, status]
+    );
+    return rows[0]?.id ?? null;
+  } catch (error) {
+    console.error('disparo log failed:', error.message);
+    return null;
+  }
+}
+
 // Real-time campaign dashboard passthrough (read-only) from the n8n flow.
 app.get('/api/disparo/dashboard', async (req, res) => {
   if (!disparoBase()) return res.json({ configured: false });
   try {
-    const resp = await fetch(`${disparoBase()}/dashboard`);
-    const data = await resp.json().catch(() => ({}));
-    res.json({ configured: true, ...data });
+    const resp = await disparoFetch('/dashboard');
+    res.json({ configured: true, ...(resp.data || {}) });
   } catch (error) {
     console.error('disparo dashboard failed:', error.message);
     res.status(502).json({ configured: true, error: 'Falha ao consultar o dashboard.' });
@@ -691,6 +1327,7 @@ app.get('/api/disparo/dashboard', async (req, res) => {
 });
 
 const HISTORY_TABLE = 'kanban_stage_history';
+const ACTIVITY_TABLE = 'app_activity_logs';
 const LICITACAO_TABLE = 'licitacao_opportunities';
 const LICITACAO_REQUIREMENTS_TABLE = 'licitacao_requirements';
 const LICITACAO_ITEMS_TABLE = 'licitacao_items';
@@ -782,12 +1419,48 @@ const createHistoryTable = async () => {
       from_stage TEXT,
       to_stage TEXT,
       changed_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      source TEXT NOT NULL
+      source TEXT NOT NULL,
+      actor_id INTEGER,
+      actor_name TEXT
     );
   `);
+  await pool.query(`ALTER TABLE ${HISTORY_TABLE} ADD COLUMN IF NOT EXISTS actor_id INTEGER;`);
+  await pool.query(`ALTER TABLE ${HISTORY_TABLE} ADD COLUMN IF NOT EXISTS actor_name TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_kanban_history_contact ON ${HISTORY_TABLE} (contact_id, changed_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_kanban_history_changed ON ${HISTORY_TABLE} (changed_at);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_kanban_history_stage ON ${HISTORY_TABLE} (to_stage, changed_at);`);
+};
+
+const createActivityTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${ACTIVITY_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER,
+      actor_id INTEGER,
+      actor_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      entity_name TEXT,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_app_activity_logs_created ON ${ACTIVITY_TABLE} (created_at DESC);`);
+};
+
+const recordActivity = async (req, { accountId = CHATWOOT_ACCOUNT_ID, action, entityType, entityId, entityName, details = {} }) => {
+  const actorId = Number.isFinite(Number(req.auth?.uid)) ? Number(req.auth.uid) : null;
+  const actorName = req.auth?.name || req.auth?.sub || 'Usuario do painel';
+  try {
+    await pool.query(
+      `INSERT INTO ${ACTIVITY_TABLE} (account_id, actor_id, actor_name, action, entity_type, entity_id, entity_name, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+      [accountId, actorId, actorName, action, entityType, entityId == null ? null : String(entityId), entityName || null, JSON.stringify(details)]
+    );
+  } catch (error) {
+    console.error('recordActivity failed:', error.message);
+  }
 };
 
 const seedHistorySnapshot = async () => {
@@ -1294,6 +1967,7 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;`);
   await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account ON ${PCA_WATCHLIST_TABLE} (account_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account_name ON ${PCA_WATCHLIST_TABLE} (account_id, nome, id);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${PCA_SIGNALS_TABLE} (
@@ -1312,6 +1986,18 @@ const createLicitacaoTables = async () => {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_signals_account_status ON ${PCA_SIGNALS_TABLE} (account_id, status);`);
+  // O feed precisa encontrar primeiro a pagina recente e contar por watchlist sem
+  // ordenar/juntar a tabela inteira. Esses indices evitam o plano que causava 504.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pca_signals_feed
+      ON ${PCA_SIGNALS_TABLE} (account_id, status, criado_em DESC, id DESC)
+      WHERE watchlist_id IS NOT NULL;
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pca_signals_watchlist_count
+      ON ${PCA_SIGNALS_TABLE} (account_id, status, watchlist_id)
+      WHERE watchlist_id IS NOT NULL;
+  `);
   await pool.query(`
     WITH ranked AS (
       SELECT id,
@@ -1334,9 +2020,15 @@ const createLicitacaoTables = async () => {
       id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       ultimo_sync TIMESTAMP,
       ultimo_data_fim DATE,
-      bootstrap_concluido BOOLEAN NOT NULL DEFAULT FALSE
+      bootstrap_concluido BOOLEAN NOT NULL DEFAULT FALSE,
+      bootstrap_started_at TIMESTAMP,
+      bootstrap_finished_at TIMESTAMP,
+      bootstrap_error TEXT
     );
   `);
+  await pool.query(`ALTER TABLE ${PCA_SYNC_STATE_TABLE} ADD COLUMN IF NOT EXISTS bootstrap_started_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE ${PCA_SYNC_STATE_TABLE} ADD COLUMN IF NOT EXISTS bootstrap_finished_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE ${PCA_SYNC_STATE_TABLE} ADD COLUMN IF NOT EXISTS bootstrap_error TEXT;`);
   await pool.query(`INSERT INTO ${PCA_SYNC_STATE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING;`);
 };
 
@@ -1732,8 +2424,10 @@ const fetchPncpConsulta = async (pathName, query = {}) => {
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENAI_AI_MODEL = process.env.OPENAI_AI_MODEL || 'gpt-4.1-mini';
 const GROQ_AI_MODEL = process.env.GROQ_AI_MODEL || 'llama-3.3-70b-versatile';
+const OPENROUTER_AI_MODEL = process.env.OPENROUTER_AI_MODEL || 'openai/gpt-4o-mini';
 const AI_RELATIONS_VERSION = 'v5';
 
 // Cache simples para termos correlatos (evita chamadas repetidas)
@@ -3496,6 +4190,311 @@ app.get('/api/overview/history', async (req, res) => {
   }
 });
 
+app.get('/api/overview/recent-actions', async (req, res) => {
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 30, 1), 100);
+  try {
+    const { rows } = await pool.query(
+      `
+        WITH actions AS (
+          SELECT h.id::text AS id, 'platform' AS source, 'move_card' AS action,
+                 COALESCE(h.actor_name, 'Chatwoot') AS actor_name,
+                 COALESCE(c.name, c.email, 'Contato #' || h.contact_id) AS entity_name,
+                 h.contact_id::text AS entity_id,
+                 h.from_stage, h.to_stage, NULL::text AS preview, h.changed_at AS occurred_at
+            FROM ${HISTORY_TABLE} h
+            LEFT JOIN contacts c ON c.id = h.contact_id
+           WHERE h.source <> 'snapshot' AND h.account_id = $1
+          UNION ALL
+          SELECT a.id::text, 'platform', a.action, a.actor_name, a.entity_name, a.entity_id,
+                 NULL, NULL, NULL, a.created_at
+            FROM ${ACTIVITY_TABLE} a
+           WHERE a.account_id = $1
+          UNION ALL
+          SELECT 'conversation-' || cv.id, 'chatwoot', 'start_conversation',
+                 COALESCE(starter.actor_name, NULLIF(NULLIF(COALESCE(u.display_name, u.name, u.email), 'System'), 'Sistema'), 'Chatwoot'),
+                 COALESCE(c.name, c.email, 'Contato #' || cv.contact_id), cv.contact_id::text,
+                 NULL, NULL, NULL, cv.created_at
+            FROM conversations cv
+            LEFT JOIN users u ON u.id = cv.assignee_id
+            LEFT JOIN contacts c ON c.id = cv.contact_id
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(starter_user.display_name, starter_user.name, starter_user.email) AS actor_name
+                FROM messages first_message
+                JOIN users starter_user ON starter_user.id = first_message.sender_id
+               WHERE first_message.conversation_id = cv.id
+                 AND first_message.sender_type = 'User'
+                 AND LOWER(COALESCE(starter_user.display_name, starter_user.name, starter_user.email, '')) NOT IN ('system', 'sistema')
+               ORDER BY first_message.created_at ASC
+               LIMIT 1
+            ) starter ON true
+           WHERE cv.account_id = $1
+          UNION ALL
+          SELECT 'contact-' || c.id, 'chatwoot', 'new_contact', COALESCE(contact_starter.actor_name, 'Chatwoot'),
+                 COALESCE(c.name, c.email, 'Contato #' || c.id), c.id::text,
+                 NULL, NULL, NULL, c.created_at
+            FROM contacts c
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(starter_user.display_name, starter_user.name, starter_user.email) AS actor_name
+                FROM conversations first_conversation
+                JOIN messages first_message ON first_message.conversation_id = first_conversation.id
+                JOIN users starter_user ON starter_user.id = first_message.sender_id
+               WHERE first_conversation.contact_id = c.id
+                 AND first_message.sender_type = 'User'
+                 AND LOWER(COALESCE(starter_user.display_name, starter_user.name, starter_user.email, '')) NOT IN ('system', 'sistema')
+               ORDER BY first_message.created_at ASC
+               LIMIT 1
+            ) contact_starter ON true
+           WHERE c.account_id = $1
+        )
+        SELECT * FROM actions
+        ORDER BY occurred_at DESC NULLS LAST
+        LIMIT $2
+      `,
+      [CHATWOOT_ACCOUNT_ID, limit]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching recent actions:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Ritmo do funil (dia + mês):
+ * - Contatos = mensagens públicas enviadas (WhatsApp etc.) + notas privadas no Chatwoot
+ *   (regra operacional: ligação/e-mail devem ser registrados em Notas).
+ * - SQL / Oportunidade / Proposta / Fechamento = movimentações do card no funil
+ *   (kanban_stage_history → to_stage).
+ * Query opcional: agent_id — filtra feito do dia/mês por remetente (mensagens) e actor (moves).
+ */
+app.get('/api/overview/funnel-pace', async (req, res) => {
+  try {
+    const accountId = CHATWOOT_ACCOUNT_ID;
+    const agentIdRaw = req.query.agent_id;
+    const agentId = agentIdRaw != null && String(agentIdRaw).trim() !== ''
+      ? Number.parseInt(agentIdRaw, 10)
+      : null;
+    const hasAgent = Number.isFinite(agentId) && agentId > 0;
+
+    // $1 account, $2 optional agent id (null = time todo)
+    const msgAgentFilter = hasAgent
+      ? `AND m.sender_type = 'User' AND m.sender_id = $2`
+      : '';
+    const histAgentFilter = hasAgent
+      ? `AND h.actor_id = $2`
+      : '';
+    const params = hasAgent ? [accountId, agentId] : [accountId];
+
+    const [contactsDay, contactsMonth, stagesDay, stagesMonth, leadsDay, leadsMonth, agentsRes] = await Promise.all([
+      pool.query(
+        `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE m.message_type = 1 AND COALESCE(m."private", false) = false
+          )::int AS messages,
+          COUNT(*) FILTER (
+            WHERE COALESCE(m."private", false) = true
+          )::int AS notes,
+          COUNT(*) FILTER (
+            WHERE (m.message_type = 1 AND COALESCE(m."private", false) = false)
+               OR COALESCE(m."private", false) = true
+          )::int AS total
+        FROM messages m
+        WHERE m.account_id = $1
+          AND m.created_at >= DATE_TRUNC('day', NOW())
+          ${msgAgentFilter}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE m.message_type = 1 AND COALESCE(m."private", false) = false
+          )::int AS messages,
+          COUNT(*) FILTER (
+            WHERE COALESCE(m."private", false) = true
+          )::int AS notes,
+          COUNT(*) FILTER (
+            WHERE (m.message_type = 1 AND COALESCE(m."private", false) = false)
+               OR COALESCE(m."private", false) = true
+          )::int AS total
+        FROM messages m
+        WHERE m.account_id = $1
+          AND m.created_at >= DATE_TRUNC('month', NOW())
+          ${msgAgentFilter}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 6
+          )::int AS sql,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
+          )::int AS oportunidade,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
+          )::int AS proposta,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
+          )::int AS fechamento,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
+          ), 0)::float AS oportunidade_value,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
+          ), 0)::float AS proposta_value,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
+          ), 0)::float AS fechamento_value
+        FROM ${HISTORY_TABLE} h
+        LEFT JOIN contacts c ON c.id = h.contact_id
+        WHERE h.account_id = $1
+          AND h.source <> 'snapshot'
+          AND h.changed_at >= DATE_TRUNC('day', NOW())
+          AND h.to_stage IS NOT NULL
+          ${histAgentFilter}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 6
+          )::int AS sql,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
+          )::int AS oportunidade,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
+          )::int AS proposta,
+          COUNT(*) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
+          )::int AS fechamento,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
+          ), 0)::float AS oportunidade_value,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
+          ), 0)::float AS proposta_value,
+          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
+            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
+          ), 0)::float AS fechamento_value
+        FROM ${HISTORY_TABLE} h
+        LEFT JOIN contacts c ON c.id = h.contact_id
+        WHERE h.account_id = $1
+          AND h.source <> 'snapshot'
+          AND h.changed_at >= DATE_TRUNC('month', NOW())
+          AND h.to_stage IS NOT NULL
+          ${histAgentFilter}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS total
+        FROM ${HISTORY_TABLE} h
+        WHERE h.account_id = $1
+          AND h.source <> 'snapshot'
+          AND h.changed_at >= DATE_TRUNC('day', NOW())
+          AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
+          ${histAgentFilter}
+        `,
+        params
+      ),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS total
+        FROM ${HISTORY_TABLE} h
+        WHERE h.account_id = $1
+          AND h.source <> 'snapshot'
+          AND h.changed_at >= DATE_TRUNC('month', NOW())
+          AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
+          ${histAgentFilter}
+        `,
+        params
+      ),
+      // Agentes do account (para seletor do ritmo)
+      pool.query(
+        `
+        SELECT DISTINCT
+          u.id AS agent_id,
+          COALESCE(u.display_name, u.name, u.email, 'Agente #' || u.id) AS agent_name
+        FROM account_users au
+        JOIN users u ON u.id = au.user_id
+        WHERE au.account_id = $1
+        ORDER BY agent_name
+        `,
+        [accountId]
+      ).catch(() => ({ rows: [] })),
+    ]);
+
+    const cd = contactsDay.rows[0] || {};
+    const cm = contactsMonth.rows[0] || {};
+    const sd = stagesDay.rows[0] || {};
+    const sm = stagesMonth.rows[0] || {};
+
+    res.json({
+      as_of: new Date().toISOString(),
+      agent_id: hasAgent ? agentId : null,
+      agents: (agentsRes.rows || []).map((r) => ({
+        id: Number(r.agent_id),
+        name: r.agent_name || `Agente #${r.agent_id}`,
+      })),
+      day: {
+        contatos: {
+          total: Number(cd.total) || 0,
+          messages: Number(cd.messages) || 0,
+          notes: Number(cd.notes) || 0,
+        },
+        leads: Number(leadsDay.rows[0]?.total) || 0,
+        sql: Number(sd.sql) || 0,
+        oportunidade: Number(sd.oportunidade) || 0,
+        proposta: Number(sd.proposta) || 0,
+        fechamento: Number(sd.fechamento) || 0,
+        // R$: soma de Valor_Oportunidade dos cards movidos à etapa no período
+        value: {
+          oportunidade: Number(sd.oportunidade_value) || 0,
+          proposta: Number(sd.proposta_value) || 0,
+          fechamento: Number(sd.fechamento_value) || 0,
+        },
+      },
+      month: {
+        contatos: {
+          total: Number(cm.total) || 0,
+          messages: Number(cm.messages) || 0,
+          notes: Number(cm.notes) || 0,
+        },
+        leads: Number(leadsMonth.rows[0]?.total) || 0,
+        sql: Number(sm.sql) || 0,
+        oportunidade: Number(sm.oportunidade) || 0,
+        proposta: Number(sm.proposta) || 0,
+        fechamento: Number(sm.fechamento) || 0,
+        value: {
+          oportunidade: Number(sm.oportunidade_value) || 0,
+          proposta: Number(sm.proposta_value) || 0,
+          fechamento: Number(sm.fechamento_value) || 0,
+        },
+      },
+      rules: {
+        contatos: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas. Ligação e e-mail: registrar em Notas.',
+        leads: 'Card movido para Inbox / etapa 1 do funil.',
+        sql: 'Card movido para 6. Qualificado (SQL).',
+        oportunidade: 'Card movido para 7–8 (Agendamento Demo / Demo Realizada). Em R$: soma do Valor_Oportunidade.',
+        proposta: 'Card movido para 9–12 (Elaborando Proposta até Aprovação Interna). Em R$: soma do Valor_Oportunidade.',
+        fechamento: 'Card movido para 13. Fechado-Ganho. Em R$: receita das vendas ganhas no período.',
+      },
+    });
+  } catch (err) {
+    console.error('Error fetching funnel pace:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 const getAccountId = (req) => {
   const raw = req.query.account_id ?? req.body?.account_id;
   const parsed = Number.parseInt(raw, 10);
@@ -3673,6 +4672,14 @@ app.post('/api/licitacoes/opportunities', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    await recordActivity(req, {
+      accountId,
+      action: 'create_opportunity',
+      entityType: 'opportunity',
+      entityId: created.id,
+      entityName: created.titulo,
+      details: { fase: created.fase },
+    });
     res.status(201).json(normalizeOpportunityRow(created));
   } catch (error) {
     await client.query('ROLLBACK');
@@ -3824,7 +4831,16 @@ app.put('/api/licitacoes/opportunities/:id', async (req, res) => {
       ]
     );
 
-    res.json(normalizeOpportunityRow(rows[0]));
+    const updated = rows[0];
+    await recordActivity(req, {
+      accountId,
+      action: current.fase !== updated.fase ? 'move_opportunity' : 'update_opportunity',
+      entityType: 'opportunity',
+      entityId: updated.id,
+      entityName: updated.titulo,
+      details: { from_stage: current.fase, to_stage: updated.fase },
+    });
+    res.json(normalizeOpportunityRow(updated));
   } catch (error) {
     console.error('Error updating licitacao opportunity:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -3835,7 +4851,17 @@ app.delete('/api/licitacoes/opportunities/:id', async (req, res) => {
   const accountId = getAccountId(req);
   const { id } = req.params;
   try {
+    const existing = await pool.query(`SELECT titulo FROM ${LICITACAO_TABLE} WHERE id = $1 AND account_id = $2`, [id, accountId]);
     await pool.query(`DELETE FROM ${LICITACAO_TABLE} WHERE id = $1 AND account_id = $2`, [id, accountId]);
+    if (existing.rows[0]) {
+      await recordActivity(req, {
+        accountId,
+        action: 'delete_opportunity',
+        entityType: 'opportunity',
+        entityId: id,
+        entityName: existing.rows[0].titulo,
+      });
+    }
     res.status(204).send();
   } catch (error) {
     console.error('Error deleting licitacao opportunity:', error);
@@ -5910,6 +6936,26 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 });
 
 // Opções de status disponíveis para busca
+// Balanceador global de chamadas ao PNCP: várias buscas rodam ao mesmo tempo,
+// mas no máximo 2 requests simultâneas com intervalo mínimo — evita resets/429.
+const PNCP_GATE = { active: 0, queue: [], max: 2, gapMs: 350, last: 0 };
+const withPncpGate = async (fn) => {
+  if (PNCP_GATE.active >= PNCP_GATE.max) {
+    await new Promise(resolve => PNCP_GATE.queue.push(resolve));
+  }
+  PNCP_GATE.active += 1;
+  try {
+    const wait = PNCP_GATE.last + PNCP_GATE.gapMs - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    PNCP_GATE.last = Date.now();
+    return await fn();
+  } finally {
+    PNCP_GATE.active -= 1;
+    const next = PNCP_GATE.queue.shift();
+    if (next) next();
+  }
+};
+
 const cleanupPncpDeepJobs = () => {
   const now = Date.now();
   for (const [id, job] of PNCP_DEEP_SEARCH_JOBS.entries()) {
@@ -5918,6 +6964,11 @@ const cleanupPncpDeepJobs = () => {
       PNCP_DEEP_SEARCH_CANCELLED.delete(id);
     }
   }
+  // Buscas antigas que não viraram watchlist somem do banco depois de 7 dias.
+  pool.query(
+    `DELETE FROM ${PNCP_SEARCH_JOBS_TABLE}
+      WHERE watchlist_id IS NULL AND updated_at < NOW() - INTERVAL '7 days'`
+  ).catch(() => {});
 };
 
 const normalizePncpSearchJobRow = (row) => row ? ({
@@ -6017,12 +7068,13 @@ const loadPncpDeepJob = async (jobId, accountId = null) => {
   return normalizePncpSearchJobRow(rows[0]);
 };
 
-const startPersistedPncpSearchJob = async (jobOrId) => {
+const startPersistedPncpSearchJob = async (jobOrId, { force = false } = {}) => {
   const job = typeof jobOrId === 'string'
     ? await loadPncpDeepJob(jobOrId)
     : jobOrId;
   if (!job?.id || !job?.account_id) return false;
-  if (['completed', 'cancelled'].includes(job.status)) return false;
+  if (!force && ['completed', 'cancelled'].includes(job.status)) return false;
+  if (job.status === 'cancelled') return false;
   const current = PNCP_DEEP_SEARCH_JOBS.get(job.id);
   if (current && ['queued', 'running', 'cancelling'].includes(current.status)) {
     return true;
@@ -6125,6 +7177,23 @@ const buildDeepSearchItemsSnapshot = async ({
 
 const getPncpSearchResultKey = (item) => getPncpRawItemKey(item) || item?.id || item?.numero_controle_pncp || item?.url || item?.item_url || crypto.createHash('sha1').update(JSON.stringify(item || {})).digest('hex');
 
+const clearPncpJobResults = async (jobId) => {
+  if (!jobId) return;
+  await pool.query(`DELETE FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`, [jobId]).catch(() => {});
+};
+
+const countPncpJobResults = async (jobId, accountId = null) => {
+  if (!jobId) return 0;
+  const params = [jobId];
+  let sql = `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`;
+  if (accountId != null) {
+    params.push(accountId);
+    sql += ' AND account_id = $2';
+  }
+  const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total: 0 }] }));
+  return Number(rows[0]?.total || 0);
+};
+
 const persistPncpJobResults = async (job, items = []) => {
   if (!job?.id || !job?.account_id || !Array.isArray(items) || !items.length) return;
   const rows = items
@@ -6225,7 +7294,11 @@ const runPncpDeepSearchJob = async (jobId) => {
   const termRuns = [];
   let lastSnapshotAt = 0;
   try {
+    // Limpa resultados anteriores para o total do card e do popup baterem (re-run / filtros).
+    await clearPncpJobResults(jobId);
     job.status = 'running';
+    job.total = 0;
+    job.items = [];
     job.progress = { ...(job.progress || {}), current_term: '', terms_done: 0, terms_total: terms.length, items_collected: 0 };
     await persistPncpDeepJob(job);
     for (let index = 0; index < terms.length; index += 1) {
@@ -6260,11 +7333,14 @@ const runPncpDeepSearchJob = async (jobId) => {
         run.pages_requested += 1;
         let data;
         try {
-          data = await fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 2 });
+          data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 2 }));
         } catch (error) {
           run.errors.push(`pagina ${page}: ${error.message}`);
           const errorText = normalizeSearchText(error.message || '');
-          run.stop_reason = (errorText.includes('429') || errorText.includes('limite') || errorText.includes('rate'))
+          // Conexão resetada/timeout é o PNCP throttling na prática: pausa e retoma
+          // automaticamente em vez de encerrar o termo com erro.
+          const isNetworkDrop = /reset|recv failure|econnreset|etimedout|timed out|socket|curl exit (28|52|56)/.test(errorText);
+          run.stop_reason = (errorText.includes('429') || errorText.includes('limite') || errorText.includes('rate') || isNetworkDrop)
             ? 'rate_limited'
             : (run.items_collected > 0 ? 'page_error_partial' : 'page_error');
           break;
@@ -6309,7 +7385,7 @@ const runPncpDeepSearchJob = async (jobId) => {
           });
           await persistPncpJobResults(job, pageSnapshot.items);
           job.items = pageSnapshot.items.slice(0, 200);
-          job.total = pageSnapshot.items.length;
+          job.total = await countPncpJobResults(jobId, job.account_id) || pageSnapshot.items.length;
           job.summary = pageSnapshot.summary;
           job.query_plan = { ...pageSnapshot.query_plan, term_runs: [...termRuns, run], partial: true };
           await persistPncpDeepJob(job);
@@ -6342,7 +7418,7 @@ const runPncpDeepSearchJob = async (jobId) => {
       });
       await persistPncpJobResults(job, partial.items);
       job.items = partial.items.slice(0, 200);
-      job.total = partial.items.length;
+      job.total = await countPncpJobResults(jobId, job.account_id) || partial.items.length;
       job.summary = partial.summary;
       job.query_plan = { ...partial.query_plan, term_runs: termRuns, partial: true };
       job.updated_at = Date.now();
@@ -6367,14 +7443,18 @@ const runPncpDeepSearchJob = async (jobId) => {
       enrichValues: true,
     });
     job.status = 'completed';
+    // Snapshot final substitui o conjunto: limpa e grava de novo para não acumular órfãos.
+    await clearPncpJobResults(jobId);
     await persistPncpJobResults(job, finalSnapshot.items);
     job.items = finalSnapshot.items.slice(0, 200);
-    job.total = finalSnapshot.items.length;
+    // Total canônico = o que está na tabela de resultados (mesma fonte do popup).
+    job.total = await countPncpJobResults(jobId, job.account_id) || finalSnapshot.items.length;
     job.summary = finalSnapshot.summary;
     job.query_plan = {
       ...finalSnapshot.query_plan,
       term_runs: termRuns,
       partial: false,
+      results_persisted: job.total,
     };
     job.updated_at = Date.now();
     await persistPncpDeepJob(job);
@@ -6392,13 +7472,19 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const { rows } = await pool.query(
-      `SELECT id, nome, status, filters, terms, negative_terms, accepted_positive_terms, accepted_negative_terms,
-              suggested_positive_terms, suggested_negative_terms, progress, term_runs, summary, total, error,
-              watchlist_id, started_at, updated_at, completed_at
-         FROM ${PNCP_SEARCH_JOBS_TABLE}
-        WHERE account_id = $1
-        ORDER BY updated_at DESC
-        LIMIT 5`,
+      `SELECT j.id, j.nome, j.status, j.filters, j.terms, j.negative_terms, j.accepted_positive_terms, j.accepted_negative_terms,
+              j.suggested_positive_terms, j.suggested_negative_terms, j.progress, j.term_runs, j.summary,
+              COALESCE(rc.cnt, j.total, 0)::int AS total,
+              j.error, j.watchlist_id, j.started_at, j.updated_at, j.completed_at
+         FROM ${PNCP_SEARCH_JOBS_TABLE} j
+         LEFT JOIN (
+           SELECT job_id, COUNT(*)::int AS cnt
+             FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+            GROUP BY job_id
+         ) rc ON rc.job_id = j.id
+        WHERE j.account_id = $1
+        ORDER BY j.updated_at DESC
+        LIMIT 20`,
       [accountId]
     );
     res.json(rows.map(normalizePncpSearchJobRow));
@@ -6491,6 +7577,18 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   if (!memoryJob && ['queued', 'running', 'paused_rate_limit'].includes(job.status)) {
     startPersistedPncpSearchJob(job).catch(err => console.warn('[PNCP Search Job] resume on open falhou:', err.message));
   }
+  // Job "concluído" mas com coleta parcial (conexão resetada/rate limit no meio):
+  // retoma automaticamente para completar o que faltou.
+  if (!memoryJob && job.status === 'completed') {
+    const partialRun = (job.term_runs || []).find(run =>
+      ['rate_limited', 'page_error', 'page_error_partial'].includes(run?.stop_reason)
+      && Number(run?.total_reported || 0) > Number(run?.items_collected || 0)
+    );
+    if (partialRun) {
+      console.log(`[PNCP Search Job] ${job.id} concluiu parcial (${partialRun.stop_reason}) — retomando coleta.`);
+      startPersistedPncpSearchJob(job, { force: true }).catch(err => console.warn('[PNCP Search Job] resume parcial falhou:', err.message));
+    }
+  }
   res.json({
     id: job.id,
     status: job.status,
@@ -6571,6 +7669,22 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
   }
 });
 
+// Excluir uma busca (quadro): cancela o worker se estiver rodando e apaga do banco.
+app.delete('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+    PNCP_DEEP_SEARCH_CANCELLED.add(jobId);
+    PNCP_DEEP_SEARCH_JOBS.delete(jobId);
+    const timer = PNCP_DEEP_SEARCH_RESUME_TIMERS.get(jobId);
+    if (timer) { clearTimeout(timer); PNCP_DEEP_SEARCH_RESUME_TIMERS.delete(jobId); }
+    await pool.query(`DELETE FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`, [jobId]).catch(() => {});
+    await pool.query(`DELETE FROM ${PNCP_SEARCH_JOBS_TABLE} WHERE id = $1 AND account_id = $2`, [jobId, getAccountId(req)]);
+    res.json({ deleted: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao excluir a busca', details: error.message });
+  }
+});
+
 app.post('/api/licitacoes/pncp/search/deep/:jobId/cancel', async (req, res) => {
   const job = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
   if (job) {
@@ -6637,6 +7751,109 @@ const handlePncpSearchJobTerms = async (req, res) => {
 
 app.post('/api/licitacoes/pncp/search/deep-terms/:jobId', handlePncpSearchJobTerms);
 app.post('/api/licitacoes/pncp/search/deep/:jobId/terms', handlePncpSearchJobTerms);
+
+// Atualiza filtros de partida do job e reenfileira a coleta.
+app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const memoryJob = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
+    const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, accountId);
+    const job = memoryJob || dbJob;
+    if (!job) return res.status(404).json({ error: 'Pesquisa nao encontrada' });
+    if (job.account_id && Number(job.account_id) !== Number(accountId)) {
+      return res.status(404).json({ error: 'Pesquisa nao encontrada' });
+    }
+
+    const incoming = req.body?.filters && typeof req.body.filters === 'object' ? req.body.filters : {};
+    const nextFilters = {
+      ...(job.filters || {}),
+      ...incoming,
+    };
+    // Normaliza strings vazias
+    Object.keys(nextFilters).forEach((key) => {
+      if (nextFilters[key] === undefined || nextFilters[key] === null) delete nextFilters[key];
+      else if (typeof nextFilters[key] === 'string') nextFilters[key] = nextFilters[key].trim();
+    });
+
+    // Termos negativos do formulário de partida entram no job
+    if (Object.prototype.hasOwnProperty.call(incoming, 'negative_terms')) {
+      const fromFilter = splitPncpTerms(incoming.negative_terms || '');
+      const extra = Array.isArray(req.body?.negative_terms) ? req.body.negative_terms : [];
+      job.negative_terms = mergeUniqueTerms(fromFilter, extra);
+    }
+
+    job.filters = nextFilters;
+    if (nextFilters.q && String(nextFilters.q).trim()) {
+      job.nome = String(nextFilters.q).trim().slice(0, 160);
+      // Garante que o termo principal exista nas frentes
+      job.terms = mergeUniqueTerms([nextFilters.q], job.terms || []).slice(0, 12);
+    }
+
+    const signature = buildPncpJobSignature({
+      filters: job.filters || {},
+      terms: job.terms || [],
+      negativeTerms: job.negative_terms || [],
+    });
+    job.progress = {
+      ...(job.progress || {}),
+      signature,
+      terms_total: (job.terms || []).length,
+      terms_done: 0,
+      current_term: '',
+      items_collected: Number(job.progress?.items_collected || job.total || 0),
+    };
+    job.error = null;
+    job.completed_at = null;
+    job.updated_at = Date.now();
+
+    // Se estiver rodando, pede cancelamento e recomeça com os novos filtros
+    if (['running', 'cancelling', 'queued', 'paused_rate_limit'].includes(job.status)) {
+      PNCP_DEEP_SEARCH_CANCELLED.add(job.id);
+    }
+    job.status = 'queued';
+    job.total = 0;
+    job.items = [];
+    await clearPncpJobResults(job.id);
+
+    await pool.query(
+      `UPDATE ${PNCP_SEARCH_JOBS_TABLE}
+          SET filters = $2::jsonb,
+              terms = $3,
+              negative_terms = $4,
+              nome = $5,
+              status = 'queued',
+              progress = $6::jsonb,
+              total = 0,
+              items = '[]'::jsonb,
+              error = NULL,
+              completed_at = NULL,
+              updated_at = NOW()
+        WHERE id = $1 AND account_id = $7`,
+      [
+        job.id,
+        JSON.stringify(job.filters || {}),
+        job.terms || [],
+        job.negative_terms || [],
+        job.nome || String(job.filters?.q || 'Busca PNCP').slice(0, 160),
+        JSON.stringify(job.progress || {}),
+        accountId,
+      ]
+    );
+
+    PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+    // Pequeno delay se estava cancelando, para o worker antigo soltar
+    setTimeout(() => {
+      PNCP_DEEP_SEARCH_CANCELLED.delete(job.id);
+      startPersistedPncpSearchJob(job, { force: true }).catch(err =>
+        console.warn('[PNCP Search Job] restart apos filtros falhou:', err.message)
+      );
+    }, 400);
+
+    res.json(normalizePncpSearchJobRow(job));
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar filtros da pesquisa', details: error.message });
+  }
+});
 
 app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) => {
   try {
@@ -7865,9 +9082,69 @@ const fetchPncpPcaPagina = async ({ dataInicio, dataFim, pagina, tamanhoPagina =
   throw lastErr;
 };
 
+// Um lock no Postgres cobre também cenários com mais de uma réplica do backend.
+// Mantemos uma conexão dedicada apenas para segurar o lock; o trabalho usa o pool.
+const PCA_SYNC_ADVISORY_LOCK = 524341;
+const withPcaSyncLock = async (work) => {
+  const lockClient = await pool.connect();
+  let locked = false;
+  try {
+    const { rows } = await lockClient.query(
+      'SELECT pg_try_advisory_lock($1) AS locked',
+      [PCA_SYNC_ADVISORY_LOCK]
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) {
+      return { skipped: true, reason: 'pca_sync_already_running' };
+    }
+    return await work(lockClient);
+  } finally {
+    if (locked) {
+      await lockClient.query('SELECT pg_advisory_unlock($1)', [PCA_SYNC_ADVISORY_LOCK]).catch((error) => {
+        console.warn('[pca] falha ao liberar advisory lock:', error.message);
+      });
+    }
+    lockClient.release();
+  }
+};
+
+const PCA_READ_TIMEOUT_MS = Math.max(
+  1000,
+  Number.parseInt(process.env.PCA_READ_TIMEOUT_MS || '20000', 10) || 20000
+);
+const PCA_LOCK_TIMEOUT_MS = Math.min(5000, PCA_READ_TIMEOUT_MS);
+
+const withPcaReadTimeout = async (work) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN READ ONLY');
+    await client.query(`SET LOCAL statement_timeout = ${PCA_READ_TIMEOUT_MS}`);
+    await client.query(`SET LOCAL lock_timeout = ${PCA_LOCK_TIMEOUT_MS}`);
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const pcaReadErrorResponse = (res, error, fallback) => {
+  const transient = ['57014', '55P03', '53300'].includes(error?.code)
+    || /timeout|connection terminated|connect/i.test(error?.message || '');
+  if (transient) {
+    return res.status(503).json({
+      error: 'A base PCA está ocupada no momento. A tela tentará novamente automaticamente.',
+    });
+  }
+  return res.status(500).json({ error: fallback, details: error.message });
+};
+
 // Daily sync: pega delta entre o último cursor e hoje.
 // onProgress(diffPlanos, diffItens) chamado após cada página upsertada (uso pelo bootstrap pra atualizar UI live).
-const runPcaDailySync = async (opts = {}, onProgress = null) => {
+const runPcaDailySyncUnlocked = async (opts = {}, onProgress = null) => {
   const { rows: stateRows } = await pool.query(
     `SELECT * FROM ${PCA_SYNC_STATE_TABLE} WHERE id = 1`
   );
@@ -7921,22 +9198,38 @@ const runPcaDailySync = async (opts = {}, onProgress = null) => {
     pagina += 1;
   }
 
-  await pool.query(
-    `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_sync = NOW(), ultimo_data_fim = $1::date WHERE id = 1`,
-    [`${dataFim.slice(0, 4)}-${dataFim.slice(4, 6)}-${dataFim.slice(6, 8)}`]
-  );
+  // Nunca avança o cursor se uma página ficou para trás. Assim o próximo ciclo
+  // tenta novamente em vez de transformar uma falha transitória em perda de dados.
+  if (paginasComFalha > 0) {
+    throw new Error(`${paginasComFalha} página(s) do PNCP falharam; cursor preservado para nova tentativa`);
+  }
 
-  const matchResult = await runPcaWatchlistMatching().catch(e => {
-    console.error('[pca] erro matching watchlists:', e.message);
-    return { signals_inserted: 0 };
-  });
+  if (opts.updateCursor !== false) {
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_sync = NOW(), ultimo_data_fim = $1::date WHERE id = 1`,
+      [`${dataFim.slice(0, 4)}-${dataFim.slice(4, 6)}-${dataFim.slice(6, 8)}`]
+    );
+  }
+
+  let matchResult = { signals_inserted: 0 };
+  if (opts.matchWatchlists !== false) {
+    matchResult = await runPcaWatchlistMatching();
+  }
 
   return {
     dataInicio, dataFim,
     planos_upserted: planosUpserted,
     itens_upserted: itensUpserted,
     signals_inserted: matchResult.signals_inserted,
+    paginas_com_falha: paginasComFalha,
   };
+};
+
+const runPcaDailySync = async (opts = {}, onProgress = null) => {
+  if (opts.lockAlreadyHeld) {
+    return runPcaDailySyncUnlocked(opts, onProgress);
+  }
+  return withPcaSyncLock(() => runPcaDailySyncUnlocked(opts, onProgress));
 };
 
 // Estado in-memory do bootstrap — sobrevive a desconexões do client mas
@@ -7947,6 +9240,7 @@ const pcaBootstrapState = {
   finishedAt: null,
   ano: null,
   mes_atual: null,
+  mes_total: null,
   planos_upserted: 0,
   itens_upserted: 0,
   error: null,
@@ -7954,55 +9248,142 @@ const pcaBootstrapState = {
 
 const runPcaBootstrap = async (ano) => {
   const targetAno = toIntOrNull(ano) || new Date().getFullYear();
+  const currentYear = new Date().getFullYear();
+  if (targetAno !== currentYear) {
+    throw new Error(`A preparação inicial aceita somente o ano corrente (${currentYear})`);
+  }
   pcaBootstrapState.running = true;
   pcaBootstrapState.startedAt = new Date().toISOString();
   pcaBootstrapState.finishedAt = null;
   pcaBootstrapState.ano = targetAno;
   pcaBootstrapState.mes_atual = null;
+  pcaBootstrapState.mes_total = null;
   pcaBootstrapState.planos_upserted = 0;
   pcaBootstrapState.itens_upserted = 0;
   pcaBootstrapState.error = null;
 
-  try {
-    for (let mes = 1; mes <= 12; mes += 1) {
+  const work = (async () => {
+    const result = await withPcaSyncLock(async () => {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const lastMonth = targetAno < currentYear ? 12 : (targetAno === currentYear ? today.getMonth() + 1 : 0);
+    const monthErrors = [];
+    let matchingResult = { signals_inserted: 0 };
+
+    if (!lastMonth) {
+      throw new Error(`Não há atualizações do PNCP para o ano futuro ${targetAno}`);
+    }
+
+    pcaBootstrapState.mes_total = lastMonth;
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE}
+          SET bootstrap_concluido = FALSE,
+              bootstrap_started_at = NOW(),
+              bootstrap_finished_at = NULL,
+              bootstrap_error = NULL
+        WHERE id = 1`
+    );
+
+    for (let mes = 1; mes <= lastMonth; mes += 1) {
       pcaBootstrapState.mes_atual = mes;
       const inicio = new Date(targetAno, mes - 1, 1);
-      const fim = new Date(targetAno, mes, 0);
+      const fimDoMes = new Date(targetAno, mes, 0);
+      const fim = targetAno === currentYear && mes === lastMonth ? today : fimDoMes;
       const fmt = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
       try {
         await runPcaDailySync(
-          { dataInicio: fmt(inicio), dataFim: fmt(fim) },
+          {
+            dataInicio: fmt(inicio),
+            dataFim: fmt(fim),
+            matchWatchlists: false,
+            updateCursor: false,
+            lockAlreadyHeld: true,
+          },
           (dPlanos, dItens) => {
             pcaBootstrapState.planos_upserted += dPlanos;
             pcaBootstrapState.itens_upserted += dItens;
           }
         );
-      } catch (e) {
-        // Erro num mês não derruba os outros — continua o bootstrap
-        console.error(`[pca] mês ${mes}/${targetAno} falhou: ${e.message}`);
+      } catch (error) {
+        monthErrors.push(`mês ${mes}: ${error.message}`);
+        console.error(`[pca] mês ${mes}/${targetAno} falhou: ${error.message}`);
       }
     }
+
+    // O matching é global e caro: roda uma única vez depois de toda a carga, não
+    // uma vez por janela mensal (antes podia repetir até 12 vezes).
+    try {
+      matchingResult = await runPcaWatchlistMatching();
+    } catch (error) {
+      console.error('[pca] matching final das watchlists falhou:', error.message);
+      // A ingestão pode estar íntegra mesmo se o matching falhar. Não invalida a
+      // base nem força outro bootstrap de milhões de itens; tenta só o matching.
+      setTimeout(() => runPcaWatchlistMatching().catch((retryError) => {
+        console.error('[pca] retry do matching das watchlists falhou:', retryError.message);
+      }), 5 * 60 * 1000);
+    }
+
+    if (monthErrors.length > 0) {
+      throw new Error(monthErrors.join(' | '));
+    }
+
     await pool.query(
-      `UPDATE ${PCA_SYNC_STATE_TABLE} SET bootstrap_concluido = TRUE WHERE id = 1`
+      `UPDATE ${PCA_SYNC_STATE_TABLE}
+          SET bootstrap_concluido = TRUE,
+              bootstrap_finished_at = NOW(),
+              bootstrap_error = NULL,
+              ultimo_sync = NOW(),
+              ultimo_data_fim = CURRENT_DATE
+        WHERE id = 1`
     );
-  } catch (e) {
-    pcaBootstrapState.error = e.message;
-    console.error('[pca] bootstrap error:', e);
+
+    return {
+      ano: targetAno,
+      planos_upserted: pcaBootstrapState.planos_upserted,
+      itens_upserted: pcaBootstrapState.itens_upserted,
+      signals_inserted: matchingResult.signals_inserted,
+    };
+    });
+
+    if (result?.skipped) console.log('[pca] preparação não iniciada: outra sincronização possui o lock');
+    return result;
+  })();
+
+  return finishPcaBootstrapState(work);
+};
+
+const finishPcaBootstrapState = async (promise) => {
+  try {
+    return await promise;
+  } catch (error) {
+    pcaBootstrapState.error = error.message;
+    console.error('[pca] bootstrap error:', error);
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE}
+          SET bootstrap_concluido = FALSE,
+              bootstrap_finished_at = NOW(),
+              bootstrap_error = $1
+        WHERE id = 1`,
+      [error.message.slice(0, 2000)]
+    ).catch((stateError) => console.warn('[pca] falha ao persistir erro do bootstrap:', stateError.message));
+    throw error;
   } finally {
     pcaBootstrapState.running = false;
     pcaBootstrapState.finishedAt = new Date().toISOString();
     pcaBootstrapState.mes_atual = null;
   }
-  return {
-    ano: targetAno,
-    planos_upserted: pcaBootstrapState.planos_upserted,
-    itens_upserted: pcaBootstrapState.itens_upserted,
-  };
 };
 
-const runPcaWatchlistMatching = async () => {
+const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
+  const params = [];
+  let where = 'ativo = TRUE';
+  if (watchlistId) {
+    params.push(watchlistId);
+    where += ` AND id = $${params.length}`;
+  }
   const { rows: watches } = await pool.query(
-    `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE ativo = TRUE`
+    `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE ${where}`,
+    params
   );
   let inserted = 0;
   for (const watch of watches) {
@@ -8058,9 +9439,75 @@ const runPcaWatchlistMatching = async () => {
   return { signals_inserted: inserted, notifications };
 };
 
+// Serializa matching global e matching direcionado (criação/reativação de regra)
+// para que duas varreduras caras não disputem o banco no mesmo processo.
+let pcaWatchlistMatchingQueue = Promise.resolve();
+const runPcaWatchlistMatching = (options = {}) => {
+  const job = pcaWatchlistMatchingQueue.then(() => executePcaWatchlistMatching(options));
+  pcaWatchlistMatchingQueue = job.catch(() => {});
+  return job;
+};
+
+let pcaBootstrapCheckRunning = false;
+const ensurePcaBootstrap = async () => {
+  if (pcaBootstrapState.running || pcaBootstrapCheckRunning) {
+    return { started: false, reason: 'already_running' };
+  }
+  pcaBootstrapCheckRunning = true;
+  try {
+    const [{ rows: stateRows }, { rows: countRows }] = await Promise.all([
+      pool.query(
+        `SELECT bootstrap_concluido, bootstrap_started_at, bootstrap_finished_at, bootstrap_error
+           FROM ${PCA_SYNC_STATE_TABLE}
+          WHERE id = 1`
+      ),
+      pool.query(`SELECT COUNT(*)::int AS total FROM ${PCA_PLANOS_TABLE}`),
+    ]);
+    const state = stateRows[0] || {};
+    const totalPlanos = Number(countRows[0]?.total) || 0;
+    const interrupted = Boolean(state.bootstrap_started_at && !state.bootstrap_finished_at);
+    // Falha concluída com dados parciais não pode reprocessar milhões de itens a
+    // cada 30 minutos. O delta diário cobre novidades; retry integral automático
+    // fica restrito a base vazia ou execução interrompida por restart.
+    const shouldStart = !state.bootstrap_concluido && (totalPlanos === 0 || interrupted);
+
+    if (!shouldStart) {
+      return { started: false, reason: state.bootstrap_concluido ? 'complete' : 'existing_data' };
+    }
+
+    console.log('[pca] iniciando preparação automática da base');
+    runPcaBootstrap(new Date().getFullYear()).catch((error) => {
+      console.error('[pca] preparação automática falhou:', error.message);
+    });
+    return { started: true };
+  } finally {
+    pcaBootstrapCheckRunning = false;
+  }
+};
+
+const catchUpPcaSyncIfStale = async () => {
+  if (pcaBootstrapState.running) return { started: false, reason: 'bootstrap_running' };
+  const { rows } = await pool.query(
+    `SELECT bootstrap_concluido,
+            (ultimo_sync IS NULL OR ultimo_sync::date < CURRENT_DATE) AS stale
+       FROM ${PCA_SYNC_STATE_TABLE}
+      WHERE id = 1`
+  );
+  if (!rows[0]?.bootstrap_concluido || rows[0]?.stale !== true) {
+    return { started: false, reason: 'up_to_date_or_not_initialized' };
+  }
+  console.log('[pca] sincronização atrasada detectada; iniciando catch-up');
+  const result = await runPcaDailySync();
+  console.log('[pca] catch-up concluído:', result);
+  return { started: !result?.skipped, result };
+};
+
 // ============ ENDPOINTS PCA ============
 
-app.post('/api/licitacoes/pca/sync', async (req, res) => {
+app.post('/api/licitacoes/pca/sync', requireAdmin, async (req, res) => {
+  if (pcaBootstrapState.running) {
+    return res.status(409).json({ error: 'A base PCA já está sendo preparada.' });
+  }
   try {
     const { dataInicio, dataFim } = req.body || {};
     const result = await runPcaDailySync({ dataInicio, dataFim });
@@ -8071,7 +9518,7 @@ app.post('/api/licitacoes/pca/sync', async (req, res) => {
   }
 });
 
-app.post('/api/licitacoes/pca/bootstrap', async (req, res) => {
+app.post('/api/licitacoes/pca/bootstrap', requireAdmin, async (req, res) => {
   if (pcaBootstrapState.running) {
     return res.status(409).json({
       error: 'Bootstrap já em andamento',
@@ -8079,6 +9526,9 @@ app.post('/api/licitacoes/pca/bootstrap', async (req, res) => {
     });
   }
   const ano = toIntOrNull(req.body?.ano) || new Date().getFullYear();
+  if (ano !== new Date().getFullYear()) {
+    return res.status(400).json({ error: 'A preparação inicial usa somente o ano corrente.' });
+  }
   // Dispara em background — cliente recebe 202 imediato e faz polling em /status.
   runPcaBootstrap(ano).catch(err => console.error('[pca] bootstrap async error:', err));
   res.status(202).json({
@@ -8088,24 +9538,48 @@ app.post('/api/licitacoes/pca/bootstrap', async (req, res) => {
   });
 });
 
-app.post('/api/licitacoes/pca/reset', async (_req, res) => {
+app.post('/api/licitacoes/pca/reset', requireAdmin, async (_req, res) => {
   if (pcaBootstrapState.running) {
     return res.status(409).json({ error: 'Bootstrap em andamento — aguarde ou reinicie o backend.' });
   }
   try {
-    await pool.query(`TRUNCATE ${PCA_PLANOS_TABLE} RESTART IDENTITY CASCADE`);
-    await pool.query(
-      `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_data_fim = NULL, bootstrap_concluido = FALSE WHERE id = 1`
-    );
+    const resetResult = await withPcaSyncLock(async (client) => {
+      await client.query('BEGIN');
+      try {
+        await client.query(`TRUNCATE ${PCA_PLANOS_TABLE} RESTART IDENTITY CASCADE`);
+        await client.query(
+          `UPDATE ${PCA_SYNC_STATE_TABLE}
+              SET ultimo_sync = NULL,
+                  ultimo_data_fim = NULL,
+                  bootstrap_concluido = FALSE,
+                  bootstrap_started_at = NULL,
+                  bootstrap_finished_at = NULL,
+                  bootstrap_error = NULL
+            WHERE id = 1`
+        );
+        await client.query('COMMIT');
+        return { ok: true };
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      }
+    });
+    if (resetResult?.skipped) {
+      return res.status(409).json({ error: 'Há uma sincronização PCA em andamento.' });
+    }
     pcaBootstrapState.running = false;
     pcaBootstrapState.startedAt = null;
     pcaBootstrapState.finishedAt = null;
     pcaBootstrapState.ano = null;
     pcaBootstrapState.mes_atual = null;
+    pcaBootstrapState.mes_total = null;
     pcaBootstrapState.planos_upserted = 0;
     pcaBootstrapState.itens_upserted = 0;
     pcaBootstrapState.error = null;
-    res.json({ ok: true, message: 'pca_planos / pca_itens / pca_signals esvaziados.' });
+    res.json({ ok: true, message: 'Base PCA esvaziada. A reconstrução automática será iniciada.' });
+    setImmediate(() => ensurePcaBootstrap().catch((error) => {
+      console.error('[pca] falha ao iniciar reconstrução após reset:', error.message);
+    }));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -8113,16 +9587,36 @@ app.post('/api/licitacoes/pca/reset', async (_req, res) => {
 
 app.get('/api/licitacoes/pca/bootstrap/status', async (_req, res) => {
   try {
-    const { rows: planoCount } = await pool.query(
-      `SELECT COUNT(*)::int AS planos, COALESCE(SUM(quantidade_itens),0)::int AS itens FROM ${PCA_PLANOS_TABLE}`
+    const { planoCount, syncRows } = await withPcaReadTimeout(async (client) => {
+      const { rows: counts } = await client.query(
+        `SELECT COUNT(*)::int AS planos, COALESCE(SUM(quantidade_itens),0)::int AS itens FROM ${PCA_PLANOS_TABLE}`
+      );
+      // Sinal persistente: o estado em memória zera em cada restart.
+      const { rows: sync } = await client.query(
+        `SELECT bootstrap_concluido, ultimo_sync, ultimo_data_fim,
+                bootstrap_started_at, bootstrap_finished_at, bootstrap_error
+           FROM ${PCA_SYNC_STATE_TABLE}
+          WHERE id = 1`
+      );
+      return { planoCount: counts, syncRows: sync };
+    });
+    const persistentRunning = Boolean(
+      syncRows[0]?.bootstrap_started_at && !syncRows[0]?.bootstrap_finished_at
     );
     res.json({
       ...pcaBootstrapState,
+      running: pcaBootstrapState.running || persistentRunning,
+      bootstrap_concluido: syncRows[0]?.bootstrap_concluido === true,
+      ultimo_sync: syncRows[0]?.ultimo_sync || null,
+      ultimo_data_fim: syncRows[0]?.ultimo_data_fim || null,
+      bootstrap_started_at: syncRows[0]?.bootstrap_started_at || null,
+      bootstrap_finished_at: syncRows[0]?.bootstrap_finished_at || null,
+      error: pcaBootstrapState.error || syncRows[0]?.bootstrap_error || null,
       total_planos_db: planoCount[0]?.planos || 0,
       total_itens_db: planoCount[0]?.itens || 0,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    pcaReadErrorResponse(res, error, 'Erro ao consultar o estado da base PCA');
   }
 });
 
@@ -8191,51 +9685,75 @@ app.get('/api/licitacoes/pca/planos/:id', async (req, res) => {
 app.get('/api/licitacoes/pca/signals', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    const status = req.query.status || 'novo';
+    const status = ['novo', 'visto', 'promovido', 'descartado'].includes(req.query.status)
+      ? req.query.status
+      : 'novo';
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const requestedOffset = Number.parseInt(req.query.offset, 10);
-    const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 1000, 1), 2000);
+    const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 200, 1), 500);
     const offset = Math.max(Number.isFinite(requestedOffset) ? requestedOffset : 0, 0);
     const params = [accountId, status, limit, offset];
-    const { rows } = await pool.query(
-      `
+    const { pageResult, countResult } = await withPcaReadTimeout(async (client) => {
+      const page = await client.query(
+        `
+        WITH paged AS MATERIALIZED (
+          SELECT s.*
+          FROM ${PCA_SIGNALS_TABLE} s
+          WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+          ORDER BY s.criado_em DESC, s.id DESC
+          LIMIT $3 OFFSET $4
+        )
         SELECT s.*, i.descricao, i.valor_total, i.mes_previsto, i.numero_item,
                i.quantidade, i.unidade_medida, i.futura_contratacao_id, i.futura_contratacao_nome,
                p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social, p.codigo_unidade, p.unidade_nome, p.ano_pca,
-               p.responsaveis, p.contatos, w.nome AS watchlist_nome,
-               COUNT(*) OVER()::int AS total_count,
-               COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
-        FROM ${PCA_SIGNALS_TABLE} s
+               p.responsaveis, p.contatos, w.nome AS watchlist_nome
+        FROM paged s
         JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
         JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
         LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
-        WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
         ORDER BY w.nome ASC NULLS LAST, p.orgao_razao_social ASC NULLS LAST, p.ano_pca DESC,
                  p.id ASC, i.valor_total DESC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
-        LIMIT $3 OFFSET $4
-      `, params
+        `,
+        params
+      );
+      const counts = await client.query(
+        `
+          SELECT watchlist_id, COUNT(*)::int AS total
+          FROM ${PCA_SIGNALS_TABLE}
+          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL
+          GROUP BY watchlist_id
+        `,
+        [accountId, status]
+      );
+      return { pageResult: page, countResult: counts };
+    });
+    const countsByWatchlist = new Map(
+      countResult.rows.map((row) => [String(row.watchlist_id), Number(row.total) || 0])
     );
-    const total = Number(rows[0]?.total_count) || 0;
-    const data = rows.map(({ total_count, ...row }) => row);
+    const total = countResult.rows.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+    const data = pageResult.rows.map((row) => ({
+      ...row,
+      watchlist_total_count: countsByWatchlist.get(String(row.watchlist_id)) || 0,
+    }));
     res.json({ data, total, limit, offset, has_more: offset + data.length < total });
   } catch (error) {
     console.error('Error listing PCA signals:', error);
-    res.status(500).json({ error: 'Erro ao listar signals' });
+    pcaReadErrorResponse(res, error, 'Erro ao listar sinais PCA');
   }
 });
 
 app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    const { rows } = await pool.query(
-      `
-        SELECT status, COUNT(*)::int AS total
-        FROM ${PCA_SIGNALS_TABLE}
-        WHERE account_id = $1 AND watchlist_id IS NOT NULL
-        GROUP BY status
-      `,
-      [accountId]
-    );
+    const { rows } = await withPcaReadTimeout((client) => client.query(
+        `
+          SELECT status, COUNT(*)::int AS total
+          FROM ${PCA_SIGNALS_TABLE}
+          WHERE account_id = $1 AND watchlist_id IS NOT NULL
+          GROUP BY status
+        `,
+        [accountId]
+      ));
 
     const base = { novo: 0, visto: 0, promovido: 0, descartado: 0 };
     for (const row of rows) {
@@ -8246,7 +9764,7 @@ app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
     res.json(base);
   } catch (error) {
     console.error('Error counting PCA signals:', error);
-    res.status(500).json({ error: 'Erro ao contar signals' });
+    pcaReadErrorResponse(res, error, 'Erro ao contar sinais PCA');
   }
 });
 
@@ -8792,13 +10310,13 @@ app.post('/api/licitacoes/pca/signals/batch', async (req, res) => {
 app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    const { rows } = await pool.query(
-      `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
-      [accountId]
-    );
+    const { rows } = await withPcaReadTimeout((client) => client.query(
+        `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
+        [accountId]
+      ));
     res.json(rows);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao listar watchlist', details: error.message });
+    pcaReadErrorResponse(res, error, 'Erro ao listar watchlists PCA');
   }
 });
 
@@ -8828,7 +10346,13 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
        normalizeWatchlistPhone(b.whatsapp_number),
        b.ativo !== false]
     );
-    res.json(rows[0]);
+    const created = rows[0];
+    res.status(201).json(created);
+    if (created?.ativo && !pcaBootstrapState.running) {
+      setImmediate(() => runPcaWatchlistMatching({ watchlistId: created.id }).catch((error) => {
+        console.error(`[pca] matching inicial da watchlist ${created.id} falhou:`, error.message);
+      }));
+    }
   } catch (error) {
     res.status(500).json({ error: 'Erro ao criar watchlist', details: error.message });
   }
@@ -8871,7 +10395,16 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
        id, accountId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'não encontrado' });
-    res.json(rows[0]);
+    const updated = rows[0];
+    res.json(updated);
+    const matchingRelevant = ['ativo', 'palavras_chave', 'termos_negativos', 'usar_ia',
+      'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros']
+      .some((key) => Object.prototype.hasOwnProperty.call(b, key));
+    if (updated.ativo && matchingRelevant && !pcaBootstrapState.running) {
+      setImmediate(() => runPcaWatchlistMatching({ watchlistId: updated.id }).catch((error) => {
+        console.error(`[pca] rematching da watchlist ${updated.id} falhou:`, error.message);
+      }));
+    }
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar watchlist', details: error.message });
   }
@@ -8950,7 +10483,7 @@ app.put('/api/contacts/:id', async (req, res) => {
 
     try {
         const { rows } = await pool.query(
-            'SELECT custom_attributes, account_id FROM contacts WHERE id = $1',
+            'SELECT name, email, custom_attributes, account_id FROM contacts WHERE id = $1',
             [id]
         );
 
@@ -8968,9 +10501,9 @@ app.put('/api/contacts/:id', async (req, res) => {
 
         if (Funil_Vendas && previousStage !== Funil_Vendas) {
           await pool.query(
-            `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source)
-             VALUES ($1, $2, $3, $4, NOW(), 'kanban')`,
-            [id, rows[0].account_id, previousStage, Funil_Vendas]
+            `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id, actor_name)
+             VALUES ($1, $2, $3, $4, NOW(), 'kanban', $5, $6)`,
+            [id, rows[0].account_id, previousStage, Funil_Vendas, req.auth?.uid || null, req.auth?.name || req.auth?.sub || 'Usuario do painel']
           );
         }
 
@@ -9612,6 +11145,781 @@ app.get('/api/leads/cnae/search', async (req, res) => {
   });
 
   res.json({ results: unique, total: unique.length, source: 'conecta_cnae' });
+});
+
+// ============================================================
+// GOOGLE TRENDS → INTEL DE PROSPECÇÃO (Busca Lead B2B)
+// Fonte gratuita: RSS diário do Google Trends (geo=BR).
+// Cron diário + cache em Postgres. IA (OpenAI/Groq/OpenRouter)
+// transforma trends em filtros RFB (CNAE, UF, porte, idade…).
+// ============================================================
+
+const TRENDS_RSS_URL = process.env.TRENDS_RSS_URL || 'https://trends.google.com/trending/rss?geo=BR';
+const TRENDS_GEO = process.env.TRENDS_GEO || 'BR';
+const AERION_PRODUCT_CONTEXT = `
+Produtos Aerion (drones enterprise Autel e ecossistema):
+- Autel EVO Lite Enterprise (640T/6K): inspeção ágil, segurança, mapeamento leve
+- Autel EVO Max V2 (4T/4N): operações complexas, térmica, anti-interferência
+- Autel Alpha: industrial IP55, zoom 35x, longo alcance, missões críticas
+- EVO Nest + Autel Mapper: operação remota automatizada e processamento 2D/3D
+
+ICPs prioritários:
+1) Construção/topografia urbana — construtoras, topografia, geodesia
+2) Inspeção industrial e energia — concessionárias, solar/eólica, manutenção de ativos
+3) Segurança pública e defesa civil — PM, PC, PRF, segurança privada
+4) Resgate, emergências e meio ambiente — bombeiros, defesa civil, ONGs ambientais
+Modelo de canal: revendas/integradores; não concorre em serviço final; licitações com parceiro.
+`.trim();
+
+let trendsIntelMemory = null; // { dayKey, payload, updatedAt }
+let trendsIntelRefreshRunning = false;
+
+const brDayKey = (date = new Date()) => {
+  // America/Sao_Paulo as YYYY-MM-DD without external deps
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(date);
+};
+
+const decodeXmlEntities = (value = '') => String(value)
+  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+  .replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'")
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&amp;/g, '&')
+  .trim();
+
+const extractXmlTag = (block, tag) => {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i');
+  const m = block.match(re);
+  return m ? decodeXmlEntities(m[1]) : '';
+};
+
+const parseGoogleTrendsRss = (xml = '') => {
+  const items = [];
+  const itemBlocks = String(xml).match(/<item>[\s\S]*?<\/item>/gi) || [];
+  for (const block of itemBlocks) {
+    const title = extractXmlTag(block, 'title');
+    if (!title) continue;
+    const traffic = extractXmlTag(block, 'ht:approx_traffic') || extractXmlTag(block, 'approx_traffic');
+    const pubDate = extractXmlTag(block, 'pubDate');
+    const picture = extractXmlTag(block, 'ht:picture') || extractXmlTag(block, 'picture');
+    const newsBlocks = block.match(/<ht:news_item>[\s\S]*?<\/ht:news_item>/gi) || [];
+    const news = newsBlocks.slice(0, 3).map((nb) => ({
+      title: extractXmlTag(nb, 'ht:news_item_title') || extractXmlTag(nb, 'news_item_title'),
+      source: extractXmlTag(nb, 'ht:news_item_source') || extractXmlTag(nb, 'news_item_source'),
+      url: extractXmlTag(nb, 'ht:news_item_url') || extractXmlTag(nb, 'news_item_url'),
+    })).filter((n) => n.title);
+    items.push({
+      title,
+      traffic: traffic || null,
+      pubDate: pubDate || null,
+      picture: picture || null,
+      news,
+    });
+  }
+  return items;
+};
+
+const fetchGoogleTrendsDaily = async () => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(TRENDS_RSS_URL, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AerionSalesCommand/1.0; +https://aerion.com.br)',
+        Accept: 'application/rss+xml, application/xml, text/xml, */*',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`Google Trends RSS HTTP ${res.status}`);
+    }
+    const xml = await res.text();
+    const trends = parseGoogleTrendsRss(xml);
+    if (!trends.length) {
+      throw new Error('RSS de trends vazio ou ilegível');
+    }
+    return {
+      geo: TRENDS_GEO,
+      source: 'google_trends_rss',
+      fetchedAt: new Date().toISOString(),
+      trends,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const getAiChatProviders = () => {
+  const providers = [];
+  if (OPENAI_API_KEY) {
+    providers.push({
+      name: 'openai',
+      url: 'https://api.openai.com/v1/chat/completions',
+      key: OPENAI_API_KEY,
+      model: OPENAI_AI_MODEL,
+    });
+  }
+  if (GROQ_API_KEY) {
+    providers.push({
+      name: 'groq',
+      url: 'https://api.groq.com/openai/v1/chat/completions',
+      key: GROQ_API_KEY,
+      model: GROQ_AI_MODEL,
+    });
+  }
+  if (OPENROUTER_API_KEY) {
+    providers.push({
+      name: 'openrouter',
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      key: OPENROUTER_API_KEY,
+      model: OPENROUTER_AI_MODEL,
+      headers: {
+        'HTTP-Referer': 'https://sales.aerion.com.br',
+        'X-Title': 'Aerion Sales Command',
+      },
+    });
+  }
+  return providers;
+};
+
+const chatCompletionJson = async ({ system, user, maxTokens = 2200, temperature = 0.25 }) => {
+  const providers = getAiChatProviders();
+  if (!providers.length) {
+    return { ok: false, error: 'Nenhuma IA configurada (OPENAI_API_KEY, GROQ_API_KEY ou OPENROUTER_API_KEY).' };
+  }
+  const errors = [];
+  for (const provider of providers) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    try {
+      const res = await fetch(provider.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${provider.key}`,
+          ...(provider.headers || {}),
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature,
+          max_tokens: maxTokens,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        errors.push(`${provider.name}:${res.status} ${errText.slice(0, 160)}`);
+        continue;
+      }
+      const data = await res.json();
+      const content = data.choices?.[0]?.message?.content || '';
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        errors.push(`${provider.name}:JSON inválido`);
+        continue;
+      }
+      return {
+        ok: true,
+        data: JSON.parse(jsonMatch[0]),
+        provider: provider.name,
+        model: provider.model,
+      };
+    } catch (err) {
+      errors.push(`${provider.name}:${err.name === 'AbortError' ? 'timeout' : err.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return { ok: false, error: errors.join(' | ') || 'Falha em todos os providers de IA' };
+};
+
+const normalizePorteCode = (value) => {
+  const v = String(value || '').trim();
+  if (['00', '01', '03', '05'].includes(v)) return v;
+  const lower = v.toLowerCase();
+  if (/micro/.test(lower)) return '01';
+  if (/pequeno|epp/.test(lower)) return '03';
+  if (/demais|grande|medio|médio/.test(lower)) return '05';
+  return '';
+};
+
+const resolveCnaeCodes = async (rawCodes = [], rawLabels = []) => {
+  const list = await getCNAEList().catch(() => []);
+  const byCode = new Map(list.map((c) => [String(c.codigo).replace(/\D/g, ''), c]));
+  const resolved = [];
+  const seen = new Set();
+
+  const pushCode = (raw, descHint = '') => {
+    if (!raw) return;
+    const digits = String(raw).replace(/\D/g, '');
+    if (!digits || seen.has(digits)) return;
+    // exact / prefix match on RFB list
+    let hit = byCode.get(digits)
+      || list.find((c) => String(c.codigo).replace(/\D/g, '').startsWith(digits.slice(0, 5)))
+      || list.find((c) => digits.startsWith(String(c.codigo).replace(/\D/g, '').slice(0, 5)));
+    if (!hit && descHint) {
+      const q = stripAccents(descHint).toLowerCase();
+      const words = q.split(/\s+/).filter((w) => w.length > 3).slice(0, 4);
+      if (words.length) {
+        hit = list.find((c) => {
+          const d = stripAccents(c.descricao).toLowerCase();
+          return words.every((w) => d.includes(w));
+        });
+      }
+    }
+    if (hit) {
+      seen.add(String(hit.codigo).replace(/\D/g, ''));
+      resolved.push({ codigo: hit.codigo, descricao: hit.descricao });
+    } else if (raw) {
+      // keep AI suggestion even if not in local table yet
+      const pretty = String(raw).trim();
+      if (!seen.has(pretty)) {
+        seen.add(pretty);
+        resolved.push({ codigo: pretty, descricao: descHint || pretty });
+      }
+    }
+  };
+
+  for (const label of rawLabels) {
+    if (typeof label === 'string') pushCode(label, label);
+    else if (label && typeof label === 'object') pushCode(label.codigo || label.code, label.descricao || label.desc || '');
+  }
+  for (const code of rawCodes) pushCode(code);
+
+  return resolved.slice(0, 12);
+};
+
+// Tokens geográficos BR para validar UF só com evidência no texto dos trends (não na “imaginação” da IA).
+// Impede erros tipo "Bavi" → Bahia por semelhança fonética.
+const BR_UF_GEO_ALIASES = {
+  AC: ['acre', 'rio branco'],
+  AL: ['alagoas', 'maceio', 'maceió'],
+  AP: ['amapa', 'amapá', 'macapa', 'macapá'],
+  AM: ['amazonas', 'manaus'],
+  BA: ['bahia', 'salvador', 'feira de santana'],
+  CE: ['ceara', 'ceará', 'fortaleza'],
+  DF: ['distrito federal', 'brasilia', 'brasília'],
+  ES: ['espirito santo', 'espírito santo', 'vitoria', 'vitória'],
+  GO: ['goias', 'goiás', 'goiania', 'goiânia'],
+  MA: ['maranhao', 'maranhão', 'sao luis', 'são luís'],
+  MT: ['mato grosso', 'cuiaba', 'cuiabá'],
+  MS: ['mato grosso do sul', 'campo grande'],
+  MG: ['minas gerais', 'belo horizonte', 'uberlandia', 'uberlândia'],
+  PA: ['para ', ' pará', 'belem', 'belém'], // "para" is noisy; rely more on belem
+  PB: ['paraiba', 'paraíba', 'joao pessoa', 'joão pessoa'],
+  PR: ['parana', 'paraná', 'curitiba', 'londrina'],
+  PE: ['pernambuco', 'recife', 'olinda'],
+  PI: ['piaui', 'piauí', 'teresina'],
+  RJ: ['rio de janeiro', 'niteroi', 'niterói'],
+  RN: ['rio grande do norte', 'natal'],
+  RS: ['rio grande do sul', 'porto alegre'],
+  RO: ['rondonia', 'rondônia', 'porto velho'],
+  RR: ['roraima', 'boa vista'],
+  SC: ['santa catarina', 'florianopolis', 'florianópolis', 'joinville'],
+  SP: ['sao paulo', 'são paulo', 'campinas', 'santos', 'guarulhos'],
+  SE: ['sergipe', 'aracaju'],
+  TO: ['tocantins', 'palmas'],
+};
+
+const buildTrendsGeoCorpus = (trends = []) => {
+  const parts = [];
+  for (const t of trends) {
+    if (t?.title) parts.push(String(t.title));
+    for (const n of t?.news || []) {
+      if (n?.title) parts.push(String(n.title));
+      if (n?.source) parts.push(String(n.source));
+    }
+  }
+  return stripAccents(parts.join(' \n ')).toLowerCase();
+};
+
+/** UF só se o corpus dos trends citar estado/cidade de forma explícita — nunca por rima/substring do título. */
+const ufHasGeographicEvidence = (uf, corpus) => {
+  const code = String(uf || '').toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code) || !corpus) return false;
+  const aliases = BR_UF_GEO_ALIASES[code] || [];
+  for (const alias of aliases) {
+    const a = stripAccents(alias).toLowerCase().trim();
+    if (!a) continue;
+    if (a.length <= 3) {
+      // short tokens need word-ish boundaries
+      const re = new RegExp(`(^|[^a-z0-9])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`);
+      if (re.test(corpus)) return true;
+    } else if (corpus.includes(a)) {
+      return true;
+    }
+  }
+  // Sigla UF como token isolado (não casa "ba" dentro de "bavi")
+  const codeRe = new RegExp(`(^|[^a-z0-9])${code.toLowerCase()}([^a-z0-9]|$)`);
+  return codeRe.test(corpus);
+};
+
+const sanitizeUfAgainstTrends = (uf, corpus) => {
+  const code = String(uf || '').trim().toUpperCase();
+  if (!code) return { uf: '', grounded: true, stripped: false };
+  // SOMENTE evidência no corpus dos trends (título + manchetes). geo_basis da IA NÃO conta.
+  if (ufHasGeographicEvidence(code, corpus)) {
+    return { uf: code, grounded: true, stripped: false };
+  }
+  return { uf: '', grounded: false, stripped: true };
+};
+
+/** Remove localidades inventadas no texto quando a UF foi invalidada. */
+const scrubInventedGeographyText = (text = '') => {
+  let out = String(text || '');
+  // estados e macrorregiões BR (sem base nos trends → não devem aparecer na sugestão)
+  out = out.replace(
+    /\b(em|no|na|do|da|dos|das|pelo|pela)?\s*(estado d[oa]\s+)?(acre|alagoas|amapa|amapá|amazonas|bahia|ceara|ceará|distrito federal|espirito santo|espírito santo|goias|goiás|maranhao|maranhão|mato grosso do sul|mato grosso|minas gerais|paraiba|paraíba|parana|paraná|pernambuco|piaui|piauí|rio de janeiro|rio grande do norte|rio grande do sul|rondonia|rondônia|roraima|santa catarina|sao paulo|são paulo|sergipe|tocantins|para|pará)\b/gi,
+    ''
+  );
+  out = out.replace(
+    /\b(regi[oõ]es?\s+)?(norte|nordeste|sudeste|sul|centro[- ]oeste)(\s+e\s+(norte|nordeste|sudeste|sul|centro[- ]oeste))?\b/gi,
+    ''
+  );
+  out = out.replace(
+    /\b(UF\s*)?(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b/g,
+    ''
+  );
+  out = out.replace(/\s{2,}/g, ' ').replace(/\s+([,.;:!?])/g, '$1').trim();
+  return out;
+};
+
+const normalizeIntelSuggestions = async (rawIntel = {}, trendsPayload = {}) => {
+  const suggestionsIn = Array.isArray(rawIntel.suggestions) ? rawIntel.suggestions : [];
+  const geoCorpus = buildTrendsGeoCorpus(trendsPayload.trends || []);
+  const suggestions = [];
+  for (const s of suggestionsIn.slice(0, 6)) {
+    const filtersIn = s.filters || s.filter || {};
+    const cnaeResolved = await resolveCnaeCodes(
+      filtersIn.cnae || filtersIn.cnaes || [],
+      filtersIn.cnae_labels || filtersIn.cnaeLabels || s.cnaes || []
+    );
+    const ufsRaw = []
+      .concat(filtersIn.uf || filtersIn.ufs || [])
+      .flatMap((u) => String(u).split(/[,\s]+/))
+      .map((u) => u.trim().toUpperCase())
+      .filter((u) => /^[A-Z]{2}$/.test(u));
+    // Also catch "Bahia" written as full name in uf field
+    const ufNameHints = String(filtersIn.uf || filtersIn.estado || s.title || s.company_profile || '');
+    // no-op: only 2-letter codes enter filters
+    const geoBasis = s.geo_basis || s.geoBasis || s.geographic_evidence || '';
+    const groundedUfs = [];
+    let strippedAnyUf = false;
+    for (const code of ufsRaw) {
+      const check = sanitizeUfAgainstTrends(code, geoCorpus);
+      if (check.uf) groundedUfs.push(check.uf);
+      if (check.stripped) strippedAnyUf = true;
+    }
+    // If AI left uf empty but put "Bahia"/"Nordeste" only in title/profile without evidence → scrub text
+    const titleRaw = String(s.title || s.nome || 'Sugestão de prospecção');
+    const profileRaw = String(s.company_profile || s.perfil || '');
+    const inventedGeoInCopy = (() => {
+      const blob = stripAccents(`${titleRaw} ${profileRaw} ${s.rationale || ''}`);
+      // macrorregião or state name without corpus evidence
+      const regions = ['nordeste', 'sudeste', 'norte', 'centro oeste', 'centro-oeste', 'sul'];
+      if (regions.some((r) => blob.includes(r) && !geoCorpus.includes(r))) return true;
+      for (const [code, aliases] of Object.entries(BR_UF_GEO_ALIASES)) {
+        for (const alias of aliases) {
+          const a = stripAccents(alias).toLowerCase().trim();
+          if (a.length < 4) continue;
+          if (blob.includes(a) && !geoCorpus.includes(a) && !ufHasGeographicEvidence(code, geoCorpus)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    })();
+    const uf = groundedUfs[0] || '';
+    const mustScrubGeo = strippedAnyUf || (uf === '' && inventedGeoInCopy);
+    let title = titleRaw.slice(0, 120);
+    let companyProfile = profileRaw.slice(0, 200);
+    let rationale = String(s.rationale || s.motivo || s.why || '').slice(0, 500);
+    if (mustScrubGeo) {
+      title = scrubInventedGeographyText(title) || titleRaw.slice(0, 120);
+      companyProfile = scrubInventedGeographyText(companyProfile);
+      rationale = scrubInventedGeographyText(rationale);
+      const note = 'Localidade removida: só usamos UF/região se o trend ou manchete citar explicitamente o lugar no Brasil (ex.: Bavi ≠ Bahia).';
+      rationale = rationale ? `${rationale} ${note}` : note;
+      rationale = rationale.slice(0, 560);
+    }
+    void ufNameHints;
+    void geoBasis;
+    const capitalMin = Number(filtersIn.capital_min ?? filtersIn.capitalMin ?? 0) || 0;
+    const capitalMax = Number(filtersIn.capital_max ?? filtersIn.capitalMax ?? 0) || 0;
+    const aberturaMin = Number(filtersIn.abertura_min_anos ?? filtersIn.aberturaMinAnos ?? filtersIn.age_min ?? 0) || 0;
+    const aberturaMax = Number(filtersIn.abertura_max_anos ?? filtersIn.aberturaMaxAnos ?? filtersIn.age_max ?? 0) || 0;
+    suggestions.push({
+      title: (mustScrubGeo ? title : titleRaw).slice(0, 120) || 'Sugestão de prospecção',
+      rationale,
+      related_trends: (s.related_trends || s.trends || s.relatedTrends || []).map(String).slice(0, 6),
+      priority: ['alta', 'media', 'baixa'].includes(String(s.priority || '').toLowerCase())
+        ? String(s.priority).toLowerCase()
+        : 'media',
+      company_profile: companyProfile,
+      product_fit: String(s.product_fit || s.produto || '').slice(0, 200),
+      geo_basis: mustScrubGeo ? '' : String(geoBasis || '').slice(0, 200),
+      geo_grounded: Boolean(uf),
+      filters: {
+        uf,
+        ufs: groundedUfs.slice(0, 5),
+        cnae: cnaeResolved.map((c) => c.codigo),
+        cnae_labels: cnaeResolved,
+        porte: normalizePorteCode(filtersIn.porte),
+        capital_min: capitalMin,
+        capital_max: capitalMax,
+        abertura_min_anos: aberturaMin,
+        abertura_max_anos: aberturaMax,
+        situacao: Array.isArray(filtersIn.situacao) && filtersIn.situacao.length
+          ? filtersIn.situacao.map(String)
+          : ['2'],
+        nome: String(filtersIn.nome || filtersIn.razao || '').slice(0, 80),
+        only_matriz: filtersIn.only_matriz !== false && filtersIn.onlyMatriz !== false,
+        mei: filtersIn.mei === 'S' || filtersIn.mei === true ? 'S' : (filtersIn.mei === 'N' ? 'N' : ''),
+        simples: filtersIn.simples === 'S' || filtersIn.simples === true ? 'S' : (filtersIn.simples === 'N' ? 'N' : ''),
+      },
+    });
+  }
+  return {
+    summary: String(rawIntel.summary || rawIntel.resumo || '').slice(0, 600),
+    opportunity_day: String(rawIntel.opportunity_day || rawIntel.tema_do_dia || '').slice(0, 300),
+    suggestions,
+    trends_count: (trendsPayload.trends || []).length,
+    trends_geo: TRENDS_GEO,
+  };
+};
+
+const buildTrendsIntelWithAI = async (trendsPayload) => {
+  const trendsForPrompt = (trendsPayload.trends || []).slice(0, 15).map((t, i) => ({
+    rank: i + 1,
+    title: t.title,
+    traffic: t.traffic,
+    headlines: (t.news || []).map((n) => n.title).filter(Boolean).slice(0, 2),
+  }));
+
+  const system = `Você é estrategista de prospecção B2B da Aerion Technologies (drones enterprise Autel no Brasil).
+${AERION_PRODUCT_CONTEXT}
+
+Fonte dos dados: Google Trends com geo=BR — isto significa o que PESSOAS NO BRASIL estão buscando agora.
+NÃO significa que o evento ocorre no Brasil. Ex.: um tufão na Ásia pode estar em alta no BR sem afetar um estado brasileiro.
+
+Sua tarefa: a partir dos trends, sugerir BUSCAS práticas na base RFB (CNPJ) de empresas que possam comprar/usar drones enterprise, integradores ou canais.
+O foco NÃO é só desastres/emergência: priorize também construção, topografia, energia, inspeção industrial, segurança pública, canais/revendas, infraestrutura, agronegócio e qualquer tema B2B ligado aos ICPs Autel.
+
+## Geografia (CRÍTICO — zero alucinação de UF)
+- Só preencha filters.uf se o TÍTULO ou as MANCHETES citarem explicitamente um estado, cidade ou região do BRASIL (ex.: "Bahia", "Salvador", "SP", "Minas Gerais").
+- geo_basis deve copiar a frase literal que justifica a UF. Sem citação → filters.uf = "" (busca nacional).
+- PROIBIDO inferir UF por semelhança fonética, rima, anagrama ou pedaço de nome:
+  - ERRADO: trend "supertufão Bavi" → UF Bahia (BA) só porque "Bavi" parece "Bahia".
+  - ERRADO: nome de pessoa/marca → estado brasileiro.
+  - CERTO: tufão internacional + tema resgate/defesa civil → CNAEs de resgate/segurança, uf:"" (nacional), rationale: demanda de drones em emergência sem fixar estado.
+- Evento internacional sem local BR: use ângulo de caso de uso (resgate, inspeção, energia) em escala nacional; NÃO invente cidade/UF.
+
+## Outras regras
+- Conecte trends a casos de uso reais (inspeção, mapeamento, segurança, energia, obras, emergência, infraestrutura).
+- Ignore fofoca/celebridade/esporte sem ângulo B2B. Se o dia for barulhento, entregue 3–5 sugestões ICP sólidas.
+- Filtros: CNAEs BR reais (0000-0/00), porte 01|03|05, capital e idade em números, situacao ["2"].
+- Varie perfis (novas/maduras/grandes). Máximo 5 sugestões, prioridade alta primeiro.
+- Responda SOMENTE JSON válido, sem markdown:
+{
+  "summary": "1-2 frases sobre o clima de busca do dia e o ângulo comercial",
+  "opportunity_day": "tema comercial do dia em uma linha",
+  "suggestions": [
+    {
+      "title": "rótulo curto da busca",
+      "rationale": "por que isso agora (liga trend → produto); se uf vazio diga que é nacional",
+      "related_trends": ["trend1"],
+      "priority": "alta|media|baixa",
+      "company_profile": "perfil sem inventar estado",
+      "product_fit": "qual linha Autel encaixa",
+      "geo_basis": "trecho literal das manchetes que cita o local BR, ou string vazia",
+      "filters": {
+        "uf": "",
+        "cnae": ["4120-4/00"],
+        "cnae_labels": [{"codigo":"4120-4/00","descricao":"..."}],
+        "porte": "05",
+        "capital_min": 500000,
+        "capital_max": 0,
+        "abertura_min_anos": 3,
+        "abertura_max_anos": 25,
+        "situacao": ["2"],
+        "nome": "",
+        "only_matriz": true,
+        "mei": "",
+        "simples": ""
+      }
+    }
+  ]
+}`;
+
+  const user = `Trends Google geo=BR (interesse de busca no Brasil) — ${brDayKey()}:
+${JSON.stringify(trendsForPrompt, null, 2)}
+
+Lembrete final: se um trend for desastre/evento no exterior, pode sugerir CNAE de resgate/defesa civil NACIONAL (uf vazio). Nunca invente UF por nome parecido (ex. Bavi ≠ Bahia).
+
+Gere o JSON de inteligência comercial.`;
+
+  const ai = await chatCompletionJson({ system, user, maxTokens: 2500, temperature: 0.2 });
+  if (!ai.ok) {
+    // Fallback determinístico se IA cair: 3 buscas ICP clássicas
+    const fallback = {
+      summary: 'IA indisponível no momento. Sugestões padrão dos ICPs Aerion com base em prospecção recorrente.',
+      opportunity_day: 'Prospecção ICP padrão (fallback)',
+      suggestions: [
+        {
+          title: 'Construtoras e topografia (SP/MG/PR)',
+          rationale: 'ICP 1 — obras e topografia recorrente; alto fit para EVO Lite / Max RTK.',
+          related_trends: [],
+          priority: 'alta',
+          company_profile: 'Construtoras e topografia com capital relevante',
+          product_fit: 'EVO Lite Enterprise / EVO Max 4T',
+          filters: {
+            uf: 'SP',
+            cnae: ['4120-4/00', '7111-1/00', '4211-1/01'],
+            porte: '05',
+            capital_min: 1000000,
+            abertura_min_anos: 2,
+            situacao: ['2'],
+            only_matriz: true,
+          },
+        },
+        {
+          title: 'Energia e inspeção de ativos',
+          rationale: 'ICP 2 — inspeção de linhas, parques e plantas industriais.',
+          related_trends: [],
+          priority: 'alta',
+          company_profile: 'Empresas de energia/manutenção com operação em área',
+          product_fit: 'Autel Alpha / EVO Max 4T',
+          filters: {
+            uf: 'MG',
+            cnae: ['3511-5/01', '3514-0/00', '7112-0/00'],
+            porte: '05',
+            capital_min: 2000000,
+            abertura_min_anos: 5,
+            situacao: ['2'],
+            only_matriz: true,
+          },
+        },
+        {
+          title: 'Segurança privada e integradores',
+          rationale: 'ICP 3/canal — segurança e integradores que operam com tecnologia de campo.',
+          related_trends: [],
+          priority: 'media',
+          company_profile: 'Segurança privada e integração de sistemas',
+          product_fit: 'Autel Alpha / EVO Max',
+          filters: {
+            uf: 'RJ',
+            cnae: ['8011-1/01', '8020-0/01', '6201-5/01'],
+            porte: '03',
+            capital_min: 200000,
+            abertura_min_anos: 1,
+            abertura_max_anos: 15,
+            situacao: ['2'],
+            only_matriz: true,
+          },
+        },
+      ],
+    };
+    const intel = await normalizeIntelSuggestions(fallback, trendsPayload);
+    return {
+      intel,
+      ai: { provider: null, model: null, fallback: true, error: ai.error },
+    };
+  }
+
+  const intel = await normalizeIntelSuggestions(ai.data, trendsPayload);
+  return {
+    intel,
+    ai: { provider: ai.provider, model: ai.model, fallback: false },
+  };
+};
+
+const createTrendsIntelTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS trends_intel_cache (
+      day_key TEXT PRIMARY KEY,
+      geo TEXT NOT NULL DEFAULT 'BR',
+      trends_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      intel_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+};
+
+const loadTrendsIntelFromDb = async (dayKey) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT day_key, geo, trends_json, intel_json, meta_json, updated_at
+       FROM trends_intel_cache WHERE day_key = $1`,
+      [dayKey]
+    );
+    if (!rows[0]) return null;
+    const row = rows[0];
+    return {
+      dayKey: row.day_key,
+      geo: row.geo,
+      trends: row.trends_json,
+      intel: row.intel_json,
+      meta: row.meta_json || {},
+      updatedAt: row.updated_at,
+    };
+  } catch (err) {
+    console.warn('[trends-intel] load db:', err.message);
+    return null;
+  }
+};
+
+const saveTrendsIntelToDb = async (payload) => {
+  try {
+    await pool.query(
+      `INSERT INTO trends_intel_cache (day_key, geo, trends_json, intel_json, meta_json, updated_at)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, NOW())
+       ON CONFLICT (day_key) DO UPDATE SET
+         trends_json = EXCLUDED.trends_json,
+         intel_json = EXCLUDED.intel_json,
+         meta_json = EXCLUDED.meta_json,
+         updated_at = NOW()`,
+      [
+        payload.dayKey,
+        payload.geo || TRENDS_GEO,
+        JSON.stringify(payload.trends || []),
+        JSON.stringify(payload.intel || {}),
+        JSON.stringify(payload.meta || {}),
+      ]
+    );
+  } catch (err) {
+    console.warn('[trends-intel] save db:', err.message);
+  }
+};
+
+const reSanitizeCachedIntel = async (intel, trends) => {
+  try {
+    return await normalizeIntelSuggestions(intel || {}, { trends: trends || [] });
+  } catch (err) {
+    console.warn('[trends-intel] re-sanitize failed:', err.message);
+    return intel;
+  }
+};
+
+const buildTrendsIntelPayload = async ({ force = false } = {}) => {
+  const dayKey = brDayKey();
+  if (!force && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
+    const mem = trendsIntelMemory.payload;
+    // Always re-apply geo sanitizer (fixes stale cache that still had BA from "Bavi", etc.)
+    const intel = await reSanitizeCachedIntel(mem.intel, mem.trends);
+    return { ...mem, intel, cached: true, cache: 'memory' };
+  }
+  if (!force) {
+    const fromDb = await loadTrendsIntelFromDb(dayKey);
+    if (fromDb) {
+      const intel = await reSanitizeCachedIntel(fromDb.intel, fromDb.trends);
+      const payload = {
+        day: fromDb.dayKey,
+        geo: fromDb.geo,
+        trends: fromDb.trends,
+        intel,
+        meta: { ...(fromDb.meta || {}), updatedAt: fromDb.updatedAt, geoSanitized: true },
+        cached: true,
+        cache: 'db',
+      };
+      trendsIntelMemory = { dayKey, payload, updatedAt: Date.now() };
+      // Persist scrubbed intel so DB doesn't keep hallucinated UFs
+      await saveTrendsIntelToDb({
+        dayKey,
+        geo: payload.geo,
+        trends: payload.trends,
+        intel: payload.intel,
+        meta: payload.meta,
+      });
+      return payload;
+    }
+  }
+
+  if (trendsIntelRefreshRunning) {
+    // Wait briefly for in-flight refresh
+    for (let i = 0; i < 40; i += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (!trendsIntelRefreshRunning && trendsIntelMemory?.dayKey === dayKey) {
+        return { ...trendsIntelMemory.payload, cached: true, cache: 'memory' };
+      }
+    }
+  }
+
+  trendsIntelRefreshRunning = true;
+  try {
+    const trendsPayload = await fetchGoogleTrendsDaily();
+    const { intel, ai } = await buildTrendsIntelWithAI(trendsPayload);
+    const payload = {
+      day: dayKey,
+      geo: trendsPayload.geo,
+      trends: trendsPayload.trends,
+      intel,
+      meta: {
+        source: trendsPayload.source,
+        fetchedAt: trendsPayload.fetchedAt,
+        ai,
+        updatedAt: new Date().toISOString(),
+      },
+      cached: false,
+      cache: 'fresh',
+    };
+    trendsIntelMemory = { dayKey, payload, updatedAt: Date.now() };
+    await saveTrendsIntelToDb({
+      dayKey,
+      geo: payload.geo,
+      trends: payload.trends,
+      intel: payload.intel,
+      meta: payload.meta,
+    });
+    console.log(`[trends-intel] refreshed day=${dayKey} trends=${payload.trends.length} suggestions=${intel.suggestions?.length || 0} ai=${ai.provider || 'fallback'}`);
+    return payload;
+  } finally {
+    trendsIntelRefreshRunning = false;
+  }
+};
+
+const runDailyTrendsIntel = async (reason = 'scheduled') => {
+  try {
+    console.log(`[trends-intel] run (${reason})`);
+    await buildTrendsIntelPayload({ force: true });
+  } catch (err) {
+    console.error(`[trends-intel] run failed (${reason}):`, err.message);
+  }
+};
+
+// GET /api/trends/intel — cache do dia (gera se faltar)
+app.get('/api/trends/intel', async (req, res) => {
+  try {
+    const force = String(req.query.refresh || '') === '1';
+    const payload = await buildTrendsIntelPayload({ force });
+    res.json(payload);
+  } catch (err) {
+    console.error('[trends-intel] GET error:', err);
+    res.status(500).json({ error: err.message || 'Falha ao obter inteligência de trends' });
+  }
+});
+
+// POST /api/trends/intel/refresh — força nova coleta + IA
+app.post('/api/trends/intel/refresh', async (req, res) => {
+  try {
+    const payload = await buildTrendsIntelPayload({ force: true });
+    res.json(payload);
+  } catch (err) {
+    console.error('[trends-intel] refresh error:', err);
+    res.status(500).json({ error: err.message || 'Falha ao atualizar trends' });
+  }
 });
 
 // ============================================================
@@ -10615,6 +12923,13 @@ app.get('/api/rfb/search', async (req, res) => {
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const positiveFilterGroupCount = [
+      nomeJoins.length,
+      cnaeJoins.length,
+      endJoins.length,
+      socioJoins.length,
+    ].filter(Boolean).length;
+    const hasCombinedHeavyFilters = positiveFilterGroupCount > 1;
 
     // Ordenação
     // Quando o CTE de nome está ativo, o conjunto já foi materializado (~29K CNPJs) →
@@ -10635,7 +12950,7 @@ app.get('/api/rfb/search', async (req, res) => {
     // Sem filtro nenhum, ORDER BY coluna não-PK ordena 49M linhas → timeout;
     // mantemos ORDER BY cnpj_basico (PK) + JS sort por página só nesse caso extremo.
     // only_matriz='0001' já está em where[] por padrão, então useSqlOrder é quase sempre true.
-    const useSqlOrder = where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0;
+    const useSqlOrder = !hasCombinedHeavyFilters && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0);
     const sqlOrderClause = useSqlOrder
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
@@ -10734,7 +13049,8 @@ app.get('/api/rfb/search', async (req, res) => {
     // Se o cliente já tem o total (paginação page>1), pula a query de count para economizar
     // ~12s em buscas filtradas (ELG+SC etc.). O total não muda entre páginas.
     const cachedTotal    = known_total !== '' ? parseInt(known_total, 10) : NaN;
-    const skipCount      = !isNaN(cachedTotal) && cachedTotal >= 0;
+    const skipCount      = (!isNaN(cachedTotal) && cachedTotal >= 0) || hasCombinedHeavyFilters;
+    const queryLimit     = hasCombinedHeavyFilters ? limit + 1 : limit;
     const countQueryFull = skipCount ? null : `${ctePrefix} SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`;
 
     let dataRows, countRow;
@@ -10742,11 +13058,11 @@ app.get('/api/rfb/search', async (req, res) => {
       const clientData = await pool.connect();
       try {
         await clientData.query(SESSION_OPTS);
-        dataRows = await clientData.query(dataQueryFull, [...params, limit, offset]);
+        dataRows = await clientData.query(dataQueryFull, [...params, queryLimit, offset]);
       } finally {
         clientData.release();
       }
-      countRow = { rows: [{ count: String(cachedTotal) }] };
+      countRow = { rows: [{ count: String(!isNaN(cachedTotal) && cachedTotal >= 0 ? cachedTotal : 0) }] };
     } else {
       const [clientData, clientCount] = await Promise.all([pool.connect(), pool.connect()]);
       try {
@@ -10755,13 +13071,21 @@ app.get('/api/rfb/search', async (req, res) => {
           clientCount.query(SESSION_OPTS),
         ]);
         [dataRows, countRow] = await Promise.all([
-          clientData.query(dataQueryFull, [...params, limit, offset]),
+          clientData.query(dataQueryFull, [...params, queryLimit, offset]),
           clientCount.query(countQueryFull, params),
         ]);
       } finally {
         clientData.release();
         clientCount.release();
       }
+    }
+
+    const hasMoreRows = hasCombinedHeavyFilters && dataRows.rows.length > limit;
+    if (hasMoreRows) dataRows.rows = dataRows.rows.slice(0, limit);
+    if (hasCombinedHeavyFilters) {
+      const visibleTotal = offset + dataRows.rows.length + (hasMoreRows ? 1 : 0);
+      const currentTotal = parseInt(countRow.rows[0].count, 10) || 0;
+      countRow.rows[0].count = String(Math.max(currentTotal, visibleTotal));
     }
 
     // Deriva primeiro_socio de socios_nomes (evita segunda subquery no PG)
@@ -10825,117 +13149,174 @@ app.post('/api/rfb/import/start', (req, res) => {
 // FIM RFB LOCAL
 // ============================================================
 
-const startServer = async () => {
-  try {
-    await createHistoryTable();
-    await createCNPJCacheTable();
-    await createRFBTables();
-    // Índices GIN para filtro de endereço standalone (logradouro, bairro).
-    // CONCURRENTLY: não bloqueia a tabela durante o build (pode demorar horas em 49M linhas).
-    // Rodado em background sem await — não atrasa o startup.
-    (async () => {
-      const enderecoIdxs = [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_logradouro_trgm
-           ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)`,
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_bairro_trgm
-           ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)`,
-      ];
-      for (const sql of enderecoIdxs) {
-        try { await pool.query(sql); }
-        catch (e) { console.warn('[rfb] Índice GIN endereço:', e.message); }
-      }
-      console.log('[rfb] Índices GIN de endereço verificados.');
-    })();
-    // Auto-import RFB data if tables are empty (desabilitar com RFB_SKIP_AUTO_IMPORT=1)
-    if (!isEnvFlagEnabled(process.env.RFB_SKIP_AUTO_IMPORT)) {
-      try {
-        const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
-        if (parseInt(rows[0].count, 10) === 0) {
-          console.log('[rfb] Tabelas vazias — iniciando import automático...');
-          startRFBImport({ reason: 'startup-empty-tables' });
-        } else {
-          setImmediate(() => checkAndStartRFBImport('startup-check'));
-        }
-      } catch (e) {
-        console.error('[rfb] Erro ao verificar tabelas:', e.message);
-      }
-    } else {
-      console.log('[rfb] Auto-import desabilitado por RFB_SKIP_AUTO_IMPORT.');
+let dataLayerReady = false;
+let backgroundSchedulesRegistered = false;
+const registerBackgroundSchedules = () => {
+  if (backgroundSchedulesRegistered) return;
+  backgroundSchedulesRegistered = true;
+
+  cron.schedule('0 * * * *', pollStageChanges);
+  // Trends intel: sob demanda ao expandir o painel no frontend (sem cron diário).
+  cron.schedule('17 */6 * * *', () => checkAndStartRFBImport('scheduled-check'));
+  cron.schedule('30 7 * * *', async () => {
+    try {
+      await runComprasSync();
+    } catch (error) {
+      console.error('Error running automatic compras sync:', error);
     }
-    await createLicitacaoTables();
-    await migrateLicitacaoFases();
-    await seedHistorySnapshot();
-    await resumePausedPncpSearchJobs();
-    await pollStageChanges();
-    cron.schedule('0 * * * *', pollStageChanges);
-    // Checagem recorrente da base RFB — evita perder a janela se o container reiniciar.
-    cron.schedule('17 */6 * * *', () => checkAndStartRFBImport('scheduled-check'));
-    cron.schedule('30 7 * * *', async () => {
-      try {
-        await runComprasSync();
-      } catch (error) {
-        console.error('Error running automatic compras sync:', error);
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Atualização PCA diária, com horário explícito para não depender do timezone do container.
+  cron.schedule('45 7 * * *', async () => {
+    if (!dataLayerReady) {
+      console.log('[pca] daily sync adiado: camada de dados ainda não inicializada');
+      return;
+    }
+    if (pcaBootstrapState.running) {
+      console.log('[pca] daily sync ignorado: preparação inicial em andamento');
+      return;
+    }
+    try {
+      const result = await runPcaDailySync();
+      console.log('[pca] daily sync ok:', result);
+    } catch (error) {
+      console.error('[pca] daily sync error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Recupera automaticamente carga inicial vazia/interrompida, sem depender de abrir a tela.
+  cron.schedule('*/30 * * * *', async () => {
+    if (!dataLayerReady) return;
+    try {
+      await ensurePcaBootstrap();
+    } catch (error) {
+      console.error('[pca] verificação automática do bootstrap falhou:', error.message);
+    }
+  });
+
+  cron.schedule('0 8 * * *', async () => {
+    try {
+      const result = await runEditalWatchlistMatching();
+      console.log('[editais] daily watchlist sync ok:', result);
+    } catch (error) {
+      console.error('[editais] daily watchlist sync error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      await resumePausedPncpSearchJobs();
+      const result = await processWatchlistNotifications();
+      if (result.processed > 0) console.log('[watchlist-notifications] processed:', result);
+    } catch (error) {
+      console.error('[watchlist-notifications] error:', error);
+    }
+  });
+
+  cron.schedule('0 4 1 1 *', async () => {
+    try {
+      const r = await pool.query(
+        `DELETE FROM ${PCA_PLANOS_TABLE} WHERE ano_pca < EXTRACT(YEAR FROM NOW())::int`
+      );
+      console.log(`[pca] cleanup anual: ${r.rowCount} planos removidos`);
+    } catch (error) {
+      console.error('[pca] cleanup anual error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+};
+
+const initializeDataLayer = async () => {
+  await createHistoryTable();
+  await createActivityTable();
+  await createCNPJCacheTable();
+  await createRFBTables();
+
+  // Índices pesados seguem em background e não seguram a disponibilidade do app.
+  (async () => {
+    const enderecoIdxs = [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_logradouro_trgm
+         ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)`,
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_est_bairro_trgm
+         ON rfb_estabelecimentos USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)`,
+    ];
+    for (const sql of enderecoIdxs) {
+      try { await pool.query(sql); }
+      catch (error) { console.warn('[rfb] Índice GIN endereço:', error.message); }
+    }
+    console.log('[rfb] Índices GIN de endereço verificados.');
+  })();
+
+  if (!isEnvFlagEnabled(process.env.RFB_SKIP_AUTO_IMPORT)) {
+    try {
+      const { rows } = await pool.query('SELECT COUNT(*) FROM rfb_estabelecimentos');
+      if (parseInt(rows[0].count, 10) === 0) {
+        console.log('[rfb] Tabelas vazias — iniciando import automático...');
+        startRFBImport({ reason: 'startup-empty-tables' });
+      } else {
+        setImmediate(() => checkAndStartRFBImport('startup-check'));
       }
-    });
-    // PCA: delta diário às 07:45 UTC (escalonado de runComprasSync às 07:30)
-    cron.schedule('45 7 * * *', async () => {
-      try {
-        const result = await runPcaDailySync();
-        console.log('[pca] daily sync ok:', result);
-      } catch (error) {
-        console.error('[pca] daily sync error:', error);
-      }
-    });
-    // Limpeza anual: 1º de janeiro às 04:00 UTC apaga PCAs de anos anteriores.
-    cron.schedule('0 8 * * *', async () => {
-      try {
-        const result = await runEditalWatchlistMatching();
-        console.log('[editais] daily watchlist sync ok:', result);
-      } catch (error) {
-        console.error('[editais] daily watchlist sync error:', error);
-      }
-    });
-    cron.schedule('*/5 * * * *', async () => {
-      try {
-        await resumePausedPncpSearchJobs();
-        const result = await processWatchlistNotifications();
-        if (result.processed > 0) console.log('[watchlist-notifications] processed:', result);
-      } catch (error) {
-        console.error('[watchlist-notifications] error:', error);
-      }
-    });
-    cron.schedule('0 4 1 1 *', async () => {
-      try {
-        const r = await pool.query(
-          `DELETE FROM ${PCA_PLANOS_TABLE} WHERE ano_pca < EXTRACT(YEAR FROM NOW())::int`
-        );
-        console.log(`[pca] cleanup anual: ${r.rowCount} planos removidos`);
-      } catch (error) {
-        console.error('[pca] cleanup anual error:', error);
-      }
-    });
-  } catch (err) {
-    console.error('Error initializing history tracking:', err);
+    } catch (error) {
+      console.error('[rfb] Erro ao verificar tabelas:', error.message);
+    }
+  } else {
+    console.log('[rfb] Auto-import desabilitado por RFB_SKIP_AUTO_IMPORT.');
   }
 
-  // Retoma buscas profundas que ficaram órfãs (queued/running no banco) após um restart.
-  try {
-    const { rows } = await pool.query(
-      `SELECT id FROM ${PNCP_SEARCH_JOBS_TABLE}
-        WHERE status IN ('queued', 'running', 'paused_rate_limit')
-        ORDER BY updated_at DESC
-        LIMIT 10`
-    );
-    for (const row of rows) {
-      startPersistedPncpSearchJob(row.id).catch(() => {});
-    }
-    if (rows.length) console.log(`[PNCP Search Job] retomando ${rows.length} busca(s) órfã(s) após restart.`);
-  } catch (err) {
-    console.warn('[PNCP Search Job] varredura de órfãos falhou:', err.message);
-  }
+  await createLicitacaoTables();
+  await migrateLicitacaoFases();
+  await createTrendsIntelTable();
+  await seedHistorySnapshot();
+  await resumePausedPncpSearchJobs();
+  await pollStageChanges();
 
+  setImmediate(() => {
+    ensurePcaBootstrap()
+      .then((bootstrap) => {
+        if (!bootstrap?.started) return catchUpPcaSyncIfStale();
+        return null;
+      })
+      .catch((error) => {
+        console.warn('[pca] verificação inicial da base:', error.message);
+      });
+  });
+
+  // Retoma buscas profundas que ficaram órfãs após um restart.
+  const { rows } = await pool.query(
+    `SELECT id FROM ${PNCP_SEARCH_JOBS_TABLE}
+      WHERE status IN ('queued', 'running', 'paused_rate_limit')
+      ORDER BY updated_at DESC
+      LIMIT 10`
+  );
+  for (const row of rows) {
+    startPersistedPncpSearchJob(row.id).catch(() => {});
+  }
+  if (rows.length) console.log(`[PNCP Search Job] retomando ${rows.length} busca(s) órfã(s) após restart.`);
+};
+
+let dataLayerInitializationRunning = false;
+const initializeDataLayerWithRetry = async (attempt = 1) => {
+  if (dataLayerInitializationRunning) return;
+  dataLayerInitializationRunning = true;
+  try {
+    await initializeDataLayer();
+    dataLayerReady = true;
+    console.log('[startup] camada de dados inicializada');
+  } catch (error) {
+    dataLayerReady = false;
+    const delayMs = Math.min(10000 * (2 ** Math.min(attempt - 1, 5)), 300000);
+    console.error(`[startup] banco indisponível na tentativa ${attempt}; nova tentativa em ${Math.round(delayMs / 1000)}s:`, error.message);
+    setTimeout(() => initializeDataLayerWithRetry(attempt + 1), delayMs);
+  } finally {
+    dataLayerInitializationRunning = false;
+  }
+};
+
+const startServer = () => {
+  // Os agendamentos são registrados mesmo se o Postgres subir depois do app.
+  registerBackgroundSchedules();
   app.listen(port, () => {
     console.log(`Backend server listening at http://localhost:${port}`);
+    setImmediate(() => initializeDataLayerWithRetry());
   });
 };
 

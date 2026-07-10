@@ -84,10 +84,10 @@ export const subtle =
 // --- Modals ------------------------------------------------------------------
 
 export const modalOverlay =
-  'fixed inset-0 z-modal bg-black/50 flex items-center justify-center p-4';
+  'fixed inset-0 z-modal bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4';
 
 export const modalPanel =
-  'w-full max-w-lg rounded-[16px] border border-border bg-card p-5 shadow-lift ' +
+  'w-full max-w-lg max-h-[min(92dvh,100%)] overflow-y-auto rounded-t-[16px] sm:rounded-[16px] border border-border bg-card p-4 sm:p-5 shadow-lift ' +
   'dark:bg-[#111827] dark:border-[#1f2937]';
 
 // --- Badges & chips ----------------------------------------------------------
