@@ -40,8 +40,8 @@ export const btnGhost =
   'disabled:opacity-50 disabled:pointer-events-none';
 
 export const iconBtn =
-  'inline-flex items-center justify-center h-9 w-9 rounded-[11px] text-muted transition ' +
-  'hover:bg-surf2 hover:text-ink ' +
+  'inline-flex items-center justify-center h-9 w-9 rounded-full text-muted transition ' +
+  'border border-transparent hover:border-line hover:bg-surf2 hover:text-ink ' +
   'dark:text-[#8b95ad] dark:hover:bg-[#1a2233] dark:hover:text-[#eef1f8] ' +
   'focus:outline-none focus:ring-2 focus:ring-primary/30 ' +
   'disabled:opacity-50 disabled:pointer-events-none';
@@ -55,9 +55,9 @@ export const input =
   'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 
 export const select =
-  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 px-3 text-sm text-ink transition ' +
+  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 pl-3 pr-8 text-sm text-ink transition ' +
   'dark:bg-[#0e1220] dark:text-[#eef1f8] dark:border-[#232c40] ' +
-  'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
+  'hover:border-line2 focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 
 export const textarea =
   'rounded-[11px] border border-line bg-bg2 px-3 py-2 text-sm text-ink ' +

@@ -2783,8 +2783,15 @@ function useVerticalScrollArrows(scrollRef, remeasureKey = null) {
   return { canScrollUp, canScrollDown, hasOverflow, scrollByDir, updateMetrics };
 }
 
-const scrollYArrowBtnClass =
-  'scroll-y-arrow flex w-full shrink-0 items-center justify-center py-0.5 text-muted2 transition hover:text-ink focus:outline-none focus-visible:text-ink disabled:pointer-events-none disabled:opacity-30';
+/** Compact floating scroll control — replaces old full-width chevron bars. */
+const scrollEdgeBtnClass =
+  'scroll-edge-btn pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_6px_16px_rgba(0,0,0,.4)] backdrop-blur-md transition duration-150 hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 disabled:pointer-events-none disabled:opacity-0';
+
+const scrollEdgeRailTopClass =
+  'pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center bg-gradient-to-b from-[#0a0d14]/90 via-[#0a0d14]/45 to-transparent pt-1.5 pb-7';
+
+const scrollEdgeRailBottomClass =
+  'pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center bg-gradient-to-t from-[#0a0d14]/90 via-[#0a0d14]/45 to-transparent pb-1.5 pt-7';
 
 const VerticalScrollArrows = memo(function VerticalScrollArrows({
   children,
@@ -2811,17 +2818,18 @@ const VerticalScrollArrows = memo(function VerticalScrollArrows({
   );
 
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden ${className}`} style={style}>
-      {hasOverflow && (
-        <button
-          type="button"
-          aria-label="Rolar para cima"
-          disabled={!canScrollUp}
-          onClick={() => scrollByDir(-1)}
-          className={scrollYArrowBtnClass}
-        >
-          <ChevronUpIcon className="h-4 w-4" />
-        </button>
+    <div className={`relative flex min-h-0 flex-col overflow-hidden ${className}`} style={style}>
+      {hasOverflow && canScrollUp && (
+        <div className={scrollEdgeRailTopClass}>
+          <button
+            type="button"
+            aria-label="Rolar para cima"
+            onClick={() => scrollByDir(-1)}
+            className={scrollEdgeBtnClass}
+          >
+            <ChevronUpIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+          </button>
+        </div>
       )}
       <div
         ref={setRefs}
@@ -2832,16 +2840,17 @@ const VerticalScrollArrows = memo(function VerticalScrollArrows({
       >
         {children}
       </div>
-      {hasOverflow && (
-        <button
-          type="button"
-          aria-label="Rolar para baixo"
-          disabled={!canScrollDown}
-          onClick={() => scrollByDir(1)}
-          className={scrollYArrowBtnClass}
-        >
-          <ChevronDownIcon className="h-4 w-4" />
-        </button>
+      {hasOverflow && canScrollDown && (
+        <div className={scrollEdgeRailBottomClass}>
+          <button
+            type="button"
+            aria-label="Rolar para baixo"
+            onClick={() => scrollByDir(1)}
+            className={scrollEdgeBtnClass}
+          >
+            <ChevronDownIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+          </button>
+        </div>
       )}
     </div>
   );
@@ -2919,17 +2928,18 @@ const VirtualizedColumnList = memo(function VirtualizedColumnList({
   }, [focusItemId, itemIds, shouldVirtualize, virtualizer]);
 
   return (
-    <div className="mt-3 flex min-h-0 flex-1 flex-col">
-      {hasOverflow && (
-        <button
-          type="button"
-          aria-label="Rolar coluna para cima"
-          disabled={!canScrollUp}
-          onClick={() => scrollByDir(-1)}
-          className={scrollYArrowBtnClass}
-        >
-          <ChevronUpIcon className="h-4 w-4" />
-        </button>
+    <div className="relative mt-3 flex min-h-0 flex-1 flex-col">
+      {hasOverflow && canScrollUp && (
+        <div className={scrollEdgeRailTopClass}>
+          <button
+            type="button"
+            aria-label="Rolar coluna para cima"
+            onClick={() => scrollByDir(-1)}
+            className={scrollEdgeBtnClass}
+          >
+            <ChevronUpIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+          </button>
+        </div>
       )}
       <div
         ref={parentRef}
@@ -2969,16 +2979,17 @@ const VirtualizedColumnList = memo(function VirtualizedColumnList({
           )}
         </SortableContext>
       </div>
-      {hasOverflow && (
-        <button
-          type="button"
-          aria-label="Rolar coluna para baixo"
-          disabled={!canScrollDown}
-          onClick={() => scrollByDir(1)}
-          className={scrollYArrowBtnClass}
-        >
-          <ChevronDownIcon className="h-4 w-4" />
-        </button>
+      {hasOverflow && canScrollDown && (
+        <div className={scrollEdgeRailBottomClass}>
+          <button
+            type="button"
+            aria-label="Rolar coluna para baixo"
+            onClick={() => scrollByDir(1)}
+            className={scrollEdgeBtnClass}
+          >
+            <ChevronDownIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+          </button>
+        </div>
       )}
     </div>
   );
@@ -10423,9 +10434,9 @@ function App() {
                 type="button"
                 onClick={() => scrollBoardBy(-1)}
                 aria-label="Rolar board para a esquerda"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
               >
-                <ChevronLeftIcon className="h-4 w-4" />
+                <ChevronLeftIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
               </button>
               <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
                 <div style={{ width: boardScrollMetrics.scrollWidth }} />
@@ -10434,9 +10445,9 @@ function App() {
                 type="button"
                 onClick={() => scrollBoardBy(1)}
                 aria-label="Rolar board para a direita"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
               >
-                <ChevronRightIcon className="h-4 w-4" />
+                <ChevronRightIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
               </button>
             </div>
           )}
@@ -12212,9 +12223,9 @@ function App() {
                     type="button"
                     onClick={() => scrollBoardBy(-1)}
                     aria-label="Rolar board para a esquerda"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                    className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
                   >
-                    <ChevronLeftIcon className="h-4 w-4" />
+                    <ChevronLeftIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
                   </button>
                   <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
                     <div style={{ width: boardScrollMetrics.scrollWidth }} />
@@ -12223,9 +12234,9 @@ function App() {
                     type="button"
                     onClick={() => scrollBoardBy(1)}
                     aria-label="Rolar board para a direita"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-muted transition hover:bg-surf2 hover:text-ink"
+                    className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
                   >
-                    <ChevronRightIcon className="h-4 w-4" />
+                    <ChevronRightIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
                   </button>
                 </div>
               )}
