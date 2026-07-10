@@ -592,15 +592,78 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Board / filter selects: fill grid cells, never force horizontal overflow. */
-.board-filter-select {
+/* Toolbar / filter selects: fill grid cells, never force horizontal overflow. */
+.board-filter-select,
+.filter-select {
   display: block;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
-  /* Keep long option labels from expanding the control past its cell. */
   text-overflow: ellipsis;
+}
+
+/* Toolbar rows that combine search + actions / selects */
+.toolbar-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0.625rem;
+}
+
+.toolbar-row--search-action {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .toolbar-row--search-action {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+
+.toolbar-row--search-filters {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .toolbar-row--search-filters {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.toolbar-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .toolbar-filters--4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .toolbar-filters--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .toolbar-filters--2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.toolbar-meta {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0.625rem;
+  align-items: center;
+}
+
+@media (min-width: 640px) {
+  .toolbar-meta {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
 }
 
 @media (max-width: 767px) {
@@ -619,7 +682,8 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
     white-space: normal;
   }
 
-  .board-filter-select {
+  .board-filter-select,
+  .filter-select {
     font-size: 12px;
     padding-left: 0.625rem;
     padding-right: 1.5rem;

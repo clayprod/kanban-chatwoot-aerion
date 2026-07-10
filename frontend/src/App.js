@@ -3829,8 +3829,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
           </div>
         )}
 
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative flex h-[42px] min-w-0 flex-1 items-center rounded-[11px] border border-line bg-bg2">
+        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto] lg:items-center">
+          <div className="relative flex h-[42px] min-w-0 items-center rounded-[11px] border border-line bg-bg2 sm:col-span-2 lg:col-span-1">
             <MagnifyingGlassIcon className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
             <input
               type="text"
@@ -3838,24 +3838,24 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && runSearch()}
-              className="h-full w-full rounded-[11px] bg-transparent pl-10 pr-28 text-sm font-semibold text-ink outline-none placeholder:text-muted"
+              className="h-full w-full min-w-0 rounded-[11px] bg-transparent pl-10 pr-28 text-sm font-semibold text-ink outline-none placeholder:text-muted"
             />
             <button
               type="button"
               onClick={() => setUsarIa(v => !v)}
               title={usarIa ? 'Busca IA ativada — expande termos correlatos' : 'Busca IA desativada'}
-              className={`absolute right-2 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${usarIa ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
+              className={`absolute right-2 shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${usarIa ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
             >
               ✦ Busca IA
             </button>
           </div>
-          <button type="button" onClick={() => runSearch()} disabled={loading} className={`${btnPrimary} h-[42px] px-6`}>
+          <button type="button" onClick={() => runSearch()} disabled={loading} className={`${btnPrimary} h-[42px] w-full px-5 lg:w-auto lg:px-6`}>
             {loading ? 'Buscando…' : 'Buscar'}
           </button>
           <button
             type="button"
             onClick={() => setShowFilters(v => !v)}
-            className={`${btnSecondary} h-[42px] px-3 text-xs ${showFilters || filtrosAtivos > 0 ? 'border-primary/40 text-primary' : ''}`}
+            className={`${btnSecondary} h-[42px] w-full px-3 text-xs lg:w-auto ${showFilters || filtrosAtivos > 0 ? 'border-primary/40 text-primary' : ''}`}
           >
             Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''}
           </button>
@@ -3863,7 +3863,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             type="button"
             onClick={() => setSaveDialog(true)}
             disabled={!q.trim() && !positivos.length}
-            className={`${btnSecondary} h-[42px] px-3 text-xs disabled:opacity-50`}
+            className={`${btnSecondary} h-[42px] w-full px-3 text-xs disabled:opacity-50 sm:col-span-2 lg:col-span-1 lg:w-auto`}
           >
             Salvar watchlist
           </button>
@@ -3891,7 +3891,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               </button>
             </div>
             {editTerms && (
-              <div className="flex flex-wrap gap-2 pt-1">
+              <div className="grid min-w-0 grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
                 <input
                   value={posDraft}
                   onChange={e => setPosDraft(e.target.value)}
@@ -3902,7 +3902,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                     }
                   }}
                   placeholder="+ termo positivo (Enter)"
-                  className={`${input} h-8 min-w-[180px] flex-1 text-xs`}
+                  className={`${input} h-8 w-full min-w-0 text-xs`}
                 />
                 <input
                   value={negDraft}
@@ -3914,7 +3914,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                     }
                   }}
                   placeholder="− termo negativo (Enter)"
-                  className={`${input} h-8 min-w-[180px] flex-1 text-xs`}
+                  className={`${input} h-8 w-full min-w-0 text-xs`}
                 />
               </div>
             )}
@@ -10256,8 +10256,8 @@ function App() {
               )}
 
               {activeView === 'Licitações' && (
-                <div className="mt-4 sm:mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 sm:gap-4">
-                  <div className="relative w-full md:max-w-md min-w-0">
+                <div className="toolbar-row toolbar-row--search-action mt-3 sm:mt-4 min-w-0 pb-3">
+                  <div className="relative min-w-0 w-full">
                     <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-muted">
                       <MagnifyingGlassIcon className="h-4 w-4" />
                     </span>
@@ -10277,7 +10277,7 @@ function App() {
                           goToLicitacaoSearchMatch(event.shiftKey ? -1 : 1);
                         }
                       }}
-                      className={`${input} w-full pl-9 ${licitacaoSearch.trim() && licitacaoSubview === 'board' ? 'pr-[9.5rem]' : 'pr-3'}`}
+                      className={`${input} w-full min-w-0 max-w-full pl-9 ${licitacaoSearch.trim() && licitacaoSubview === 'board' ? 'pr-[9.5rem]' : 'pr-3'}`}
                       aria-label="Buscar no pipe de licitações"
                       autoComplete="off"
                       spellCheck={false}
@@ -10336,16 +10336,14 @@ function App() {
                       </button>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={openNewOpportunityForm}
-                      className={`${btnPrimary} w-full sm:w-auto`}
-                    >
-                      <PlusIcon className="h-4 w-4" />
-                      Nova licitação
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={openNewOpportunityForm}
+                    className={`${btnPrimary} w-full shrink-0 sm:w-auto`}
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    Nova licitação
+                  </button>
                 </div>
               )}
             </header>
@@ -10739,8 +10737,8 @@ function App() {
                     </button>
                   </div>
 
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                    <div className="flex min-h-[42px] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[11px] border border-line bg-bg2 py-1.5 pl-3 pr-2">
+                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                    <div className="flex min-h-[42px] min-w-0 flex-wrap items-center gap-1.5 rounded-[11px] border border-line bg-bg2 py-1.5 pl-3 pr-2">
                       <MagnifyingGlassIcon className="h-4 w-4 shrink-0 text-muted" />
                       {pncpAcceptedPositiveTerms.map(term => (
                         <button
@@ -10748,9 +10746,9 @@ function App() {
                           type="button"
                           onClick={() => setPncpAcceptedPositiveTerms(prev => prev.filter(item => item !== term))}
                           title="Remover termo da nova busca"
-                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 font-display text-[11.5px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/20"
+                          className="inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 font-display text-[11.5px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/20"
                         >
-                          {term} <span className="text-primary/70 normal-case">×</span>
+                          <span className="truncate">{term}</span> <span className="text-primary/70 normal-case">×</span>
                         </button>
                       ))}
                       <input
@@ -10772,22 +10770,22 @@ function App() {
                             setPncpAcceptedPositiveTerms(prev => prev.slice(0, -1));
                           }
                         }}
-                        className="h-7 min-w-[140px] flex-1 bg-transparent text-sm font-semibold text-ink outline-none placeholder:text-muted"
+                        className="h-7 min-w-0 flex-1 basis-[8rem] bg-transparent text-sm font-semibold text-ink outline-none placeholder:text-muted"
                       />
                       <button
                         type="button"
                         onClick={() => setPncpSearchFilters(prev => ({ ...prev, usar_ia: !prev.usar_ia }))}
                         title={pncpSearchFilters.usar_ia ? 'IA expande termos correlatos ao iniciar a busca' : 'IA desligada'}
-                        className={`ml-auto shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${pncpSearchFilters.usar_ia ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
+                        className={`shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${pncpSearchFilters.usar_ia ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
                       >
-                        ✦ IA expande termos
+                        ✦ IA
                       </button>
                     </div>
                     <button
                       type="button"
                       onClick={() => runPncpSearch(1)}
                       disabled={pncpSearchLoading || (!String(pncpSearchFilters.q || '').trim() && pncpAcceptedPositiveTerms.length === 0)}
-                      className={`${btnPrimary} h-[42px] px-8`}
+                      className={`${btnPrimary} h-[42px] w-full shrink-0 px-5 sm:w-auto sm:px-8`}
                     >
                       {pncpSearchLoading ? 'Iniciando…' : 'Iniciar busca'}
                     </button>
@@ -10830,37 +10828,37 @@ function App() {
                     </div>
                   )}
 
-                  <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
-                    <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                      <select value={pncpSearchFilters.tipos_documento} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))} className={`${select} h-8 w-full rounded-[10px] text-xs`}>
+                  <div className="grid min-w-0 grid-cols-1 gap-2">
+                    <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                      <select value={pncpSearchFilters.tipos_documento} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="edital">Editais</option>
                         <option value="ata">Atas de Registro</option>
                         <option value="contrato">Contratos</option>
                         <option value="edital,ata">Editais e Atas</option>
                         <option value="edital,ata,contrato">Todos</option>
                       </select>
-                      <select value={pncpSearchFilters.status} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))} className={`${select} h-8 w-full rounded-[10px] text-xs`}>
+                      <select value={pncpSearchFilters.status} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="recebendo_proposta">Recebendo proposta</option>
                         <option value="encerrada">Encerrada</option>
                         <option value="suspensa">Suspensa</option>
                         <option value="todos">Todos os status</option>
                       </select>
-                      <select value={pncpSearchFilters.modalidade_licitacao_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))} className={`${select} h-8 w-full rounded-[10px] text-xs`}>
+                      <select value={pncpSearchFilters.modalidade_licitacao_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="">Todas modalidades</option>
                         {modalidadeOptions.map(item => (
                           <option key={item.id} value={item.id}>{item.nome}</option>
                         ))}
                       </select>
-                      <select value={pncpSearchFilters.uf} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))} className={`${select} h-8 w-full rounded-[10px] text-xs`}>
+                      <select value={pncpSearchFilters.uf} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="">Todos os estados</option>
                         {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (
                           <option key={uf} value={uf}>{uf}</option>
                         ))}
                       </select>
-                      <input value={pncpSearchFilters.negative_terms} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))} onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)} placeholder="Excluir termos (partida)" className={`${input} h-8 w-full rounded-[10px] text-xs`} />
+                      <input value={pncpSearchFilters.negative_terms} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))} onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)} placeholder="Excluir termos (partida)" className={`${input} h-8 w-full min-w-0 rounded-[10px] text-xs sm:col-span-2 xl:col-span-1`} />
                     </div>
-                    <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
-                      <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondary} h-8 px-3 text-xs`}>
+                    <div className="flex min-w-0">
+                      <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondary} h-8 w-full px-3 text-xs sm:w-auto`}>
                         {pncpSearchExpanded ? 'Menos filtros de partida' : 'Mais filtros de partida'}
                       </button>
                     </div>
@@ -10876,7 +10874,7 @@ function App() {
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                           <div className="min-w-0">
                             <label className="mb-1.5 block text-xs font-medium text-muted">Esfera</label>
-                            <select value={pncpSearchFilters.esfera_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, esfera_id: event.target.value }))} className={`${select} w-full text-xs`}>
+                            <select value={pncpSearchFilters.esfera_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, esfera_id: event.target.value }))} className={`${select} filter-select text-xs`}>
                               <option value="">Todas as esferas</option>
                               <option value="F">Federal</option>
                               <option value="E">Estadual</option>
@@ -10885,7 +10883,7 @@ function App() {
                           </div>
                           <div className="min-w-0">
                             <label className="mb-1.5 block text-xs font-medium text-muted">Tipo de instrumento</label>
-                            <select value={pncpSearchFilters.tipo_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipo_id: event.target.value }))} className={`${select} w-full text-xs`}>
+                            <select value={pncpSearchFilters.tipo_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipo_id: event.target.value }))} className={`${select} filter-select text-xs`}>
                               <option value="">Todos os tipos</option>
                               {pncpEditalTipoInstrumentoOptions.map(item => (
                                 <option key={item.id} value={item.id}>
@@ -10896,7 +10894,7 @@ function App() {
                           </div>
                           <div className="min-w-0">
                             <label className="mb-1.5 block text-xs font-medium text-muted">Modo de disputa</label>
-                            <select value={pncpSearchFilters.modo_disputa_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modo_disputa_id: event.target.value }))} className={`${select} w-full text-xs`}>
+                            <select value={pncpSearchFilters.modo_disputa_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modo_disputa_id: event.target.value }))} className={`${select} filter-select text-xs`}>
                               <option value="">Todos os modos</option>
                               {modoDisputaOptions.map(item => (
                                 <option key={item.id} value={item.id}>{item.nome}</option>
@@ -10922,7 +10920,7 @@ function App() {
                               }}
                             />
                             <select
-                              className={`${select} w-full text-xs`}
+                              className={`${select} filter-select text-xs`}
                               value={pncpSearchFilters.orgao_cnpj}
                               onChange={(event) => {
                                 const selected = pncpOrgaoOptions.find(item => String(item.cnpj || '') === String(event.target.value));
@@ -10949,7 +10947,7 @@ function App() {
                               }}
                             />
                             <select
-                              className={`${select} w-full text-xs`}
+                              className={`${select} filter-select text-xs`}
                               value={pncpSearchFilters.unidade_codigo}
                               onChange={(event) => {
                                 const selected = pncpUasgOptions.find(item => String(item.codigo || '') === String(event.target.value));
@@ -11334,7 +11332,7 @@ function App() {
                                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Documento</label>
-                                          <select value={pncpJobFilterDraft.tipos_documento} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, tipos_documento: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.tipos_documento} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, tipos_documento: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="edital">Editais</option>
                                             <option value="ata">Atas de Registro</option>
                                             <option value="contrato">Contratos</option>
@@ -11344,7 +11342,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Status</label>
-                                          <select value={pncpJobFilterDraft.status} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, status: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.status} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, status: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="recebendo_proposta">Recebendo proposta</option>
                                             <option value="encerrada">Encerrada</option>
                                             <option value="suspensa">Suspensa</option>
@@ -11353,7 +11351,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">UF</label>
-                                          <select value={pncpJobFilterDraft.uf} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, uf: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.uf} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, uf: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="">Todos os estados</option>
                                             {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (
                                               <option key={uf} value={uf}>{uf}</option>
@@ -11362,7 +11360,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Modalidade</label>
-                                          <select value={pncpJobFilterDraft.modalidade_licitacao_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, modalidade_licitacao_id: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.modalidade_licitacao_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, modalidade_licitacao_id: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="">Todas modalidades</option>
                                             {modalidadeOptions.map(item => (
                                               <option key={item.id} value={item.id}>{item.nome}</option>
@@ -11371,7 +11369,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Esfera</label>
-                                          <select value={pncpJobFilterDraft.esfera_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, esfera_id: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.esfera_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, esfera_id: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="">Todas as esferas</option>
                                             <option value="F">Federal</option>
                                             <option value="E">Estadual</option>
@@ -11380,7 +11378,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Tipo de instrumento</label>
-                                          <select value={pncpJobFilterDraft.tipo_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, tipo_id: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.tipo_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, tipo_id: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="">Todos os tipos</option>
                                             {pncpEditalTipoInstrumentoOptions.map(item => (
                                               <option key={item.id} value={item.id}>{item.nome}</option>
@@ -11389,7 +11387,7 @@ function App() {
                                         </div>
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Modo de disputa</label>
-                                          <select value={pncpJobFilterDraft.modo_disputa_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, modo_disputa_id: e.target.value }))} className={`${select} h-8 w-full text-xs`}>
+                                          <select value={pncpJobFilterDraft.modo_disputa_id} onChange={(e) => setPncpJobFilterDraft(prev => ({ ...prev, modo_disputa_id: e.target.value }))} className={`${select} filter-select h-8 text-xs`}>
                                             <option value="">Todos os modos</option>
                                             {modoDisputaOptions.map(item => (
                                               <option key={item.id} value={item.id}>{item.nome}</option>
@@ -11513,9 +11511,9 @@ function App() {
                                     <p className="text-xs font-semibold text-ink">Aprofundar nos resultados obtidos</p>
                                     <p className={`${subtle} mt-0.5`}>Filtra o que já foi coletado neste job — não relança a busca no PNCP.</p>
                                   </div>
-                                  <div className="mt-2.5 flex flex-col gap-2 lg:flex-row lg:items-center">
+                                  <div className="mt-2.5 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,13rem)] sm:items-center">
                                     <input
-                                      className={`${input} h-8 min-w-0 flex-1 text-xs`}
+                                      className={`${input} h-8 w-full min-w-0 text-xs`}
                                       placeholder="Filtrar nesta lista (título, órgão, UF…)"
                                       value={pncpResultLocalQuery}
                                       onChange={(event) => setPncpResultLocalQuery(event.target.value)}
@@ -11527,7 +11525,7 @@ function App() {
                                         setPncpSearchFilters(prev => ({ ...prev, ordenacao }));
                                         if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { ordenacao });
                                       }}
-                                      className={`${select} h-8 w-full text-xs lg:w-52`}
+                                      className={`${select} filter-select h-8 text-xs`}
                                     >
                                       <option value="relevancia_desc">Maior aderência</option>
                                       <option value="valor_desc_data_desc">Maior valor</option>
@@ -11732,13 +11730,13 @@ function App() {
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Fase</label>
-                            <select className={`${select} w-full text-sm`} value={newOpportunityForm.fase} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, fase: event.target.value }))}>
+                            <select className={`${select} filter-select text-sm`} value={newOpportunityForm.fase} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, fase: event.target.value }))}>
                               {licitacaoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                             </select>
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Status</label>
-                            <select className={`${select} w-full text-sm`} value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
+                            <select className={`${select} filter-select text-sm`} value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
                               <option value="ativo">Ativo</option>
                               <option value="ganho">Ganho</option>
                               <option value="perdido">Perdido</option>
@@ -11751,7 +11749,7 @@ function App() {
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Origem</label>
-                            <select className={`${select} w-full text-sm`} value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
+                            <select className={`${select} filter-select text-sm`} value={newOpportunityForm.origem_oportunidade} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, origem_oportunidade: event.target.value }))}>
                               <option value="direta">Origem direta</option>
                               <option value="automatica_api">Automática via API</option>
                               <option value="pca_pncp">PCA PNCP</option>
@@ -11784,7 +11782,7 @@ function App() {
                               }}
                             />
                             <select
-                              className={`${select} w-full text-sm`}
+                              className={`${select} filter-select text-sm`}
                               value={newOpportunityForm.orgao_cnpj}
                               onChange={(event) => {
                                 const selected = orgaoOptions.find(item => String(item.cnpj || '') === String(event.target.value));
@@ -11820,7 +11818,7 @@ function App() {
                               onChange={(event) => setUasgLookupQuery(event.target.value)}
                             />
                             <select
-                              className={`${select} w-full text-sm`}
+                              className={`${select} filter-select text-sm`}
                               value={newOpportunityForm.uasg_codigo}
                               onChange={(event) => {
                                 const selected = uasgOptions.find(item => String(item.codigo || '') === String(event.target.value));
@@ -11870,7 +11868,7 @@ function App() {
                                 onChange={(event) => setModalidadeLookupQuery(event.target.value)}
                               />
                               <select
-                                className={`${select} w-full text-sm`}
+                                className={`${select} filter-select text-sm`}
                                 value={newOpportunityForm.modalidade}
                                 onChange={(event) => {
                                   setNewOpportunityForm(prev => ({ ...prev, modalidade: event.target.value }));
@@ -11897,7 +11895,7 @@ function App() {
                             </div>
                             <div className="min-w-0">
                               <label className="mb-1 block text-xs font-medium text-muted">Tipo de item</label>
-                              <select className={`${select} w-full text-sm`} value={newOpportunityForm.item_tipo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, item_tipo: event.target.value }))}>
+                              <select className={`${select} filter-select text-sm`} value={newOpportunityForm.item_tipo} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, item_tipo: event.target.value }))}>
                                 <option value="material">Material</option>
                                 <option value="servico">Serviço</option>
                               </select>
@@ -11911,7 +11909,7 @@ function App() {
                                 onChange={(event) => setCatalogoLookupQuery(event.target.value)}
                               />
                               <select
-                                className={`${select} w-full text-sm`}
+                                className={`${select} filter-select text-sm`}
                                 value={newOpportunityForm.codigo_item_catalogo}
                                 onChange={(event) => {
                                   const selected = catalogOptions.find(option => String(option.codigo) === String(event.target.value));
@@ -12172,9 +12170,9 @@ function App() {
                 <div className={`mt-4 ${subtle}`}>Carregando licitações...</div>
               )}
 
-              <div className="mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                <p className="text-[13px] text-muted">Pipeline de licitações · 15 fases (Lei 14.133)</p>
-                <span className="inline-flex items-center gap-2 self-start rounded-xl bg-amber/[0.16] px-3.5 py-2 font-mono text-sm font-semibold text-amber">
+              <div className="mt-2 sm:mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+                <p className="min-w-0 text-[13px] text-muted">Pipeline de licitações · 15 fases (Lei 14.133)</p>
+                <span className="inline-flex max-w-full shrink-0 items-center gap-2 rounded-xl bg-amber/[0.16] px-3 py-2 font-mono text-xs sm:text-sm font-semibold text-amber">
                   Valor em aberto {formatCompactCurrency(licSummary?.total_value) || 'R$ 0'}
                 </span>
               </div>
@@ -12346,13 +12344,13 @@ function App() {
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Fase</label>
-                            <select className={`${select} w-full text-sm`} value={selectedOpportunity.fase || ''} onChange={(event) => updateSelectedOpportunity({ fase: event.target.value })}>
+                            <select className={`${select} filter-select text-sm`} value={selectedOpportunity.fase || ''} onChange={(event) => updateSelectedOpportunity({ fase: event.target.value })}>
                               {licitacaoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                             </select>
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Status</label>
-                            <select className={`${select} w-full text-sm`} value={selectedOpportunity.status || 'ativo'} onChange={(event) => updateSelectedOpportunity({ status: event.target.value })}>
+                            <select className={`${select} filter-select text-sm`} value={selectedOpportunity.status || 'ativo'} onChange={(event) => updateSelectedOpportunity({ status: event.target.value })}>
                               <option value="ativo">Ativo</option>
                               <option value="ganho">Ganho</option>
                               <option value="perdido">Perdido</option>
@@ -12844,7 +12842,7 @@ function App() {
                       <div className="min-w-0">
                         <label className="mb-1.5 block text-xs font-medium text-muted">Tipo</label>
                         <select
-                          className={`${select} w-full text-xs`}
+                          className={`${select} filter-select text-xs`}
                           value={pncpOutcomeFilters.tipo}
                           onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, tipo: event.target.value }))}
                         >
@@ -12875,7 +12873,7 @@ function App() {
                       <div className="min-w-0">
                         <label className="mb-1.5 block text-xs font-medium text-muted">UF</label>
                         <select
-                          className={`${select} w-full text-xs`}
+                          className={`${select} filter-select text-xs`}
                           value={pncpOutcomeFilters.uf || ''}
                           onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, uf: event.target.value }))}
                         >
@@ -13150,7 +13148,7 @@ function App() {
                               </span>
                             ))}
                           </div>
-                          <select value={historyGranularity} onChange={(event) => setHistoryGranularity(event.target.value)} className={`${select} h-8 text-xs`}>
+                          <select value={historyGranularity} onChange={(event) => setHistoryGranularity(event.target.value)} className={`${select} filter-select h-8 w-auto min-w-[7.5rem] max-w-full text-xs`}>
                             <option value="day">Diário</option>
                             <option value="week">Semanal</option>
                             <option value="month">Mensal</option>
@@ -14174,7 +14172,7 @@ function App() {
                                 <select
                                   value={m.tipo || 'texto'}
                                   onChange={(e) => setMsg({ tipo: e.target.value, arquivo_nome: null, arquivo_tipo: null, arquivo_base64: null })}
-                                  className={`${select} h-8 w-auto min-w-[7.5rem] rounded-[9px] px-2 text-xs`}
+                                  className={`${select} filter-select h-8 w-auto min-w-0 max-w-full rounded-[9px] px-2 text-xs sm:min-w-[7.5rem]`}
                                   aria-label={`Tipo da mensagem ${idx + 1}`}
                                 >
                                   <option value="texto">Texto</option>
@@ -15233,11 +15231,11 @@ function App() {
 
           {activeView === 'Metas' && authStatus.role === 'admin' && (
             <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <p className="text-sm text-muted">
+              <div className="toolbar-meta mb-6">
+                <p className="min-w-0 text-sm text-muted">
                   Receita em R$: <span className="font-semibold text-ink/80 dark:text-white/80">meta</span> (plano) vs <span className="font-semibold text-ink/80 dark:text-white/80">realizado</span> (faturamento). Por mês e no ano.
                 </p>
-                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} h-10 font-mono`}>
+                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} filter-select h-10 w-full font-mono sm:w-auto sm:min-w-[7rem]`}>
                   {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
@@ -15490,11 +15488,11 @@ function App() {
 
           {activeView === 'Definir Metas' && authStatus.role === 'admin' && (
             <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <p className="text-sm text-muted">
+              <div className="toolbar-meta mb-6">
+                <p className="min-w-0 text-sm text-muted">
                   Plano de receita mensal (R$). O realizado de faturamento aparece em Metas e Resultados.
                 </p>
-                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} h-10 font-mono`}>
+                <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} filter-select h-10 w-full font-mono sm:w-auto sm:min-w-[7rem]`}>
                   {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
@@ -15572,9 +15570,9 @@ function App() {
 
           {activeView === 'Usuários' && authStatus.role === 'admin' && (
             <div className="mt-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <p className="text-sm text-muted">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
-                <button type="button" onClick={loadUsers} className={`${btnSecondary} h-10 px-4`}>Atualizar</button>
+              <div className="toolbar-meta mb-6">
+                <p className="min-w-0 text-sm text-muted">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
+                <button type="button" onClick={loadUsers} className={`${btnSecondary} h-10 w-full shrink-0 px-4 sm:w-auto`}>Atualizar</button>
               </div>
               {usersLoading ? (
                 <div className={`${subtle} py-10 text-center`}>Carregando usuários…</div>
@@ -15585,8 +15583,8 @@ function App() {
                     const isAdminUser = u.role === 'admin';
                     const current = Array.isArray(u.allowed_views) && u.allowed_views.length ? u.allowed_views : (isAdminUser ? allViews : []);
                     return (
-                      <div key={u.id} className="flex flex-col lg:flex-row lg:items-center gap-4 p-4">
-                        <div className="flex items-center gap-3 lg:w-64 shrink-0">
+                      <div key={u.id} className="grid min-w-0 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] lg:items-center">
+                        <div className="flex min-w-0 items-center gap-3">
                           <div className="h-9 w-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0">
                             {String(u.name || u.email || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
                           </div>
@@ -17273,15 +17271,16 @@ function App() {
 
                     {/* Results header */}
                     {rfbTotal > 0 && (
-                      <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-line bg-surf p-3 text-sm shadow-card">
-                        <span className="text-muted">
+                      <div className="toolbar-meta rounded-[18px] border border-line bg-surf p-3 text-sm shadow-card">
+                        <span className="min-w-0 text-muted">
                           Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbTotal)}</span> de <span className="font-semibold text-ink">{rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')}</span> resultados
                         </span>
-                        <div className="ml-auto flex items-center gap-2">
+                        <div className="toolbar-filters toolbar-filters--2 min-w-0 sm:justify-self-end sm:w-auto sm:min-w-[18rem]">
                           <select
-                            className={`${select} text-xs`}
+                            className={`${select} filter-select text-xs`}
                             value={rfbOrderBy}
                             onChange={e => { const v = e.target.value; setRfbOrderBy(v); handleRfbSearch(1, null, v); }}
+                            aria-label="Ordenar resultados"
                           >
                             <option value="razao_social">Ordenar: Razão Social</option>
                             <option value="nome_fantasia">Ordenar: Nome Fantasia</option>
@@ -17293,9 +17292,10 @@ function App() {
                             <option value="abertura_asc">Mais antigas</option>
                           </select>
                           <select
-                            className={`${select} text-xs`}
+                            className={`${select} filter-select text-xs`}
                             value={rfbPageSize}
                             onChange={e => { const n = Number(e.target.value); setRfbPageSize(n); handleRfbSearch(1, n); }}
+                            aria-label="Resultados por página"
                           >
                             {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n} por página</option>)}
                           </select>
