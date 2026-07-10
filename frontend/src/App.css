@@ -429,11 +429,59 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   border-radius: 999px;
 }
 
+/* Horizontal scroll stays; only the top .kanban-scrollbar is visible.
+   Native bottom bar is redundant (synced from the top control). */
+/* Chart panels — TV / wallboard portal (must sit above #root { z-index: 1 }) */
+.chart-panel {
+  position: relative;
+}
+
+.chart-panel__fs-btn {
+  opacity: 0.75;
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+
+.chart-panel:hover .chart-panel__fs-btn,
+.chart-panel:focus-within .chart-panel__fs-btn,
+.chart-panel--wallboard .chart-panel__fs-btn {
+  opacity: 1;
+}
+
+.chart-panel--wallboard .chart-panel__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: 2.75rem !important;
+  padding-right: 2.75rem !important;
+}
+
+.chart-panel--wallboard .chart-panel__plot {
+  flex: 1 1 auto;
+  min-height: min(70dvh, 720px);
+  width: 100%;
+}
+
+.chart-panel--wallboard .chart-panel__fs-btn {
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 40;
+}
+
 .kanban-board-scroll {
   overflow-y: hidden;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.kanban-board-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .kanban-column {

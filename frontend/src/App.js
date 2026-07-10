@@ -55,23 +55,43 @@ import {
   ArrowPathIcon,
   QueueListIcon,
   PresentationChartBarIcon,
+  ArrowsPointingOutIcon,
+  ArrowsPointingInIcon,
 } from '@heroicons/react/24/outline';
 import {
   btnPrimary,
+  btnPrimarySm,
+  btnPrimaryXs,
+  btnPrimaryLg,
+  btnPrimaryControl,
   btnSecondary,
+  btnSecondarySm,
+  btnSecondaryXs,
+  btnSecondaryLg,
+  btnSecondaryControl,
   btnGhost,
+  btnGhostSm,
+  btnGhostXs,
+  btnDangerGhost,
   iconBtn,
   input,
   select,
   textarea,
   card,
   cardAlt,
+  entityCard,
+  cardActionBar,
   sectionTitle,
   subtle,
   modalOverlay,
   modalPanel,
   badge,
   chip,
+  metaChip,
+  termChip,
+  termChipNeg,
+  statusPillActive,
+  statusPillInactive,
 } from './ui';
 import {
   countOpenFunnelLeads,
@@ -170,10 +190,99 @@ const LIC_SUB_LABELS = {
   editais_watchlist: 'Busca Editais',
   board: 'Pipeline',
   resultados: 'Contratos/Resultados',
-  pca: 'PCA',
-  sinais: 'PCA',
+  pca: 'PCA — Contratações anuais',
+  sinais: 'PCA — Watchlists',
 };
 const licSubLabel = (sub) => LIC_SUB_LABELS[sub] || 'Resumo';
+
+const PNCP_OUTCOME_FILTER_DEFAULTS = Object.freeze({
+  q: '',
+  fornecedor: '',
+  fornecedor_ni: '',
+  orgao_cnpj: '',
+  uf: '',
+  tipo: 'todos',
+});
+
+const toBooleanFlag = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value > 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'sim', 'yes'].includes(normalized)) return true;
+    if (['false', '0', 'nao', 'não', 'no', ''].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const asPncpOutcomeArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
+};
+
+const safePncpExternalUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw, 'https://pncp.gov.br');
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+};
+
+const formatPncpOutcomeDate = (value, { includeTime = false } = {}) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleString('pt-BR', includeTime
+    ? { dateStyle: 'short', timeStyle: 'short' }
+    : { dateStyle: 'short' });
+};
+
+const normalizePncpOutcomeStatus = (payload) => {
+  const root = payload && typeof payload === 'object' ? payload : {};
+  const nested = root.state && typeof root.state === 'object' ? root.state : {};
+  const source = { ...root, ...nested };
+  const cache = {
+    ...(root.cache && typeof root.cache === 'object' ? root.cache : {}),
+    ...(nested.cache && typeof nested.cache === 'object' ? nested.cache : {}),
+  };
+  const progress = source.progress && typeof source.progress === 'object' ? source.progress : {};
+  const status = String(source.status || (source.running ? 'running' : root.started ? 'running' : 'idle')).toLowerCase();
+  const running = toBooleanFlag(source.running, ['queued', 'starting', 'running', 'processing'].includes(status));
+  const processed = Number(source.processed ?? progress.processed ?? progress.current ?? 0);
+  const total = Number(source.total ?? progress.total ?? progress.maximum ?? 0);
+  const numericProgress = Number(typeof source.progress === 'number' ? source.progress : progress.percent);
+  const percent = Number.isFinite(numericProgress)
+    ? Math.max(0, Math.min(100, numericProgress <= 1 ? numericProgress * 100 : numericProgress))
+    : (Number.isFinite(processed) && Number.isFinite(total) && total > 0
+      ? Math.max(0, Math.min(100, (processed / total) * 100))
+      : null);
+  const cacheTotalRaw = cache.total ?? cache.count ?? source.cache_total ?? source.cached_total
+    ?? source.quantidade ?? source.quantity ?? source.count ?? null;
+  const cacheTotal = cacheTotalRaw === null || cacheTotalRaw === undefined || cacheTotalRaw === ''
+    ? null
+    : Number(cacheTotalRaw);
+
+  return {
+    ...source,
+    cache,
+    status,
+    running,
+    phase: source.phase || progress.phase || null,
+    processed: Number.isFinite(processed) ? processed : 0,
+    total: Number.isFinite(total) ? total : 0,
+    percent,
+    error: source.error || source.last_error || null,
+    startedAt: source.started_at || source.startedAt || null,
+    finishedAt: source.finished_at || source.finishedAt || null,
+    cacheTotal: Number.isFinite(cacheTotal) ? cacheTotal : null,
+    lastRefreshed: cache.last_refreshed || cache.last_updated || cache.updated_at
+      || source.last_refreshed || source.last_updated || null,
+  };
+};
 
 // DDDs brasileiros com região, para o seletor de público do Disparo.
 const DDD_REGIONS = [
@@ -480,8 +589,8 @@ const processBlueprint = {
     {
       group: 'Prospecção',
       tab: 'Busca de leads',
-      use: 'Prospecção B2B na base RFB/CNPJ com filtros (CNAE, UF, porte, capital, idade) e Radar Trends sob demanda (IA sugere buscas por setor, ICP e o que estiver em alta).',
-      routine: 'Sob demanda: abrir Radar Trends → aplicar sugestão → importar leads para o Funil (Inbox).'
+      use: 'Prospecção B2B na base RFB/CNPJ com filtros (CNAE, UF, porte, capital, idade) e Radar Trends (correlatos de drones/enterprise no BR via pytrends; cache 1×/dia; IA sugere buscas RFB).',
+      routine: '1×/dia: abrir Radar Trends → aplicar sugestão → importar leads para o Funil (Inbox).'
     },
     {
       group: 'Prospecção',
@@ -1004,8 +1113,9 @@ const processBlueprint = {
       conversionLabel: 'atividade', role: 'SDR', hat: 'sdr', color: '#5a93ff', isActivity: true,
       hasValue: false,
       stockStages: [2, 3, 4, 5],
-      howCounted: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas. Ligação e e-mail não entram sozinhos: registre em Notas no chat.',
+      howCounted: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas na conversa + notas do perfil do contato (aba Notas). Ligação, e-mail e visita: registre em Notas.',
     },
+
     {
       key: 'leads', stage: 'Leads (MQL)', short: 'Entrada no funil',
       volume: 800, conversionFromPrev: null, conversionToNext: 0.30,
@@ -1019,8 +1129,9 @@ const processBlueprint = {
       volume: 240, conversionFromPrev: 0.30, conversionToNext: 0.50,
       conversionLabel: '30% MQL → SQL', role: 'SDR', hat: 'sdr', color: '#a78bff',
       hasValue: false,
-      stockStages: [6, 7, 8],
-      howCounted: 'Card movido para 6. Qualificado (SQL).',
+      // Estoque aberto no pipeline qualificado (escadinha: ainda “é SQL” se está em demo/proposta)
+      stockStages: [6, 7, 8, 9, 10, 11, 12],
+      howCounted: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 6 (SQL → ganho). Ir direto para demo ainda conta como SQL.',
     },
     {
       key: 'oportunidade', stage: 'Oportunidade', short: 'Demo / discovery',
@@ -1028,7 +1139,7 @@ const processBlueprint = {
       conversionLabel: '50% SQL → Opp', role: 'AE', hat: 'ae', color: '#ffb24d',
       hasValue: true,
       stockStages: [7, 8, 9, 10, 11, 12],
-      howCounted: 'Card movido para 7–8 (Agendamento Demo / Demo Realizada). Em R$: Valor_Oportunidade.',
+      howCounted: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 7 (demo → ganho). Em R$: Valor_Oportunidade 1× por contato.',
     },
     {
       key: 'proposta', stage: 'Proposta', short: 'Proposta em jogo',
@@ -1036,7 +1147,7 @@ const processBlueprint = {
       conversionLabel: '60% Opp → Prop', role: 'AE', hat: 'ae', color: '#38d6e6',
       hasValue: true,
       stockStages: [9, 10, 11, 12],
-      howCounted: 'Card movido para 9–12 (Elaborando Proposta até Aprovação Interna). Em R$: Valor_Oportunidade.',
+      howCounted: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 9 (proposta → ganho). Em R$: Valor_Oportunidade 1× por contato.',
     },
     {
       key: 'fechamento', stage: 'Fechamento', short: 'Venda ganha',
@@ -1044,7 +1155,7 @@ const processBlueprint = {
       conversionLabel: '24% Prop → Venda · 7% SQL → Venda', role: 'AE', hat: 'ae', color: '#36d39a',
       hasValue: true,
       stockStages: [13],
-      howCounted: 'Card movido para 13. Fechado-Ganho. Em R$: receita das vendas.',
+      howCounted: 'Card movido para 13. Fechado-Ganho (1× por contato). Em R$: Valor_Oportunidade das vendas.',
     },
   ],
   glossary: [
@@ -1346,7 +1457,10 @@ const PaceDetailsPanel = ({
                           {how}
                           {actual.breakdown && (
                             <span className="mt-1 block font-mono text-[10px]">
-                              Hoje — canal {actual.breakdown.messages ?? 0} · notas {actual.breakdown.notes ?? 0}
+                              Hoje — canal {actual.breakdown.messages ?? 0}
+                              {' · '}notas chat {actual.breakdown.private_notes ?? 0}
+                              {' · '}notas contato {actual.breakdown.contact_notes ?? 0}
+                              {' · '}notas total {actual.breakdown.notes ?? 0}
                             </span>
                           )}
                         </td>
@@ -1452,10 +1566,10 @@ const TeamPaceCard = ({
   const monthValue = month.value || {};
   const workingDays = processBlueprint.revenueEngine.workingDays || 20;
   const isValue = metric === 'value';
-  // Meta individual ≈ time / nº agentes (mín. 2 do blueprint se lista vazia)
+  // Meta individual = time / nº vendedores (lista já vem só com is_seller, identidades unificadas).
+  // Fallback do blueprint só se ainda não houver vendedores marcados.
   const headcount = Math.max(
-    agents.length,
-    processBlueprint.sdrGoals?.teamSize || 2,
+    agents.length > 0 ? agents.length : (processBlueprint.sdrGoals?.teamSize || 2),
     1
   );
   const isIndividual = agentId != null && agentId !== '';
@@ -1530,25 +1644,23 @@ const TeamPaceCard = ({
   const ratePct = (r) => `${Math.round(r * 100)}%`;
 
   return (
-    <div className={`${card} p-5 ${className}`}>
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className={`${sectionTitle} text-base`}>Ritmo do time</h3>
-          <p className={`${subtle} mt-0.5`}>
-            {isValue ? 'R$ no mês · funil reverso' : 'Qtd hoje'} · {scopeLabel}
-          </p>
-        </div>
+    <ChartPanel
+      className={`p-0 ${className}`}
+      bodyClassName="!px-5 !pr-11 !pb-10"
+      title="Ritmo do time"
+      subtitle={`${isValue ? 'R$ no mês · funil reverso' : 'Qtd hoje'} · ${scopeLabel}`}
+      actions={(
         <button
           type="button"
           onClick={onOpenDetails}
-          className={`${btnGhost} h-8 shrink-0 gap-1 px-2.5 text-xs`}
+          className={`${btnGhostSm} shrink-0 gap-1`}
           title="Ver funil, conversões, estoque e regras"
         >
           <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-line font-mono text-[9px] font-bold text-muted">i</span>
           Detalhes
         </button>
-      </div>
-
+      )}
+    >
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <div className="min-w-0 flex-1">
           <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Escopo</label>
@@ -1629,11 +1741,162 @@ const TeamPaceCard = ({
           </button>
         ))}
       </div>
-    </div>
+    </ChartPanel>
   );
 };
 
-/** Toggle Qtd | R$ por quadro (Gestão de Leads). */
+/**
+ * Chart panel with TV / wallboard mode.
+ *
+ * IMPORTANT: #root has `position:relative; z-index:1` (App.css). Portals painted
+ * on document.body with z-index:auto sit UNDER #root and look like they "did nothing".
+ * Always set an explicit inline z-index >> 1 on the wallboard layer.
+ */
+const ChartPanel = memo(function ChartPanel({
+  title,
+  subtitle,
+  actions = null,
+  children,
+  className = '',
+  bodyClassName = '',
+  liveLabel = 'Ao vivo',
+}) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [clock, setClock] = useState(() => new Date());
+
+  const openFullscreen = useCallback((e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    setIsFullscreen(true);
+  }, []);
+
+  const closeFullscreen = useCallback((e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    setIsFullscreen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') setIsFullscreen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.dispatchEvent(new CustomEvent('chart-wallboard', { detail: { active: true } }));
+    const id = window.setInterval(() => setClock(new Date()), 1000);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      window.dispatchEvent(new CustomEvent('chart-wallboard', { detail: { active: false } }));
+      window.clearInterval(id);
+    };
+  }, [isFullscreen]);
+
+  const fsBtn = (mode) => (
+    <button
+      type="button"
+      onClick={mode === 'open' ? openFullscreen : closeFullscreen}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="chart-panel__fs-btn pointer-events-auto absolute bottom-2.5 right-2.5 z-30 inline-flex h-8 w-8 items-center justify-center rounded-md border border-line bg-surf text-muted shadow-[0_2px_8px_rgba(0,0,0,.35)] transition hover:border-primary/50 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+      title={mode === 'open' ? 'Tela cheia' : 'Sair da tela cheia (Esc)'}
+      aria-label={mode === 'open' ? 'Abrir em tela cheia' : 'Sair da tela cheia'}
+    >
+      {mode === 'open' ? (
+        <ArrowsPointingOutIcon className="h-4 w-4" aria-hidden />
+      ) : (
+        <ArrowsPointingInIcon className="h-4 w-4" aria-hidden />
+      )}
+    </button>
+  );
+
+  const header = (title || subtitle || actions || isFullscreen) ? (
+    <div className="chart-panel__header flex flex-wrap items-start justify-between gap-2 px-4 pt-4 pb-2 xl:px-5">
+      <div className="min-w-0">
+        {title ? <h3 className={`${sectionTitle} text-base`}>{title}</h3> : null}
+        {subtitle ? <p className={`${subtle} mt-0.5`}>{subtitle}</p> : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {isFullscreen && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-green/30 bg-green/10 px-2.5 py-1 font-mono text-[10px] font-semibold text-green">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+            {liveLabel} · {clock.toLocaleTimeString('pt-BR')}
+          </span>
+        )}
+        {actions}
+      </div>
+    </div>
+  ) : null;
+
+  const body = (
+    <div className={`chart-panel__body min-h-0 flex-1 px-4 pb-10 pr-10 xl:px-5 xl:pr-11 ${bodyClassName}`}>
+      {typeof children === 'function' ? children({ isFullscreen }) : children}
+    </div>
+  );
+
+  // Always keep the inline shell mounted (grid layout). When fullscreen, hide its
+  // content and paint the same content in a body portal ABOVE #root (z-index:1).
+  return (
+    <>
+      <div
+        className={`chart-panel relative ${card} flex min-h-0 flex-col ${className}`}
+        data-chart-panel="true"
+        style={isFullscreen ? { minHeight: '12rem' } : undefined}
+      >
+        {isFullscreen ? (
+          <div className="flex flex-1 items-center justify-center p-6 opacity-50" aria-hidden>
+            <p className="text-center text-xs text-muted">Exibindo em tela cheia…</p>
+          </div>
+        ) : (
+          <>
+            {header}
+            {body}
+            {fsBtn('open')}
+          </>
+        )}
+      </div>
+
+      {isFullscreen &&
+        createPortal(
+          <div
+            className="chart-panel chart-panel--wallboard"
+            data-chart-panel="true"
+            data-chart-wallboard="1"
+            role="dialog"
+            aria-modal="true"
+            aria-label={title ? `${title} — tela cheia` : 'Gráfico em tela cheia'}
+            style={{
+              position: 'fixed',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              // Must beat #root { z-index: 1 } in App.css — Tailwind z-* alone is not enough here
+              zIndex: 2147483000,
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '1rem',
+              boxSizing: 'border-box',
+              background: '#0a0d14',
+            }}
+          >
+            <div
+              className={`${card} relative flex min-h-0 w-full flex-1 flex-col overflow-auto p-0 shadow-lift`}
+              style={{ minHeight: 0, flex: '1 1 auto' }}
+            >
+              {header}
+              {body}
+              {fsBtn('close')}
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
+  );
+});
+
 const MetricToggle = ({ value, onChange, className = '' }) => (
   <div className={`inline-flex items-center gap-1 rounded-xl border border-line bg-bg2 p-1 ${className}`}>
     {[['count', 'Qtd'], ['value', 'R$']].map(([key, label]) => (
@@ -1721,6 +1984,20 @@ const formatCurrency = (value) => {
 
 const getBestEstimatedValue = (item) => {
   const values = [item?.valor_itens_pertinentes, item?.valor_total_estimado, item?.valor_global, item?.valor_total_homologado]
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return values.length ? values[0] : null;
+};
+
+/** Valor do(s) item(ns) pertinente(s) ao termo da busca. */
+const getPncpItemMatchedValue = (item) => {
+  const n = Number(item?.valor_itens_pertinentes);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** Valor total estimado da licitação/compra (objeto completo). */
+const getPncpLicitacaoTotalValue = (item) => {
+  const values = [item?.valor_total_estimado, item?.valor_global, item?.valor_total_homologado]
     .map(value => Number(value))
     .filter(value => Number.isFinite(value) && value > 0);
   return values.length ? values[0] : null;
@@ -3004,7 +3281,6 @@ const KanbanColumn = memo(function KanbanColumn({
   onMenuAction,
   onMoveToColumn,
   availableColumns,
-  showHeaderMenu,
   newContactUrl,
   isDarkMode,
   activeDragId,
@@ -3068,39 +3344,22 @@ const KanbanColumn = memo(function KanbanColumn({
             <span className="font-mono text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          {newContactUrl ? (
-            <button
-              type="button"
-              className="h-7 w-7 flex items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                window.open(newContactUrl, '_blank', 'noreferrer');
-              }}
-              aria-label="Adicionar contato"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          ) : (
-            <button type="button" className="h-7 w-7 flex items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-          )}
-          {showHeaderMenu && (
-            <button type="button" className="h-7 w-7 flex items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-                <circle cx="12" cy="5" r="1.6" />
-                <circle cx="12" cy="12" r="1.6" />
-                <circle cx="12" cy="19" r="1.6" />
-              </svg>
-            </button>
-          )}
-        </div>
+        {newContactUrl ? (
+          <button
+            type="button"
+            className="h-7 w-7 flex shrink-0 items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              window.open(newContactUrl, '_blank', 'noreferrer');
+            }}
+            aria-label="Adicionar contato"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+        ) : null}
       </div>
       <VirtualizedColumnList
         itemIds={itemIds}
@@ -3521,7 +3780,7 @@ const PcaChips = ({ items, onRemove, accent }) => (
 );
 
 const statusFilterPill = (active) =>
-  `h-8 rounded-lg border px-3 text-xs font-semibold transition ${
+  `inline-flex h-8 items-center justify-center rounded-lg border px-3 text-xs font-semibold transition ${
     active
       ? 'border-primary bg-primary/10 text-primary'
       : 'border-line bg-bg2 text-muted hover:border-line2 hover:text-ink'
@@ -3799,10 +4058,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
     <div className="mt-6 space-y-5">
       <div className="rounded-[16px] border border-line bg-surf p-4 md:p-5 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className={`${sectionTitle} text-base`}>Busca de PCA</h3>
-            <p className={`${subtle} mt-0.5`}>
-              Planejamento pré-edital. Encontre contratações futuras e promova para o board.
+          <div className="min-w-0 max-w-3xl">
+            <h3 className={`${sectionTitle} text-base`}>PCA — Plano de Contratações Anuais</h3>
+            <p className={`${subtle} mt-1.5 leading-relaxed`}>
+              O <strong className="font-semibold text-ink">PCA</strong> é o plano de contratações anuais do governo:
+              órgãos públicos publicam, com antecedência, o que pretendem comprar no ano — ainda{' '}
+              <strong className="font-semibold text-ink">antes do edital</strong>.
+              Use esta tela para mapear demanda futura, priorizar itens e promover oportunidades ao board.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -3816,7 +4078,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                 {bootstrapStatus.total_planos_db.toLocaleString('pt-BR')} planos · {bootstrapStatus.total_itens_db.toLocaleString('pt-BR')} itens · automático
               </span>
             )}
-            <button type="button" onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()} className={`${btnSecondary} h-8 px-3 text-xs`}>
+            <button type="button" onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()} className={`${btnSecondarySm}`}>
               Watchlists / sinais
             </button>
           </div>
@@ -3860,13 +4122,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               ✦ Busca IA
             </button>
           </div>
-          <button type="button" onClick={() => runSearch()} disabled={loading} className={`${btnPrimary} h-[42px] w-full px-5 lg:w-auto lg:px-6`}>
+          <button type="button" onClick={() => runSearch()} disabled={loading} className={`${btnPrimaryControl} w-full lg:w-auto lg:px-6`}>
             {loading ? 'Buscando…' : 'Buscar'}
           </button>
           <button
             type="button"
             onClick={() => setShowFilters(v => !v)}
-            className={`${btnSecondary} h-[42px] w-full px-3 text-xs lg:w-auto ${showFilters || filtrosAtivos > 0 ? 'border-primary/40 text-primary' : ''}`}
+            className={`${btnSecondaryControl} w-full lg:w-auto ${showFilters || filtrosAtivos > 0 ? 'border-primary/40 text-primary' : ''}`}
           >
             Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''}
           </button>
@@ -3874,7 +4136,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             type="button"
             onClick={() => setSaveDialog(true)}
             disabled={!q.trim() && !positivos.length}
-            className={`${btnSecondary} h-[42px] w-full px-3 text-xs disabled:opacity-50 sm:col-span-2 lg:col-span-1 lg:w-auto`}
+            className={`${btnSecondaryControl} w-full sm:col-span-2 lg:col-span-1 lg:w-auto`}
           >
             Salvar watchlist
           </button>
@@ -4267,19 +4529,198 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   );
 }
 
-const PCA_SIGNALS_PAGE_SIZE = 200;
+const PCA_SIGNALS_PAGE_SIZE = 25;
+const EDITAL_SIGNALS_PAGE_SIZE = 25;
 
-function PcaSignalsPanel({ onPromoted }) {
+/** Barra de paginação compacta para listas de sinais (popup e painel). */
+function SignalsPaginationBar({
+  page = 1,
+  total = 0,
+  pageSize = 25,
+  loading = false,
+  onPageChange,
+}) {
+  const totalPages = Math.max(1, Math.ceil(Math.max(0, total) / Math.max(1, pageSize)));
+  if (total <= 0) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+      <span className="font-mono text-[11px] text-muted2">
+        {from.toLocaleString('pt-BR')}–{to.toLocaleString('pt-BR')} de {total.toLocaleString('pt-BR')}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={page <= 1 || loading}
+          onClick={() => onPageChange?.(page - 1)}
+          className="h-8 rounded-lg border border-line px-3 text-xs font-semibold text-ink disabled:opacity-50 hover:bg-bg2"
+        >
+          Anterior
+        </button>
+        <span className="min-w-[4.5rem] text-center font-mono text-xs text-muted">
+          {page} / {totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={page >= totalPages || loading}
+          onClick={() => onPageChange?.(page + 1)}
+          className="h-8 rounded-lg border border-line px-3 text-xs font-semibold text-ink disabled:opacity-50 hover:bg-bg2"
+        >
+          Próxima
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Modal de WhatsApp para watchlists (substitui window.prompt nativo). */
+function WatchlistWhatsappDialog({
+  open,
+  watchlistName,
+  initialNumber = '',
+  initialEnabled = false,
+  saving = false,
+  onClose,
+  onSave,
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [number, setNumber] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setEnabled(initialEnabled || Boolean(String(initialNumber || '').trim()));
+    setNumber(String(initialNumber || ''));
+  }, [open, initialEnabled, initialNumber]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const t = window.setTimeout(() => inputRef.current?.focus(), 40);
+    const onKey = (event) => {
+      if (event.key === 'Escape' && !saving) onClose?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, saving, onClose]);
+
+  if (!open) return null;
+
+  const handleSave = () => {
+    const cleaned = String(number || '').trim();
+    if (enabled && !cleaned.replace(/\D/g, '')) return;
+    onSave?.({
+      whatsapp_enabled: enabled && Boolean(cleaned),
+      whatsapp_number: enabled && cleaned ? cleaned : null,
+    });
+  };
+
+  return createPortal(
+    <div
+      className={modalOverlay}
+      onClick={() => { if (!saving) onClose?.(); }}
+      role="presentation"
+    >
+      <div
+        className={`${modalPanel} max-w-md space-y-4`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="watchlist-wa-title"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 id="watchlist-wa-title" className="font-display text-base font-semibold text-ink">
+              Alertas por WhatsApp
+            </h3>
+            <p className={`${subtle} mt-0.5`}>
+              {watchlistName
+                ? <>Watchlist <span className="font-semibold text-ink">{watchlistName}</span></>
+                : 'Receba novos sinais no celular'}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className={iconBtn} aria-label="Fechar">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-[12px] border border-line bg-bg2/50 px-3 py-2.5">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+            disabled={saving}
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-ink">Ativar alertas</span>
+            <span className={`${subtle} mt-0.5 block`}>
+              Envia aviso quando a watchlist capturar novos sinais.
+            </span>
+          </span>
+        </label>
+
+        <div className={enabled ? '' : 'opacity-50 pointer-events-none'}>
+          <label htmlFor="watchlist-wa-number" className="mb-1.5 block text-xs font-medium text-muted">
+            Número com DDD
+          </label>
+          <input
+            id="watchlist-wa-number"
+            ref={inputRef}
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            disabled={saving || !enabled}
+            className={`${input} w-full`}
+            placeholder="Ex.: 48 99999-9999"
+            value={number}
+            onChange={(event) => setNumber(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleSave();
+              }
+            }}
+          />
+          <p className={`${subtle} mt-1.5`}>
+            Use o número brasileiro com DDD. Deixe desativado para parar os alertas.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
+          <button type="button" disabled={saving} onClick={onClose} className={btnSecondary}>
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={saving || (enabled && !String(number || '').replace(/\D/g, ''))}
+            onClick={handleSave}
+            className={btnPrimary}
+          >
+            {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onChanged, refreshVersion = 0 }) {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('novo');
+  const [page, setPage] = useState(1);
   const [busy, setBusy] = useState({});
   const [selectedSignals, setSelectedSignals] = useState({});
   const [collapsedWatchlists, setCollapsedWatchlists] = useState({});
   const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
-  const [pageInfo, setPageInfo] = useState({ total: 0, limit: PCA_SIGNALS_PAGE_SIZE, offset: 0, hasMore: false });
+  const [pageInfo, setPageInfo] = useState({ total: 0, pageSize: PCA_SIGNALS_PAGE_SIZE });
+  const flatMode = Boolean(watchlistId) || compact;
 
   const loadCounts = useCallback(async () => {
     try {
@@ -4295,35 +4736,43 @@ function PcaSignalsPanel({ onPromoted }) {
     }
   }, []);
 
-  const load = useCallback(async ({ append = false, offset = 0, background = false } = {}) => {
-    if (append) setLoadingMore(true);
-    else if (!background) setLoading(true);
+  const load = useCallback(async ({ background = false, pageOverride } = {}) => {
+    const activePage = Math.max(1, pageOverride ?? page);
+    if (!background) setLoading(true);
     setError(null);
     try {
+      const offset = (activePage - 1) * PCA_SIGNALS_PAGE_SIZE;
       const r = await axios.get('/api/licitacoes/pca/signals', {
-        params: { status: statusFilter, limit: PCA_SIGNALS_PAGE_SIZE, offset },
+        params: {
+          status: statusFilter,
+          limit: PCA_SIGNALS_PAGE_SIZE,
+          offset,
+          ...(watchlistId ? { watchlist_id: watchlistId } : {}),
+        },
       });
       const rows = Array.isArray(r.data) ? r.data : (r.data?.data || []);
       const total = Array.isArray(r.data) ? rows.length : (Number(r.data?.total) || 0);
-      setSignals(prev => append ? [...prev, ...rows] : rows);
-      setPageInfo({
-        total,
-        limit: Number(r.data?.limit) || PCA_SIGNALS_PAGE_SIZE,
-        offset,
-        hasMore: Array.isArray(r.data) ? false : !!r.data?.has_more,
-      });
+      const totalPages = Math.max(1, Math.ceil(total / PCA_SIGNALS_PAGE_SIZE));
+      if (rows.length === 0 && total > 0 && activePage > totalPages) {
+        setPage(totalPages);
+        return;
+      }
+      setSignals(rows);
+      setPageInfo({ total, pageSize: PCA_SIGNALS_PAGE_SIZE });
       loadCounts();
     } catch (e) {
       setError(e.response?.status === 504
         ? 'A atualização demorou mais que o esperado. Vamos tentar novamente automaticamente.'
         : (e.response?.data?.error || 'Não foi possível carregar os sinais agora.'));
     } finally {
-      if (append) setLoadingMore(false);
-      else if (!background) setLoading(false);
+      if (!background) setLoading(false);
     }
-  }, [statusFilter, loadCounts]);
+  }, [statusFilter, loadCounts, watchlistId, page]);
 
-  useEffect(() => { load(); }, [load]);
+  // Reset page when switching watchlist; status filter resets page in the click handler.
+  useEffect(() => { setPage(1); }, [watchlistId]);
+
+  useEffect(() => { load(); }, [load, refreshVersion]);
 
   useEffect(() => {
     let lastRefresh = Date.now();
@@ -4344,7 +4793,18 @@ function PcaSignalsPanel({ onPromoted }) {
 
   useEffect(() => {
     setSelectedSignals({});
-  }, [statusFilter]);
+  }, [statusFilter, page]);
+
+  const changeStatusFilter = (nextStatus) => {
+    setStatusFilter(nextStatus);
+    setPage(1);
+  };
+
+  const goToPage = (nextPage) => {
+    const totalPages = Math.max(1, Math.ceil((pageInfo.total || 0) / PCA_SIGNALS_PAGE_SIZE));
+    const clamped = Math.min(Math.max(1, nextPage), totalPages);
+    setPage(clamped);
+  };
 
   const toggleSelected = (id) => {
     setSelectedSignals(prev => ({ ...prev, [id]: !prev[id] }));
@@ -4376,7 +4836,8 @@ function PcaSignalsPanel({ onPromoted }) {
       });
       if (action === 'promote') onPromoted && onPromoted();
       setSelectedSignals({});
-      load();
+      await load();
+      onChanged?.();
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
@@ -4400,7 +4861,8 @@ function PcaSignalsPanel({ onPromoted }) {
         const status = kind.replace('to_', '');
         await axios.put(`/api/licitacoes/pca/signals/${id}/status`, { status });
       }
-      load();
+      await load();
+      onChanged?.();
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
@@ -4408,54 +4870,146 @@ function PcaSignalsPanel({ onPromoted }) {
     }
   };
 
+  const plansFromGroups = useMemo(() => {
+    if (!flatMode) return [];
+    return groupedSignals.flatMap(group => group.plans || []);
+  }, [flatMode, groupedSignals]);
+
+  const renderPlan = (plan) => (
+    <div key={plan.key} className="overflow-hidden rounded-[12px] border border-line bg-surf">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
+        <div className="min-w-[240px] flex-1">
+          <div className="text-sm font-semibold text-ink">
+            {plan.orgao_razao || plan.orgao_cnpj} · PCA {plan.ano_pca}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
+            <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5 font-mono text-[10px]">UASG {plan.codigo_unidade}</span>
+            {plan.unidade_nome && <span>{plan.unidade_nome}</span>}
+            <span>{plan.items.length} item{plan.items.length !== 1 ? 's' : ''}</span>
+            <span className="font-mono font-semibold text-ink">{formatPcaCurrency(plan.valor_total)}</span>
+            <span className="font-mono text-[10px] text-primary">score {Number(plan.max_score || 0).toFixed(2)}</span>
+          </div>
+        </div>
+        <a
+          href={plan.pncp_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${btnSecondarySm}`}
+          title="Abrir PCA no PNCP"
+        >
+          PNCP ↗
+        </a>
+      </div>
+      <div className="divide-y divide-border">
+        {plan.items.map(s => (
+          <div key={s.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-start">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <input type="checkbox" checked={!!selectedSignals[s.id]} onChange={() => toggleSelected(s.id)} className="mt-1.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-ink">{s.descricao}</div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className={metaChip}>Item {s.numero_item || '—'}</span>
+                  {s.futura_contratacao_id && <span className={metaChip}>Contratação {s.futura_contratacao_id}</span>}
+                  {s.futura_contratacao_nome && <span className={metaChip}>{s.futura_contratacao_nome}</span>}
+                  <span className={metaChip}>Mês {s.mes_previsto ?? '—'}</span>
+                  <span className={metaChip}>Qtd. {formatPcaQuantity(s.quantidade)}</span>
+                  {s.unidade_medida && <span className={metaChip}>{s.unidade_medida}</span>}
+                  <span className={metaChip}>{formatPcaCurrency(s.valor_total)}</span>
+                  <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">Score {Number(s.score || 0).toFixed(2)}</span>
+                  <span className={metaChip}>{formatPcaDate(s.criado_em)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end sm:pl-2">
+              {statusFilter !== 'promovido' && (
+                <>
+                  {s.status !== 'novo' && (
+                    <button type="button" disabled={busy[s.id]}
+                      onClick={() => act(s.id, 'to_novo')}
+                      className={btnSecondarySm}>Novo</button>
+                  )}
+                  {s.status !== 'visto' && (
+                    <button type="button" disabled={busy[s.id]}
+                      onClick={() => act(s.id, 'to_visto')}
+                      className={btnSecondarySm}>Visto</button>
+                  )}
+                  {s.status !== 'descartado' && (
+                    <button type="button" disabled={busy[s.id]}
+                      onClick={() => act(s.id, 'to_descartado')}
+                      className={btnSecondarySm}>Descartar</button>
+                  )}
+                </>
+              )}
+              {statusFilter === 'novo' && (
+                <button type="button" disabled={busy[s.id]}
+                  onClick={() => act(s.id, 'promote')}
+                  className={btnPrimarySm}>Promover</button>
+              )}
+              {statusFilter === 'promovido' && (
+                <button type="button" disabled={busy[s.id]}
+                  onClick={() => act(s.id, 'unpromote')}
+                  className={btnSecondarySm}>Despromover</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="mt-4 space-y-4">
+    <div className={`${compact ? 'mt-0' : 'mt-4'} space-y-4`}>
       <div className="flex flex-wrap items-center gap-2">
         {['novo', 'visto', 'promovido', 'descartado'].map(s => (
           <button
             key={s}
             type="button"
-            onClick={() => setStatusFilter(s)}
+            onClick={() => changeStatusFilter(s)}
             className={statusFilterPill(statusFilter === s)}
           >
-            {statusFilterLabel(s)} ({statusCounts[s] || 0})
+            {statusFilterLabel(s)}
+            {flatMode
+              ? (s === statusFilter ? ` (${pageInfo.total})` : '')
+              : ` (${statusCounts[s] || 0})`}
           </button>
         ))}
-        <span className="font-mono text-[11px] text-muted2">
-          {signals.length}/{pageInfo.total || statusCounts[statusFilter] || signals.length}
+        <span className="inline-flex h-8 items-center font-mono text-[11px] text-muted2">
+          pág. {page} · {pageInfo.total || statusCounts[statusFilter] || 0} total
         </span>
-        {groupedSignals.length > 0 && (
+        {!flatMode && groupedSignals.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <button type="button" onClick={() => setAllWatchlistsCollapsed(false)} className={`${btnSecondary} h-8 px-2.5 text-[11px]`}>
+            <button type="button" onClick={() => setAllWatchlistsCollapsed(false)} className={btnSecondarySm}>
               Expandir
             </button>
-            <button type="button" onClick={() => setAllWatchlistsCollapsed(true)} className={`${btnSecondary} h-8 px-2.5 text-[11px]`}>
+            <button type="button" onClick={() => setAllWatchlistsCollapsed(true)} className={btnSecondarySm}>
               Colapsar
             </button>
           </div>
         )}
-        <span className="ml-auto text-[11px] text-muted">Atualização automática</span>
+        <span className="ml-auto inline-flex h-8 items-center text-[11px] text-muted">
+          {PCA_SIGNALS_PAGE_SIZE}/página
+        </span>
       </div>
 
       {statusFilter !== 'promovido' && (
         <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-line bg-bg2/40 px-3 py-2">
-          <span className="text-xs text-muted">{selectedIds.length} selecionado(s)</span>
+          <span className="inline-flex h-8 items-center text-xs text-muted">{selectedIds.length} selecionado(s) nesta página</span>
           {statusFilter === 'novo' && (
             <button type="button" disabled={!selectedIds.length || busy.__batch}
               onClick={() => runBatch('promote')}
-              className="h-8 rounded-lg bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] px-3 text-xs font-semibold text-white disabled:opacity-50">
+              className={btnPrimarySm}>
               Promover selecionados
             </button>
           )}
           <button type="button" disabled={!selectedIds.length || busy.__batch}
             onClick={() => runBatch('status', 'visto')}
-            className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>Marcar visto</button>
+            className={btnSecondarySm}>Marcar visto</button>
           <button type="button" disabled={!selectedIds.length || busy.__batch}
             onClick={() => runBatch('status', 'descartado')}
-            className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>Descartar</button>
+            className={btnSecondarySm}>Descartar</button>
           <button type="button" disabled={!selectedIds.length || busy.__batch}
             onClick={() => setSelectedSignals({})}
-            className={`${btnGhost} h-8 px-2 text-xs disabled:opacity-50`}>Limpar</button>
+            className={btnGhostSm}>Limpar</button>
         </div>
       )}
 
@@ -4472,6 +5026,17 @@ function PcaSignalsPanel({ onPromoted }) {
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
           <p className="text-sm font-semibold text-ink">Nenhum sinal {statusFilterLabel(statusFilter).toLowerCase()}</p>
           <p className={`${subtle} mt-1`}>Os sinais aparecem após o sync das watchlists ativas.</p>
+        </div>
+      ) : flatMode ? (
+        <div className="space-y-2.5">
+          {plansFromGroups.map(renderPlan)}
+          <SignalsPaginationBar
+            page={page}
+            total={pageInfo.total}
+            pageSize={PCA_SIGNALS_PAGE_SIZE}
+            loading={loading}
+            onPageChange={goToPage}
+          />
         </div>
       ) : (
         <div className="space-y-3">
@@ -4494,113 +5059,32 @@ function PcaSignalsPanel({ onPromoted }) {
               </button>
               {!isCollapsed && (
               <div className="space-y-2.5 bg-bg2/30 p-3">
-                {group.plans.map(plan => (
-                  <div key={plan.key} className="overflow-hidden rounded-[12px] border border-line bg-surf">
-                    <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
-                      <div className="min-w-[240px] flex-1">
-                        <div className="text-sm font-semibold text-ink">
-                          {plan.orgao_razao || plan.orgao_cnpj} · PCA {plan.ano_pca}
-                        </div>
-                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
-                          <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5 font-mono text-[10px]">UASG {plan.codigo_unidade}</span>
-                          {plan.unidade_nome && <span>{plan.unidade_nome}</span>}
-                          <span>{plan.items.length} item{plan.items.length !== 1 ? 's' : ''}</span>
-                          <span className="font-mono font-semibold text-ink">{formatPcaCurrency(plan.valor_total)}</span>
-                          <span className="font-mono text-[10px] text-primary">score {Number(plan.max_score || 0).toFixed(2)}</span>
-                        </div>
-                      </div>
-                      <a
-                        href={plan.pncp_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={`${btnSecondary} h-8 px-3 text-xs`}
-                        title="Abrir PCA no PNCP"
-                      >
-                        PNCP ↗
-                      </a>
-                    </div>
-                    <div className="divide-y divide-border">
-                      {plan.items.map(s => (
-                        <div key={s.id} className="p-3 flex items-start gap-3">
-                          <input type="checkbox" checked={!!selectedSignals[s.id]} onChange={() => toggleSelected(s.id)} className="mt-1" />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm text-ink">{s.descricao}</div>
-                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted">
-                              <span>Item {s.numero_item || '—'}</span>
-                              {s.futura_contratacao_id && <span>Contratação {s.futura_contratacao_id}</span>}
-                              {s.futura_contratacao_nome && <span>{s.futura_contratacao_nome}</span>}
-                              <span>Mês {s.mes_previsto ?? '—'}</span>
-                              <span>Qtd. {formatPcaQuantity(s.quantidade)}</span>
-                              {s.unidade_medida && <span>{s.unidade_medida}</span>}
-                              <span>{formatPcaCurrency(s.valor_total)}</span>
-                              <span>Score {Number(s.score || 0).toFixed(2)}</span>
-                              <span>· {formatPcaDate(s.criado_em)}</span>
-                            </div>
-                          </div>
-                          <div className="flex gap-2 flex-wrap justify-end">
-                            {statusFilter !== 'promovido' && (
-                              <>
-                                {s.status !== 'novo' && (
-                                  <button type="button" disabled={busy[s.id]}
-                                    onClick={() => act(s.id, 'to_novo')}
-                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Novo</button>
-                                )}
-                                {s.status !== 'visto' && (
-                                  <button type="button" disabled={busy[s.id]}
-                                    onClick={() => act(s.id, 'to_visto')}
-                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Visto</button>
-                                )}
-                                {s.status !== 'descartado' && (
-                                  <button type="button" disabled={busy[s.id]}
-                                    onClick={() => act(s.id, 'to_descartado')}
-                                    className="h-8 rounded-lg border border-border px-3 text-xs disabled:opacity-50">Descartar</button>
-                                )}
-                              </>
-                            )}
-                            {statusFilter === 'novo' && (
-                              <button type="button" disabled={busy[s.id]}
-                                onClick={() => act(s.id, 'promote')}
-                                className="h-8 rounded-lg bg-primary text-white px-3 text-xs font-semibold disabled:opacity-50">Promover</button>
-                            )}
-                            {statusFilter === 'promovido' && (
-                              <button type="button" disabled={busy[s.id]}
-                                onClick={() => act(s.id, 'unpromote')}
-                                className="h-8 rounded-lg border border-border px-3 text-xs font-semibold disabled:opacity-50">Despromover</button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                {group.plans.map(renderPlan)}
               </div>
               )}
             </div>
             );
           })}
-          {pageInfo.hasMore && (
-            <div className="flex justify-center pt-1">
-              <button
-                type="button"
-                disabled={loadingMore}
-                onClick={() => load({ append: true, offset: signals.length })}
-                className="h-9 rounded-lg border border-border bg-card px-4 text-xs font-semibold text-primary disabled:opacity-50"
-              >
-                {loadingMore ? 'Carregando...' : `Carregar mais (${signals.length}/${pageInfo.total})`}
-              </button>
-            </div>
-          )}
+          <SignalsPaginationBar
+            page={page}
+            total={pageInfo.total}
+            pageSize={PCA_SIGNALS_PAGE_SIZE}
+            loading={loading}
+            onPageChange={goToPage}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function PcaWatchlistsPanel() {
+function PcaWatchlistsPanel({ onPromoted }) {
   const [watchlists, setWatchlists] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState({});
+  const [resultsWatchlist, setResultsWatchlist] = useState(null);
+  const [signalsRefreshVersion, setSignalsRefreshVersion] = useState(0);
 
   const loadWatchlists = useCallback(async ({ background = false } = {}) => {
     if (!background) setLoading(true);
@@ -4638,6 +5122,23 @@ function PcaWatchlistsPanel() {
     };
   }, [loadWatchlists]);
 
+  useEffect(() => {
+    if (!resultsWatchlist) return;
+    const next = watchlists.find(w => w.id === resultsWatchlist.id);
+    if (next && next !== resultsWatchlist) setResultsWatchlist(next);
+  }, [watchlists, resultsWatchlist]);
+
+  const refreshAfterSignals = useCallback(() => {
+    setSignalsRefreshVersion(v => v + 1);
+    loadWatchlists({ background: true });
+  }, [loadWatchlists]);
+
+  const openResults = (row) => setResultsWatchlist(row);
+  const closeResults = () => {
+    setResultsWatchlist(null);
+    refreshAfterSignals();
+  };
+
   const toggleAtivo = async (row) => {
     setBusy(prev => ({ ...prev, [row.id]: true }));
     try {
@@ -4655,6 +5156,7 @@ function PcaWatchlistsPanel() {
     setBusy(prev => ({ ...prev, [row.id]: true }));
     try {
       await axios.delete(`/api/licitacoes/pca/watchlist/${row.id}`);
+      if (resultsWatchlist?.id === row.id) setResultsWatchlist(null);
       await loadWatchlists();
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
@@ -4663,16 +5165,19 @@ function PcaWatchlistsPanel() {
     }
   };
 
-  const updateWhatsapp = async (row) => {
-    const nextNumber = window.prompt('Número de WhatsApp para alertas desta watchlist:', row.whatsapp_number || '');
-    if (nextNumber === null) return;
+  const [whatsappTarget, setWhatsappTarget] = useState(null);
+
+  const saveWhatsapp = async ({ whatsapp_enabled, whatsapp_number }) => {
+    if (!whatsappTarget) return;
+    const row = whatsappTarget;
     setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
     try {
       await axios.put(`/api/licitacoes/pca/watchlist/${row.id}`, {
-        whatsapp_enabled: Boolean(nextNumber.trim()),
-        whatsapp_number: nextNumber.trim() || null,
+        whatsapp_enabled,
+        whatsapp_number,
       });
-      await loadWatchlists();
+      setWhatsappTarget(null);
+      await loadWatchlists({ background: true });
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
@@ -4682,9 +5187,9 @@ function PcaWatchlistsPanel() {
 
   return (
     <div className="mt-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className={subtle}>Regras salvas são verificadas automaticamente e ao voltar para esta tela.</p>
-        <span className="text-[11px] text-muted">Atualização automática</span>
+      <div className="toolbar-meta">
+        <p className={subtle}>Clique no card para ver os sinais no popup. Regras são verificadas automaticamente e ao voltar para esta tela.</p>
+        <span className="justify-self-start text-[11px] text-muted sm:justify-self-end">Atualização automática</span>
       </div>
 
       {error && (
@@ -4702,55 +5207,120 @@ function PcaWatchlistsPanel() {
           <p className={`${subtle} mt-1 mx-auto max-w-md`}>Salve uma busca na aba PCA para monitorar termos e receber sinais.</p>
         </div>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {watchlists.map(w => (
-            <div key={w.id} className={`flex flex-col rounded-[14px] border bg-surf p-3.5 ${w.ativo ? 'border-line' : 'border-line opacity-75'}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink">{w.nome}</p>
-                  <p className="mt-0.5 font-mono text-[10px] text-muted2">criada {formatPcaDate(w.criado_em)}</p>
-                </div>
-                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${w.ativo ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600' : 'border-line bg-bg2 text-muted'}`}>
-                  {w.ativo ? 'Ativa' : 'Inativa'}
-                </span>
-              </div>
-              <div className="mt-2.5 flex flex-wrap gap-1.5 text-[10px] text-muted">
-                <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">
-                  WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
-                </span>
-              </div>
-              {(w.palavras_chave || []).length > 0 && (
-                <div className="mt-2.5 flex flex-wrap gap-1">
-                  {(w.palavras_chave || []).slice(0, 6).map(t => (
-                    <span key={t} className="max-w-[9rem] truncate rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wide text-primary">{t}</span>
-                  ))}
-                  {(w.palavras_chave || []).length > 6 && (
-                    <span className="rounded-md bg-bg2 px-1.5 py-0.5 text-[10px] text-muted">+{(w.palavras_chave || []).length - 6}</span>
-                  )}
-                </div>
-              )}
-              {(w.termos_negativos || []).length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {(w.termos_negativos || []).slice(0, 4).map(t => (
-                    <span key={t} className="rounded-md border border-amber/30 bg-amber/15 px-1.5 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wide text-amber">− {t}</span>
-                  ))}
-                </div>
-              )}
-              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line/70 pt-2.5">
-                <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={`${btnSecondary} h-7 px-2.5 text-[11px] disabled:opacity-50`}>
-                  {w.ativo ? 'Desativar' : 'Ativar'}
+        <div className="grid items-stretch gap-3 md:grid-cols-2">
+          {watchlists.map(w => {
+            const novos = Number(w.sinais_novos || 0);
+            const totalSinais = Number(w.sinais_total || 0);
+            return (
+              <div key={w.id} className={`${entityCard} ${w.ativo ? '' : 'opacity-75'}`}>
+                <button type="button" onClick={() => openResults(w)} className="min-w-0 flex-1 text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink hover:text-primary">{w.nome}</p>
+                      <p className="mt-0.5 font-mono text-[10px] text-muted2">criada {formatPcaDate(w.criado_em)}</p>
+                    </div>
+                    <span className={w.ativo ? statusPillActive : statusPillInactive}>
+                      {w.ativo ? 'Ativa' : 'Inativa'}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
+                    <span className={metaChip}>
+                      WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
+                    </span>
+                    <span className={metaChip}>
+                      Sinais: {totalSinais.toLocaleString('pt-BR')}
+                      {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex min-h-[1.75rem] flex-1 flex-col gap-1.5">
+                    {(w.palavras_chave || []).length > 0 && (
+                      <div className="flex flex-wrap content-start gap-1">
+                        {(w.palavras_chave || []).slice(0, 6).map(t => (
+                          <span key={t} className={termChip}>{t}</span>
+                        ))}
+                        {(w.palavras_chave || []).length > 6 && (
+                          <span className={metaChip}>+{(w.palavras_chave || []).length - 6}</span>
+                        )}
+                      </div>
+                    )}
+                    {(w.termos_negativos || []).length > 0 && (
+                      <div className="flex flex-wrap content-start gap-1">
+                        {(w.termos_negativos || []).slice(0, 4).map(t => (
+                          <span key={t} className={termChipNeg}>− {t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </button>
-                <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => updateWhatsapp(w)} className={`${btnSecondary} h-7 px-2.5 text-[11px] disabled:opacity-50`}>
-                  WhatsApp
-                </button>
-                <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className="ml-auto h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] text-muted hover:border-status-danger/40 hover:text-status-danger disabled:opacity-50">
-                  Excluir
-                </button>
+                <div className={cardActionBar}>
+                  <button type="button" onClick={() => openResults(w)} className={btnSecondaryXs}>
+                    Resultados
+                  </button>
+                  <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={btnSecondaryXs}>
+                    {w.ativo ? 'Desativar' : 'Ativar'}
+                  </button>
+                  <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => setWhatsappTarget(w)} className={btnSecondaryXs}>
+                    WhatsApp
+                  </button>
+                  <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
+                    Excluir
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+
+      <WatchlistWhatsappDialog
+        open={Boolean(whatsappTarget)}
+        watchlistName={whatsappTarget?.nome}
+        initialNumber={whatsappTarget?.whatsapp_number || ''}
+        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && whatsappTarget?.whatsapp_number)}
+        saving={Boolean(whatsappTarget && busy[`wa:${whatsappTarget.id}`])}
+        onClose={() => { if (!(whatsappTarget && busy[`wa:${whatsappTarget.id}`])) setWhatsappTarget(null); }}
+        onSave={saveWhatsapp}
+      />
+
+      {resultsWatchlist && createPortal(
+        <div className={modalOverlay} onClick={closeResults} role="presentation">
+          <div
+            className="flex w-full max-w-5xl max-h-[92vh] flex-col overflow-hidden rounded-[16px] border border-border bg-card shadow-lift dark:bg-[#111827] dark:border-[#1f2937]"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Sinais da watchlist ${resultsWatchlist.nome}`}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+              <div className="min-w-0">
+                <h3 className="truncate font-display text-base font-semibold uppercase tracking-wide text-ink">
+                  {resultsWatchlist.nome}
+                </h3>
+                <p className="mt-1 font-mono text-[11px] text-muted">
+                  {Number(resultsWatchlist.sinais_total || 0).toLocaleString('pt-BR')} sinal(is)
+                  {Number(resultsWatchlist.sinais_novos || 0) > 0
+                    ? ` · ${Number(resultsWatchlist.sinais_novos).toLocaleString('pt-BR')} novo(s)`
+                    : ''}
+                  {' · '}promova para o board quando fizer sentido
+                </p>
+              </div>
+              <button type="button" onClick={closeResults} className={iconBtn} aria-label="Fechar">
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-4 py-4 sm:px-5">
+              <PcaSignalsPanel
+                watchlistId={resultsWatchlist.id}
+                compact
+                onPromoted={onPromoted}
+                refreshVersion={signalsRefreshVersion}
+                onChanged={refreshAfterSignals}
+              />
+            </VerticalScrollArrows>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -4760,31 +5330,29 @@ function PcaWatchlistPage({ onPromoted }) {
   return (
     <div className="mt-6 space-y-5">
       <section className="rounded-[16px] border border-line bg-surf p-4 md:p-5">
-        <div className="mb-1">
+        <div className="mb-1 max-w-3xl">
           <h3 className={`${sectionTitle} text-base`}>Watchlists PCA</h3>
-          <p className={`${subtle} mt-0.5`}>Ative, configure WhatsApp e gerencie regras de monitoramento pré-edital.</p>
+          <p className={`${subtle} mt-1.5 leading-relaxed`}>
+            Regras de monitoramento do <strong className="font-semibold text-ink">Plano de Contratações Anuais</strong> do governo.
+            Cada watchlist acompanha termos no PCA e gera sinais quando aparecem itens relevantes — clique no card para ver os resultados no popup.
+          </p>
         </div>
-        <PcaWatchlistsPanel />
-      </section>
-      <section className="rounded-[16px] border border-line bg-surf p-4 md:p-5">
-        <div className="mb-1">
-          <h3 className={`${sectionTitle} text-base`}>Sinais encontrados</h3>
-          <p className={`${subtle} mt-0.5`}>Oportunidades geradas pelas watchlists — promova para o board quando fizer sentido.</p>
-        </div>
-        <PcaSignalsPanel onPromoted={onPromoted} />
+        <PcaWatchlistsPanel onPromoted={onPromoted} />
       </section>
     </div>
   );
 }
 
-function EditalWatchlistsPanel({ onSignalsChanged }) {
+function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountChange, listRefreshVersion = 0 }) {
   const [watchlists, setWatchlists] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState({});
+  const [resultsWatchlist, setResultsWatchlist] = useState(null);
+  const [signalsRefreshVersion, setSignalsRefreshVersion] = useState(0);
 
-  const loadWatchlists = useCallback(async () => {
-    setLoading(true);
+  const loadWatchlists = useCallback(async ({ background = false } = {}) => {
+    if (!background) setLoading(true);
     setError(null);
     try {
       const r = await axios.get('/api/licitacoes/editais/watchlist');
@@ -4792,13 +5360,25 @@ function EditalWatchlistsPanel({ onSignalsChanged }) {
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadWatchlists();
-  }, [loadWatchlists]);
+    loadWatchlists({ background: listRefreshVersion > 0 });
+  }, [loadWatchlists, listRefreshVersion]);
+
+  useEffect(() => {
+    if (!resultsWatchlist) return;
+    const next = watchlists.find(w => w.id === resultsWatchlist.id);
+    if (next && next !== resultsWatchlist) setResultsWatchlist(next);
+  }, [watchlists, resultsWatchlist]);
+
+  const refreshAfterSignals = useCallback(() => {
+    setSignalsRefreshVersion(v => v + 1);
+    loadWatchlists({ background: true });
+    onSignalsChanged?.();
+  }, [loadWatchlists, onSignalsChanged]);
 
   const toggleAtivo = async (row) => {
     setBusy(prev => ({ ...prev, [row.id]: true }));
@@ -4812,16 +5392,19 @@ function EditalWatchlistsPanel({ onSignalsChanged }) {
     }
   };
 
-  const updateWhatsapp = async (row) => {
-    const nextNumber = window.prompt('Número de WhatsApp para alertas desta watchlist:', row.whatsapp_number || '');
-    if (nextNumber === null) return;
+  const [whatsappTarget, setWhatsappTarget] = useState(null);
+
+  const saveWhatsapp = async ({ whatsapp_enabled, whatsapp_number }) => {
+    if (!whatsappTarget) return;
+    const row = whatsappTarget;
     setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
     try {
       await axios.put(`/api/licitacoes/editais/watchlist/${row.id}`, {
-        whatsapp_enabled: Boolean(nextNumber.trim()),
-        whatsapp_number: nextNumber.trim() || null,
+        whatsapp_enabled,
+        whatsapp_number,
       });
-      await loadWatchlists();
+      setWhatsappTarget(null);
+      await loadWatchlists({ background: true });
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
@@ -4834,6 +5417,7 @@ function EditalWatchlistsPanel({ onSignalsChanged }) {
     setBusy(prev => ({ ...prev, [row.id]: true }));
     try {
       await axios.delete(`/api/licitacoes/editais/watchlist/${row.id}`);
+      if (resultsWatchlist?.id === row.id) setResultsWatchlist(null);
       await loadWatchlists();
       onSignalsChanged?.();
     } catch (e) {
@@ -4843,11 +5427,17 @@ function EditalWatchlistsPanel({ onSignalsChanged }) {
     }
   };
 
+  const openResults = (row) => setResultsWatchlist(row);
+  const closeResults = () => {
+    setResultsWatchlist(null);
+    refreshAfterSignals();
+  };
+
   return (
     <div className="mt-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className={subtle}>Watchlists de editais usam a busca PNCP e geram sinais no sync.</p>
-        <button type="button" onClick={loadWatchlists} className={`${btnSecondary} h-8 px-3 text-xs inline-flex items-center gap-1.5`}>
+      <div className="toolbar-meta">
+        <p className={subtle}>Regras salvas são verificadas no sync. Clique no card para ver os resultados no popup.</p>
+        <button type="button" onClick={loadWatchlists} className={`${btnSecondarySm} justify-self-start sm:justify-self-end`}>
           <ArrowPathIcon className="h-3.5 w-3.5" /> Atualizar
         </button>
       </div>
@@ -4860,72 +5450,141 @@ function EditalWatchlistsPanel({ onSignalsChanged }) {
           <p className={`${subtle} mt-1 mx-auto max-w-md`}>Na Busca Editais, abra um job e use “Virar watchlist” para monitorar termos no PNCP.</p>
         </div>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {watchlists.map(w => (
-            <div key={w.id} className={`flex flex-col rounded-[14px] border bg-surf p-3.5 ${w.ativo ? 'border-line' : 'border-line opacity-75'}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink">{w.nome}</p>
-                  <p className="mt-0.5 font-mono text-[10px] text-muted2">criada {formatPcaDate(w.criado_em)}</p>
-                </div>
-                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${w.ativo ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600' : 'border-line bg-bg2 text-muted'}`}>
-                  {w.ativo ? 'Ativa' : 'Inativa'}
-                </span>
-              </div>
-              <div className="mt-2.5 flex flex-wrap gap-1.5 text-[10px] text-muted">
-                <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">
-                  WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
-                </span>
-              </div>
-              {(w.palavras_chave || []).length > 0 && (
-                <div className="mt-2.5 flex flex-wrap gap-1">
-                  {(w.palavras_chave || []).slice(0, 6).map(t => (
-                    <span key={t} className="max-w-[9rem] truncate rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wide text-primary">{t}</span>
-                  ))}
-                  {(w.palavras_chave || []).length > 6 && (
-                    <span className="rounded-md bg-bg2 px-1.5 py-0.5 text-[10px] text-muted">+{(w.palavras_chave || []).length - 6}</span>
-                  )}
-                </div>
-              )}
-              {Object.keys(w.filtros || {}).length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {Object.entries(w.filtros || {}).filter(([, v]) => v !== '' && v != null).slice(0, 4).map(([k, v]) => (
-                    <span key={k} className="rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[10px] text-muted">
-                      <span className="text-muted2">{k}:</span> {String(v)}
+        <div className="grid items-stretch gap-3 md:grid-cols-2">
+          {watchlists.map(w => {
+            const novos = Number(w.sinais_novos || 0);
+            const totalSinais = Number(w.sinais_total || 0);
+            return (
+              <div key={w.id} className={`${entityCard} ${w.ativo ? '' : 'opacity-75'}`}>
+                <button type="button" onClick={() => openResults(w)} className="min-w-0 flex-1 text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink hover:text-primary">{w.nome}</p>
+                      <p className="mt-0.5 font-mono text-[10px] text-muted2">criada {formatPcaDate(w.criado_em)}</p>
+                    </div>
+                    <span className={w.ativo ? statusPillActive : statusPillInactive}>
+                      {w.ativo ? 'Ativa' : 'Inativa'}
                     </span>
-                  ))}
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
+                    <span className={metaChip}>
+                      WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
+                    </span>
+                    <span className={metaChip}>
+                      Resultados: {totalSinais.toLocaleString('pt-BR')}
+                      {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 flex min-h-[1.75rem] flex-1 flex-col gap-1.5">
+                    {(w.palavras_chave || []).length > 0 && (
+                      <div className="flex flex-wrap content-start gap-1">
+                        {(w.palavras_chave || []).slice(0, 6).map(t => (
+                          <span key={t} className={termChip}>{t}</span>
+                        ))}
+                        {(w.palavras_chave || []).length > 6 && (
+                          <span className={metaChip}>+{(w.palavras_chave || []).length - 6}</span>
+                        )}
+                      </div>
+                    )}
+                    {(w.termos_negativos || []).length > 0 && (
+                      <div className="flex flex-wrap content-start gap-1">
+                        {(w.termos_negativos || []).slice(0, 4).map(t => (
+                          <span key={t} className={termChipNeg}>− {t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </button>
+                <div className={cardActionBar}>
+                  <button type="button" onClick={() => openResults(w)} className={btnSecondaryXs}>
+                    Resultados
+                  </button>
+                  <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={btnSecondaryXs}>
+                    {w.ativo ? 'Desativar' : 'Ativar'}
+                  </button>
+                  <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => setWhatsappTarget(w)} className={btnSecondaryXs}>
+                    WhatsApp
+                  </button>
+                  <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
+                    Excluir
+                  </button>
                 </div>
-              )}
-              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line/70 pt-2.5">
-                <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={`${btnSecondary} h-7 px-2.5 text-[11px] disabled:opacity-50`}>
-                  {w.ativo ? 'Desativar' : 'Ativar'}
-                </button>
-                <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => updateWhatsapp(w)} className={`${btnSecondary} h-7 px-2.5 text-[11px] disabled:opacity-50`}>
-                  WhatsApp
-                </button>
-                <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className="ml-auto h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] text-muted hover:border-status-danger/40 hover:text-status-danger disabled:opacity-50">
-                  Excluir
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+
+      <WatchlistWhatsappDialog
+        open={Boolean(whatsappTarget)}
+        watchlistName={whatsappTarget?.nome}
+        initialNumber={whatsappTarget?.whatsapp_number || ''}
+        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && whatsappTarget?.whatsapp_number)}
+        saving={Boolean(whatsappTarget && busy[`wa:${whatsappTarget.id}`])}
+        onClose={() => { if (!(whatsappTarget && busy[`wa:${whatsappTarget.id}`])) setWhatsappTarget(null); }}
+        onSave={saveWhatsapp}
+      />
+
+      {resultsWatchlist && createPortal(
+        <div className={modalOverlay} onClick={closeResults} role="presentation">
+          <div
+            className="flex w-full max-w-5xl max-h-[92vh] flex-col overflow-hidden rounded-[16px] border border-border bg-card shadow-lift dark:bg-[#111827] dark:border-[#1f2937]"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Resultados da watchlist ${resultsWatchlist.nome}`}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+              <div className="min-w-0">
+                <h3 className="truncate font-display text-base font-semibold uppercase tracking-wide text-ink">
+                  {resultsWatchlist.nome}
+                </h3>
+                <p className="mt-1 font-mono text-[11px] text-muted">
+                  {Number(resultsWatchlist.sinais_total || 0).toLocaleString('pt-BR')} resultado(s)
+                  {Number(resultsWatchlist.sinais_novos || 0) > 0
+                    ? ` · ${Number(resultsWatchlist.sinais_novos).toLocaleString('pt-BR')} novo(s)`
+                    : ''}
+                  {' · '}editais capturados por esta watchlist
+                </p>
+              </div>
+              <button type="button" onClick={closeResults} className={iconBtn} aria-label="Fechar">
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-4 py-4 sm:px-5">
+              <EditalSignalsPanel
+                watchlistId={resultsWatchlist.id}
+                compact
+                onImportSignal={onImportSignal}
+                onNewCountChange={onNewCountChange}
+                refreshVersion={signalsRefreshVersion}
+                onChanged={refreshAfterSignals}
+              />
+            </VerticalScrollArrows>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
 
-const EDITAL_SIGNALS_PAGE_SIZE = 100;
-
-function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion = 0 }) {
+function EditalSignalsPanel({
+  onImportSignal,
+  onNewCountChange,
+  refreshVersion = 0,
+  watchlistId = null,
+  compact = false,
+  onChanged,
+}) {
   const [signals, setSignals] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('novo');
+  const [page, setPage] = useState(1);
   const [statusCounts, setStatusCounts] = useState({ novo: 0, visto: 0, promovido: 0, descartado: 0 });
-  const [pageInfo, setPageInfo] = useState({ total: 0, hasMore: false });
+  const [pageInfo, setPageInfo] = useState({ total: 0, pageSize: EDITAL_SIGNALS_PAGE_SIZE });
   const [busy, setBusy] = useState({});
   const [collapsedWatchlists, setCollapsedWatchlists] = useState({});
 
@@ -4945,35 +5604,60 @@ function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion =
     }
   }, [onNewCountChange]);
 
-  const load = useCallback(async ({ append = false, offset = 0 } = {}) => {
-    if (append) setLoadingMore(true);
-    else setLoading(true);
+  const load = useCallback(async ({ pageOverride } = {}) => {
+    const activePage = Math.max(1, pageOverride ?? page);
+    setLoading(true);
     setError(null);
     try {
+      const offset = (activePage - 1) * EDITAL_SIGNALS_PAGE_SIZE;
       const r = await axios.get('/api/licitacoes/editais/signals', {
-        params: { status: statusFilter, limit: EDITAL_SIGNALS_PAGE_SIZE, offset },
+        params: {
+          status: statusFilter,
+          limit: EDITAL_SIGNALS_PAGE_SIZE,
+          offset,
+          ...(watchlistId ? { watchlist_id: watchlistId } : {}),
+        },
       });
       const rows = r.data?.data || [];
-      setSignals(prev => append ? [...prev, ...rows] : rows);
-      setPageInfo({ total: Number(r.data?.total) || 0, hasMore: !!r.data?.has_more });
+      const total = Number(r.data?.total) || 0;
+      const totalPages = Math.max(1, Math.ceil(total / EDITAL_SIGNALS_PAGE_SIZE));
+      if (rows.length === 0 && total > 0 && activePage > totalPages) {
+        setPage(totalPages);
+        return;
+      }
+      setSignals(rows);
+      setPageInfo({ total, pageSize: EDITAL_SIGNALS_PAGE_SIZE });
       loadCounts();
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
-      if (append) setLoadingMore(false);
-      else setLoading(false);
+      setLoading(false);
     }
-  }, [statusFilter, loadCounts]);
+  }, [statusFilter, loadCounts, watchlistId, page]);
+
+  useEffect(() => { setPage(1); }, [watchlistId]);
 
   useEffect(() => { load(); }, [load, refreshVersion]);
 
+  const changeStatusFilter = (nextStatus) => {
+    setStatusFilter(nextStatus);
+    setPage(1);
+  };
+
+  const goToPage = (nextPage) => {
+    const totalPages = Math.max(1, Math.ceil((pageInfo.total || 0) / EDITAL_SIGNALS_PAGE_SIZE));
+    setPage(Math.min(Math.max(1, nextPage), totalPages));
+  };
+
   const groupedSignals = useMemo(() => groupEditalSignalsByWatchlist(signals), [signals]);
+  const flatMode = Boolean(watchlistId) || compact;
 
   const setStatus = async (row, status) => {
     setBusy(prev => ({ ...prev, [row.id]: true }));
     try {
       await axios.put(`/api/licitacoes/editais/signals/${row.id}/status`, { status });
       await load();
+      onChanged?.();
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
     } finally {
@@ -4981,18 +5665,64 @@ function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion =
     }
   };
 
+  const renderSignalRow = (s) => {
+    const item = s.payload || {};
+    return (
+      <div key={s.id} className="flex flex-col gap-3 p-3.5 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-ink">{item.titulo || item.title || 'Edital PNCP'}</div>
+          <div className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao || item.description}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className={metaChip}>{item.orgao?.nome || item.orgao_nome || 'Órgão n/d'}</span>
+            {item.unidade?.codigo && <span className={`${metaChip} font-mono`}>UASG {item.unidade.codigo}</span>}
+            {item.prazo_info?.label && <span className={metaChip}>{item.prazo_info.label}</span>}
+            <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">score {Number(s.score || 0).toFixed(2)}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:justify-end">
+          {item.url && (
+            <a href={item.url} target="_blank" rel="noopener noreferrer" className={btnSecondarySm}>PNCP ↗</a>
+          )}
+          {statusFilter !== 'promovido' && onImportSignal && (
+            <button
+              type="button"
+              disabled={busy[s.id]}
+              onClick={async () => {
+                await onImportSignal(item, s.id);
+                onChanged?.();
+                load();
+              }}
+              className={btnPrimarySm}
+            >
+              Importar
+            </button>
+          )}
+          {s.status !== 'visto' && (
+            <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'visto')} className={btnSecondarySm}>Visto</button>
+          )}
+          {s.status !== 'descartado' && (
+            <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'descartado')} className={btnSecondarySm}>Descartar</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="mt-4 space-y-4">
+    <div className={`${compact ? 'mt-0' : 'mt-4'} space-y-4`}>
       <div className="flex flex-wrap items-center gap-2">
         {['novo', 'visto', 'promovido', 'descartado'].map(s => (
-          <button key={s} type="button" onClick={() => setStatusFilter(s)} className={statusFilterPill(statusFilter === s)}>
-            {statusFilterLabel(s)} ({statusCounts[s] || 0})
+          <button key={s} type="button" onClick={() => changeStatusFilter(s)} className={statusFilterPill(statusFilter === s)}>
+            {statusFilterLabel(s)}
+            {flatMode
+              ? (s === statusFilter ? ` (${pageInfo.total})` : '')
+              : ` (${statusCounts[s] || 0})`}
           </button>
         ))}
         <span className="font-mono text-[11px] text-muted2">
-          {signals.length}/{pageInfo.total || statusCounts[statusFilter] || signals.length}
+          pág. {page} · {pageInfo.total || statusCounts[statusFilter] || 0} total
         </span>
-        <button type="button" onClick={load} className={`${btnSecondary} ml-auto h-8 px-3 text-xs inline-flex items-center gap-1.5`}>
+        <button type="button" onClick={() => load()} className={`${btnSecondarySm} ml-auto`}>
           <ArrowPathIcon className="h-3.5 w-3.5" /> Atualizar
         </button>
       </div>
@@ -5003,6 +5733,19 @@ function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion =
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
           <p className="text-sm font-semibold text-ink">Nenhum sinal {statusFilterLabel(statusFilter).toLowerCase()}</p>
           <p className={`${subtle} mt-1`}>Rode o sync ou aguarde o ciclo automático das watchlists ativas.</p>
+        </div>
+      ) : flatMode ? (
+        <div className="space-y-3">
+          <div className="overflow-hidden rounded-[14px] border border-line bg-surf divide-y divide-line">
+            {signals.map(renderSignalRow)}
+          </div>
+          <SignalsPaginationBar
+            page={page}
+            total={pageInfo.total}
+            pageSize={EDITAL_SIGNALS_PAGE_SIZE}
+            loading={loading}
+            onPageChange={goToPage}
+          />
         </div>
       ) : (
         <div className="space-y-3">
@@ -5019,52 +5762,19 @@ function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion =
                 </button>
                 {!isCollapsed && (
                   <div className="divide-y divide-line">
-                    {group.items.map(s => {
-                      const item = s.payload || {};
-                      return (
-                        <div key={s.id} className="flex items-start gap-3 p-3.5">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-semibold text-ink">{item.titulo || item.title || 'Edital PNCP'}</div>
-                            <div className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao || item.description}</div>
-                            <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted">
-                              <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">{item.orgao?.nome || item.orgao_nome || 'Órgão n/d'}</span>
-                              {item.unidade?.codigo && <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5 font-mono text-[10px]">UASG {item.unidade.codigo}</span>}
-                              {item.prazo_info?.label && <span className="rounded-md border border-line bg-bg2 px-1.5 py-0.5">{item.prazo_info.label}</span>}
-                              <span className="rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">score {Number(s.score || 0).toFixed(2)}</span>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-                            {item.url && (
-                              <a href={item.url} target="_blank" rel="noopener noreferrer" className={`${btnSecondary} h-8 px-3 text-xs`}>PNCP ↗</a>
-                            )}
-                            {statusFilter !== 'promovido' && onImportSignal && (
-                              <button type="button" disabled={busy[s.id]} onClick={() => onImportSignal(item, s.id)} className="h-8 rounded-[10px] bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] px-3 text-xs font-semibold text-white disabled:opacity-50">
-                                Importar
-                              </button>
-                            )}
-                            {s.status !== 'visto' && (
-                              <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'visto')} className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>Visto</button>
-                            )}
-                            {s.status !== 'descartado' && (
-                              <button type="button" disabled={busy[s.id]} onClick={() => setStatus(s, 'descartado')} className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>Descartar</button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {group.items.map(renderSignalRow)}
                   </div>
                 )}
               </div>
             );
           })}
-          {pageInfo.hasMore && (
-            <div className="flex justify-center pt-1">
-              <button type="button" disabled={loadingMore} onClick={() => load({ append: true, offset: signals.length })}
-                className={`${btnSecondary} h-9 px-4 text-xs disabled:opacity-50`}>
-                {loadingMore ? 'Carregando…' : `Carregar mais (${signals.length}/${pageInfo.total})`}
-              </button>
-            </div>
-          )}
+          <SignalsPaginationBar
+            page={page}
+            total={pageInfo.total}
+            pageSize={EDITAL_SIGNALS_PAGE_SIZE}
+            loading={loading}
+            onPageChange={goToPage}
+          />
         </div>
       )}
     </div>
@@ -5073,15 +5783,31 @@ function EditalSignalsPanel({ onImportSignal, onNewCountChange, refreshVersion =
 
 function EditalWatchlistPage({ onImportSignal, onNewCountChange }) {
   const [syncing, setSyncing] = useState(false);
-  const [signalsRefreshVersion, setSignalsRefreshVersion] = useState(0);
-  const refreshSignals = useCallback(() => {
-    setSignalsRefreshVersion(version => version + 1);
-  }, []);
+  const [listRefreshVersion, setListRefreshVersion] = useState(0);
+
+  const refreshBadge = useCallback(async () => {
+    try {
+      const count = await fetchEditalNewSignalsCount();
+      onNewCountChange?.(count);
+    } catch {
+      /* badge is best-effort */
+    }
+  }, [onNewCountChange]);
+
+  useEffect(() => {
+    refreshBadge();
+  }, [refreshBadge]);
+
+  const handleSignalsChanged = useCallback(() => {
+    setListRefreshVersion(v => v + 1);
+    refreshBadge();
+  }, [refreshBadge]);
+
   const syncNow = async () => {
     setSyncing(true);
     try {
       const r = await axios.post('/api/licitacoes/editais/sync');
-      refreshSignals();
+      handleSignalsChanged();
       alert(`Sync concluído: ${r.data?.signals_inserted || 0} novo(s) sinal(is).`);
     } catch (e) {
       alert(`Erro: ${e.response?.data?.error || e.message}`);
@@ -5095,23 +5821,19 @@ function EditalWatchlistPage({ onImportSignal, onNewCountChange }) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className={`${sectionTitle} text-base`}>Watchlists de editais</h3>
-            <p className={`${subtle} mt-0.5`}>Regras salvas a partir da Busca Editais / PNCP.</p>
+            <p className={`${subtle} mt-0.5`}>
+              Mesmo estilo das watchlists PCA. Resultados abrem no popup do card — não numa lista fora.
+            </p>
           </div>
-          <button type="button" disabled={syncing} onClick={syncNow} className={`${btnPrimary} h-8 px-3 text-xs disabled:opacity-50`}>
+          <button type="button" disabled={syncing} onClick={syncNow} className={`${btnPrimarySm}`}>
             {syncing ? 'Sincronizando…' : 'Rodar sync'}
           </button>
         </div>
-        <EditalWatchlistsPanel onSignalsChanged={refreshSignals} />
-      </section>
-      <section className="rounded-[16px] border border-line bg-surf p-4 md:p-5">
-        <div className="mb-1">
-          <h3 className={`${sectionTitle} text-base`}>Sinais encontrados</h3>
-          <p className={`${subtle} mt-0.5`}>Editais capturados pelas watchlists — importe para o funil quando fizer sentido.</p>
-        </div>
-        <EditalSignalsPanel
+        <EditalWatchlistsPanel
+          listRefreshVersion={listRefreshVersion}
           onImportSignal={onImportSignal}
           onNewCountChange={onNewCountChange}
-          refreshVersion={signalsRefreshVersion}
+          onSignalsChanged={refreshBadge}
         />
       </section>
     </div>
@@ -5226,6 +5948,7 @@ function App() {
     ordenacao: 'relevancia_desc',
     usar_ia: true, // Busca inteligente com termos correlatos
     negative_terms: '',
+    srp_only: false, // Filtro client-side: apenas Sistema de Registro de Preços
   });
   const [pncpSearchResults, setPncpSearchResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 0, termosUsados: [], termosNegativos: [], fonteIA: null });
   const [pncpSearchLoading, setPncpSearchLoading] = useState(false);
@@ -5242,6 +5965,7 @@ function App() {
   const [pncpAcceptedNegativeTerms, setPncpAcceptedNegativeTerms] = useState([]);
   const [pncpCustomTermInput, setPncpCustomTermInput] = useState('');
   const [pncpActiveJobTermInput, setPncpActiveJobTermInput] = useState('');
+  const [pncpActiveJobPendingTerms, setPncpActiveJobPendingTerms] = useState([]);
   const [pncpSuggestionLoading, setPncpSuggestionLoading] = useState(false);
   const [pncpOrgaoLookupQuery, setPncpOrgaoLookupQuery] = useState('');
   const [pncpUasgLookupQuery, setPncpUasgLookupQuery] = useState('');
@@ -5270,6 +5994,9 @@ function App() {
   });
   const [pncpJobFiltersEditing, setPncpJobFiltersEditing] = useState(false);
   const [pncpJobFiltersSaving, setPncpJobFiltersSaving] = useState(false);
+  // Confirmação de exclusão de job (substitui window.confirm nativo).
+  const [pncpDeleteJobConfirm, setPncpDeleteJobConfirm] = useState(null); // { id, nome, total, terms, status, live }
+  const [pncpDeleteJobBusy, setPncpDeleteJobBusy] = useState(false);
   const [pncpResultLocalQuery, setPncpResultLocalQuery] = useState('');
   const [pncpResultScope, setPncpResultScope] = useState('all');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
@@ -5400,6 +6127,8 @@ function App() {
   const [sortOption, setSortOption] = useState('opportunity-desc');
   const [historyGranularity, setHistoryGranularity] = useState('week');
   const [overviewLoading, setOverviewLoading] = useState(false);
+  /** True while a chart-panel is in browser fullscreen (TV wallboard mode). */
+  const [chartWallboardActive, setChartWallboardActive] = useState(false);
   const [funnelPace, setFunnelPace] = useState(null);
   const [paceAgentId, setPaceAgentId] = useState(null); // null = time geral
   const [paceMetric, setPaceMetric] = useState('count'); // 'count' | 'value' (R$ a partir de opp)
@@ -5523,33 +6252,27 @@ function App() {
     loadUsers();
   }, [authStatus.authenticated, authStatus.role, activeView, loadUsers]);
 
-  const saveUserAccess = useCallback(async (userId, allowedViews) => {
+  const saveUserAccess = useCallback(async (userId, patch) => {
     try {
-      await axios.put(`/api/users/${userId}/access`, { allowed_views: allowedViews });
-      setUsersList(prev => prev.map(u => (u.id === userId ? { ...u, allowed_views: allowedViews } : u)));
+      const { data } = await axios.put(`/api/users/${userId}/access`, patch);
+      setUsersList(prev => prev.map(u => (
+        u.id === userId
+          ? {
+              ...u,
+              allowed_views: data?.allowed_views != null ? data.allowed_views : (patch.allowed_views ?? u.allowed_views),
+              is_seller: data?.is_seller != null ? data.is_seller : (patch.is_seller ?? u.is_seller),
+              seller_label: data?.seller_label !== undefined ? data.seller_label : (patch.seller_label !== undefined ? patch.seller_label : u.seller_label),
+              seller_identity: data?.seller_identity !== undefined ? data.seller_identity : u.seller_identity,
+            }
+          : u
+      )));
     } catch (error) {
       console.error('Error saving user access:', error);
     }
   }, []);
 
-  useEffect(() => {
-    if (!authStatus.authenticated || activeView !== 'Overview') return;
-    const now = new Date();
-    const ano = now.getFullYear();
-    const mes = now.getMonth() + 1;
-    Promise.all([
-      axios.get('/api/metas', { params: { ano } }),
-      axios.get('/api/vendas/realizado', { params: { ano, mes } }),
-    ])
-      .then(([m, r]) => {
-        const metaRow = (m.data || []).find(x => Number(x.mes) === mes);
-        setVendaMeta({ meta: metaRow ? Number(metaRow.receita_meta) : null, ...r.data });
-      })
-      .catch(() => setVendaMeta(null));
-  }, [authStatus.authenticated, activeView]);
-
-  const loadMetas = useCallback((year) => {
-    setMetasLoading(true);
+  const loadMetas = useCallback((year, background = false) => {
+    if (!background) setMetasLoading(true);
     Promise.all([
       axios.get('/api/metas', { params: { ano: year } }).then(r => r.data || []).catch(() => []),
       axios.get('/api/vendas/realizado/ano', { params: { ano: year } })
@@ -5560,14 +6283,26 @@ function App() {
         .catch(() => []),
     ])
       .then(([metas, meses, vendedores]) => { setMetasRows(metas); setRealizadoRows(meses); setRealizadoVendedores(vendedores); })
-      .finally(() => setMetasLoading(false));
+      .finally(() => {
+        if (!background) setMetasLoading(false);
+      });
   }, []);
 
+  // Initial / year change load — never tied to wallboard flag (that was unmounting charts mid-fullscreen)
   useEffect(() => {
-    if (!authStatus.authenticated || authStatus.role !== 'admin') return;
-    if (activeView !== 'Metas' && activeView !== 'Definir Metas') return;
-    loadMetas(metasYear);
+    if (!authStatus.authenticated || authStatus.role !== 'admin') return undefined;
+    if (activeView !== 'Metas' && activeView !== 'Definir Metas') return undefined;
+    loadMetas(metasYear, false);
   }, [authStatus.authenticated, authStatus.role, activeView, metasYear, loadMetas]);
+
+  // Silent interval only — changing speed must not re-trigger a blocking load
+  useEffect(() => {
+    if (!authStatus.authenticated || authStatus.role !== 'admin') return undefined;
+    if (activeView !== 'Metas' && activeView !== 'Definir Metas') return undefined;
+    const ms = chartWallboardActive ? 15000 : 60000;
+    const id = window.setInterval(() => loadMetas(metasYear, true), ms);
+    return () => window.clearInterval(id);
+  }, [authStatus.authenticated, authStatus.role, activeView, metasYear, loadMetas, chartWallboardActive]);
 
   const saveMeta = useCallback(async (ano, mes, patch, prevRow) => {
     const merged = {
@@ -5766,7 +6501,7 @@ function App() {
       setDisparoResult({
         error: data?.error || formatted.title,
         errorTitle: formatted.title,
-        errorDetail: formatted.detail || formatDisparoApiError(error, 'Falha no envio.'),
+        errorDetail: data?.detail || formatted.detail || formatDisparoApiError(error, 'Falha no envio.'),
         errorKind: formatted.kind,
         resumo: data?.resumo || null,
       });
@@ -5865,13 +6600,29 @@ function App() {
     axios.get('/api/leads/existing-cnpjs').then(r => setLeadExistingCNPJs(r.data || {})).catch(() => {});
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Dia civil America/Sao_Paulo (YYYY-MM-DD) — alinha com cache diário do backend
+  const brDayKeyClient = useCallback(() => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, []);
+
+  // Cache diário: 1ª abertura do dia gera no backend; reexpandir no mesmo dia só reutiliza.
+  // force=true só com ?force=1 no backend (admin) — a UI normal nunca força regeneração.
   const loadTrendsIntel = useCallback(async ({ force = false } = {}) => {
     if (force) setTrendsRefreshing(true);
     else setTrendsIntelLoading(true);
     setTrendsIntelError('');
     try {
       const r = force
-        ? await axios.post('/api/trends/intel/refresh')
+        ? await axios.get('/api/trends/intel', { params: { force: 1 } })
         : await axios.get('/api/trends/intel');
       setTrendsIntel(r.data || null);
     } catch (e) {
@@ -6302,23 +7053,44 @@ function App() {
     return () => observer.disconnect();
   }, [activeTab, activeView, contacts.length, licitacaoOpportunities.length]);
 
-  // Ritmo do time: time geral ou um agente (feito do dia filtrado) — só Gestão de Leads
+  // Faster data poll while any chart wallboard is open
   useEffect(() => {
+    const onWallboard = (e) => {
+      setChartWallboardActive(Boolean(e?.detail?.active));
+    };
+    window.addEventListener('chart-wallboard', onWallboard);
+    return () => window.removeEventListener('chart-wallboard', onWallboard);
+  }, []);
+
+  // Ritmo do time: time geral ou um agente (feito do dia filtrado) — só Gestão de Leads
+  const loadFunnelPace = useCallback((background = false) => {
     if (!authStatus.authenticated) return;
-    if (activeView !== 'Overview') return;
     const params = paceAgentId ? { agent_id: paceAgentId } : {};
     axios.get('/api/overview/funnel-pace', { params })
       .then((r) => setFunnelPace(r.data || null))
-      .catch(() => setFunnelPace(null));
-  }, [authStatus.authenticated, activeView, paceAgentId]);
+      .catch(() => {
+        if (!background) setFunnelPace(null);
+      });
+  }, [authStatus.authenticated, paceAgentId]);
 
   useEffect(() => {
-    if (!authStatus.authenticated) return;
-    if (activeView !== 'Overview') return;
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    loadFunnelPace(false);
+  }, [authStatus.authenticated, activeView, loadFunnelPace]);
 
-    setOverviewLoading(true);
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    const ms = chartWallboardActive ? 12000 : 30000;
+    const id = window.setInterval(() => loadFunnelPace(true), ms);
+    return () => window.clearInterval(id);
+  }, [authStatus.authenticated, activeView, loadFunnelPace, chartWallboardActive]);
+
+  const loadOverviewData = useCallback((background = false) => {
+    if (!authStatus.authenticated) return Promise.resolve();
+    // Only show the blocking skeleton on the first paint — never while a chart is wallboarded
+    if (!background) setOverviewLoading(true);
     const range = historyGranularity === 'day' ? 30 : historyGranularity === 'month' ? 12 : 12;
-    Promise.all([
+    return Promise.all([
       axios.get('/api/overview/summary'),
       axios.get('/api/overview/by-stage'),
       axios.get('/api/overview/by-label'),
@@ -6352,9 +7124,64 @@ function App() {
         console.error('Error fetching overview data:', error);
       })
       .finally(() => {
-        setOverviewLoading(false);
+        if (!background) setOverviewLoading(false);
       });
-  }, [activeView, historyGranularity, authStatus.authenticated]);
+  }, [authStatus.authenticated, historyGranularity]);
+
+  // Load when entering Overview / changing history grain — NOT when wallboard toggles
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    loadOverviewData(false);
+  }, [activeView, authStatus.authenticated, loadOverviewData]);
+
+  // Silent poll — only restarts interval when wallboard speed changes
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    const ms = chartWallboardActive ? 12000 : 45000;
+    const id = window.setInterval(() => loadOverviewData(true), ms);
+    return () => window.clearInterval(id);
+  }, [activeView, authStatus.authenticated, loadOverviewData, chartWallboardActive]);
+
+  // Meta de receita do mês (ritmo) — refresh silencioso
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    const pull = () => {
+      const now = new Date();
+      const ano = now.getFullYear();
+      const mes = now.getMonth() + 1;
+      Promise.all([
+        axios.get('/api/metas', { params: { ano } }),
+        axios.get('/api/vendas/realizado', { params: { ano, mes } }),
+      ])
+        .then(([m, r]) => {
+          const metaRow = (m.data || []).find(x => Number(x.mes) === mes);
+          setVendaMeta({ meta: metaRow ? Number(metaRow.receita_meta) : null, ...r.data });
+        })
+        .catch(() => {});
+    };
+    pull();
+  }, [authStatus.authenticated, activeView]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
+    const pull = () => {
+      const now = new Date();
+      const ano = now.getFullYear();
+      const mes = now.getMonth() + 1;
+      Promise.all([
+        axios.get('/api/metas', { params: { ano } }),
+        axios.get('/api/vendas/realizado', { params: { ano, mes } }),
+      ])
+        .then(([m, r]) => {
+          const metaRow = (m.data || []).find(x => Number(x.mes) === mes);
+          setVendaMeta({ meta: metaRow ? Number(metaRow.receita_meta) : null, ...r.data });
+        })
+        .catch(() => {});
+    };
+    const ms = chartWallboardActive ? 15000 : 60000;
+    const id = window.setInterval(pull, ms);
+    return () => window.clearInterval(id);
+  }, [authStatus.authenticated, activeView, chartWallboardActive]);
 
   useEffect(() => {
     if (activeView !== 'Processo') return undefined;
@@ -6580,6 +7407,11 @@ function App() {
     let list = pncpResultScope === 'all'
       ? pncpResultsWithVisibility
       : pncpResultsWithVisibility.filter(item => item.__visibility === pncpResultScope);
+    // Filtro client-side: SRP só é conhecido após enriquecimento (itens sem
+    // detalhe têm srp === null e são ocultados apenas com o filtro ligado).
+    if (pncpSearchFilters.srp_only) {
+      list = list.filter(item => item.srp === true);
+    }
     const q = String(pncpResultLocalQuery || '').trim().toLowerCase();
     if (q) {
       list = list.filter(item => {
@@ -6595,7 +7427,7 @@ function App() {
       });
     }
     return list;
-  }, [pncpResultsWithVisibility, pncpResultScope, pncpResultLocalQuery]);
+  }, [pncpResultsWithVisibility, pncpResultScope, pncpResultLocalQuery, pncpSearchFilters.srp_only]);
 
   const pncpSearchSummary = useMemo(() => {
     const backendSummary = pncpSearchResults.summary || pncpSearchResults.pageSummary;
@@ -6649,6 +7481,48 @@ function App() {
     if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min`;
     if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} h`;
     return `${Math.floor(diffSec / 86400)} d`;
+  };
+
+  // Countdown até arquivamento (15 dias desde started_at; reexecuções não estendem).
+  const getPncpJobArchiveMeta = (job) => {
+    if (!job || job.watchlist_id) return null;
+    const archiveDays = Number(job.archive_days || 15);
+    let daysLeft = job.days_until_archive;
+    if (daysLeft == null && job.archive_at) {
+      const archiveTs = Date.parse(job.archive_at);
+      if (Number.isFinite(archiveTs)) {
+        daysLeft = Math.max(0, Math.ceil((archiveTs - Date.now()) / 86400000));
+      }
+    }
+    if (daysLeft == null && job.started_at) {
+      const startTs = typeof job.started_at === 'number' ? job.started_at : Date.parse(job.started_at);
+      if (Number.isFinite(startTs)) {
+        const archiveTs = startTs + archiveDays * 86400000;
+        daysLeft = Math.max(0, Math.ceil((archiveTs - Date.now()) / 86400000));
+      }
+    }
+    if (daysLeft == null || !Number.isFinite(Number(daysLeft))) return null;
+    const n = Number(daysLeft);
+    if (n <= 0) {
+      return { daysLeft: 0, label: 'Arquiva hoje', urgent: true, className: 'bg-status-danger/10 text-status-danger border-status-danger/25' };
+    }
+    if (n === 1) {
+      return { daysLeft: 1, label: 'Arquiva em 1 d', urgent: true, className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' };
+    }
+    if (n <= 2) {
+      return { daysLeft: n, label: `Arquiva em ${n} d`, urgent: true, className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' };
+    }
+    return { daysLeft: n, label: `Arquiva em ${n} d`, urgent: false, className: 'bg-cardAlt text-muted border-border' };
+  };
+
+  const canRerunPncpSearchJob = (job) => {
+    if (!job?.id || job.watchlist_id) return false;
+    if (isPncpJobLive(job.status)) return false;
+    const archive = getPncpJobArchiveMeta(job);
+    if (archive && archive.daysLeft <= 0 && job.days_until_archive === 0) {
+      // Ainda permite no último dia; bloqueio real fica no backend (410).
+    }
+    return ['completed', 'failed', 'cancelled'].includes(String(job.status || ''));
   };
 
   const seedPncpJobFilterDraft = (filters = {}) => {
@@ -6814,7 +7688,6 @@ function App() {
   const getContactsForColumn = (columnName) => contactsByColumn[columnName] || [];
   const dotClass = activeTab === 'leads' ? 'bg-primary' : 'bg-secondary';
   const showMenu = true;
-  const showHeaderMenu = activeTab === 'leads';
   const menuLabel = activeTab === 'leads' ? 'Enviar para novos clientes' : 'Voltar para Inbox';
   const newContactUrl = activeTab === 'customers'
     ? 'https://chatwoot.tenryu.com.br/app/accounts/2/contacts?page=1'
@@ -7310,6 +8183,14 @@ function App() {
           total: Number(response.data?.total || 0),
           summary: response.data?.summary || null,
           error: response.data?.error || null,
+          watchlist_id: response.data?.watchlist_id || null,
+          started_at: response.data?.started_at,
+          updated_at: response.data?.updated_at,
+          completed_at: response.data?.completed_at,
+          archive_at: response.data?.archive_at || null,
+          days_until_archive: response.data?.days_until_archive,
+          archive_days: response.data?.archive_days || 15,
+          term_runs: response.data?.term_runs || response.data?.query_plan?.term_runs || [],
         };
         const exists = prev.some(j => String(j.id) === String(jobId));
         if (!exists) return [next, ...prev].slice(0, 20);
@@ -7374,11 +8255,51 @@ function App() {
     }
   };
 
-  const deletePncpSearchJob = async (jobId) => {
+  // Reexecuta mantendo resultados já encontrados (UPSERT no backend).
+  const rerunPncpSearchJob = async (jobId) => {
     if (!jobId) return;
-    if (!window.confirm('Excluir esta busca e todos os resultados salvos?')) return;
+    try {
+      setPncpSearchLoading(true);
+      await axios.post(`/api/licitacoes/pncp/search/deep/${jobId}/rerun`);
+      await loadPncpSearchJobs();
+      if (String(activePncpSearchJobId) === String(jobId)) {
+        await openPncpSearchJob(jobId, { refreshJobs: false, openModal: pncpJobModalOpen });
+      }
+    } catch (error) {
+      const msg = error.response?.data?.error || error.message;
+      alert(`Não foi possível rodar de novo: ${msg}`);
+    } finally {
+      setPncpSearchLoading(false);
+    }
+  };
+
+  const requestDeletePncpSearchJob = (jobId) => {
+    if (!jobId) return;
+    const job = pncpSearchJobs.find(j => String(j.id) === String(jobId))
+      || (String(activePncpSearchJobId) === String(jobId) ? activePncpSearchJob : null);
+    setPncpDeleteJobConfirm({
+      id: jobId,
+      nome: job?.nome || job?.filters?.q || 'Pesquisa PNCP',
+      total: Number(job?.total || 0),
+      terms: Array.isArray(job?.terms) ? job.terms : [],
+      status: job?.status || null,
+      live: isPncpJobLive(job?.status),
+      watchlist: Boolean(job?.watchlist_id),
+    });
+  };
+
+  const closeDeletePncpSearchJobConfirm = () => {
+    if (pncpDeleteJobBusy) return;
+    setPncpDeleteJobConfirm(null);
+  };
+
+  const confirmDeletePncpSearchJob = async () => {
+    const jobId = pncpDeleteJobConfirm?.id;
+    if (!jobId) return;
+    setPncpDeleteJobBusy(true);
     try {
       await axios.delete(`/api/licitacoes/pncp/search/deep/${jobId}`);
+      setPncpDeleteJobConfirm(null);
       if (String(activePncpSearchJobId) === String(jobId)) {
         setActivePncpSearchJobId(null);
         setPncpJobModalOpen(false);
@@ -7391,8 +8312,13 @@ function App() {
     } catch (error) {
       console.error('Error deleting PNCP job:', error);
       alert(`Erro ao excluir: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setPncpDeleteJobBusy(false);
     }
   };
+
+  // Alias usado pelos botões do card/modal (abre o diálogo, não exclui direto).
+  const deletePncpSearchJob = requestDeletePncpSearchJob;
 
   const convertPncpSearchJobToWatchlist = async (jobId) => {
     if (!jobId) return;
@@ -7431,14 +8357,69 @@ function App() {
     }
   };
 
-  const addTermsToActivePncpJob = async () => {
-    const terms = splitTermsInput(pncpActiveJobTermInput);
+  // Converte o texto digitado em chip local (vírgula) antes de anexar ao job.
+  const commitPncpActiveJobTermDraft = () => {
+    const draft = String(pncpActiveJobTermInput || '').trim().replace(/[,;]+$/, '');
+    if (!draft) return [];
+    const parts = splitTermsInput(draft);
+    if (!parts.length) return [];
+    setPncpActiveJobPendingTerms(prev => Array.from(new Set([...prev, ...parts])));
+    setPncpActiveJobTermInput('');
+    return parts;
+  };
+
+  const removePncpActiveJobPendingTerm = (term) => {
+    setPncpActiveJobPendingTerms(prev => prev.filter(item => item !== term));
+  };
+
+  const addTermsToActivePncpJob = async (extraTerms = []) => {
+    const draftParts = splitTermsInput(String(pncpActiveJobTermInput || '').trim().replace(/[,;]+$/, ''));
+    const terms = Array.from(new Set([
+      ...pncpActiveJobPendingTerms,
+      ...draftParts,
+      ...(Array.isArray(extraTerms) ? extraTerms : []),
+    ].map(t => String(t || '').trim()).filter(t => t.length >= 2)));
     if (!activePncpSearchJobId || !terms.length) return;
+    const existing = (activePncpSearchJob?.terms || []).map(t => normalizeText(t));
+    const toAdd = terms.filter(t => !existing.includes(normalizeText(t)));
+    setPncpActiveJobPendingTerms([]);
+    setPncpActiveJobTermInput('');
+    if (!toAdd.length) return;
+
+    const nextTerms = Array.from(new Set([...(activePncpSearchJob?.terms || []), ...toAdd])).slice(0, 12);
+    // Otimista: chip aparece na hora (antes o backend não gravava terms e sumia no refresh).
+    setPncpSearchJobs(prev => prev.map(job => (
+      String(job.id) === String(activePncpSearchJobId)
+        ? {
+            ...job,
+            terms: nextTerms,
+            progress: {
+              ...(job.progress || {}),
+              terms_total: Math.max(Number(job.progress?.terms_total || 0), nextTerms.length),
+            },
+          }
+        : job
+    )));
     try {
-      await postPncpSearchJobTerms(activePncpSearchJobId, { terms });
-      setPncpActiveJobTermInput('');
-      await openPncpSearchJob(activePncpSearchJobId);
+      const response = await postPncpSearchJobTerms(activePncpSearchJobId, { terms: toAdd });
+      const payload = response?.data || {};
+      if (payload.terms) {
+        setPncpSearchJobs(prev => prev.map(job => (
+          String(job.id) === String(activePncpSearchJobId)
+            ? {
+                ...job,
+                terms: payload.terms || job.terms,
+                negative_terms: payload.negative_terms || job.negative_terms,
+                status: payload.status || job.status,
+                progress: payload.progress || job.progress,
+                total: payload.total != null ? Number(payload.total) : job.total,
+              }
+            : job
+        )));
+      }
+      await openPncpSearchJob(activePncpSearchJobId, { refreshJobs: true, openModal: true });
     } catch (error) {
+      await loadPncpSearchJobs();
       alert(`Erro: ${error.response?.data?.error || error.message}`);
     }
   };
@@ -7623,6 +8604,15 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [pncpJobModalOpen]);
 
+  useEffect(() => {
+    if (!pncpDeleteJobConfirm) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape' && !pncpDeleteJobBusy) closeDeletePncpSearchJobConfirm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pncpDeleteJobConfirm, pncpDeleteJobBusy]);
+
   // Poll detalhado só com o popup aberto — resultados e progresso ao vivo.
   useEffect(() => {
     if (!activePncpSearchJobId || !pncpJobModalOpen) return undefined;
@@ -7645,6 +8635,15 @@ function App() {
                 filters: response.data?.filters || job.filters,
                 summary: response.data?.summary || job.summary,
                 error: response.data?.error || null,
+                watchlist_id: response.data?.watchlist_id ?? job.watchlist_id,
+                started_at: response.data?.started_at || job.started_at,
+                updated_at: response.data?.updated_at || job.updated_at,
+                completed_at: response.data?.completed_at || job.completed_at,
+                archive_at: response.data?.archive_at ?? job.archive_at,
+                days_until_archive: response.data?.days_until_archive ?? job.days_until_archive,
+                archive_days: response.data?.archive_days || job.archive_days || 15,
+                term_runs: response.data?.term_runs || response.data?.query_plan?.term_runs || job.term_runs,
+                query_plan: response.data?.query_plan || job.query_plan,
               }
             : job
         )));
@@ -9590,8 +10589,12 @@ function App() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(620px_420px_at_8%_-4%,rgba(124,92,255,.16),transparent_60%),radial-gradient(560px_420px_at_100%_0%,rgba(56,214,230,.10),transparent_55%)]" />
           <div className="relative mx-auto flex min-h-screen max-w-md items-center justify-center px-4">
             <div className={`${card} w-full p-8 text-center`}>
-              <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-[11px] bg-[linear-gradient(135deg,#7c5cff,#38d6e6)]">
-                <span className="font-display text-lg font-bold text-bg">A</span>
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center overflow-hidden rounded-[12px] border border-line bg-surf p-2">
+                <img
+                  src="/logo_aerion.png"
+                  alt="Aerion Technologies"
+                  className="logo-image h-full w-full object-contain"
+                />
               </div>
               <p className="font-mono text-[11px] uppercase tracking-[0.13em] text-muted2">Aerion Command</p>
               <p className="mt-3 font-display text-xl font-semibold text-ink">Verificando acesso…</p>
@@ -9715,7 +10718,7 @@ function App() {
                   <button
                     type="submit"
                     disabled={loginLoading}
-                    className={`${btnPrimary} h-11 w-full`}
+                    className={`${btnPrimaryLg} w-full !h-11`}
                   >
                     {loginLoading ? 'Entrando…' : 'Entrar'}
                   </button>
@@ -9765,13 +10768,19 @@ function App() {
                             key={item.name}
                             type="button"
                             onClick={() => onPick(item.view, item.sub)}
-                            className={`group relative flex min-h-[44px] h-[39px] w-full items-center gap-3 rounded-[11px] px-3 text-[13px] transition ${active ? 'bg-[linear-gradient(135deg,rgba(124,92,255,.22),rgba(56,214,230,.10))] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(124,92,255,.45),0_0_0_1px_rgba(238,241,248,.28)]' : 'font-medium text-muted hover:bg-white/[0.04] hover:text-white'}`}
+                            className={`group relative flex h-10 w-full items-center gap-2.5 rounded-[11px] border px-2.5 text-[13px] transition ${
+                              active
+                                ? 'border-primary/40 bg-[linear-gradient(135deg,rgba(124,92,255,.22),rgba(56,214,230,.10))] font-semibold text-white'
+                                : 'border-transparent font-medium text-muted hover:bg-white/[0.04] hover:text-white'
+                            }`}
                           >
                             <Icon className={`h-[18px] w-[18px] shrink-0 transition ${active ? 'text-white' : 'text-muted group-hover:text-[#cbd2dd]'}`} />
-                            <span className="min-w-0 truncate">{item.name}</span>
+                            <span className="min-w-0 flex-1 truncate text-left">{item.name}</span>
                             {item.badge !== null && item.badge !== undefined && (
                               <span
-                                className={`ml-auto shrink-0 rounded-full px-2 py-0.5 font-mono text-[10.5px] font-semibold ${active ? 'bg-primary/30 text-[#cbbcff]' : 'bg-surf text-muted2'}`}
+                                className={`inline-flex h-5 min-w-[1.75rem] shrink-0 items-center justify-center rounded-full px-1.5 font-mono text-[10.5px] font-semibold tabular-nums leading-none ${
+                                  active ? 'bg-primary/30 text-[#cbbcff]' : 'bg-surf text-muted2'
+                                }`}
                                 title={`${item.badge} ${item.badgeLabel || ''}`.trim()}
                                 aria-label={`${item.badge} ${item.badgeLabel || ''}`.trim()}
                               >
@@ -10138,7 +11147,7 @@ function App() {
                       href="https://chatwoot.tenryu.com.br/app/accounts/2/contacts"
                       target="_blank"
                       rel="noreferrer"
-                      className={`${btnPrimary} h-10 shrink-0 px-2.5 sm:px-3 gap-1.5`}
+                      className={`${btnPrimaryLg} shrink-0 px-2.5 sm:px-3`}
                     >
                       <PlusIcon className="h-4 w-4" />
                       <span className="hidden sm:inline">Novo lead</span>
@@ -10453,7 +11462,7 @@ function App() {
           )}
           <div className="relative">
             <div
-              className={`kanban-board-scroll mt-2 flex gap-[var(--kanban-col-gap)] overflow-x-auto pb-4 -mx-1 px-1 ${activeDragId ? 'snap-none is-dnd-active' : 'snap-x snap-mandatory'}`}
+              className={`kanban-board-scroll mt-2 flex gap-[var(--kanban-col-gap)] overflow-x-auto pb-4 -mx-1 px-1 scrollbar-none ${activeDragId ? 'snap-none is-dnd-active' : 'snap-x snap-mandatory'}`}
               ref={boardScrollRef}
               onScroll={handleBoardScroll}
             >
@@ -10468,7 +11477,6 @@ function App() {
                   onMenuAction={activeTab === 'leads' ? sendToCustomersStage : sendToLeadsInbox}
                   onMoveToColumn={moveContactToStage}
                   availableColumns={activeColumns}
-                  showHeaderMenu={showHeaderMenu}
                   newContactUrl={newContactUrl}
                   isDarkMode={isDarkMode}
                   activeDragId={activeDragId}
@@ -10510,20 +11518,20 @@ function App() {
 
                   {/* Funil + rail lateral — preenche a largura sem buraco */}
                   <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 sm:gap-4 items-stretch">
-                    <div className={`${card} p-3.5 sm:p-5 xl:col-span-8 flex flex-col min-h-0 min-w-0`}>
-                      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-                        <div className="min-w-0">
-                          <h3 className={`${sectionTitle} text-base`}>Funil de licitações</h3>
-                          <p className={`${subtle} mt-0.5`}>Fases operacionais 2 a 12</p>
-                        </div>
+                    <ChartPanel
+                      className="flex min-h-0 min-w-0 flex-col xl:col-span-8"
+                      title="Funil de licitações"
+                      subtitle="Fases operacionais 2 a 12"
+                      actions={(
                         <button
                           type="button"
                           onClick={() => setLicitacaoSubview('board')}
-                          className="text-[12.5px] text-primary font-medium hover:underline shrink-0"
+                          className="text-[12.5px] font-medium text-primary hover:underline shrink-0"
                         >
                           Abrir pipeline
                         </button>
-                      </div>
+                      )}
+                    >
                       {(() => {
                         const byStage = {};
                         licitacaoOpportunities.forEach(o => {
@@ -10612,7 +11620,7 @@ function App() {
                           </>
                         );
                       })()}
-                    </div>
+                    </ChartPanel>
 
                     <div className="xl:col-span-4 flex flex-col gap-4 min-h-0">
                       <div className={`${card} p-4`}>
@@ -10651,7 +11659,7 @@ function App() {
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <h3 className={`${sectionTitle} text-base`}>Monitoramento de PCA</h3>
-                            <p className={`${subtle} mt-0.5`}>Pré-edital fora do funil operacional</p>
+                            <p className={`${subtle} mt-0.5`}>Plano de contratações anuais — demanda futura antes do edital</p>
                           </div>
                           <button
                             type="button"
@@ -10745,7 +11753,7 @@ function App() {
                         Defina termos e filtros de partida. A busca vira um job persistente que continua rodando até concluir, parar ou falhar.
                       </p>
                     </div>
-                    <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondary} h-8 px-3 text-xs`}>
+                    <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondarySm}`}>
                       Watchlists
                     </button>
                   </div>
@@ -10798,7 +11806,7 @@ function App() {
                       type="button"
                       onClick={() => runPncpSearch(1)}
                       disabled={pncpSearchLoading || (!String(pncpSearchFilters.q || '').trim() && pncpAcceptedPositiveTerms.length === 0)}
-                      className={`${btnPrimary} h-[42px] w-full shrink-0 px-5 sm:w-auto sm:px-8`}
+                      className={`${btnPrimaryControl} w-full shrink-0 sm:w-auto sm:px-8`}
                     >
                       {pncpSearchLoading ? 'Iniciando…' : 'Iniciar busca'}
                     </button>
@@ -10871,7 +11879,7 @@ function App() {
                       <input value={pncpSearchFilters.negative_terms} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))} onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)} placeholder="Excluir termos (partida)" className={`${input} h-8 w-full min-w-0 rounded-[10px] text-xs sm:col-span-2 xl:col-span-1`} />
                     </div>
                     <div className="flex min-w-0">
-                      <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondary} h-8 w-full px-3 text-xs sm:w-auto`}>
+                      <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondarySm} w-full sm:w-auto`}>
                         {pncpSearchExpanded ? 'Menos filtros de partida' : 'Mais filtros de partida'}
                       </button>
                     </div>
@@ -10915,6 +11923,14 @@ function App() {
                             </select>
                           </div>
                         </div>
+                        <label className="mt-3 flex items-center gap-2 text-xs text-muted" title="SRP é conhecido após o enriquecimento; itens ainda sem detalhe ficam ocultos com o filtro ligado.">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(pncpSearchFilters.srp_only)}
+                            onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, srp_only: event.target.checked }))}
+                          />
+                          Apenas SRP (registro de preços)
+                        </label>
                       </section>
 
                       <section className="border-t border-line pt-4">
@@ -10985,11 +12001,11 @@ function App() {
                     <div>
                       <h3 className={`${sectionTitle} text-[15px]`}>Minhas buscas</h3>
                       <p className={subtle}>
-                        Cada card é um job persistente. Clique para abrir resultados, termos e auditoria no popup.
+                        Ativas por 15 dias (recoleta diária + botão Rodar de novo, sem apagar o acervo). Depois arquivam, a menos que virem watchlist.
                         {pncpSearchJobs.some(j => isPncpJobLive(j.status)) ? ' · Atualizando status ao vivo…' : ''}
                       </p>
                     </div>
-                    <button type="button" onClick={loadPncpSearchJobs} className={`${btnSecondary} h-8 px-3 text-xs inline-flex items-center gap-1.5`}>
+                    <button type="button" onClick={loadPncpSearchJobs} className={`${btnSecondarySm}`}>
                       <ArrowPathIcon className="h-3.5 w-3.5" /> Atualizar
                     </button>
                   </div>
@@ -11002,34 +12018,31 @@ function App() {
                       </p>
                     </div>
                   ) : (
-                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="mt-3 grid items-stretch gap-3 md:grid-cols-2">
                       {pncpSearchJobs.slice(0, 18).map(job => {
                         const meta = getPncpJobStatusMeta(job.status);
+                        const archiveMeta = getPncpJobArchiveMeta(job);
+                        const canRerun = canRerunPncpSearchJob(job);
                         const done = Number(job.progress?.terms_done || 0);
-                        const total = Math.max(Number(job.progress?.terms_total || job.terms?.length || 0), 1);
+                        const termsTotal = Math.max(Number(job.progress?.terms_total || job.terms?.length || 0), 1);
                         const live = isPncpJobLive(job.status);
                         const finished = ['completed', 'failed', 'cancelled'].includes(job.status);
-                        const pct = finished ? 100 : Math.min(98, Math.round((done / total) * 100));
+                        const pct = finished ? 100 : Math.min(98, Math.round((done / termsTotal) * 100));
                         const title = job.nome || job.filters?.q || 'Pesquisa PNCP';
-                        const termsPreview = (job.terms || []).slice(0, 3);
                         const age = formatPncpJobAge(job.updated_at || job.completed_at || job.created_at);
-                        const filterBits = [
-                          job.filters?.uf,
-                          job.filters?.status && job.filters.status !== 'todos' ? String(job.filters.status).replace(/_/g, ' ') : null,
-                          job.filters?.tipos_documento,
-                        ].filter(Boolean);
+                        const negativeTerms = job.negative_terms || [];
                         return (
                           <div
                             key={job.id}
-                            className={`group flex flex-col rounded-[14px] border bg-surf p-3.5 transition hover:border-primary/40 hover:bg-surf2 ${live ? 'border-primary/35' : 'border-line'}`}
+                            className={`group ${entityCard} ${live ? '' : finished && job.status === 'failed' ? 'opacity-75' : ''}`}
                           >
                             <button type="button" onClick={() => openPncpSearchJob(job.id)} className="min-w-0 flex-1 text-left">
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
                                   <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink group-hover:text-primary">{title}</p>
                                   <p className="mt-0.5 font-mono text-[10px] text-muted2">
-                                    {age ? `atualizado ${age}` : 'job salvo'}
-                                    {job.watchlist_id ? ' · watchlist' : ''}
+                                    {age ? `atualizado ${age}` : 'criada agora'}
+                                    {!job.watchlist_id && finished ? ' · recoleta diária' : ''}
                                   </p>
                                 </div>
                                 <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
@@ -11038,78 +12051,90 @@ function App() {
                                 </span>
                               </div>
 
-                              <div className="mt-3 grid grid-cols-3 gap-2">
-                                <div className="rounded-lg border border-line/80 bg-bg2 px-2 py-1.5">
-                                  <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Resultados</p>
-                                  <p className="mt-0.5 font-mono text-sm font-bold text-ink">{Number(job.total || 0).toLocaleString('pt-BR')}</p>
-                                </div>
-                                <div className="rounded-lg border border-line/80 bg-bg2 px-2 py-1.5">
-                                  <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Termos</p>
-                                  <p className="mt-0.5 font-mono text-sm font-bold text-ink">{done}/{total}</p>
-                                </div>
-                                <div className="rounded-lg border border-line/80 bg-bg2 px-2 py-1.5">
-                                  <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Progresso</p>
-                                  <p className="mt-0.5 font-mono text-sm font-bold text-ink">{pct}%</p>
-                                </div>
+                              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                                <span className={metaChip}>
+                                  Resultados: {Number(job.total || 0).toLocaleString('pt-BR')}
+                                </span>
+                                <span className={metaChip}>
+                                  Termos: {done}/{termsTotal}
+                                </span>
+                                {live && <span className={metaChip}>{pct}%</span>}
+                                {job.watchlist_id ? (
+                                  <span className={metaChip}>Watchlist: sim</span>
+                                ) : (
+                                  <span className={metaChip}>Watchlist: off</span>
+                                )}
+                                {archiveMeta && (
+                                  <span
+                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
+                                    title="Buscas sem watchlist são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo."
+                                  >
+                                    {archiveMeta.label}
+                                  </span>
+                                )}
                               </div>
 
-                              <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-bg2">
-                                <div
-                                  className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : job.status === 'failed' ? 'bg-status-danger/70' : 'bg-primary/45'}`}
-                                  style={{ width: `${pct}%` }}
-                                />
+                              <div className="mt-2.5 flex min-h-[1.75rem] flex-1 flex-col gap-1.5">
+                                {(job.terms || []).length > 0 && (
+                                  <div className="flex flex-wrap content-start gap-1">
+                                    {(job.terms || []).slice(0, 6).map(term => (
+                                      <span key={term} className={termChip}>{term}</span>
+                                    ))}
+                                    {(job.terms || []).length > 6 && (
+                                      <span className={metaChip}>+{(job.terms || []).length - 6}</span>
+                                    )}
+                                  </div>
+                                )}
+                                {negativeTerms.length > 0 && (
+                                  <div className="flex flex-wrap content-start gap-1">
+                                    {negativeTerms.slice(0, 4).map(term => (
+                                      <span key={`n-${term}`} className={termChipNeg}>− {term}</span>
+                                    ))}
+                                  </div>
+                                )}
+                                {live && (
+                                  <p className="truncate font-mono text-[10px] text-muted2">
+                                    {job.status === 'paused_rate_limit'
+                                      ? 'Aguardando limite do PNCP — retoma sozinho'
+                                      : <>coletando · <span className="font-display font-semibold uppercase tracking-wide text-muted">{job.progress?.current_term || 'preparando…'}</span></>}
+                                  </p>
+                                )}
                               </div>
-
-                              <p className="mt-1.5 truncate font-mono text-[10px] text-muted2">
-                                {live
-                                  ? (job.status === 'paused_rate_limit'
-                                    ? 'Aguardando limite do PNCP — retoma sozinho'
-                                    : <>coletando · <span className="font-display font-semibold uppercase tracking-wide text-muted">{job.progress?.current_term || 'preparando…'}</span></>)
-                                  : job.status === 'failed'
-                                    ? (job.error || 'falhou')
-                                    : job.status === 'cancelled'
-                                      ? 'parada pelo usuário'
-                                      : 'coleta finalizada'}
-                              </p>
-
-                              {(termsPreview.length > 0 || filterBits.length > 0) && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {termsPreview.map(term => (
-                                    <span key={term} className="max-w-[9rem] truncate rounded-md bg-primary/10 px-1.5 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wide text-primary">{term}</span>
-                                  ))}
-                                  {(job.terms || []).length > 3 && (
-                                    <span className="rounded-md bg-bg2 px-1.5 py-0.5 text-[10px] text-muted">+{(job.terms || []).length - 3}</span>
-                                  )}
-                                  {filterBits.slice(0, 2).map(bit => (
-                                    <span key={bit} className="rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[10px] text-muted">{bit}</span>
-                                  ))}
-                                </div>
-                              )}
                             </button>
 
-                            <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line/70 pt-2.5">
+                            <div className={cardActionBar}>
                               <button
                                 type="button"
                                 onClick={() => openPncpSearchJob(job.id)}
-                                className="h-7 rounded-lg border border-primary/30 bg-primary/10 px-2.5 text-[11px] font-semibold text-primary hover:bg-primary/15"
+                                className={btnSecondaryXs}
                               >
-                                Abrir
+                                Resultados
                               </button>
                               {live && (
                                 <button
                                   type="button"
                                   onClick={() => cancelPncpSearchJob(job.id)}
                                   title="Para a coleta e mantém os resultados já salvos"
-                                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] text-muted hover:border-amber/40 hover:text-amber"
+                                  className={btnSecondaryXs}
                                 >
                                   <StopIcon className="h-3.5 w-3.5" /> Parar
+                                </button>
+                              )}
+                              {canRerun && (
+                                <button
+                                  type="button"
+                                  onClick={() => rerunPncpSearchJob(job.id)}
+                                  title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                  className={btnSecondaryXs}
+                                >
+                                  <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
                                 </button>
                               )}
                               <button
                                 type="button"
                                 onClick={() => convertPncpSearchJobToWatchlist(job.id)}
                                 disabled={Boolean(job.watchlist_id)}
-                                className="h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] font-semibold text-cyan hover:bg-cyan/10 disabled:opacity-50 disabled:text-muted"
+                                className={btnSecondaryXs}
                               >
                                 {job.watchlist_id ? 'Watchlist ✓' : 'Watchlist'}
                               </button>
@@ -11117,9 +12142,9 @@ function App() {
                                 type="button"
                                 onClick={() => deletePncpSearchJob(job.id)}
                                 title="Excluir busca e resultados"
-                                className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] text-muted hover:border-status-danger/40 hover:text-status-danger"
+                                className={`${btnDangerGhost} ml-auto`}
                               >
-                                <TrashIcon className="h-3.5 w-3.5" />
+                                Excluir
                               </button>
                             </div>
                           </div>
@@ -11130,8 +12155,117 @@ function App() {
                 </div>
               </div>
 
-              {/* Popup do job: tudo relacionado à busca */}
-              {pncpJobModalOpen && activePncpSearchJobId && (
+              {/* Confirmação de exclusão de busca — substitui o confirm nativo do browser */}
+              {pncpDeleteJobConfirm && createPortal(
+                <div
+                  className={`${modalOverlay} z-[80]`}
+                  onClick={closeDeletePncpSearchJobConfirm}
+                  role="presentation"
+                >
+                  <div
+                    className={`${modalPanel} max-w-md flex flex-col gap-4`}
+                    onClick={(event) => event.stopPropagation()}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="pncp-delete-job-title"
+                    aria-describedby="pncp-delete-job-desc"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-status-danger/25 bg-status-danger/10 text-status-danger">
+                        <TrashIcon className="h-5 w-5" aria-hidden />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 id="pncp-delete-job-title" className="font-display text-base font-semibold uppercase tracking-wide text-ink">
+                          Excluir busca
+                        </h3>
+                        <p id="pncp-delete-job-desc" className="mt-1 text-sm text-muted">
+                          Esta ação remove a coleta e o acervo de resultados. Não dá para desfazer.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={closeDeletePncpSearchJobConfirm}
+                        disabled={pncpDeleteJobBusy}
+                        className={iconBtn}
+                        aria-label="Fechar"
+                      >
+                        <XMarkIcon className="h-5 w-5" />
+                      </button>
+                    </div>
+
+                    <div className="rounded-[12px] border border-line bg-bg2/60 px-3.5 py-3">
+                      <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink">
+                        {pncpDeleteJobConfirm.nome}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className={metaChip}>
+                          {Number(pncpDeleteJobConfirm.total || 0).toLocaleString('pt-BR')} resultado(s)
+                        </span>
+                        {(pncpDeleteJobConfirm.terms || []).length > 0 && (
+                          <span className={metaChip}>
+                            {(pncpDeleteJobConfirm.terms || []).length} termo(s)
+                          </span>
+                        )}
+                        {pncpDeleteJobConfirm.live && (
+                          <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                            Coleta em andamento
+                          </span>
+                        )}
+                        {pncpDeleteJobConfirm.watchlist && (
+                          <span className={metaChip}>Tem watchlist ligada</span>
+                        )}
+                      </div>
+                      {(pncpDeleteJobConfirm.terms || []).length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap gap-1">
+                          {(pncpDeleteJobConfirm.terms || []).slice(0, 8).map(term => (
+                            <span key={term} className={termChip}>{term}</span>
+                          ))}
+                          {(pncpDeleteJobConfirm.terms || []).length > 8 && (
+                            <span className={metaChip}>+{(pncpDeleteJobConfirm.terms || []).length - 8}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-[12px] border border-status-danger/25 bg-status-danger/8 px-3.5 py-2.5 text-xs text-muted">
+                      <p className="font-semibold text-status-danger">O que será apagado</p>
+                      <ul className="mt-1.5 list-disc space-y-1 pl-4 text-muted">
+                        <li>Job de busca e progresso da coleta</li>
+                        <li>Todos os resultados classificados neste card</li>
+                        {pncpDeleteJobConfirm.live ? <li>A coleta em andamento será interrompida</li> : null}
+                      </ul>
+                      <p className="mt-2 text-[11px] text-muted2">
+                        Editais já importados para o pipeline não são removidos.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                      <button
+                        type="button"
+                        autoFocus
+                        onClick={closeDeletePncpSearchJobConfirm}
+                        disabled={pncpDeleteJobBusy}
+                        className={btnSecondary}
+                      >
+                        Manter busca
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmDeletePncpSearchJob}
+                        disabled={pncpDeleteJobBusy}
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded-[11px] border border-status-danger/40 bg-status-danger/15 px-4 text-sm font-semibold text-status-danger transition hover:bg-status-danger/25 focus:outline-none focus:ring-2 focus:ring-status-danger/30 disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        <TrashIcon className="h-4 w-4" />
+                        {pncpDeleteJobBusy ? 'Excluindo…' : 'Excluir definitivamente'}
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+
+              {/* Popup do job: resultados e detalhe — portal fora do layout dos cards */}
+              {pncpJobModalOpen && activePncpSearchJobId && createPortal(
                 <div className={modalOverlay} onClick={closePncpSearchJobModal} role="presentation">
                   <div
                     className="flex w-full max-w-6xl max-h-[92vh] flex-col overflow-hidden rounded-[16px] border border-border bg-card shadow-lift dark:bg-[#111827] dark:border-[#1f2937]"
@@ -11143,6 +12277,8 @@ function App() {
                     {(() => {
                       const job = activePncpSearchJob;
                       const meta = getPncpJobStatusMeta(job?.status);
+                      const archiveMeta = getPncpJobArchiveMeta(job);
+                      const canRerun = canRerunPncpSearchJob(job);
                       const live = isPncpJobLive(job?.status);
                       const title = job?.nome || job?.filters?.q || 'Pesquisa PNCP';
                       return (
@@ -11156,6 +12292,14 @@ function App() {
                                     {meta.live && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
                                     {meta.label}
                                   </span>
+                                  {archiveMeta && (
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
+                                      title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
+                                    >
+                                      {archiveMeta.label}
+                                    </span>
+                                  )}
                                 </div>
                                 <p className="mt-1 font-mono text-[11px] text-muted">
                                   {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} resultado(s)
@@ -11169,19 +12313,30 @@ function App() {
                                       </span>
                                     </>
                                   ) : null}
+                                  {!job?.watchlist_id && !live ? ' · recoleta diária ativa' : ''}
                                   {job?.error ? ` · ${job.error}` : ''}
                                 </p>
                               </div>
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {live && (
-                                  <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondary} h-8 px-3 text-xs inline-flex items-center gap-1`}>
+                                  <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm}`}>
                                     <StopIcon className="h-3.5 w-3.5" /> Parar
                                   </button>
                                 )}
-                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)} disabled={Boolean(job?.watchlist_id)} className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`}>
+                                {canRerun && (
+                                  <button
+                                    type="button"
+                                    onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
+                                    title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                    className={`${btnSecondarySm}`}
+                                  >
+                                    <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
+                                  </button>
+                                )}
+                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)} disabled={Boolean(job?.watchlist_id)} className={`${btnSecondarySm}`}>
                                   {job?.watchlist_id ? 'Watchlist ✓' : 'Virar watchlist'}
                                 </button>
-                                <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondary} h-8 px-3 text-xs inline-flex items-center gap-1 text-status-danger`}>
+                                <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} text-status-danger`}>
                                   <TrashIcon className="h-3.5 w-3.5" /> Excluir
                                 </button>
                                 <button type="button" onClick={closePncpSearchJobModal} className={iconBtn} aria-label="Fechar">
@@ -11245,12 +12400,27 @@ function App() {
                               <div className="space-y-5">
                                 <div>
                                   <h4 className={`${sectionTitle} text-sm`}>Termos da coleta</h4>
-                                  <p className={`${subtle} mt-0.5`}>Cada termo é uma frente da busca profunda. Anexar termos continua o job (ou reabre se já terminou).</p>
+                                  <p className={`${subtle} mt-0.5`}>
+                                    Cada termo é uma frente da busca profunda. Digite e use vírgula para virar chip; Anexar grava no job e mantém o acervo.
+                                  </p>
                                   <div className="mt-2.5 flex flex-wrap gap-1.5">
                                     {(job?.terms || []).map(term => (
                                       <span key={term} className="rounded-lg bg-primary/10 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary">{term}</span>
                                     ))}
-                                    {!(job?.terms || []).length && <span className="text-xs text-muted">Nenhum termo registrado.</span>}
+                                    {pncpActiveJobPendingTerms.map(term => (
+                                      <button
+                                        key={`pending-${term}`}
+                                        type="button"
+                                        onClick={() => removePncpActiveJobPendingTerm(term)}
+                                        title="Remover antes de anexar"
+                                        className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/15"
+                                      >
+                                        {term} <span className="normal-case text-primary/70">×</span>
+                                      </button>
+                                    ))}
+                                    {!(job?.terms || []).length && pncpActiveJobPendingTerms.length === 0 && (
+                                      <span className="text-xs text-muted">Nenhum termo registrado.</span>
+                                    )}
                                   </div>
                                   {(job?.negative_terms || []).length > 0 && (
                                     <div className="mt-2 flex flex-wrap gap-1.5">
@@ -11262,19 +12432,63 @@ function App() {
                                 </div>
 
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                  <input
-                                    className={`${input} h-9 min-w-0 flex-1 text-xs`}
-                                    placeholder="Adicionar termo a este job"
-                                    value={pncpActiveJobTermInput}
-                                    onChange={(event) => setPncpActiveJobTermInput(event.target.value)}
-                                    onKeyDown={(event) => {
-                                      if (event.key === 'Enter') {
-                                        event.preventDefault();
-                                        addTermsToActivePncpJob();
-                                      }
-                                    }}
-                                  />
-                                  <button type="button" onClick={addTermsToActivePncpJob} className={`${btnPrimary} h-9 px-4 text-xs`}>
+                                  <div className="flex min-h-[36px] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[11px] border border-line bg-bg2 py-1 pl-2.5 pr-2">
+                                    {pncpActiveJobPendingTerms.map(term => (
+                                      <button
+                                        key={`input-chip-${term}`}
+                                        type="button"
+                                        onClick={() => removePncpActiveJobPendingTerm(term)}
+                                        className="inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 font-display text-[11px] font-semibold uppercase tracking-wide text-primary"
+                                      >
+                                        <span className="truncate">{term}</span>
+                                        <span className="text-primary/70 normal-case">×</span>
+                                      </button>
+                                    ))}
+                                    <input
+                                      className="h-7 min-w-0 flex-1 basis-[7rem] bg-transparent text-xs font-semibold text-ink outline-none placeholder:text-muted"
+                                      placeholder={pncpActiveJobPendingTerms.length ? 'outro termo… (vírgula)' : 'ex: uav, rpa — vírgula vira chip'}
+                                      value={pncpActiveJobTermInput}
+                                      onChange={(event) => {
+                                        const raw = event.target.value;
+                                        if (raw.includes(',') || raw.includes(';')) {
+                                          const parts = raw.split(/[,;]+/);
+                                          const rest = parts.pop() ?? '';
+                                          const committed = parts.map(t => t.trim()).filter(Boolean);
+                                          if (committed.length) {
+                                            setPncpActiveJobPendingTerms(prev => Array.from(new Set([...prev, ...committed])));
+                                          }
+                                          setPncpActiveJobTermInput(rest);
+                                        } else {
+                                          setPncpActiveJobTermInput(raw);
+                                        }
+                                      }}
+                                      onKeyDown={(event) => {
+                                        const value = String(pncpActiveJobTermInput || '').trim();
+                                        if (event.key === 'Enter') {
+                                          event.preventDefault();
+                                          if (value || pncpActiveJobPendingTerms.length) {
+                                            addTermsToActivePncpJob();
+                                          }
+                                        } else if (event.key === 'Tab' && value) {
+                                          event.preventDefault();
+                                          commitPncpActiveJobTermDraft();
+                                        } else if (event.key === 'Backspace' && !value && pncpActiveJobPendingTerms.length) {
+                                          setPncpActiveJobPendingTerms(prev => prev.slice(0, -1));
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        if (String(pncpActiveJobTermInput || '').trim()) {
+                                          commitPncpActiveJobTermDraft();
+                                        }
+                                      }}
+                                    />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => addTermsToActivePncpJob()}
+                                    disabled={!String(pncpActiveJobTermInput || '').trim() && pncpActiveJobPendingTerms.length === 0}
+                                    className={`${btnPrimary} text-xs disabled:opacity-50`}
+                                  >
                                     Anexar termo
                                   </button>
                                 </div>
@@ -11285,19 +12499,13 @@ function App() {
                                     <div className="flex flex-wrap gap-1.5">
                                       {pncpSuggestedTerms.positivos
                                         .filter(term => !(job?.terms || []).some(existing => normalizeText(existing) === normalizeText(term)))
+                                        .filter(term => !pncpActiveJobPendingTerms.some(p => normalizeText(p) === normalizeText(term)))
                                         .slice(0, 8)
                                         .map(term => (
                                           <button
                                             key={term}
                                             type="button"
-                                            onClick={async () => {
-                                              try {
-                                                await postPncpSearchJobTerms(activePncpSearchJobId, { terms: [term] });
-                                                await openPncpSearchJob(activePncpSearchJobId, { refreshJobs: true, openModal: true });
-                                              } catch (error) {
-                                                alert(`Erro: ${error.response?.data?.error || error.message}`);
-                                              }
-                                            }}
+                                            onClick={() => addTermsToActivePncpJob([term])}
                                             className="rounded-lg border border-line bg-bg2 px-2 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-muted hover:border-primary hover:text-primary"
                                           >
                                             + {term}
@@ -11321,7 +12529,7 @@ function App() {
                                         if (!pncpJobFiltersEditing) seedPncpJobFilterDraft(job?.filters || {});
                                         setPncpJobFiltersEditing(v => !v);
                                       }}
-                                      className={`${btnSecondary} h-8 px-3 text-xs`}
+                                      className={`${btnSecondarySm}`}
                                     >
                                       {pncpJobFiltersEditing ? 'Fechar edição' : 'Editar e rodar de novo'}
                                     </button>
@@ -11421,7 +12629,7 @@ function App() {
                                         </div>
                                       </div>
                                       <div className="flex flex-wrap items-center gap-2">
-                                        <button type="button" onClick={applyPncpJobFiltersAndRerun} disabled={pncpJobFiltersSaving} className={`${btnPrimary} h-9 px-4 text-xs disabled:opacity-50`}>
+                                        <button type="button" onClick={applyPncpJobFiltersAndRerun} disabled={pncpJobFiltersSaving} className={`${btnPrimary} text-xs`}>
                                           {pncpJobFiltersSaving ? 'Aplicando…' : 'Aplicar e coletar de novo'}
                                         </button>
                                         <button
@@ -11430,7 +12638,7 @@ function App() {
                                             seedPncpJobFilterDraft(job?.filters || {});
                                             setPncpJobFiltersEditing(false);
                                           }}
-                                          className={`${btnSecondary} h-9 px-3 text-xs`}
+                                          className={`${btnSecondary} text-xs`}
                                         >
                                           Cancelar
                                         </button>
@@ -11445,17 +12653,44 @@ function App() {
                               );
                             })()}
 
-                            {pncpJobModalTab === 'auditoria' && (
+                            {pncpJobModalTab === 'auditoria' && (() => {
+                              const termRuns = pncpSearchResults.query_plan?.term_runs
+                                || job?.term_runs
+                                || job?.query_plan?.term_runs
+                                || [];
+                              const plannedTerms = job?.terms || pncpSearchResults.query_plan?.terms_planned || pncpSearchResults.termosUsados || [];
+                              const executedTerms = new Set(
+                                termRuns
+                                  .filter(r => r?.term && r?.source !== 'pncp_consulta_complement')
+                                  .map(r => normalizeText(r.term))
+                              );
+                              const pendingTerms = plannedTerms.filter(t => !executedTerms.has(normalizeText(t)));
+                              const currentTerm = job?.progress?.current_term || activePncpJobProgress.currentTerm || '';
+                              return (
                               <div className="space-y-3">
                                 <div className="rounded-[12px] border border-line bg-bg2/40 p-3 text-xs text-muted">
                                   <p className="font-semibold text-ink">Auditoria da coleta</p>
                                   <p className="mt-1">
-                                    {pncpSearchResults.query_plan?.term_runs?.length || 0} termo(s) executado(s)
-                                    {pncpSearchResults.query_plan?.cache_hit ? ' · cache' : ''}
-                                    {pncpSearchResults.query_plan?.pncp_status_sent
-                                      ? ` · status PNCP: ${pncpSearchResults.query_plan.pncp_status_sent}`
-                                      : ' · status filtrado localmente'}
+                                    Coleta <strong className="text-ink">sequencial</strong>: um termo por vez (não em paralelo).
+                                    {' '}A tabela só lista frentes já executadas — termos anexados no meio da corrida entram na fila e aparecem aqui quando chegarem a vez.
                                   </p>
+                                  <p className="mt-1">
+                                    Planejados: <strong className="text-ink">{plannedTerms.length}</strong>
+                                    {' · '}Executados: <strong className="text-ink">{executedTerms.size}</strong>
+                                    {pendingTerms.length > 0 ? <> · Na fila: <strong className="text-amber-600 dark:text-amber-300">{pendingTerms.length}</strong></> : null}
+                                    {currentTerm ? <> · Agora: <span className="font-display font-semibold uppercase tracking-wide text-ink">{currentTerm}</span></> : null}
+                                    {pncpSearchResults.query_plan?.cache_hit ? ' · cache' : ''}
+                                  </p>
+                                  {pendingTerms.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-1">
+                                      <span className="text-[10px] uppercase tracking-wide text-muted2">Aguardando vez</span>
+                                      {pendingTerms.map(term => (
+                                        <span key={`pend-${term}`} className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                                          {term}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="grid gap-2 md:grid-cols-3">
                                   <div className="rounded-lg border border-line bg-surf p-2.5 text-xs text-muted">
@@ -11495,7 +12730,7 @@ function App() {
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {(pncpSearchResults.query_plan?.term_runs || []).map((run, index) => (
+                                      {termRuns.map((run, index) => (
                                         <tr key={`${run.term}-${index}`} className="border-t border-line">
                                           <td className="px-2 py-1.5 font-medium text-ink">{run.term || 'vazio'}</td>
                                           <td className="px-2 py-1.5 text-muted">{run.source}</td>
@@ -11506,7 +12741,18 @@ function App() {
                                           <td className="px-2 py-1.5 text-status-danger">{Array.isArray(run.errors) && run.errors.length ? run.errors.join('; ') : '—'}</td>
                                         </tr>
                                       ))}
-                                      {!(pncpSearchResults.query_plan?.term_runs || []).length && (
+                                      {pendingTerms.map(term => (
+                                        <tr key={`queue-${term}`} className="border-t border-line bg-amber-500/5">
+                                          <td className="px-2 py-1.5 font-medium text-ink">{term}</td>
+                                          <td className="px-2 py-1.5 text-muted">fila</td>
+                                          <td className="px-2 py-1.5 text-muted">—</td>
+                                          <td className="px-2 py-1.5 text-muted">—</td>
+                                          <td className="px-2 py-1.5 text-muted">—</td>
+                                          <td className="px-2 py-1.5 text-amber-700 dark:text-amber-300">aguardando vez</td>
+                                          <td className="px-2 py-1.5 text-muted">—</td>
+                                        </tr>
+                                      ))}
+                                      {!termRuns.length && !pendingTerms.length && (
                                         <tr>
                                           <td colSpan={7} className="px-2 py-6 text-center text-muted">Sem runs de auditoria ainda — a coleta pode estar na fila.</td>
                                         </tr>
@@ -11515,7 +12761,8 @@ function App() {
                                   </table>
                                 </div>
                               </div>
-                            )}
+                              );
+                            })()}
 
                             {pncpJobModalTab === 'resultados' && (
                               <div className="space-y-3">
@@ -11596,6 +12843,21 @@ function App() {
                                               <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
                                                 {item.modalidade?.nome || 'Modalidade n/d'}
                                               </span>
+                                              {item.srp === true && (
+                                                <span title="Sistema de Registro de Preços (Lei 14.133/2021)" className="inline-flex items-center rounded-md bg-green/10 px-2 py-0.5 text-[11px] font-semibold text-green">
+                                                  SRP
+                                                </span>
+                                              )}
+                                              {item.modo_disputa?.nome && (
+                                                <span title="Modo de disputa" className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                                  {item.modo_disputa.nome}
+                                                </span>
+                                              )}
+                                              {item.amparo_legal?.nome && (
+                                                <span title={item.amparo_legal.descricao || item.amparo_legal.nome} className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                                  {String(item.amparo_legal.nome).replace(/^Lei\s*14\.?133\/?(?:2021)?,?\s*/i, '') || item.amparo_legal.nome}
+                                                </span>
+                                              )}
                                               <span className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
                                                 {item.esfera?.nome ? `${item.esfera.nome} · ` : ''}{item.uf || 'BR'}
                                               </span>
@@ -11618,12 +12880,39 @@ function App() {
                                             </p>
                                           </div>
                                           <div className="flex flex-col gap-1.5 lg:border-l lg:border-line lg:pl-3">
-                                            <div>
-                                              <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Valor</p>
-                                              <p className="mt-0.5 font-mono text-base font-bold text-ink">
-                                                {getBestEstimatedValue(item) ? formatCurrency(getBestEstimatedValue(item)) : 'n/d'}
-                                              </p>
-                                            </div>
+                                            {(() => {
+                                              const itemValue = getPncpItemMatchedValue(item);
+                                              const totalValue = getPncpLicitacaoTotalValue(item);
+                                              const itemCount = Number(item?.itens_pertinentes_count || 0);
+                                              return (
+                                                <div className="space-y-1.5">
+                                                  <div>
+                                                    <p className="font-mono text-[9px] uppercase tracking-wide text-primary/80">
+                                                      Valor do item{itemCount > 1 ? `s (${itemCount})` : ''}
+                                                    </p>
+                                                    <p
+                                                      className="mt-0.5 font-mono text-base font-bold text-primary"
+                                                      title={itemCount > 1
+                                                        ? 'Soma dos itens da compra que batem com o termo da busca'
+                                                        : 'Valor do item pertinente ao termo da busca'}
+                                                    >
+                                                      {itemValue ? formatCurrency(itemValue) : 'n/d'}
+                                                    </p>
+                                                  </div>
+                                                  <div className="border-t border-line/70 pt-1.5">
+                                                    <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">
+                                                      Total da licitação
+                                                    </p>
+                                                    <p
+                                                      className="mt-0.5 font-mono text-xs font-semibold text-muted"
+                                                      title="Valor total estimado da compra no PNCP"
+                                                    >
+                                                      {totalValue ? formatCurrency(totalValue) : 'n/d'}
+                                                    </p>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })()}
                                             <button
                                               type="button"
                                               onClick={() => importPncpLicitacao(item)}
@@ -11696,7 +12985,8 @@ function App() {
                       );
                     })()}
                   </div>
-                </div>
+                </div>,
+                document.body
               )}
               </>
               )}
@@ -12015,7 +13305,7 @@ function App() {
                           <input className={`${input} h-9 w-full text-sm sm:col-span-2`} inputMode="decimal" placeholder="Qtd" value={newOpportunityItemForm.quantidade} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, quantidade: event.target.value.replace(/\./g, ',') }))} />
                           <div className="flex gap-2 sm:col-span-2">
                             <input className={`${input} h-9 min-w-0 flex-1 text-sm`} inputMode="decimal" placeholder="Custo total" value={newOpportunityItemForm.custo_total_item} onChange={(event) => setNewOpportunityItemForm(prev => ({ ...prev, custo_total_item: event.target.value.replace(/\./g, ',') }))} />
-                            <button type="button" className={`${btnSecondary} h-9 shrink-0 px-3 text-xs`} onClick={addDraftItem}>Add</button>
+                            <button type="button" className={`${btnSecondary} shrink-0 text-xs`} onClick={addDraftItem}>Add</button>
                           </div>
                         </div>
 
@@ -12061,7 +13351,7 @@ function App() {
                                     <option value="verificar">Verificar</option>
                                   </select>
                                   <input className={`${input} h-8 w-full text-xs sm:col-span-3`} placeholder="Observação" value={reqForm.observacao || ''} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, observacao: event.target.value } }))} />
-                                  <button type="button" className={`${btnSecondary} h-8 px-2 text-xs sm:col-span-2`} onClick={() => addDraftItemRequirement(item.id)}>Requisito</button>
+                                  <button type="button" className={`${btnSecondarySm} px-2 sm:col-span-2`} onClick={() => addDraftItemRequirement(item.id)}>Requisito</button>
                                 </div>
                                 {expandedDraftChecklist[item.id] && (
                                   <div className="mt-2 space-y-1">
@@ -12114,7 +13404,7 @@ function App() {
                             ))}
                           </select>
                           <input className={`${input} h-9 min-w-0 text-sm sm:col-span-2`} placeholder="Observação" value={newOpportunityContact.observacao} onChange={(event) => setNewOpportunityContact(prev => ({ ...prev, observacao: event.target.value }))} />
-                          <button type="button" className={`${btnSecondary} h-9 px-3 text-sm sm:col-span-2`} onClick={addContactToNewOpportunity}>Adicionar</button>
+                          <button type="button" className={`${btnSecondary} sm:col-span-2`} onClick={addContactToNewOpportunity}>Adicionar</button>
                         </div>
                         <VerticalScrollArrows className="mt-3 max-h-36" contentClassName="space-y-2 pr-0.5">
                           {newOpportunityForm.linked_contacts.map(item => {
@@ -12243,7 +13533,7 @@ function App() {
 
               <div className="relative">
                 <div
-                className={`kanban-board-scroll mt-2 flex gap-[var(--kanban-col-gap)] overflow-x-auto pb-4 -mx-1 px-1 ${activeDragId ? 'snap-none is-dnd-active' : 'snap-x snap-mandatory'}`}
+                className={`kanban-board-scroll mt-2 flex gap-[var(--kanban-col-gap)] overflow-x-auto pb-4 -mx-1 px-1 scrollbar-none ${activeDragId ? 'snap-none is-dnd-active' : 'snap-x snap-mandatory'}`}
                 ref={boardScrollRef}
                 onScroll={handleBoardScroll}
               >
@@ -12485,7 +13775,7 @@ function App() {
                               onChange={(event) => setNewRequirementForm({ titulo: event.target.value })}
                               onKeyDown={(event) => event.key === 'Enter' && addRequirement()}
                             />
-                            <button type="button" className={`${btnPrimary} h-8 shrink-0 px-3 text-xs`} onClick={addRequirement}>Adicionar</button>
+                            <button type="button" className={`${btnPrimarySm} shrink-0`} onClick={addRequirement}>Adicionar</button>
                           </div>
                           <VerticalScrollArrows className="mt-3 max-h-64 flex-1" contentClassName="space-y-2 pr-0.5">
                             {selectedCommercialRequirements.map(requirement => (
@@ -12548,7 +13838,7 @@ function App() {
                               ))}
                             </select>
                             <input className={`${input} h-8 min-w-0 text-xs sm:col-span-2`} placeholder="Obs." value={contactLinkForm.observacao} onChange={(event) => setContactLinkForm(prev => ({ ...prev, observacao: event.target.value }))} />
-                            <button type="button" className={`${btnSecondary} h-8 px-2 text-xs sm:col-span-2`} onClick={addLinkedContact}>Vincular</button>
+                            <button type="button" className={`${btnSecondarySm} px-2 sm:col-span-2`} onClick={addLinkedContact}>Vincular</button>
                           </div>
                           <VerticalScrollArrows className="mt-3 max-h-64 flex-1" contentClassName="space-y-1.5 pr-0.5">
                             {selectedLinkedContacts.map(link => {
@@ -12600,7 +13890,7 @@ function App() {
                           <input className={`${input} h-8 w-full text-xs sm:col-span-2`} placeholder="Modelo" value={newItemForm.modelo_produto} onChange={(event) => setNewItemForm(prev => ({ ...prev, modelo_produto: event.target.value }))} />
                           <input className={`${input} h-8 w-full text-xs sm:col-span-1`} placeholder="Qtd" value={newItemForm.quantidade} onChange={(event) => setNewItemForm(prev => ({ ...prev, quantidade: event.target.value }))} />
                           <input className={`${input} h-8 w-full text-xs sm:col-span-2`} placeholder="Preço ref." inputMode="decimal" value={newItemForm.valor_referencia || ''} onChange={(event) => setNewItemForm(prev => ({ ...prev, valor_referencia: event.target.value.replace(/\./g, ',') }))} />
-                          <button type="button" className={`${btnPrimary} h-8 px-2 text-xs sm:col-span-1`} onClick={addItem}>Add</button>
+                          <button type="button" className={`${btnPrimarySm} px-2 sm:col-span-1`} onClick={addItem}>Add</button>
                         </div>
 
                         <div className="mt-3 space-y-2">
@@ -12695,7 +13985,7 @@ function App() {
                                           }))}
                                           onKeyDown={(event) => { if (event.key === 'Enter') addItemRequirement(item.id); }}
                                         />
-                                        <button type="button" className={`${btnPrimary} h-7 shrink-0 px-3 text-[10px]`} onClick={(e) => { e.stopPropagation(); addItemRequirement(item.id); }}>
+                                        <button type="button" className={`${btnPrimaryXs} shrink-0 text-[10px]`} onClick={(e) => { e.stopPropagation(); addItemRequirement(item.id); }}>
                                           Adicionar
                                         </button>
                                       </div>
@@ -12763,7 +14053,7 @@ function App() {
                             type="button"
                             onClick={addComment}
                             disabled={!newCommentText.trim()}
-                            className={`${btnPrimary} h-9 shrink-0 self-end px-4 text-xs disabled:opacity-50`}
+                            className={`${btnPrimary} shrink-0 self-end text-xs`}
                           >
                             Adicionar
                           </button>
@@ -12826,7 +14116,7 @@ function App() {
                         type="button"
                         onClick={() => runPncpOutcomeSearch(1)}
                         disabled={pncpOutcomeLoading}
-                        className={`${btnPrimary} h-9 px-4 shrink-0`}
+                        className={`${btnPrimary} shrink-0`}
                       >
                         <MagnifyingGlassIcon className="h-4 w-4" />
                         {pncpOutcomeLoading ? 'Buscando…' : 'Buscar'}
@@ -12936,6 +14226,14 @@ function App() {
                                 <span className="rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">{stageLabel}</span>
                                 {item.uf && <span className="rounded-md border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] text-muted">{item.uf}</span>}
                                 {item.modalidade && <span className="rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">{item.modalidade}</span>}
+                                {item.srp === true && (
+                                  <span title="Sistema de Registro de Preços (Lei 14.133/2021)" className="rounded-md bg-green/10 px-2 py-0.5 text-[11px] font-semibold text-green">SRP</span>
+                                )}
+                                {item.amparo_legal && (
+                                  <span title={item.amparo_legal} className="rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                    {String(item.amparo_legal).replace(/^Lei\s*14\.?133\/?(?:2021)?,?\s*/i, '') || item.amparo_legal}
+                                  </span>
+                                )}
                               </div>
                               <h3 className="text-sm font-semibold text-ink">{item.titulo || item.descricao || item.pncp_key}</h3>
                               {item.descricao && item.titulo && <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>}
@@ -12950,12 +14248,12 @@ function App() {
                               <button
                                 type="button"
                                 onClick={() => openPncpOutcomeDossier(item)}
-                                className={`${btnPrimary} h-8 px-3 text-xs`}
+                                className={`${btnPrimarySm}`}
                               >
                                 Dossiê
                               </button>
                               {item.url && (
-                                <a href={item.url} target="_blank" rel="noopener noreferrer" className={`${btnSecondary} h-8 px-3 text-xs`}>
+                                <a href={item.url} target="_blank" rel="noopener noreferrer" className={`${btnSecondarySm}`}>
                                   PNCP ↗
                                 </a>
                               )}
@@ -12977,9 +14275,9 @@ function App() {
 
                   {pncpOutcomeResults.totalPaginas > 1 && (
                     <div className="flex items-center justify-center gap-2">
-                      <button type="button" className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`} disabled={pncpOutcomeResults.pagina <= 1 || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina - 1)}>Anterior</button>
+                      <button type="button" className={`${btnSecondarySm}`} disabled={pncpOutcomeResults.pagina <= 1 || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina - 1)}>Anterior</button>
                       <span className="font-mono text-xs text-muted">{pncpOutcomeResults.pagina} / {pncpOutcomeResults.totalPaginas}</span>
-                      <button type="button" className={`${btnSecondary} h-8 px-3 text-xs disabled:opacity-50`} disabled={pncpOutcomeResults.pagina >= pncpOutcomeResults.totalPaginas || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina + 1)}>Próxima</button>
+                      <button type="button" className={`${btnSecondarySm}`} disabled={pncpOutcomeResults.pagina >= pncpOutcomeResults.totalPaginas || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina + 1)}>Próxima</button>
                     </div>
                   )}
 
@@ -13088,11 +14386,12 @@ function App() {
 
           {activeView === 'Overview' && (
             <div className="mt-6">
-              {overviewLoading && (
+              {overviewLoading && !overviewData.summary && (
                 <div className={`${subtle} py-10 text-center`}>Carregando gestão de leads…</div>
               )}
 
-              {!overviewLoading && (
+              {/* Keep charts mounted once we have data — remount kills wallboard state */}
+              {(overviewData.summary || !overviewLoading) && (
                 <>
                   <div className="grid gap-2.5 sm:gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 mb-4 sm:mb-6">
                     {[
@@ -13143,14 +14442,11 @@ function App() {
                       })()}
                     </div>
 
-                    <div className={`${card} flex min-h-0 flex-col p-4 xl:col-span-8 xl:p-5`}>
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Evolução do funil</h3>
-                          <p className={`${subtle} mt-0.5`}>
-                            {historyMetric === 'count' ? 'Série por quantidade' : 'Série por valor de pipeline'}
-                          </p>
-                        </div>
+                    <ChartPanel
+                      className="min-h-0 xl:col-span-8"
+                      title="Evolução do funil"
+                      subtitle={historyMetric === 'count' ? 'Série por quantidade' : 'Série por valor de pipeline'}
+                      actions={(
                         <div className="flex flex-wrap items-center gap-2">
                           <MetricToggle value={historyMetric} onChange={setHistoryMetric} />
                           <div className="hidden items-center gap-2 lg:flex">
@@ -13167,64 +14463,67 @@ function App() {
                             <option value="month">Mensal</option>
                           </select>
                         </div>
-                      </div>
-                      <div className="relative h-[300px] w-full xl:h-[380px]">
-                        {historySeries.length ? (
-                          <ResponsiveLine
-                            data={historySeries}
-                            margin={{ top: 12, right: 16, bottom: 48, left: 40 }}
-                            xScale={{ type: 'point' }}
-                            yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
-                            curve="linear"
-                            axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: 0, tickValues: historyTicks, format: historyTickFormat }}
-                            axisLeft={{ tickSize: 0, tickPadding: 6, tickValues: 4, format: value => historyMetric === 'value' ? (formatCompactCurrency(value) || 'R$ 0') : (formatCompactNumber(value) || value) }}
-                            colors={({ id }) => colorForGroupLabel(id)}
-                            enableArea
-                            defs={[{
-                              id: 'areaFade',
-                              type: 'linearGradient',
-                              colors: [
-                                { offset: 0, color: 'inherit', opacity: 0.42 },
-                                { offset: 100, color: 'inherit', opacity: 0 },
-                              ],
-                            }]}
-                            fill={[{ match: '*', id: 'areaFade' }]}
-                            enableGridX={false}
-                            gridYValues={4}
-                            lineWidth={2}
-                            enablePoints={false}
-                            useMesh
-                            enableSlices="x"
-                            sliceTooltip={({ slice }) => {
-                              const total = slice.points.reduce((a, p) => a + (p.data.y || 0), 0);
-                              return (
-                                <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card min-w-[160px]">
-                                  <div className="font-semibold mb-1">{formatHistoryTooltipDate(slice.points[0].data.x)}</div>
-                                  <div className="space-y-0.5">
-                                    {[...slice.points].reverse().map(point => (
-                                      <div key={point.id} className="flex items-center justify-between gap-3">
-                                        <span className="flex items-center gap-1.5">
-                                          <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
-                                          <span>{point.serieId}</span>
-                                        </span>
-                                        <span className="font-medium">{historyMetric === 'value' ? (formatCompactCurrency(point.data.y) || 'R$ 0') : (formatCompactNumber(point.data.y) || point.data.y)}</span>
+                      )}
+                    >
+                      {({ isFullscreen }) => (
+                        <div className={isFullscreen ? 'chart-panel__plot relative h-full min-h-[50vh] w-full' : 'relative h-[300px] w-full xl:h-[380px]'}>
+                          {historySeries.length ? (
+                            <ResponsiveLine
+                              data={historySeries}
+                              margin={{ top: 12, right: 16, bottom: 48, left: 40 }}
+                              xScale={{ type: 'point' }}
+                              yScale={{ type: 'linear', min: 0, max: 'auto', stacked: true }}
+                              curve="linear"
+                              axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: 0, tickValues: historyTicks, format: historyTickFormat }}
+                              axisLeft={{ tickSize: 0, tickPadding: 6, tickValues: 4, format: value => historyMetric === 'value' ? (formatCompactCurrency(value) || 'R$ 0') : (formatCompactNumber(value) || value) }}
+                              colors={({ id }) => colorForGroupLabel(id)}
+                              enableArea
+                              defs={[{
+                                id: 'areaFade',
+                                type: 'linearGradient',
+                                colors: [
+                                  { offset: 0, color: 'inherit', opacity: 0.42 },
+                                  { offset: 100, color: 'inherit', opacity: 0 },
+                                ],
+                              }]}
+                              fill={[{ match: '*', id: 'areaFade' }]}
+                              enableGridX={false}
+                              gridYValues={4}
+                              lineWidth={2}
+                              enablePoints={false}
+                              useMesh
+                              enableSlices="x"
+                              sliceTooltip={({ slice }) => {
+                                const total = slice.points.reduce((a, p) => a + (p.data.y || 0), 0);
+                                return (
+                                  <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-ink shadow-card min-w-[160px]">
+                                    <div className="font-semibold mb-1">{formatHistoryTooltipDate(slice.points[0].data.x)}</div>
+                                    <div className="space-y-0.5">
+                                      {[...slice.points].reverse().map(point => (
+                                        <div key={point.id} className="flex items-center justify-between gap-3">
+                                          <span className="flex items-center gap-1.5">
+                                            <span className="inline-block w-2 h-2 rounded-full" style={{ background: point.serieColor }} />
+                                            <span>{point.serieId}</span>
+                                          </span>
+                                          <span className="font-medium">{historyMetric === 'value' ? (formatCompactCurrency(point.data.y) || 'R$ 0') : (formatCompactNumber(point.data.y) || point.data.y)}</span>
+                                        </div>
+                                      ))}
+                                      <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
+                                        <span>Total</span>
+                                        <span>{historyMetric === 'value' ? (formatCompactCurrency(total) || 'R$ 0') : (formatCompactNumber(total) || total)}</span>
                                       </div>
-                                    ))}
-                                    <div className="border-t border-border mt-1 pt-1 flex justify-between font-semibold">
-                                      <span>Total</span>
-                                      <span>{historyMetric === 'value' ? (formatCompactCurrency(total) || 'R$ 0') : (formatCompactNumber(total) || total)}</span>
                                     </div>
                                   </div>
-                                </div>
-                              );
-                            }}
-                            theme={chartTheme}
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center"><span className={subtle}>Sem dados para exibir</span></div>
-                        )}
-                      </div>
-                    </div>
+                                );
+                              }}
+                              theme={chartTheme}
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center"><span className={subtle}>Sem dados para exibir</span></div>
+                          )}
+                        </div>
+                      )}
+                    </ChartPanel>
                   </div>
 
                   {/* Linha 2: Segmentação densa — mapa + canal + etiqueta */}
@@ -13277,40 +14576,42 @@ function App() {
                       };
                       return (
                         <>
-                    <div className={`${card} p-4 lg:col-span-6 xl:col-span-5`}>
-                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Leads por estado</h3>
-                          <p className={`${subtle} mt-0.5`}>Heatmap por {mapMetric === 'count' ? 'volume' : 'valor'}</p>
-                        </div>
+                    <ChartPanel
+                      className="lg:col-span-6 xl:col-span-5"
+                      title="Leads por estado"
+                      subtitle={`Heatmap por ${mapMetric === 'count' ? 'volume' : 'valor'}`}
+                      actions={(
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-[11px] text-muted">{ufRows.length} UFs</span>
                           <MetricToggle value={mapMetric} onChange={setMapMetric} />
                         </div>
-                      </div>
-                      {ufRows.length ? (
-                        <BrazilChoroplethMap
-                          metricByUf={Object.fromEntries(ufRows.map((r) => [r.key, r.metric]))}
-                          ufMax={ufMax}
-                          selectedUf={segFilter.uf}
-                          onSelectUf={(uf) => setSegFilter((prev) => ({ ...prev, uf: prev.uf === uf ? null : uf }))}
-                          fmtMetric={fmtMap}
-                          plotUf={plotUf}
-                          ufRows={ufRows}
-                        />
-                      ) : (
-                        <div className={`${subtle} py-8 text-center`}>Sem dados por estado</div>
                       )}
-                    </div>
+                    >
+                      {({ isFullscreen }) => (
+                        ufRows.length ? (
+                          <div className={isFullscreen ? 'chart-panel__plot flex h-full min-h-[50vh] items-center justify-center' : ''}>
+                            <BrazilChoroplethMap
+                              metricByUf={Object.fromEntries(ufRows.map((r) => [r.key, r.metric]))}
+                              ufMax={ufMax}
+                              selectedUf={segFilter.uf}
+                              onSelectUf={(uf) => setSegFilter((prev) => ({ ...prev, uf: prev.uf === uf ? null : uf }))}
+                              fmtMetric={fmtMap}
+                              plotUf={plotUf}
+                              ufRows={ufRows}
+                            />
+                          </div>
+                        ) : (
+                          <div className={`${subtle} py-8 text-center`}>Sem dados por estado</div>
+                        )
+                      )}
+                    </ChartPanel>
 
-                    <div className={`${card} p-4 lg:col-span-3 xl:col-span-3`}>
-                      <div className="mb-2 flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Por canal</h3>
-                          <p className={`${subtle} mt-0.5`}>{channelMetric === 'count' ? 'Origem dos leads' : 'Valor por origem'}</p>
-                        </div>
-                        <MetricToggle value={channelMetric} onChange={setChannelMetric} />
-                      </div>
+                    <ChartPanel
+                      className="lg:col-span-3 xl:col-span-3"
+                      title="Por canal"
+                      subtitle={channelMetric === 'count' ? 'Origem dos leads' : 'Valor por origem'}
+                      actions={<MetricToggle value={channelMetric} onChange={setChannelMetric} />}
+                    >
                       {channelRows.length ? (
                         <div className="space-y-1.5">
                           {channelRows.map((row, idx) => {
@@ -13338,16 +14639,14 @@ function App() {
                       ) : (
                         <div className={`${subtle} py-6 text-center`}>Sem canal</div>
                       )}
-                    </div>
+                    </ChartPanel>
 
-                    <div className={`${card} p-4 lg:col-span-3 xl:col-span-4`}>
-                      <div className="mb-2 flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Por etiqueta</h3>
-                          <p className={`${subtle} mt-0.5`}>{labelMetric === 'count' ? 'Tags no funil' : 'Valor por tag'}</p>
-                        </div>
-                        <MetricToggle value={labelMetric} onChange={setLabelMetric} />
-                      </div>
+                    <ChartPanel
+                      className="lg:col-span-3 xl:col-span-4"
+                      title="Por etiqueta"
+                      subtitle={labelMetric === 'count' ? 'Tags no funil' : 'Valor por tag'}
+                      actions={<MetricToggle value={labelMetric} onChange={setLabelMetric} />}
+                    >
                       {labelRows.length ? (
                         <div className="space-y-1.5">
                           {labelRows.map((row, idx) => {
@@ -13375,7 +14674,7 @@ function App() {
                       ) : (
                         <div className={`${subtle} py-6 text-center`}>Sem etiqueta</div>
                       )}
-                    </div>
+                    </ChartPanel>
                         </>
                       );
                     })()}
@@ -13384,8 +14683,11 @@ function App() {
 
                   {/* Linha 3: Faturamento + Ações (lado a lado, ações compactas + paginação) */}
                   <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-                    <div className={`${card} p-4 xl:col-span-4`}>
-                      <h3 className={`${sectionTitle} text-base mb-3`}>Faturamento por vendedor</h3>
+                    <ChartPanel
+                      className="xl:col-span-4"
+                      title="Faturamento por vendedor"
+                      subtitle="Ranking do ano em curso"
+                    >
                       {overviewData.faturamentoVendedores.length ? (
                         <div className="space-y-3">
                           {(() => {
@@ -13418,7 +14720,7 @@ function App() {
                       ) : (
                         <div className={`${subtle} py-6 text-center`}>Sem faturamento</div>
                       )}
-                    </div>
+                    </ChartPanel>
 
                     <div className={`${card} overflow-hidden xl:col-span-8`}>
                       <div className="flex flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
@@ -13513,7 +14815,7 @@ function App() {
                                   type="button"
                                   disabled={page <= 0}
                                   onClick={() => setRecentActionsPage((p) => Math.max(0, p - 1))}
-                                  className={`${btnGhost} h-7 px-2 text-xs disabled:opacity-40`}
+                                  className={`${btnGhostXs} disabled:opacity-40`}
                                 >
                                   Anterior
                                 </button>
@@ -13524,7 +14826,7 @@ function App() {
                                   type="button"
                                   disabled={page >= totalPages - 1}
                                   onClick={() => setRecentActionsPage((p) => Math.min(totalPages - 1, p + 1))}
-                                  className={`${btnGhost} h-7 px-2 text-xs disabled:opacity-40`}
+                                  className={`${btnGhostXs} disabled:opacity-40`}
                                 >
                                   Próxima
                                 </button>
@@ -13556,6 +14858,8 @@ function App() {
                         breakdown: {
                           messages: Number(day.contatos?.messages) || 0,
                           notes: Number(day.contatos?.notes) || 0,
+                          private_notes: Number(day.contatos?.private_notes) || 0,
+                          contact_notes: Number(day.contatos?.contact_notes) || 0,
                         },
                       }];
                     }
@@ -13901,7 +15205,7 @@ function App() {
                               setDisparoContatos([]);
                               setDisparoContatoBusca('');
                             }}
-                            className={`${btnGhost} h-7 px-2 text-[11px]`}
+                            className={`${btnGhostXs}`}
                           >
                             Limpar filtros
                           </button>
@@ -14162,7 +15466,7 @@ function App() {
                       <button
                         type="button"
                         onClick={() => setDisparoMensagens(prev => [...prev, { tipo: 'texto', texto: '' }])}
-                        className={`${btnSecondary} h-8 px-3 text-xs`}
+                        className={`${btnSecondarySm}`}
                       >
                         <PlusIcon className="h-3.5 w-3.5" />
                         Mensagem
@@ -14209,7 +15513,7 @@ function App() {
                             </div>
                             {isMedia && (
                               <div className="mb-2 flex flex-wrap items-center gap-2">
-                                <label className={`${btnSecondary} h-8 cursor-pointer px-3 text-xs`}>
+                                <label className={`${btnSecondarySm} cursor-pointer`}>
                                   {m.arquivo_nome ? 'Trocar arquivo' : 'Escolher arquivo'}
                                   <input
                                     type="file"
@@ -14910,10 +16214,10 @@ function App() {
                                   return (
                                     <>
                                       {canPause && (
-                                        <button type="button" disabled={disparoCampanhaBusy === `${busyBase}:pausar`} onClick={() => acaoCampanha(disparoCampanhaSel, 'pausar')} className={`${btnSecondary} h-7 px-2 text-[11px]`}>Pausar</button>
+                                        <button type="button" disabled={disparoCampanhaBusy === `${busyBase}:pausar`} onClick={() => acaoCampanha(disparoCampanhaSel, 'pausar')} className={`${btnSecondaryXs}`}>Pausar</button>
                                       )}
                                       {canResume && (
-                                        <button type="button" disabled={disparoCampanhaBusy === `${busyBase}:retomar`} onClick={() => acaoCampanha(disparoCampanhaSel, 'retomar')} className={`${btnSecondary} h-7 px-2 text-[11px]`}>Retomar</button>
+                                        <button type="button" disabled={disparoCampanhaBusy === `${busyBase}:retomar`} onClick={() => acaoCampanha(disparoCampanhaSel, 'retomar')} className={`${btnSecondaryXs}`}>Retomar</button>
                                       )}
                                       {canCancel && (
                                         <button
@@ -14922,7 +16226,7 @@ function App() {
                                           onClick={() => {
                                             if (window.confirm(`Cancelar a campanha #${disparoCampanhaSel}?`)) acaoCampanha(disparoCampanhaSel, 'cancelar');
                                           }}
-                                          className={`${btnGhost} h-7 px-2 text-[11px] text-status-danger`}
+                                          className={`${btnGhostXs} text-status-danger`}
                                         >
                                           Cancelar
                                         </button>
@@ -15209,7 +16513,7 @@ function App() {
                     type="button"
                     onClick={goBack}
                     disabled={currentStep === 0}
-                    className={`${btnSecondary} h-10 px-4 disabled:opacity-40`}
+                    className={`${btnSecondaryLg} px-4 disabled:opacity-40`}
                   >
                     <ChevronLeftIcon className="h-4 w-4" />
                     Voltar
@@ -15219,7 +16523,7 @@ function App() {
                       type="button"
                       onClick={goNext}
                       disabled={!canGoNext}
-                      className={`${btnPrimary} h-10 px-5 disabled:opacity-45 disabled:shadow-none`}
+                      className={`${btnPrimaryLg} disabled:opacity-45 disabled:shadow-none`}
                     >
                       Continuar
                       <ChevronRightIcon className="h-4 w-4" />
@@ -15229,7 +16533,7 @@ function App() {
                       type="button"
                       onClick={sendDisparo}
                       disabled={!readyToLaunch}
-                      className={`${btnPrimary} h-10 px-5 disabled:opacity-45 disabled:shadow-none`}
+                      className={`${btnPrimaryLg} disabled:opacity-45 disabled:shadow-none`}
                     >
                       {disparoSending ? 'Iniciando…' : 'Iniciar disparo'}
                     </button>
@@ -15253,7 +16557,7 @@ function App() {
                 </select>
               </div>
 
-              {metasLoading ? (
+              {metasLoading && metasRows.length === 0 && realizadoRows.length === 0 ? (
                 <div className={`${subtle} py-10 text-center`}>Carregando metas e realizado...</div>
               ) : (() => {
                 const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -15382,14 +16686,10 @@ function App() {
                     </div>
 
                     {/* Gráfico full-width — uma coluna por mês (meta fundo + realizado sólido) */}
-                    <div className={`${card} p-5 sm:p-6`}>
-                      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Meta × realizado mensal</h3>
-                          <p className={`${subtle} mt-0.5`}>
-                            Barra clara = meta · barra sólida = realizado (mesma escala em R$).
-                          </p>
-                        </div>
+                    <ChartPanel
+                      title="Meta × realizado mensal"
+                      subtitle="Barra clara = meta · barra sólida = realizado (mesma escala em R$)."
+                      actions={(
                         <div className="flex items-center gap-4 text-[11px] text-muted">
                           <span className="inline-flex items-center gap-1.5">
                             <span className="h-3 w-2.5 rounded-sm bg-primary/30 ring-1 ring-primary/40" /> Meta
@@ -15398,77 +16698,81 @@ function App() {
                             <span className="h-3 w-2.5 rounded-sm bg-primary" /> Realizado
                           </span>
                         </div>
-                      </div>
-
-                      <div className="flex items-end gap-1 sm:gap-1.5">
-                        {monthlyRows.map(row => {
-                          const metaH = row.meta > 0 ? Math.max((row.meta / maxMonthly) * chartH, 3) : 0;
-                          const doneH = row.done > 0 ? Math.max((row.done / maxMonthly) * chartH, 3) : 0;
-                          const beat = row.meta > 0 && row.done >= row.meta;
-                          const isFocus = row.mes === focusMonth;
-                          return (
-                            <div
-                              key={row.mes}
-                              className="flex min-w-0 flex-1 flex-col items-center gap-1"
-                              title={`${row.fullName}\nMeta: ${formatCompactCurrency(row.meta) || 'R$ 0'}\nRealizado: ${formatCompactCurrency(row.done) || 'R$ 0'}`}
-                            >
-                              <div
-                                className={`relative w-full max-w-[40px] mx-auto ${isFocus ? 'opacity-100' : 'opacity-90'}`}
-                                style={{ height: chartH }}
-                              >
-                                {/* Meta — volume do plano (fundo) */}
-                                {metaH > 0 && (
+                      )}
+                    >
+                      {({ isFullscreen }) => {
+                        const h = isFullscreen ? Math.min(window.innerHeight * 0.55, 560) : chartH;
+                        return (
+                          <>
+                            <div className={`flex items-end gap-1 sm:gap-1.5 ${isFullscreen ? 'min-h-[50vh] flex-1' : ''}`}>
+                              {monthlyRows.map(row => {
+                                const metaH = row.meta > 0 ? Math.max((row.meta / maxMonthly) * h, 3) : 0;
+                                const doneH = row.done > 0 ? Math.max((row.done / maxMonthly) * h, 3) : 0;
+                                const beat = row.meta > 0 && row.done >= row.meta;
+                                const isFocus = row.mes === focusMonth;
+                                return (
                                   <div
-                                    className="absolute bottom-0 left-1/2 w-[72%] -translate-x-1/2 rounded-t-md bg-primary/25 ring-1 ring-inset ring-primary/35"
-                                    style={{ height: metaH }}
-                                  />
-                                )}
-                                {/* Realizado — sobreposto */}
-                                {doneH > 0 && (
-                                  <div
-                                    className={`absolute bottom-0 left-1/2 w-[48%] -translate-x-1/2 rounded-t-md ${beat ? 'bg-green' : 'bg-primary'}`}
-                                    style={{ height: doneH }}
-                                  />
-                                )}
-                              </div>
-                              <span className={`font-mono text-[11px] font-semibold ${isFocus ? 'text-primary' : 'text-muted'}`}>
-                                {row.name}
+                                    key={row.mes}
+                                    className="flex min-w-0 flex-1 flex-col items-center gap-1"
+                                    title={`${row.fullName}\nMeta: ${formatCompactCurrency(row.meta) || 'R$ 0'}\nRealizado: ${formatCompactCurrency(row.done) || 'R$ 0'}`}
+                                  >
+                                    <div
+                                      className={`relative mx-auto w-full max-w-[40px] ${isFocus ? 'opacity-100' : 'opacity-90'}`}
+                                      style={{ height: h }}
+                                    >
+                                      {metaH > 0 && (
+                                        <div
+                                          className="absolute bottom-0 left-1/2 w-[72%] -translate-x-1/2 rounded-t-md bg-primary/25 ring-1 ring-inset ring-primary/35"
+                                          style={{ height: metaH }}
+                                        />
+                                      )}
+                                      {doneH > 0 && (
+                                        <div
+                                          className={`absolute bottom-0 left-1/2 w-[48%] -translate-x-1/2 rounded-t-md ${beat ? 'bg-green' : 'bg-primary'}`}
+                                          style={{ height: doneH }}
+                                        />
+                                      )}
+                                    </div>
+                                    <span className={`font-mono text-[11px] font-semibold ${isFocus ? 'text-primary' : 'text-muted'}`}>
+                                      {row.name}
+                                    </span>
+                                    <span className="font-mono text-[10px] font-semibold tabular-nums leading-none text-primary">
+                                      {shortBRL(row.meta)}
+                                    </span>
+                                    <span className="font-mono text-[10px] font-semibold tabular-nums leading-none text-green">
+                                      {shortBRL(row.done)}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 pr-1 font-mono text-[10px] text-muted">
+                              <span>
+                                <span className="text-primary">Roxo claro</span> = meta do mês (R$)
                               </span>
-                              <span className="font-mono text-[10px] font-semibold tabular-nums text-primary leading-none">
-                                {shortBRL(row.meta)}
+                              <span>
+                                <span className="text-green">Verde / roxo sólido</span> = realizado
                               </span>
-                              <span className="font-mono text-[10px] font-semibold tabular-nums text-green leading-none">
-                                {shortBRL(row.done)}
+                              <span className="w-full sm:ml-auto sm:w-auto">
+                                Necessário/mês restante: <span className="font-semibold text-ink">{formatCompactCurrency(requiredPerRemainingMonth) || 'R$ 0'}</span>
+                                {bestMonth ? (
+                                  <> · Melhor mês: <span className="font-semibold text-ink">{bestMonth.name} {formatCompactCurrency(bestMonth.done)}</span></>
+                                ) : null}
                               </span>
                             </div>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-muted">
-                        <span>
-                          <span className="text-primary">Roxo claro</span> = meta do mês (R$)
-                        </span>
-                        <span>
-                          <span className="text-green">Verde / roxo sólido</span> = realizado
-                        </span>
-                        <span className="ml-auto">
-                          Necessário/mês restante: <span className="font-semibold text-ink">{formatCompactCurrency(requiredPerRemainingMonth) || 'R$ 0'}</span>
-                          {bestMonth ? (
-                            <> · Melhor mês: <span className="font-semibold text-ink">{bestMonth.name} {formatCompactCurrency(bestMonth.done)}</span></>
-                          ) : null}
-                        </span>
-                      </div>
-                    </div>
+                          </>
+                        );
+                      }}
+                    </ChartPanel>
 
                     {/* Vendedores */}
-                    <div className={`${card} p-5 sm:p-6`}>
-                      <div className="mb-4 flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className={`${sectionTitle} text-base`}>Realizado por vendedor</h3>
-                          <p className={`${subtle} mt-0.5`}>Faturamento do ano</p>
-                        </div>
+                    <ChartPanel
+                      title="Realizado por vendedor"
+                      subtitle="Faturamento do ano"
+                      actions={(
                         <span className="font-mono text-[11px] text-muted">{sellerRows.length} vendedor{sellerRows.length === 1 ? '' : 'es'}</span>
-                      </div>
+                      )}
+                    >
                       {sellerRows.length ? (
                         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                           {sellerRows.slice(0, 9).map((row, idx) => (
@@ -15492,7 +16796,7 @@ function App() {
                           Sem faturamento por vendedor para este ano.
                         </div>
                       )}
-                    </div>
+                    </ChartPanel>
                   </div>
                 );
               })()}
@@ -15510,7 +16814,7 @@ function App() {
                 </select>
               </div>
 
-              {metasLoading ? (
+              {metasLoading && metasRows.length === 0 ? (
                 <div className={`${subtle} py-10 text-center`}>Carregando metas...</div>
               ) : (() => {
                 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -15584,8 +16888,11 @@ function App() {
           {activeView === 'Usuários' && authStatus.role === 'admin' && (
             <div className="mt-6">
               <div className="toolbar-meta mb-6">
-                <p className="min-w-0 text-sm text-muted">Papéis vêm do Chatwoot. Defina quais páginas cada membro pode ver.</p>
-                <button type="button" onClick={loadUsers} className={`${btnSecondary} h-10 w-full shrink-0 px-4 sm:w-auto`}>Atualizar</button>
+                <p className="min-w-0 text-sm text-muted">
+                  Papéis vêm do Chatwoot. Marque quem é <span className="font-semibold text-ink/80 dark:text-white/80">vendedor</span> (entra em ranks e divide meta).
+                  Mesmo nome em “Agrupar como” unifica contas (ex.: Clayton pessoal + Aerion → Clayton).
+                </p>
+                <button type="button" onClick={loadUsers} className={`${btnSecondaryLg} w-full shrink-0 px-4 sm:w-auto`}>Atualizar</button>
               </div>
               {usersLoading ? (
                 <div className={`${subtle} py-10 text-center`}>Carregando usuários…</div>
@@ -15595,8 +16902,10 @@ function App() {
                     const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
                     const isAdminUser = u.role === 'admin';
                     const current = Array.isArray(u.allowed_views) && u.allowed_views.length ? u.allowed_views : (isAdminUser ? allViews : []);
+                    const isSeller = Boolean(u.is_seller);
+                    const sellerLabel = u.seller_label || '';
                     return (
-                      <div key={u.id} className="grid min-w-0 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] lg:items-center">
+                      <div key={u.id} className="grid min-w-0 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,14rem)_auto_minmax(0,1fr)] lg:items-start">
                         <div className="flex min-w-0 items-center gap-3">
                           <div className="h-9 w-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0">
                             {String(u.name || u.email || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
@@ -15604,12 +16913,66 @@ function App() {
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-ink dark:text-white truncate">{u.name}</p>
                             <p className={`${subtle} truncate`}>{u.email}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              <span className={`inline-flex items-center h-5 px-2 rounded-full text-[10px] font-semibold ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-bg2 text-muted border border-line'}`}>
+                                {isAdminUser ? 'Admin' : 'Membro'}
+                              </span>
+                              {isSeller && (
+                                <span className="inline-flex items-center h-5 px-2 rounded-full text-[10px] font-semibold bg-status-success/15 text-status-success">
+                                  Vendedor{sellerLabel ? ` · ${sellerLabel}` : ''}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                        <span className={`inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-semibold shrink-0 ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-bg2 text-muted border border-line'}`}>
-                          {isAdminUser ? 'Admin' : 'Membro'}
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
+
+                        <div className="flex flex-col gap-2 min-w-[11rem]">
+                          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-line text-primary focus:ring-primary/40"
+                              checked={isSeller}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                saveUserAccess(u.id, {
+                                  is_seller: next,
+                                  seller_label: next ? (sellerLabel || null) : null,
+                                });
+                              }}
+                            />
+                            <span className="text-[12px] font-semibold text-ink dark:text-white">Vendedor</span>
+                          </label>
+                          {isSeller && (
+                            <div>
+                              <label className="mb-0.5 block font-mono text-[10px] uppercase tracking-wide text-muted">
+                                Agrupar como
+                              </label>
+                              <input
+                                type="text"
+                                defaultValue={sellerLabel}
+                                key={`seller-label-${u.id}-${sellerLabel || ''}`}
+                                placeholder="ex.: Clayton"
+                                className={`${input} h-8 w-full max-w-[12rem] text-xs`}
+                                onBlur={(e) => {
+                                  const next = e.target.value.trim();
+                                  if (next === (sellerLabel || '')) return;
+                                  saveUserAccess(u.id, {
+                                    is_seller: true,
+                                    seller_label: next || null,
+                                  });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') e.currentTarget.blur();
+                                }}
+                              />
+                              <p className="mt-0.5 text-[10px] text-muted leading-snug">
+                                Mesmo nome = mesma pessoa no rank
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 min-w-0">
                           {isAdminUser ? (
                             <span className={subtle}>Acesso total (admin)</span>
                           ) : allViews.map(v => {
@@ -15620,7 +16983,7 @@ function App() {
                                 type="button"
                                 onClick={() => {
                                   const next = on ? current.filter(x => x !== v) : [...current, v];
-                                  saveUserAccess(u.id, next);
+                                  saveUserAccess(u.id, { allowed_views: next });
                                 }}
                                 className={`h-7 px-2.5 rounded-full text-[12px] font-medium border transition ${on ? 'bg-primary/10 text-primary border-primary/30' : 'bg-cardAlt text-muted border-border hover:text-ink'}`}
                               >
@@ -16428,8 +17791,10 @@ function App() {
                             return;
                           }
                           setTrendsPanelOpen(true);
-                          // Gera sob demanda na 1ª abertura (cache do dia se já existir no backend).
-                          if (!trendsIntel && !trendsIntelLoading && !trendsRefreshing) {
+                          // 1ª abertura do dia: backend gera + cacheia. Mesmo dia: só cache (sem pytrends de novo).
+                          const today = brDayKeyClient();
+                          const hasToday = trendsIntel?.day === today;
+                          if (!hasToday && !trendsIntelLoading && !trendsRefreshing) {
                             loadTrendsIntel({ force: false });
                           }
                         }}
@@ -16439,10 +17804,15 @@ function App() {
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-semibold text-ink">Radar Trends</p>
                             <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                              BR
+                              BR · drones
                             </span>
                             {trendsIntel?.day && (
                               <span className="font-mono text-[10px] text-muted">{trendsIntel.day}</span>
+                            )}
+                            {trendsIntel?.cached && (
+                              <span className="font-mono text-[10px] text-muted" title="Resultado do dia (cache)">
+                                cache do dia
+                              </span>
                             )}
                             {(trendsIntel?.intel?.suggestions || []).length > 0 && (
                               <span className="font-mono text-[10px] text-muted">
@@ -16455,9 +17825,9 @@ function App() {
                               ? (trendsIntel?.intel?.opportunity_day
                                 || trendsIntel?.intel?.summary
                                 || (trendsIntelLoading || trendsRefreshing
-                                  ? 'Gerando sugestões a partir dos trends…'
-                                  : 'Oportunidades de prospecção: setores, ICPs, obras, energia, segurança, canais e o que estiver em alta'))
-                              : 'Expandir para gerar sugestões de prospecção (setores, ICPs, CNAE, UF, porte) a partir dos trends'}
+                                  ? 'Buscando correlatos (drones / enterprise) no BR e gerando sugestões…'
+                                  : 'Correlatos do setor no BR → sugestões RFB (ICPs, CNAE, porte)'))
+                              : 'Expandir: correlatos Google Trends (drones, enterprise…) no BR — 1× por dia, depois cache'}
                           </p>
                         </div>
                         <span className="shrink-0 text-muted" aria-hidden>{trendsPanelOpen ? '▾' : '▸'}</span>
@@ -16468,11 +17838,13 @@ function App() {
                           disabled={trendsRefreshing || trendsIntelLoading}
                           onClick={(e) => {
                             e.stopPropagation();
-                            loadTrendsIntel({ force: true });
+                            // Só re-lê o cache do dia — não reexecuta pytrends/IA no mesmo dia.
+                            loadTrendsIntel({ force: false });
                           }}
                           className={`${btnSecondary} shrink-0`}
+                          title="Recarrega o resultado já cacheado do dia (não consulta o Google de novo)"
                         >
-                          {trendsRefreshing || trendsIntelLoading ? 'Gerando…' : 'Atualizar'}
+                          {trendsRefreshing || trendsIntelLoading ? 'Carregando…' : 'Recarregar'}
                         </button>
                       )}
                     </div>
@@ -16493,27 +17865,134 @@ function App() {
                           </div>
                         ) : (
                           <div className="space-y-4">
-                            {(trendsIntel?.trends || []).length > 0 && (
-                              <div>
-                                <p className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2">
-                                  Em alta hoje
-                                </p>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {trendsIntel.trends.slice(0, 12).map((t) => (
-                                    <span
-                                      key={t.title}
-                                      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 px-2.5 py-1 text-[11px] text-ink"
-                                      title={(t.news || []).map((n) => n.title).filter(Boolean).join(' · ')}
-                                    >
-                                      <span className="font-medium">{t.title}</span>
-                                      {t.traffic && (
-                                        <span className="font-mono text-[10px] text-muted">{t.traffic}</span>
-                                      )}
-                                    </span>
-                                  ))}
+                            {(trendsIntel?.trends || []).length > 0 && (() => {
+                              const trendsSrc = String(trendsIntel?.meta?.source || '');
+                              const isNewsMode = /news_sector|google_news/i.test(trendsSrc);
+                              const isRelatedMode = /pytrends|related/i.test(trendsSrc);
+                              const sectionLabel = isRelatedMode
+                                ? 'Correlatos do setor (BR)'
+                                : isNewsMode
+                                  ? 'Notícias do setor (BR)'
+                                  : 'Em alta no BR (fallback)';
+                              const itemLink = (t) => {
+                                const fromNews = (t.news || []).find((n) => n?.url)?.url;
+                                return fromNews || t.url || t.link || null;
+                              };
+                              const itemSource = (t) => {
+                                const n = (t.news || []).find((x) => x?.source)?.source;
+                                return n || t.source || '';
+                              };
+                              // Remove " - Fonte" no fim do título (padrão Google News)
+                              const cleanTitle = (t) => {
+                                let title = String(t.title || '').trim();
+                                const src = itemSource(t);
+                                if (src && title.toLowerCase().endsWith(` - ${src.toLowerCase()}`)) {
+                                  title = title.slice(0, title.length - src.length - 3).trim();
+                                }
+                                return title;
+                              };
+                              return (
+                                <div>
+                                  <p className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2">
+                                    {sectionLabel}
+                                  </p>
+                                  {isNewsMode ? (
+                                    <ul className="divide-y divide-line overflow-hidden rounded-[12px] border border-line bg-bg2">
+                                      {trendsIntel.trends.slice(0, 12).map((t, i) => {
+                                        const href = itemLink(t);
+                                        const src = itemSource(t);
+                                        const title = cleanTitle(t);
+                                        const rowClass = 'flex items-start gap-2 px-3 py-2.5 text-left transition-colors hover:bg-surf/80';
+                                        const inner = (
+                                          <>
+                                            <span className="mt-0.5 shrink-0 font-mono text-[10px] text-muted2">{String(i + 1).padStart(2, '0')}</span>
+                                            <span className="min-w-0 flex-1">
+                                              <span className={`block text-[12px] font-medium leading-snug ${href ? 'text-ink group-hover:text-primary' : 'text-ink'}`}>
+                                                {title}
+                                              </span>
+                                              <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted">
+                                                {src && <span>{src}</span>}
+                                                {t.pubDate && (
+                                                  <span>
+                                                    {(() => {
+                                                      try {
+                                                        return new Date(t.pubDate).toLocaleString('pt-BR', {
+                                                          day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                                                        });
+                                                      } catch { return ''; }
+                                                    })()}
+                                                  </span>
+                                                )}
+                                                {href && <span className="text-primary/80">abrir ↗</span>}
+                                              </span>
+                                            </span>
+                                          </>
+                                        );
+                                        return href ? (
+                                          <li key={`${t.title}-${i}`}>
+                                            <a
+                                              href={href}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className={`group ${rowClass}`}
+                                              title={href}
+                                            >
+                                              {inner}
+                                            </a>
+                                          </li>
+                                        ) : (
+                                          <li key={`${t.title}-${i}`} className={rowClass}>{inner}</li>
+                                        );
+                                      })}
+                                    </ul>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {trendsIntel.trends.slice(0, 16).map((t) => {
+                                        const href = itemLink(t);
+                                        const chipClass = 'inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 px-2.5 py-1 text-[11px] text-ink transition-colors hover:border-primary/40 hover:text-primary';
+                                        const tip = [
+                                          t.seed ? `seed: ${t.seed}` : null,
+                                          t.kind === 'rising' ? 'em alta' : t.kind === 'top' ? 'mais frequente' : null,
+                                          href || null,
+                                        ].filter(Boolean).join(' · ');
+                                        const body = (
+                                          <>
+                                            {t.kind === 'rising' && (
+                                              <span className="font-mono text-[9px] font-semibold uppercase text-status-success">↑</span>
+                                            )}
+                                            <span className="font-medium">{t.title}</span>
+                                            {t.traffic && t.traffic !== 'news' && (
+                                              <span className="font-mono text-[10px] text-muted">{t.traffic}</span>
+                                            )}
+                                            {href && <span className="font-mono text-[9px] text-primary/70">↗</span>}
+                                          </>
+                                        );
+                                        return href ? (
+                                          <a
+                                            key={`${t.seed || ''}-${t.kind || ''}-${t.title}`}
+                                            href={href}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className={chipClass}
+                                            title={tip}
+                                          >
+                                            {body}
+                                          </a>
+                                        ) : (
+                                          <span
+                                            key={`${t.seed || ''}-${t.kind || ''}-${t.title}`}
+                                            className={chipClass}
+                                            title={tip}
+                                          >
+                                            {body}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                            )}
+                              );
+                            })()}
 
                             <div>
                               <p className="mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2">

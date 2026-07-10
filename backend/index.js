@@ -8,7 +8,9 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 
-require('dotenv').config();
+// Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 3001;
@@ -245,20 +247,113 @@ pool.on('error', (err) => {
 const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '2', 10) || 2;
 const APP_ACCESS_TABLE = 'app_user_access';
 
+/** Slug estável para agrupar contas do mesmo vendedor no ranking (ex.: Clayton pessoal + Aerion). */
+const sellerIdentityFromLabel = (label) => {
+  const slug = String(label || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || null;
+};
+
 async function ensureAppAccessTable() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ${APP_ACCESS_TABLE} (
         user_id INTEGER PRIMARY KEY,
         allowed_views JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_seller BOOLEAN NOT NULL DEFAULT false,
+        seller_identity TEXT,
+        seller_label TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS is_seller BOOLEAN NOT NULL DEFAULT false`);
+    await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS seller_identity TEXT`);
+    await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS seller_label TEXT`);
+
+    // Seed inicial: só se ainda não houver nenhum vendedor marcado.
+    // Clayton [Pessoal] + Clayton Aerion → identidade única; Thelga vendedora; Rebeca/Marketing fora do rank.
+    const { rows: sellerCountRows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ${APP_ACCESS_TABLE} WHERE is_seller = true`
+    );
+    if ((sellerCountRows[0]?.n || 0) === 0) {
+      const seeds = [
+        { id: 1, is_seller: true, identity: 'clayton', label: 'Clayton' },
+        { id: 2, is_seller: true, identity: 'clayton', label: 'Clayton' },
+        { id: 8, is_seller: true, identity: null, label: null },
+        { id: 6, is_seller: false, identity: null, label: null },
+        { id: 5, is_seller: false, identity: null, label: null },
+      ];
+      for (const seed of seeds) {
+        await pool.query(
+          `INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, is_seller, seller_identity, seller_label, updated_at)
+           VALUES ($1, '[]'::jsonb, $2, $3, $4, now())
+           ON CONFLICT (user_id) DO UPDATE SET
+             is_seller = EXCLUDED.is_seller,
+             seller_identity = EXCLUDED.seller_identity,
+             seller_label = EXCLUDED.seller_label,
+             updated_at = now()`,
+          [seed.id, seed.is_seller, seed.identity, seed.label]
+        );
+      }
+    }
   } catch (error) {
     console.error('ensureAppAccessTable failed:', error.message);
   }
 }
 ensureAppAccessTable();
+
+/**
+ * Vendedores do account, já agrupados por seller_identity.
+ * id canônico = menor user_id do grupo (ex.: Clayton pessoal = 1).
+ */
+async function getSellerGroups(accountId = CHATWOOT_ACCOUNT_ID) {
+  const { rows } = await pool.query(
+    `SELECT u.id,
+            COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS name,
+            COALESCE(acc.is_seller, false) AS is_seller,
+            NULLIF(TRIM(acc.seller_identity), '') AS seller_identity,
+            NULLIF(TRIM(acc.seller_label), '') AS seller_label
+       FROM account_users au
+       JOIN users u ON u.id = au.user_id
+       LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
+      WHERE au.account_id = $1
+        AND COALESCE(acc.is_seller, false) = true
+      ORDER BY u.id ASC`,
+    [accountId]
+  );
+  const groups = new Map();
+  for (const row of rows) {
+    const key = row.seller_identity || `id:${row.id}`;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        id: Number(row.id),
+        name: row.seller_label || row.name || `Agente #${row.id}`,
+        user_ids: [Number(row.id)],
+        identity: row.seller_identity || null,
+      });
+    } else {
+      existing.user_ids.push(Number(row.id));
+      if (row.seller_label) existing.name = row.seller_label;
+    }
+  }
+  return Array.from(groups.values()).sort((a, b) =>
+    String(a.name).localeCompare(String(b.name), 'pt-BR', { sensitivity: 'base' })
+  );
+}
+
+/** Expande agent_id canônico (ou qualquer id do grupo) para todos os user_ids da identidade. */
+async function resolveSellerActorIds(agentId, accountId = CHATWOOT_ACCOUNT_ID) {
+  const id = Number.parseInt(agentId, 10);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const groups = await getSellerGroups(accountId);
+  const group = groups.find((g) => g.id === id || g.user_ids.includes(id));
+  return group ? group.user_ids : [id];
+}
 
 const mapChatwootRole = (cwRole) => (Number(cwRole) === 1 ? 'admin' : 'member');
 
@@ -314,12 +409,15 @@ const requireAdmin = (req, res, next) => {
   return res.status(403).json({ error: 'Acesso restrito a administradores.' });
 };
 
-// List users (Chatwoot account members) + their app-side page access. Admin only.
+// List users (Chatwoot account members) + app-side access + flags de vendedor. Admin only.
 app.get('/api/users', requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT u.id, u.email, COALESCE(u.name, u.display_name, u.email) AS name,
-              au.role AS cw_role, acc.allowed_views
+      `SELECT u.id, u.email,
+              COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS name,
+              au.role AS cw_role, acc.allowed_views,
+              COALESCE(acc.is_seller, false) AS is_seller,
+              acc.seller_identity, acc.seller_label
          FROM account_users au
          JOIN users u ON u.id = au.user_id
          LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
@@ -333,6 +431,9 @@ app.get('/api/users', requireAdmin, async (req, res) => {
       name: r.name,
       role: mapChatwootRole(r.cw_role),
       allowed_views: Array.isArray(r.allowed_views) ? r.allowed_views : null,
+      is_seller: Boolean(r.is_seller),
+      seller_identity: r.seller_identity || null,
+      seller_label: r.seller_label || null,
     })));
   } catch (error) {
     console.error('Error listing users:', error);
@@ -340,21 +441,81 @@ app.get('/api/users', requireAdmin, async (req, res) => {
   }
 });
 
-// Set the pages a user can see (app-side). Admin only.
+// Set the pages a user can see + flags de vendedor/identidade (app-side). Admin only.
 app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
   const userId = Number.parseInt(req.params.id, 10);
   if (!Number.isFinite(userId)) return res.status(400).json({ error: 'Invalid id' });
-  const views = Array.isArray(req.body?.allowed_views) ? req.body.allowed_views.filter(v => typeof v === 'string') : [];
+
+  const hasViews = Array.isArray(req.body?.allowed_views);
+  const views = hasViews ? req.body.allowed_views.filter(v => typeof v === 'string') : null;
+  const hasSeller = typeof req.body?.is_seller === 'boolean';
+  const isSeller = hasSeller ? Boolean(req.body.is_seller) : null;
+  const hasLabel = Object.prototype.hasOwnProperty.call(req.body || {}, 'seller_label');
+  const sellerLabelRaw = hasLabel
+    ? (req.body.seller_label == null ? null : String(req.body.seller_label).trim() || null)
+    : undefined;
+  const sellerIdentity = hasLabel
+    ? (isSeller === false ? null : sellerIdentityFromLabel(sellerLabelRaw))
+    : undefined;
+
   try {
-    await pool.query(
-      `INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, updated_at)
-       VALUES ($1, $2::jsonb, now())
-       ON CONFLICT (user_id) DO UPDATE SET allowed_views = EXCLUDED.allowed_views, updated_at = now()`,
-      [userId, JSON.stringify(views)]
+    // Carrega estado atual para merge parcial
+    const { rows: existingRows } = await pool.query(
+      `SELECT allowed_views, is_seller, seller_identity, seller_label
+         FROM ${APP_ACCESS_TABLE} WHERE user_id = $1`,
+      [userId]
     );
-    res.json({ ok: true, user_id: userId, allowed_views: views });
+    const existing = existingRows[0] || {};
+    const nextViews = views != null
+      ? views
+      : (Array.isArray(existing.allowed_views) ? existing.allowed_views : []);
+    const nextIsSeller = isSeller != null ? isSeller : Boolean(existing.is_seller);
+    let nextLabel = hasLabel ? sellerLabelRaw : (existing.seller_label || null);
+    let nextIdentity = hasLabel ? sellerIdentity : (existing.seller_identity || null);
+    if (!nextIsSeller) {
+      nextLabel = null;
+      nextIdentity = null;
+    } else if (hasLabel && nextLabel) {
+      nextIdentity = sellerIdentityFromLabel(nextLabel);
+    }
+
+    await pool.query(
+      `INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, is_seller, seller_identity, seller_label, updated_at)
+       VALUES ($1, $2::jsonb, $3, $4, $5, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         allowed_views = EXCLUDED.allowed_views,
+         is_seller = EXCLUDED.is_seller,
+         seller_identity = EXCLUDED.seller_identity,
+         seller_label = EXCLUDED.seller_label,
+         updated_at = now()`,
+      [userId, JSON.stringify(nextViews), nextIsSeller, nextIdentity, nextLabel]
+    );
+    res.json({
+      ok: true,
+      user_id: userId,
+      allowed_views: nextViews,
+      is_seller: nextIsSeller,
+      seller_identity: nextIdentity,
+      seller_label: nextLabel,
+    });
   } catch (error) {
     console.error('Error updating user access:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Lista pública de vendedores agrupados (para ritmo / divisão de meta). Qualquer autenticado.
+app.get('/api/sellers', async (req, res) => {
+  try {
+    const groups = await getSellerGroups();
+    res.json(groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      user_ids: g.user_ids,
+      identity: g.identity,
+    })));
+  } catch (error) {
+    console.error('Error listing sellers:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1296,7 +1457,16 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
     return res.json({ configured: true, ok: resp.ok, status: resp.status, log_id: logId, ...(resp.data || {}) });
   } catch (error) {
     console.error('disparo webhook failed:', error.message);
-    return res.status(502).json({ configured: true, error: 'Falha ao acionar o n8n.' });
+    // Surface the real n8n/Evolution cause (aborts, HTTP status, webhook body)
+    // instead of an opaque message — timeouts read as "AbortError".
+    const cause = error.name === 'AbortError'
+      ? 'Tempo esgotado aguardando o n8n (timeout).'
+      : String(error.message || '').replace(/^Webhook\s+\/iniciar-disparo:\s*/, '');
+    return res.status(502).json({
+      configured: true,
+      error: 'Falha ao acionar o n8n.',
+      detail: cause || undefined,
+    });
   }
 });
 
@@ -1824,6 +1994,10 @@ const createLicitacaoTables = async () => {
       data_publicacao TIMESTAMP,
       data_resultado TIMESTAMP,
       data_assinatura TIMESTAMP,
+      has_result BOOLEAN NOT NULL DEFAULT FALSE,
+      has_contract BOOLEAN NOT NULL DEFAULT FALSE,
+      has_ata BOOLEAN NOT NULL DEFAULT FALSE,
+      fornecedores JSONB NOT NULL DEFAULT '[]'::jsonb,
       search_text TEXT,
       payload JSONB NOT NULL DEFAULT '{}'::jsonb,
       refreshed_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -1833,6 +2007,32 @@ const createLicitacaoTables = async () => {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_fornecedor ON ${PNCP_RESULT_CACHE_TABLE} (fornecedor_ni, fornecedor_nome);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_orgao ON ${PNCP_RESULT_CACHE_TABLE} (orgao_cnpj);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_refreshed ON ${PNCP_RESULT_CACHE_TABLE} (refreshed_at DESC);`);
+  // Campos Lei 14.133 para filtro SQL na aba Contratos/Resultados.
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS srp BOOLEAN;`);
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS amparo_legal TEXT;`);
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS has_result BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS has_contract BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS has_ata BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS fornecedores JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_types ON ${PNCP_RESULT_CACHE_TABLE} (has_result, has_contract, has_ata);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_fornecedores ON ${PNCP_RESULT_CACHE_TABLE} USING GIN (fornecedores);`);
+  // Backfill idempotente para linhas criadas antes das flags independentes.
+  await pool.query(`
+    UPDATE ${PNCP_RESULT_CACHE_TABLE}
+       SET has_result = has_result OR etapa_comercial = 'resulted'
+          OR jsonb_typeof(payload->'resultados') = 'array' AND jsonb_array_length(payload->'resultados') > 0,
+           has_contract = has_contract OR etapa_comercial = 'contracted'
+          OR jsonb_typeof(payload->'contratos') = 'array' AND jsonb_array_length(payload->'contratos') > 0
+          OR jsonb_typeof(payload->'contratos_daily') = 'array' AND jsonb_array_length(payload->'contratos_daily') > 0,
+           has_ata = has_ata OR etapa_comercial = 'ata_available'
+          OR jsonb_typeof(payload->'atas') = 'array' AND jsonb_array_length(payload->'atas') > 0
+          OR jsonb_typeof(payload->'atas_daily') = 'array' AND jsonb_array_length(payload->'atas_daily') > 0,
+           fornecedores = CASE
+             WHEN jsonb_array_length(fornecedores) = 0 AND (fornecedor_ni IS NOT NULL OR fornecedor_nome IS NOT NULL)
+             THEN jsonb_build_array(jsonb_build_object('ni', fornecedor_ni, 'nome', fornecedor_nome))
+             ELSE fornecedores END
+     WHERE NOT has_result OR NOT has_contract OR NOT has_ata OR jsonb_array_length(fornecedores) = 0;
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${PNCP_SEARCH_JOBS_TABLE} (
@@ -2319,6 +2519,21 @@ const fetchPncpSearch = async (query = {}) => {
 // Função para buscar detalhes de uma compra específica no PNCP
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Detecta 429 / reset / timeout típicos do PNCP (cota não documentada, mas real).
+const isPncpThrottleError = (errorOrText) => {
+  const text = String(errorOrText?.message || errorOrText || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return /429|rate.?limit|limite|too many|reset|recv failure|econnreset|etimedout|timed out|socket hang|curl exit (22|28|52|56)/.test(text);
+};
+
+// notePncpThrottle / PNCP_GATE são definidos mais abaixo; stubs até o gate montar.
+let notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
+  pncpDetalheRateLimitedUntil = Math.max(pncpDetalheRateLimitedUntil, Date.now() + (pauseMs || 90_000));
+  console.warn(`[PNCP] throttle early (${String(reason).slice(0, 80)})`);
+};
+
 const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, reject) => {
   const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
   const args = [
@@ -2371,23 +2586,34 @@ const describeFetchError = (error) => {
   return [...new Set(parts)].join(' | ') || 'erro desconhecido';
 };
 
-const fetchPncpSearchStable = async (query = {}, { retries = 4, minItemsWhenKnown = 1 } = {}) => {
+const fetchPncpSearchStable = async (query = {}, { retries = 3, minItemsWhenKnown = 1 } = {}) => {
   let lastError = null;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  // Se o gate já está em backoff, não martela a API com retries curtos.
+  const effectiveRetries = (typeof PNCP_GATE !== 'undefined' && (Date.now() < PNCP_GATE.pausedUntil || PNCP_GATE.failStreak >= 2))
+    ? Math.min(retries, 1)
+    : retries;
+  for (let attempt = 0; attempt <= effectiveRetries; attempt += 1) {
     try {
       const data = await fetchPncpSearch(query);
       const items = Array.isArray(data?.items) ? data.items : [];
       const total = Number(data?.total) || 0;
-      if (items.length > 0 || total === 0 || items.length >= minItemsWhenKnown || attempt === retries) {
+      if (items.length > 0 || total === 0 || items.length >= minItemsWhenKnown || attempt === effectiveRetries) {
         return data;
       }
     } catch (error) {
       lastError = error;
-      if (attempt === retries) {
-        throw new Error(describeFetchError(error));
+      const described = describeFetchError(error);
+      // 429 / reset: propaga na hora (o gate global entra em pausa). Retry curto piora.
+      if (isPncpThrottleError(described) || isPncpThrottleError(error)) {
+        if (typeof notePncpThrottle === 'function') notePncpThrottle(described);
+        throw new Error(described);
+      }
+      if (attempt === effectiveRetries) {
+        throw new Error(described);
       }
     }
-    await sleep(350 * Math.pow(2, attempt));
+    // Backoff generoso entre tentativas (1.2s, 2.4s, 4.8s…).
+    await sleep(1200 * Math.pow(2, attempt));
   }
   if (lastError) throw new Error(describeFetchError(lastError));
   return { items: [], total: 0 };
@@ -2439,7 +2665,10 @@ const PNCP_DEEP_SEARCH_JOBS = new Map();
 const PNCP_DEEP_SEARCH_JOB_TTL = 60 * 60 * 1000; // 1 hora
 const PNCP_DEEP_SEARCH_CANCELLED = new Set();
 const PNCP_DEEP_SEARCH_RESUME_TIMERS = new Map();
-const PNCP_RATE_LIMIT_RESUME_DELAY_MS = 4 * 60 * 1000;
+const PNCP_RATE_LIMIT_RESUME_DELAY_MS = 6 * 60 * 1000;
+// Buscas que não viraram watchlist ficam ativas por 15 dias (contados desde started_at)
+// e reexecutam diariamente; depois disso o cleanup remove do banco.
+const PNCP_SEARCH_JOB_ARCHIVE_DAYS = 15;
 const pncpCompraDetalheCache = new Map();
 const PNCP_DETALHE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
 const pncpCompraEnrichmentCache = new Map();
@@ -2749,6 +2978,13 @@ const extractPncpCompraIdentifiers = (item = {}) => {
   return { cnpj: '', ano: '', sequencial: '' };
 };
 
+// Número de controle PNCP de compra no formato "07854402000100-1-000001/2024".
+const parsePncpCompraControlNumber = (value = '') => {
+  const match = String(value).trim().match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/);
+  if (!match) return null;
+  return { cnpj: match[1], sequencial: String(Number(match[2])), ano: match[3] };
+};
+
 const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
 
@@ -2953,8 +3189,14 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
   }
 
   try {
-    const detail = await fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`);
+    const detail = await withPncpGate(() => fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`));
     const value = {
+      srp: typeof detail?.srp === 'boolean' ? detail.srp : null,
+      amparo_legal: detail?.amparoLegal ? {
+        codigo: detail.amparoLegal.codigo ?? null,
+        nome: detail.amparoLegal.nome || null,
+        descricao: detail.amparoLegal.descricao || null,
+      } : null,
       modo_disputa_id: detail?.modoDisputaId ? String(detail.modoDisputaId) : null,
       modo_disputa_nome: detail?.modoDisputaNome || null,
       tipo_instrumento_convocatorio_id: detail?.tipoInstrumentoConvocatorioCodigo ? String(detail.tipoInstrumentoConvocatorioCodigo) : null,
@@ -2970,9 +3212,12 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
     pncpCompraDetalheCache.set(cacheKey, { value, timestamp: Date.now() });
     return value;
   } catch (error) {
-    if (String(error?.message || '').includes('429')) {
-      pncpDetalheRateLimitedUntil = Date.now() + 3 * 60 * 1000;
-      console.warn(`[PNCP Detalhe] rate limit recebido; pausando detalhes ate ${new Date(pncpDetalheRateLimitedUntil).toISOString()}`);
+    if (isPncpThrottleError(error) || String(error?.message || '').includes('429')) {
+      if (typeof notePncpThrottle === 'function') {
+        notePncpThrottle(error.message || 'detalhe 429', 90_000);
+      } else {
+        pncpDetalheRateLimitedUntil = Date.now() + 90 * 1000;
+      }
       return null;
     }
     if (error?.name !== 'AbortError') {
@@ -2990,10 +3235,10 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
   let page = 1;
 
   while (page <= maxPages) {
-    const itensData = await fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
+    const itensData = await withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
       pagina: page,
       tamanhoPagina: pageSize,
-    });
+    }));
 
     const pageItems = Array.isArray(itensData?.data)
       ? itensData.data
@@ -3026,8 +3271,9 @@ const fetchPncpOptional = async (pathName, query = {}, { source = 'pncp' } = {})
     if (String(error?.message || '').includes('404')) {
       return null;
     }
-    if (String(error?.message || '').includes('429')) {
-      pncpDetalheRateLimitedUntil = Date.now() + 3 * 60 * 1000;
+    if (isPncpThrottleError(error) || String(error?.message || '').includes('429')) {
+      if (typeof notePncpThrottle === 'function') notePncpThrottle(error.message || 'optional 429', 90_000);
+      else pncpDetalheRateLimitedUntil = Date.now() + 90 * 1000;
     }
     console.warn(`[PNCP Dossier] ${pathName} falhou: ${error.message}`);
     return null;
@@ -3062,6 +3308,25 @@ const fetchPncpCompraResultados = async (cnpj, ano, sequencial, itens = []) => {
   return resultRows;
 };
 
+// O endpoint de contratos por contratação exige paginação (retorna 400 sem `pagina`).
+const fetchPncpContratosByCompra = async (cnpj, ano, sequencial) => {
+  const contratos = [];
+  let pagina = 1;
+  while (pagina <= 5) {
+    const data = await fetchPncpOptional(
+      `/v1/orgaos/${cnpj}/contratos/contratacao/${ano}/${sequencial}`,
+      { pagina, tamanhoPagina: 50 }
+    );
+    const rows = asPncpList(data);
+    if (!rows.length) break;
+    contratos.push(...rows);
+    const totalPaginas = Number(data?.totalPaginas) || 1;
+    if (pagina >= totalPaginas) break;
+    pagina += 1;
+  }
+  return contratos;
+};
+
 const fetchPncpCompraDossier = async (cnpj, ano, sequencial, { query = '', includeResultados = true } = {}) => {
   const compra = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`, {}, { source: 'consulta' });
   const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize: 100, maxPages: 20 }).catch(error => {
@@ -3071,10 +3336,9 @@ const fetchPncpCompraDossier = async (cnpj, ano, sequencial, { query = '', inclu
   const resultados = includeResultados
     ? await fetchPncpCompraResultados(cnpj, ano, sequencial, itens)
     : [];
-  const contratosData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/contratos/contratacao/${ano}/${sequencial}`);
+  const contratos = await fetchPncpContratosByCompra(cnpj, ano, sequencial);
   const atasData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/atas`);
   const arquivosData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`);
-  const contratos = asPncpList(contratosData);
   const atas = asPncpList(atasData);
   const arquivos = asPncpList(arquivosData);
   const normalizedQuery = normalizeSearchText(query).trim();
@@ -3169,6 +3433,8 @@ const buildPncpResultCachePayload = (dossier, query = '') => {
     data_publicacao: item.data_publicacao || compra?.dataPublicacaoPncp || null,
     data_resultado: firstResult?.dataResultado || null,
     data_assinatura: firstContract?.dataAssinatura || null,
+    srp: typeof compra?.srp === 'boolean' ? compra.srp : (typeof item.srp === 'boolean' ? item.srp : null),
+    amparo_legal: compra?.amparoLegal?.nome || item.amparo_legal?.nome || null,
     search_text: searchText,
     payload: dossier,
   };
@@ -3182,8 +3448,8 @@ const upsertPncpResultCache = async (dossier, query = '') => {
       INSERT INTO ${PNCP_RESULT_CACHE_TABLE}
         (pncp_key, orgao_cnpj, orgao_nome, ano, sequencial, numero_controle_pncp, titulo, descricao,
          uf, modalidade, etapa_comercial, fornecedor_ni, fornecedor_nome, valor_estimado, valor_homologado,
-         data_publicacao, data_resultado, data_assinatura, search_text, payload, refreshed_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,NOW())
+         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, search_text, payload, refreshed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,NOW())
       ON CONFLICT (pncp_key) DO UPDATE SET
         orgao_cnpj = EXCLUDED.orgao_cnpj,
         orgao_nome = EXCLUDED.orgao_nome,
@@ -3194,14 +3460,19 @@ const upsertPncpResultCache = async (dossier, query = '') => {
         descricao = EXCLUDED.descricao,
         uf = EXCLUDED.uf,
         modalidade = EXCLUDED.modalidade,
-        etapa_comercial = EXCLUDED.etapa_comercial,
-        fornecedor_ni = EXCLUDED.fornecedor_ni,
-        fornecedor_nome = EXCLUDED.fornecedor_nome,
-        valor_estimado = EXCLUDED.valor_estimado,
-        valor_homologado = EXCLUDED.valor_homologado,
-        data_publicacao = EXCLUDED.data_publicacao,
-        data_resultado = EXCLUDED.data_resultado,
-        data_assinatura = EXCLUDED.data_assinatura,
+        srp = COALESCE(EXCLUDED.srp, ${PNCP_RESULT_CACHE_TABLE}.srp),
+        amparo_legal = COALESCE(EXCLUDED.amparo_legal, ${PNCP_RESULT_CACHE_TABLE}.amparo_legal),
+        etapa_comercial = CASE
+          WHEN EXCLUDED.etapa_comercial IN ('contracted','ata_available','resulted') THEN EXCLUDED.etapa_comercial
+          WHEN ${PNCP_RESULT_CACHE_TABLE}.etapa_comercial IN ('contracted','ata_available','resulted') THEN ${PNCP_RESULT_CACHE_TABLE}.etapa_comercial
+          ELSE COALESCE(EXCLUDED.etapa_comercial, ${PNCP_RESULT_CACHE_TABLE}.etapa_comercial) END,
+        fornecedor_ni = COALESCE(EXCLUDED.fornecedor_ni, ${PNCP_RESULT_CACHE_TABLE}.fornecedor_ni),
+        fornecedor_nome = COALESCE(EXCLUDED.fornecedor_nome, ${PNCP_RESULT_CACHE_TABLE}.fornecedor_nome),
+        valor_estimado = COALESCE(EXCLUDED.valor_estimado, ${PNCP_RESULT_CACHE_TABLE}.valor_estimado),
+        valor_homologado = COALESCE(EXCLUDED.valor_homologado, ${PNCP_RESULT_CACHE_TABLE}.valor_homologado),
+        data_publicacao = COALESCE(EXCLUDED.data_publicacao, ${PNCP_RESULT_CACHE_TABLE}.data_publicacao),
+        data_resultado = COALESCE(EXCLUDED.data_resultado, ${PNCP_RESULT_CACHE_TABLE}.data_resultado),
+        data_assinatura = COALESCE(EXCLUDED.data_assinatura, ${PNCP_RESULT_CACHE_TABLE}.data_assinatura),
         search_text = EXCLUDED.search_text,
         payload = EXCLUDED.payload,
         refreshed_at = NOW()
@@ -3210,7 +3481,61 @@ const upsertPncpResultCache = async (dossier, query = '') => {
       row.pncp_key, row.orgao_cnpj, row.orgao_nome, row.ano, row.sequencial, row.numero_controle_pncp,
       row.titulo, row.descricao, row.uf, row.modalidade, row.etapa_comercial, row.fornecedor_ni,
       row.fornecedor_nome, row.valor_estimado, row.valor_homologado, row.data_publicacao,
-      row.data_resultado, row.data_assinatura, row.search_text, JSON.stringify(row.payload),
+      row.data_resultado, row.data_assinatura, row.srp ?? null, row.amparo_legal ?? null,
+      row.search_text, JSON.stringify(row.payload),
+    ]
+  );
+  return row;
+};
+
+// Upsert gentil para linhas vindas do sync diário de contratos/atas (sem dossiê):
+// só preenche o que está vazio (dado de dossiê existente vence) e faz merge do payload.
+const upsertPncpResultCacheLite = async (row) => {
+  if (!row?.pncp_key) return null;
+  await pool.query(
+    `
+      INSERT INTO ${PNCP_RESULT_CACHE_TABLE}
+        (pncp_key, orgao_cnpj, orgao_nome, ano, sequencial, numero_controle_pncp, titulo, descricao,
+         uf, modalidade, etapa_comercial, fornecedor_ni, fornecedor_nome, valor_estimado, valor_homologado,
+         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, search_text, payload, refreshed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,NOW())
+      ON CONFLICT (pncp_key) DO UPDATE SET
+        srp = COALESCE(${PNCP_RESULT_CACHE_TABLE}.srp, EXCLUDED.srp),
+        amparo_legal = COALESCE(${PNCP_RESULT_CACHE_TABLE}.amparo_legal, EXCLUDED.amparo_legal),
+        orgao_cnpj = COALESCE(${PNCP_RESULT_CACHE_TABLE}.orgao_cnpj, EXCLUDED.orgao_cnpj),
+        orgao_nome = COALESCE(${PNCP_RESULT_CACHE_TABLE}.orgao_nome, EXCLUDED.orgao_nome),
+        ano = COALESCE(${PNCP_RESULT_CACHE_TABLE}.ano, EXCLUDED.ano),
+        sequencial = COALESCE(${PNCP_RESULT_CACHE_TABLE}.sequencial, EXCLUDED.sequencial),
+        numero_controle_pncp = COALESCE(${PNCP_RESULT_CACHE_TABLE}.numero_controle_pncp, EXCLUDED.numero_controle_pncp),
+        titulo = COALESCE(${PNCP_RESULT_CACHE_TABLE}.titulo, EXCLUDED.titulo),
+        descricao = COALESCE(${PNCP_RESULT_CACHE_TABLE}.descricao, EXCLUDED.descricao),
+        uf = COALESCE(${PNCP_RESULT_CACHE_TABLE}.uf, EXCLUDED.uf),
+        modalidade = COALESCE(${PNCP_RESULT_CACHE_TABLE}.modalidade, EXCLUDED.modalidade),
+        etapa_comercial = CASE
+          WHEN EXCLUDED.etapa_comercial IN ('contracted','ata_available','resulted') THEN EXCLUDED.etapa_comercial
+          ELSE COALESCE(${PNCP_RESULT_CACHE_TABLE}.etapa_comercial, EXCLUDED.etapa_comercial) END,
+        fornecedor_ni = COALESCE(${PNCP_RESULT_CACHE_TABLE}.fornecedor_ni, EXCLUDED.fornecedor_ni),
+        fornecedor_nome = COALESCE(${PNCP_RESULT_CACHE_TABLE}.fornecedor_nome, EXCLUDED.fornecedor_nome),
+        valor_estimado = COALESCE(${PNCP_RESULT_CACHE_TABLE}.valor_estimado, EXCLUDED.valor_estimado),
+        valor_homologado = COALESCE(${PNCP_RESULT_CACHE_TABLE}.valor_homologado, EXCLUDED.valor_homologado),
+        data_publicacao = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_publicacao, EXCLUDED.data_publicacao),
+        data_resultado = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_resultado, EXCLUDED.data_resultado),
+        data_assinatura = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_assinatura, EXCLUDED.data_assinatura),
+        search_text = CASE
+          WHEN EXCLUDED.search_text IS NULL OR EXCLUDED.search_text = '' THEN ${PNCP_RESULT_CACHE_TABLE}.search_text
+          WHEN ${PNCP_RESULT_CACHE_TABLE}.search_text IS NULL THEN EXCLUDED.search_text
+          WHEN position(EXCLUDED.search_text IN ${PNCP_RESULT_CACHE_TABLE}.search_text) > 0 THEN ${PNCP_RESULT_CACHE_TABLE}.search_text
+          ELSE ${PNCP_RESULT_CACHE_TABLE}.search_text || ' ' || EXCLUDED.search_text END,
+        payload = ${PNCP_RESULT_CACHE_TABLE}.payload || EXCLUDED.payload,
+        refreshed_at = NOW()
+    `,
+    [
+      row.pncp_key, row.orgao_cnpj || null, row.orgao_nome || null, row.ano || null, row.sequencial || null,
+      row.numero_controle_pncp || null, row.titulo || null, row.descricao || null, row.uf || null,
+      row.modalidade || null, row.etapa_comercial || null, row.fornecedor_ni || null, row.fornecedor_nome || null,
+      row.valor_estimado || null, row.valor_homologado || null, row.data_publicacao || null,
+      row.data_resultado || null, row.data_assinatura || null, row.srp ?? null, row.amparo_legal || null,
+      row.search_text || null, JSON.stringify(row.payload || {}),
     ]
   );
   return row;
@@ -3235,6 +3560,8 @@ const normalizePncpResultCacheRow = (row) => ({
   data_publicacao: row.data_publicacao,
   data_resultado: row.data_resultado,
   data_assinatura: row.data_assinatura,
+  srp: typeof row.srp === 'boolean' ? row.srp : null,
+  amparo_legal: row.amparo_legal || null,
   refreshed_at: row.refreshed_at,
   dossier: row.payload || null,
   url: row.orgao_cnpj && row.ano && row.sequencial
@@ -3274,13 +3601,15 @@ const isPncpCompraItemRelevantToQuery = (item, query) => {
   return matchedCount >= 2;
 };
 
-const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
+const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', options = {}) => {
   if (!cnpj || !ano || !sequencial) {
     return null;
   }
 
   const normalizedQuery = normalizeSearchText(query).trim();
-  const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}`;
+  const maxPages = Math.max(1, Math.min(15, Number(options.maxPages) || (normalizedQuery ? 8 : 1)));
+  const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || (normalizedQuery ? 100 : 50)));
+  const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}|p:${maxPages}`;
   const cached = pncpCompraEnrichmentCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < PNCP_ENRICHMENT_CACHE_TTL) {
     return cached.value;
@@ -3294,10 +3623,7 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
     let valorItensPertinentes = null;
     let itensPertinentes = [];
     try {
-      const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, {
-        pageSize: normalizedQuery ? 100 : 50,
-        maxPages: normalizedQuery ? 15 : 1,
-      });
+      const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize, maxPages });
       totalItens = itens.length;
       itensResumoTexto = itens
         .map(item => `${item?.descricao || ''} ${item?.itemCategoriaNome || ''} ${item?.catalogoCodigoItem || ''} ${item?.numeroItem || ''}`.trim())
@@ -3305,8 +3631,16 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
         .slice(0, 20)
         .join(' | ');
 
-      if (normalizedQuery) {
-        const pertinentes = itens.filter(item => isPncpCompraItemRelevantToQuery(item, normalizedQuery));
+      if (normalizedQuery && itens.length) {
+        let pertinentes = itens.filter(item => isPncpCompraItemRelevantToQuery(item, normalizedQuery));
+        // Compra de 1 item ou nenhum match estrito: usa o(s) item(ns) com valor como fallback
+        // para não ficar só com o total da licitação.
+        if (!pertinentes.length && itens.length === 1) {
+          pertinentes = itens;
+        } else if (!pertinentes.length && itens.length > 0 && itens.length <= 5) {
+          // Poucos itens: se a query casa no objeto da compra, considera todos com valor.
+          pertinentes = itens.filter(item => Number(item?.valorTotal) > 0);
+        }
         const totalPertinente = pertinentes.reduce((sum, item) => {
           const value = Number(item?.valorTotal);
           return sum + (Number.isFinite(value) && value > 0 ? value : 0);
@@ -3323,6 +3657,20 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
             valor_total: Number.isFinite(Number(item?.valorTotal)) ? Number(item.valorTotal) : null,
           }));
         }
+      } else if (!normalizedQuery && itens.length === 1) {
+        const only = itens[0];
+        const onlyVal = Number(only?.valorTotal);
+        if (Number.isFinite(onlyVal) && onlyVal > 0) {
+          valorItensPertinentes = Number(onlyVal.toFixed(2));
+          itensPertinentes = [{
+            numero_item: only?.numeroItem ?? null,
+            descricao: only?.descricao || null,
+            quantidade: Number.isFinite(Number(only?.quantidade)) ? Number(only.quantidade) : null,
+            unidade: only?.unidadeMedida || null,
+            valor_unitario_estimado: Number.isFinite(Number(only?.valorUnitarioEstimado)) ? Number(only.valorUnitarioEstimado) : null,
+            valor_total: onlyVal,
+          }];
+        }
       }
     } catch (error) {
       if (error?.name !== 'AbortError') {
@@ -3338,6 +3686,10 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
       data_publicacao_pncp: detalhe?.data_publicacao_pncp ?? null,
       data_inicio_vigencia: detalhe?.data_abertura_proposta ?? null,
       data_fim_vigencia: detalhe?.data_encerramento_proposta ?? null,
+      srp: detalhe?.srp ?? null,
+      amparo_legal: detalhe?.amparo_legal ?? null,
+      modo_disputa_id: detalhe?.modo_disputa_id ?? null,
+      modo_disputa_nome: detalhe?.modo_disputa_nome ?? null,
       valor_itens_pertinentes: valorItensPertinentes,
       itens_pertinentes: itensPertinentes,
       itens_pertinentes_count: itensPertinentes.length,
@@ -3351,6 +3703,26 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '') => {
     console.error(`Erro no enrichment PNCP (${cacheKey}):`, error.message);
     return null;
   }
+};
+
+const buildPncpEnrichmentQuery = (item, fallbackQuery = '') => {
+  const parts = [
+    item?.__matched_termo,
+    item?.matched_termo,
+    fallbackQuery,
+  ].map(v => String(v || '').trim()).filter(Boolean);
+  return parts[0] || '';
+};
+
+const itemHasPncpItemValue = (item) => {
+  const n = Number(item?.valor_itens_pertinentes);
+  return Number.isFinite(n) && n > 0;
+};
+
+const itemNeedsPncpValueEnrichment = (item) => {
+  const hasTotal = Boolean(getPncpTotalEstimatedValue(item));
+  const hasItem = itemHasPncpItemValue(item);
+  return !hasTotal || !hasItem;
 };
 
 const getPncpTotalEstimatedValue = (item) => {
@@ -3369,42 +3741,163 @@ const getPncpTotalEstimatedValue = (item) => {
   return null;
 };
 
-const fillPncpMissingEstimatedValues = async (items = [], { limit = 80, delayMs = 250 } = {}) => {
+const mergePncpDetalheIntoItem = (item, detalhe) => ({
+  ...item,
+  valor_total_estimado: detalhe.valor_total_estimado ?? item?.valor_total_estimado ?? null,
+  valor_total_homologado: detalhe.valor_total_homologado ?? item?.valor_total_homologado ?? null,
+  situacao_id: item?.situacao_id || detalhe.situacao_id,
+  situacao_nome: item?.situacao_nome || detalhe.situacao_nome,
+  data_publicacao_pncp: item?.data_publicacao_pncp || detalhe.data_publicacao_pncp,
+  data_inicio_vigencia: item?.data_inicio_vigencia || detalhe.data_abertura_proposta,
+  data_fim_vigencia: item?.data_fim_vigencia || detalhe.data_encerramento_proposta,
+  modo_disputa_id: item?.modo_disputa_id || detalhe.modo_disputa_id,
+  modo_disputa_nome: item?.modo_disputa_nome || detalhe.modo_disputa_nome,
+  tipo_id: item?.tipo_id || detalhe.tipo_instrumento_convocatorio_id,
+  tipo_nome: item?.tipo_nome || detalhe.tipo_instrumento_convocatorio_nome,
+  srp: item?.srp ?? detalhe.srp ?? null,
+  amparo_legal: item?.amparo_legal || detalhe.amparo_legal || null,
+});
+
+const mergePncpEnrichmentIntoRawItem = (item, enrichment) => {
+  if (!enrichment) return item;
+  return {
+    ...mergePncpDetalheIntoItem(item, enrichment),
+    valor_itens_pertinentes: enrichment.valor_itens_pertinentes ?? item?.valor_itens_pertinentes ?? null,
+    itens_pertinentes: Array.isArray(enrichment.itens_pertinentes) && enrichment.itens_pertinentes.length
+      ? enrichment.itens_pertinentes
+      : (item?.itens_pertinentes || []),
+    itens_pertinentes_count: enrichment.itens_pertinentes_count ?? item?.itens_pertinentes_count ?? null,
+    itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || item?.__itens_resumo_texto || '',
+    total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
+  };
+};
+
+// Merge síncrono a partir do cache (sem rede): snapshots parciais do deep job.
+const applyCachedPncpEnrichment = (items = [], fallbackQuery = '') => items.map(item => {
+  if (!itemNeedsPncpValueEnrichment(item)) return item;
+  const ids = extractPncpCompraIdentifiers(item);
+  if (!ids.cnpj || !ids.ano || !ids.sequencial) return item;
+  const q = normalizeSearchText(buildPncpEnrichmentQuery(item, fallbackQuery)).trim();
+  // Tenta cache de enrichment completo (total + itens).
+  for (const [key, cached] of pncpCompraEnrichmentCache.entries()) {
+    if (!cached?.value || (Date.now() - cached.timestamp) >= PNCP_ENRICHMENT_CACHE_TTL) continue;
+    if (key.startsWith(`${ids.cnpj}/${ids.ano}/${ids.sequencial}|q:${q}`)) {
+      return mergePncpEnrichmentIntoRawItem(item, cached.value);
+    }
+  }
+  const cached = pncpCompraDetalheCache.get(`${ids.cnpj}/${ids.ano}/${ids.sequencial}`);
+  if (!cached?.value || (Date.now() - cached.timestamp) >= PNCP_DETALHE_CACHE_TTL) return item;
+  return mergePncpDetalheIntoItem(item, cached.value);
+});
+
+// Preenche total da licitação + valor do(s) item(ns) pertinente(s) via API de itens.
+const fillPncpMissingEstimatedValues = async (items = [], {
+  limit = 80,
+  delayMs = 250,
+  rateLimitWaitMs = 0,
+  query = '',
+  maxPages = 6,
+} = {}) => {
   const result = [];
   let checked = 0;
+  let rateLimitWaitBudget = Math.max(0, Number(rateLimitWaitMs) || 0);
   for (const item of items) {
-    const currentTotalValue = getPncpTotalEstimatedValue(item);
-    if (currentTotalValue || checked >= limit) {
+    if (!itemNeedsPncpValueEnrichment(item) || checked >= limit) {
       result.push(item);
       continue;
     }
     checked += 1;
     const ids = extractPncpCompraIdentifiers(item);
-    const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
-    if (!detalhe) {
+    if (!ids.cnpj || !ids.ano || !ids.sequencial) {
       result.push(item);
-      if (Date.now() < pncpDetalheRateLimitedUntil) {
+      continue;
+    }
+    const q = buildPncpEnrichmentQuery(item, query);
+    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    if (!enrichment && Date.now() < pncpDetalheRateLimitedUntil && rateLimitWaitBudget > 0) {
+      const waitMs = Math.min(pncpDetalheRateLimitedUntil - Date.now(), rateLimitWaitBudget);
+      rateLimitWaitBudget -= waitMs;
+      await sleep(waitMs);
+      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    }
+    if (!enrichment) {
+      result.push(item);
+      if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) {
         result.push(...items.slice(result.length));
         break;
       }
       if (delayMs > 0) await sleep(delayMs);
       continue;
     }
-    result.push({
-      ...item,
-      valor_total_estimado: detalhe.valor_total_estimado ?? item?.valor_total_estimado ?? null,
-      valor_total_homologado: detalhe.valor_total_homologado ?? item?.valor_total_homologado ?? null,
-      situacao_id: item?.situacao_id || detalhe.situacao_id,
-      situacao_nome: item?.situacao_nome || detalhe.situacao_nome,
-      data_publicacao_pncp: item?.data_publicacao_pncp || detalhe.data_publicacao_pncp,
-      data_inicio_vigencia: item?.data_inicio_vigencia || detalhe.data_abertura_proposta,
-      data_fim_vigencia: item?.data_fim_vigencia || detalhe.data_encerramento_proposta,
-      modo_disputa_id: item?.modo_disputa_id || detalhe.modo_disputa_id,
-      modo_disputa_nome: item?.modo_disputa_nome || detalhe.modo_disputa_nome,
-      tipo_id: item?.tipo_id || detalhe.tipo_instrumento_convocatorio_id,
-      tipo_nome: item?.tipo_nome || detalhe.tipo_instrumento_convocatorio_nome,
-    });
+    result.push(mergePncpEnrichmentIntoRawItem(item, enrichment));
     if (delayMs > 0) await sleep(delayMs);
+  }
+  return result;
+};
+
+const mergePncpDetalheIntoNormalizedItem = (item, detalhe) => ({
+  ...item,
+  valor_total_estimado: item?.valor_total_estimado ?? detalhe.valor_total_estimado ?? null,
+  valor_total_homologado: item?.valor_total_homologado ?? detalhe.valor_total_homologado ?? null,
+  situacao: {
+    id: item?.situacao?.id || detalhe.situacao_id || null,
+    nome: item?.situacao?.nome || detalhe.situacao_nome || null,
+  },
+  data_inicio_vigencia: item?.data_inicio_vigencia || detalhe.data_abertura_proposta || null,
+  data_fim_vigencia: item?.data_fim_vigencia || detalhe.data_encerramento_proposta || null,
+  modo_disputa: {
+    id: item?.modo_disputa?.id || detalhe.modo_disputa_id || null,
+    nome: item?.modo_disputa?.nome || detalhe.modo_disputa_nome || null,
+  },
+  srp: item?.srp ?? detalhe.srp ?? null,
+  amparo_legal: item?.amparo_legal || detalhe.amparo_legal || null,
+});
+
+const mergePncpEnrichmentIntoNormalizedItem = (item, enrichment) => {
+  if (!enrichment) return item;
+  const base = mergePncpDetalheIntoNormalizedItem(item, enrichment);
+  return {
+    ...base,
+    valor_itens_pertinentes: item?.valor_itens_pertinentes ?? enrichment.valor_itens_pertinentes ?? null,
+    itens_pertinentes: Array.isArray(item?.itens_pertinentes) && item.itens_pertinentes.length
+      ? item.itens_pertinentes
+      : (enrichment.itens_pertinentes || []),
+    itens_pertinentes_count: item?.itens_pertinentes_count ?? enrichment.itens_pertinentes_count ?? null,
+    itens_resumo_texto: item?.itens_resumo_texto || enrichment.itens_resumo_texto || '',
+    total_itens: item?.total_itens ?? enrichment.total_itens ?? null,
+  };
+};
+
+// Enriquecimento da página visível: total da licitação + valor do item pertinente.
+const fillValuesOnNormalizedPncpItems = async (items = [], {
+  limit = 20,
+  rateLimitWaitMs = 8000,
+  query = '',
+  maxPages = 4,
+} = {}) => {
+  const result = [];
+  let checked = 0;
+  let rateLimitWaitBudget = Math.max(0, Number(rateLimitWaitMs) || 0);
+  for (const item of items) {
+    if (!itemNeedsPncpValueEnrichment(item) || checked >= limit) {
+      result.push(item);
+      continue;
+    }
+    checked += 1;
+    const ids = extractPncpCompraIdentifiers(item);
+    if (!ids.cnpj || !ids.ano || !ids.sequencial) {
+      result.push(item);
+      continue;
+    }
+    const q = buildPncpEnrichmentQuery(item, query);
+    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    if (!enrichment && Date.now() < pncpDetalheRateLimitedUntil && rateLimitWaitBudget > 0) {
+      const waitMs = Math.min(pncpDetalheRateLimitedUntil - Date.now(), rateLimitWaitBudget);
+      rateLimitWaitBudget -= waitMs;
+      await sleep(waitMs);
+      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    }
+    result.push(enrichment ? mergePncpEnrichmentIntoNormalizedItem(item, enrichment) : item);
   }
   return result;
 };
@@ -3855,7 +4348,7 @@ app.get('/api/licitacoes/termos-correlatos', async (req, res) => {
 app.get('/api/contacts', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT c.id, c.name, c.location, c.phone_number, c.custom_attributes, c.additional_attributes, c.account_id, c.additional_attributes->>'company_name' AS company_name, c.company_id, conv.assignee_id AS agent_id, COALESCE(u.display_name, u.name, u.email) AS agent_name, COALESCE(jsonb_agg(DISTINCT jsonb_build_object('name', t.name, 'color', l.color)) FILTER (WHERE t.name IS NOT NULL), '[]'::jsonb) AS labels FROM contacts c LEFT JOIN LATERAL (SELECT assignee_id FROM conversations WHERE contact_id = c.id AND assignee_id IS NOT NULL ORDER BY last_activity_at DESC NULLS LAST, updated_at DESC NULLS LAST, created_at DESC LIMIT 1) conv ON true LEFT JOIN users u ON u.id = conv.assignee_id LEFT JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = c.id LEFT JOIN tags t ON t.id = tg.tag_id LEFT JOIN labels l ON l.title = t.name AND l.account_id = c.account_id GROUP BY c.id, conv.assignee_id, u.display_name, u.name, u.email"
+      "SELECT c.id, c.name, c.location, c.phone_number, c.custom_attributes, c.additional_attributes, c.account_id, c.additional_attributes->>'company_name' AS company_name, c.company_id, conv.assignee_id AS agent_id, COALESCE(NULLIF(TRIM(acc.seller_label), ''), NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS agent_name, COALESCE(jsonb_agg(DISTINCT jsonb_build_object('name', t.name, 'color', l.color)) FILTER (WHERE t.name IS NOT NULL), '[]'::jsonb) AS labels FROM contacts c LEFT JOIN LATERAL (SELECT assignee_id FROM conversations WHERE contact_id = c.id AND assignee_id IS NOT NULL ORDER BY last_activity_at DESC NULLS LAST, updated_at DESC NULLS LAST, created_at DESC LIMIT 1) conv ON true LEFT JOIN users u ON u.id = conv.assignee_id LEFT JOIN app_user_access acc ON acc.user_id = conv.assignee_id LEFT JOIN taggings tg ON tg.taggable_type = 'Contact' AND tg.context = 'labels' AND tg.taggable_id = c.id LEFT JOIN tags t ON t.id = tg.tag_id LEFT JOIN labels l ON l.title = t.name AND l.account_id = c.account_id GROUP BY c.id, conv.assignee_id, u.display_name, u.name, u.email, acc.seller_label"
     );
     const normalized = rows.map(row => ({
       ...row,
@@ -4098,6 +4591,7 @@ app.get('/api/overview/by-probability', async (req, res) => {
 
 app.get('/api/overview/by-agent', async (req, res) => {
   try {
+    // Só vendedores (is_seller). Contas com a mesma seller_identity (ex.: Clayton) viram 1 linha.
     const { rows } = await pool.query(`
       WITH agent_contacts AS (
         SELECT
@@ -4105,7 +4599,10 @@ app.get('/api/overview/by-agent', async (req, res) => {
           ${valueNumExpr('c.')} AS value_num,
           NULLIF(TRIM(SPLIT_PART(c.custom_attributes->>'Funil_Vendas', '.', 1)), '')::int AS stage_num,
           conv.assignee_id,
-          COALESCE(u.display_name, u.name, u.email) AS agent_name
+          COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS raw_name,
+          COALESCE(acc.is_seller, false) AS is_seller,
+          NULLIF(TRIM(acc.seller_identity), '') AS seller_identity,
+          NULLIF(TRIM(acc.seller_label), '') AS seller_label
         FROM contacts c
         LEFT JOIN LATERAL (
           SELECT assignee_id
@@ -4115,14 +4612,27 @@ app.get('/api/overview/by-agent', async (req, res) => {
           LIMIT 1
         ) conv ON true
         LEFT JOIN users u ON u.id = conv.assignee_id
+        LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = conv.assignee_id
+        WHERE conv.assignee_id IS NOT NULL
+          AND COALESCE(acc.is_seller, false) = true
+      ),
+      labeled AS (
+        SELECT
+          id,
+          value_num,
+          stage_num,
+          assignee_id,
+          COALESCE(seller_identity, 'id:' || assignee_id::text) AS group_key,
+          COALESCE(seller_label, raw_name, 'Agente') AS agent_display
+        FROM agent_contacts
       )
       SELECT
-        COALESCE(agent_name, 'Sem agente') AS agent,
-        assignee_id AS agent_id,
+        agent_display AS agent,
+        MIN(assignee_id)::int AS agent_id,
         COUNT(*)::int AS count,
         COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value
-      FROM agent_contacts
-      GROUP BY agent, agent_id
+      FROM labeled
+      GROUP BY group_key, agent_display
       ORDER BY count DESC;
     `);
     res.json(rows);
@@ -4261,11 +4771,14 @@ app.get('/api/overview/recent-actions', async (req, res) => {
 
 /**
  * Ritmo do funil (dia + mês):
- * - Contatos = mensagens públicas enviadas (WhatsApp etc.) + notas privadas no Chatwoot
- *   (regra operacional: ligação/e-mail devem ser registrados em Notas).
+ * - Contatos = mensagens públicas enviadas (WhatsApp etc.)
+ *   + notas privadas na conversa (messages.private)
+ *   + notas do perfil do contato (tabela notes — aba Notas no Chatwoot)
+ *   (regra operacional: ligação/e-mail/visita podem ser registrados em qualquer uma das notas).
  * - SQL / Oportunidade / Proposta / Fechamento = movimentações do card no funil
  *   (kanban_stage_history → to_stage).
- * Query opcional: agent_id — filtra feito do dia/mês por remetente (mensagens) e actor (moves).
+ * Query opcional: agent_id — filtra feito do dia/mês por remetente (mensagens),
+ *   autor da nota de contato (notes.user_id) e actor (moves).
  */
 app.get('/api/overview/funnel-pace', async (req, res) => {
   try {
@@ -4274,18 +4787,87 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const agentId = agentIdRaw != null && String(agentIdRaw).trim() !== ''
       ? Number.parseInt(agentIdRaw, 10)
       : null;
-    const hasAgent = Number.isFinite(agentId) && agentId > 0;
+    const sellerGroups = await getSellerGroups(accountId);
+    const allSellerIds = sellerGroups.flatMap((g) => g.user_ids);
+    // Individual: expande identidade (Clayton pessoal + Aerion).
+    // Time: só vendedores — não-vendedores (ex.: Rebeca) não entram no feito nem na divisão de meta.
+    let actorIds = null;
+    let selectedAgentId = null;
+    if (Number.isFinite(agentId) && agentId > 0) {
+      actorIds = await resolveSellerActorIds(agentId, accountId);
+      selectedAgentId = Array.isArray(actorIds) && actorIds.length
+        ? Math.min(...actorIds)
+        : agentId;
+    } else if (allSellerIds.length > 0) {
+      actorIds = allSellerIds;
+    }
+    const hasActorFilter = Array.isArray(actorIds) && actorIds.length > 0;
 
-    // $1 account, $2 optional agent id (null = time todo)
-    const msgAgentFilter = hasAgent
-      ? `AND m.sender_type = 'User' AND m.sender_id = $2`
+    // $1 account, $2 optional int[] de user_ids (vendedor ou time de vendedores)
+    const msgAgentFilter = hasActorFilter
+      ? `AND m.sender_type = 'User' AND m.sender_id = ANY($2::int[])`
       : '';
-    const histAgentFilter = hasAgent
-      ? `AND h.actor_id = $2`
+    const contactNoteAgentFilter = hasActorFilter
+      ? `AND n.user_id = ANY($2::int[])`
       : '';
-    const params = hasAgent ? [accountId, agentId] : [accountId];
+    // Moves: individual = só o(s) id(s) da identidade; time = vendedores (+ moves sem actor legados)
+    const histAgentFilter = hasActorFilter
+      ? (selectedAgentId != null
+        ? `AND h.actor_id = ANY($2::int[])`
+        : `AND (h.actor_id IS NULL OR h.actor_id = ANY($2::int[]))`)
+      : '';
+    const params = hasActorFilter ? [accountId, actorIds] : [accountId];
 
-    const [contactsDay, contactsMonth, stagesDay, stagesMonth, leadsDay, leadsMonth, agentsRes] = await Promise.all([
+    // Marcos cumulativos (escadinha): 1 contato conta 1x por marco no período.
+    // Ex.: mover para 7. Agendamento Demo conta SQL + Oportunidade (sem exigir passagem pelo 6).
+    // Faixa 6–13 = pipeline qualificado + ganho; 14–17 (perdido/pausa/descarte/nurture) não promovem marcos.
+    const buildMilestonePaceSql = (sinceSql) => `
+      WITH events AS (
+        SELECT
+          h.contact_id,
+          NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int AS stage_num,
+          ${valueNumExpr('c.')} AS value_num
+        FROM ${HISTORY_TABLE} h
+        LEFT JOIN contacts c ON c.id = h.contact_id
+        WHERE h.account_id = $1
+          AND h.source <> 'snapshot'
+          AND h.changed_at >= ${sinceSql}
+          AND h.to_stage IS NOT NULL
+          ${histAgentFilter}
+      ),
+      per_contact AS (
+        SELECT
+          contact_id,
+          BOOL_OR(stage_num BETWEEN 6 AND 13) AS hit_sql,
+          BOOL_OR(stage_num BETWEEN 7 AND 13) AS hit_oportunidade,
+          BOOL_OR(stage_num BETWEEN 9 AND 13) AS hit_proposta,
+          BOOL_OR(stage_num = 13) AS hit_fechamento,
+          MAX(value_num) AS value_num
+        FROM events
+        WHERE stage_num IS NOT NULL
+        GROUP BY contact_id
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE hit_sql)::int AS sql,
+        COUNT(*) FILTER (WHERE hit_oportunidade)::int AS oportunidade,
+        COUNT(*) FILTER (WHERE hit_proposta)::int AS proposta,
+        COUNT(*) FILTER (WHERE hit_fechamento)::int AS fechamento,
+        COALESCE(SUM(value_num) FILTER (WHERE hit_oportunidade), 0)::float AS oportunidade_value,
+        COALESCE(SUM(value_num) FILTER (WHERE hit_proposta), 0)::float AS proposta_value,
+        COALESCE(SUM(value_num) FILTER (WHERE hit_fechamento), 0)::float AS fechamento_value
+      FROM per_contact
+    `;
+
+    const [
+      contactsDay,
+      contactsMonth,
+      contactNotesDay,
+      contactNotesMonth,
+      stagesDay,
+      stagesMonth,
+      leadsDay,
+      leadsMonth,
+    ] = await Promise.all([
       pool.query(
         `
         SELECT
@@ -4294,11 +4876,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
           )::int AS messages,
           COUNT(*) FILTER (
             WHERE COALESCE(m."private", false) = true
-          )::int AS notes,
-          COUNT(*) FILTER (
-            WHERE (m.message_type = 1 AND COALESCE(m."private", false) = false)
-               OR COALESCE(m."private", false) = true
-          )::int AS total
+          )::int AS private_notes
         FROM messages m
         WHERE m.account_id = $1
           AND m.created_at >= DATE_TRUNC('day', NOW())
@@ -4314,11 +4892,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
           )::int AS messages,
           COUNT(*) FILTER (
             WHERE COALESCE(m."private", false) = true
-          )::int AS notes,
-          COUNT(*) FILTER (
-            WHERE (m.message_type = 1 AND COALESCE(m."private", false) = false)
-               OR COALESCE(m."private", false) = true
-          )::int AS total
+          )::int AS private_notes
         FROM messages m
         WHERE m.account_id = $1
           AND m.created_at >= DATE_TRUNC('month', NOW())
@@ -4326,74 +4900,29 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         `,
         params
       ),
+      // Notas do perfil do contato (Contato → aba Notas no Chatwoot)
       pool.query(
         `
-        SELECT
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 6
-          )::int AS sql,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
-          )::int AS oportunidade,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
-          )::int AS proposta,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
-          )::int AS fechamento,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
-          ), 0)::float AS oportunidade_value,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
-          ), 0)::float AS proposta_value,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
-          ), 0)::float AS fechamento_value
-        FROM ${HISTORY_TABLE} h
-        LEFT JOIN contacts c ON c.id = h.contact_id
-        WHERE h.account_id = $1
-          AND h.source <> 'snapshot'
-          AND h.changed_at >= DATE_TRUNC('day', NOW())
-          AND h.to_stage IS NOT NULL
-          ${histAgentFilter}
+        SELECT COUNT(*)::int AS contact_notes
+        FROM notes n
+        WHERE n.account_id = $1
+          AND n.created_at >= DATE_TRUNC('day', NOW())
+          ${contactNoteAgentFilter}
         `,
         params
       ),
       pool.query(
         `
-        SELECT
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 6
-          )::int AS sql,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
-          )::int AS oportunidade,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
-          )::int AS proposta,
-          COUNT(*) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
-          )::int AS fechamento,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 7 AND 8
-          ), 0)::float AS oportunidade_value,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int BETWEEN 9 AND 12
-          ), 0)::float AS proposta_value,
-          COALESCE(SUM(${valueNumExpr('c.')}) FILTER (
-            WHERE NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 13
-          ), 0)::float AS fechamento_value
-        FROM ${HISTORY_TABLE} h
-        LEFT JOIN contacts c ON c.id = h.contact_id
-        WHERE h.account_id = $1
-          AND h.source <> 'snapshot'
-          AND h.changed_at >= DATE_TRUNC('month', NOW())
-          AND h.to_stage IS NOT NULL
-          ${histAgentFilter}
+        SELECT COUNT(*)::int AS contact_notes
+        FROM notes n
+        WHERE n.account_id = $1
+          AND n.created_at >= DATE_TRUNC('month', NOW())
+          ${contactNoteAgentFilter}
         `,
         params
       ),
+      pool.query(buildMilestonePaceSql("DATE_TRUNC('day', NOW())"), params),
+      pool.query(buildMilestonePaceSql("DATE_TRUNC('month', NOW())"), params),
       pool.query(
         `
         SELECT COUNT(*)::int AS total
@@ -4418,39 +4947,40 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         `,
         params
       ),
-      // Agentes do account (para seletor do ritmo)
-      pool.query(
-        `
-        SELECT DISTINCT
-          u.id AS agent_id,
-          COALESCE(u.display_name, u.name, u.email, 'Agente #' || u.id) AS agent_name
-        FROM account_users au
-        JOIN users u ON u.id = au.user_id
-        WHERE au.account_id = $1
-        ORDER BY agent_name
-        `,
-        [accountId]
-      ).catch(() => ({ rows: [] })),
     ]);
+
+    const buildContatos = (msgRow, contactNotesRow) => {
+      const messages = Number(msgRow?.messages) || 0;
+      const privateNotes = Number(msgRow?.private_notes) || 0;
+      const contactNotes = Number(contactNotesRow?.contact_notes) || 0;
+      const notes = privateNotes + contactNotes;
+      return {
+        total: messages + notes,
+        messages,
+        notes,
+        private_notes: privateNotes,
+        contact_notes: contactNotes,
+      };
+    };
 
     const cd = contactsDay.rows[0] || {};
     const cm = contactsMonth.rows[0] || {};
+    const cnd = contactNotesDay.rows[0] || {};
+    const cnm = contactNotesMonth.rows[0] || {};
     const sd = stagesDay.rows[0] || {};
     const sm = stagesMonth.rows[0] || {};
 
     res.json({
       as_of: new Date().toISOString(),
-      agent_id: hasAgent ? agentId : null,
-      agents: (agentsRes.rows || []).map((r) => ({
-        id: Number(r.agent_id),
-        name: r.agent_name || `Agente #${r.agent_id}`,
+      agent_id: selectedAgentId,
+      // Apenas vendedores; identidades unificadas (Clayton ×2 → 1 item)
+      agents: sellerGroups.map((r) => ({
+        id: Number(r.id),
+        name: r.name || `Agente #${r.id}`,
+        user_ids: Array.isArray(r.user_ids) ? r.user_ids : [Number(r.id)],
       })),
       day: {
-        contatos: {
-          total: Number(cd.total) || 0,
-          messages: Number(cd.messages) || 0,
-          notes: Number(cd.notes) || 0,
-        },
+        contatos: buildContatos(cd, cnd),
         leads: Number(leadsDay.rows[0]?.total) || 0,
         sql: Number(sd.sql) || 0,
         oportunidade: Number(sd.oportunidade) || 0,
@@ -4464,11 +4994,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         },
       },
       month: {
-        contatos: {
-          total: Number(cm.total) || 0,
-          messages: Number(cm.messages) || 0,
-          notes: Number(cm.notes) || 0,
-        },
+        contatos: buildContatos(cm, cnm),
         leads: Number(leadsMonth.rows[0]?.total) || 0,
         sql: Number(sm.sql) || 0,
         oportunidade: Number(sm.oportunidade) || 0,
@@ -4481,12 +5007,12 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         },
       },
       rules: {
-        contatos: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas. Ligação e e-mail: registrar em Notas.',
+        contatos: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas na conversa + notas do perfil do contato (aba Notas). Ligação, e-mail e visita: registrar em Notas.',
         leads: 'Card movido para Inbox / etapa 1 do funil.',
-        sql: 'Card movido para 6. Qualificado (SQL).',
-        oportunidade: 'Card movido para 7–8 (Agendamento Demo / Demo Realizada). Em R$: soma do Valor_Oportunidade.',
-        proposta: 'Card movido para 9–12 (Elaborando Proposta até Aprovação Interna). Em R$: soma do Valor_Oportunidade.',
-        fechamento: 'Card movido para 13. Fechado-Ganho. Em R$: receita das vendas ganhas no período.',
+        sql: 'Marco cumulativo: 1× por contato no período ao atingir etapa ≥ 6 (SQL, demo, proposta ou ganho). Pular o 6 e ir para Agendamento Demo ainda conta como SQL. Perdido/pausa/descarte/nurture (14–17) não contam sozinhos.',
+        oportunidade: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 7 (demo em diante até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
+        proposta: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 9 (elaborando proposta até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
+        fechamento: 'Card movido para 13. Fechado-Ganho (1× por contato no período). Em R$: Valor_Oportunidade das vendas ganhas.',
       },
     });
   } catch (err) {
@@ -5608,27 +6134,12 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   const ids = extractPncpCompraIdentifiers(item);
   return ({
   id: item.id || getPncpRawItemKey(item),
-  titulo: item.title || 'Sem título',
   descricao: item.description || item.descricao || item.objetoCompra || '',
   url: normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem),
   numero_controle_pncp: item.numero_controle_pncp || item.numeroControlePNCP,
   numero_sequencial: ids.sequencial || item.numero_sequencial,
   ano: ids.ano || item.ano,
   orgao_cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
-  orgao: {
-    cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
-    nome: item.orgao_nome || item.nomeOrgao || item.orgaoNome || item.razaoSocialOrgao || '',
-    id: item.orgao_id || item.idOrgao || item.orgaoId || '',
-  },
-  unidade: {
-    codigo: item.unidade_codigo || item.codigoUnidade || item.unidadeOrgaoCodigoUnidade || item.unidadeCodigo || '',
-    nome: item.unidade_nome || item.nomeUnidade || item.unidadeOrgaoNomeUnidade || item.unidadeNome || '',
-    id: item.unidade_id || item.idUnidade || item.unidadeId || '',
-  },
-  modalidade: {
-    id: item.modalidade_licitacao_id,
-    nome: item.modalidade_licitacao_nome,
-  },
   situacao: {
     id: item.situacao_id || item.situacaoCompraId || item.situacaoId,
     nome: item.situacao_nome || item.situacaoCompraDescricao || item.situacaoCompraNome || item.situacaoNome,
@@ -5662,12 +6173,18 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   valor_total_homologado: item.valor_total_homologado ?? item.valorTotalHomologado ?? null,
   total_itens: item.total_itens ?? null,
   itens_resumo_texto: item.itens_resumo_texto || item.__itens_resumo_texto || '',
-  tem_resultado: item.tem_resultado,
   cancelado: item.cancelado,
   modo_disputa: {
     id: item.modo_disputa_id || null,
     nome: item.modo_disputa_nome || null,
   },
+  srp: typeof item.srp === 'boolean' ? item.srp : null,
+  amparo_legal: item.amparo_legal || (item.amparoLegal ? {
+    codigo: item.amparoLegal.codigo ?? null,
+    nome: item.amparoLegal.nome || null,
+    descricao: item.amparoLegal.descricao || null,
+  } : null),
+  modo_disputa_unresolved: item.modo_disputa_unresolved === true || undefined,
   titulo: item.title || item.titulo || item.objetoCompra || item.numeroControlePNCP || 'Sem titulo',
   orgao: {
     cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || item.orgaoEntidade?.cnpj || '',
@@ -5687,6 +6204,42 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   matched_termo: matchedTermo, // Termo que encontrou este resultado
   });
 };
+
+// Mapeia um item da API de consulta (/v1/contratacoes/*) para o shape "raw" da
+// /api/search/, permitindo mesclar as duas fontes antes do normalizePncpItem.
+const mapPncpConsultaContratacaoToSearchItem = (item, matchedTermo, flags = {}) => ({
+  id: item.numeroControlePNCP
+    || `${item.cnpjOrgao || item.orgaoEntidade?.cnpj || ''}-${item.anoCompra}-${item.sequencialCompra}`,
+  title: item.objetoCompra || '',
+  description: item.objetoCompra || '',
+  item_url: item.linkSistemaOrigem || null,
+  numero_controle_pncp: item.numeroControlePNCP,
+  numero_sequencial: item.sequencialCompra,
+  ano: item.anoCompra,
+  orgao_cnpj: item.cnpjOrgao || item.orgaoEntidade?.cnpj || '',
+  orgao_nome: item.nomeOrgao || item.orgaoEntidade?.razaoSocial || '',
+  unidade_codigo: item.codigoUnidadeOrgao || item.unidadeOrgao?.codigoUnidade || '',
+  unidade_nome: item.nomeUnidadeOrgao || item.unidadeOrgao?.nomeUnidade || '',
+  modalidade_licitacao_id: item.modalidadeId,
+  modalidade_licitacao_nome: item.modalidadeNome,
+  situacao_id: item.situacaoCompraId,
+  situacao_nome: item.situacaoCompraDescricao || item.situacaoCompraNome,
+  data_publicacao_pncp: item.dataPublicacaoPncp,
+  data_atualizacao_pncp: item.dataAtualizacaoPncp,
+  valor_global: item.valorTotalEstimado,
+  valor_total_estimado: item.valorTotalEstimado,
+  valor_total_homologado: item.valorTotalHomologado,
+  srp: typeof item.srp === 'boolean' ? item.srp : null,
+  amparoLegal: item.amparoLegal || null,
+  modo_disputa_id: item.modoDisputaId ? String(item.modoDisputaId) : null,
+  modo_disputa_nome: item.modoDisputaNome || null,
+  uf: item.unidadeOrgao?.ufSigla || item.ufSigla || '',
+  municipio_nome: item.unidadeOrgao?.municipioNome || item.municipioNome || '',
+  data_inicio_vigencia: item.dataAberturaPropostas || item.dataAberturaProposta || item.dataInicioPropostas || item.dataInicioVigencia || null,
+  data_fim_vigencia: item.dataEncerramentoProposta || item.dataEncerramentoPropostas || item.dataFimPropostas || item.dataFimVigencia || null,
+  __matched_termo: matchedTermo,
+  ...flags,
+});
 
 // Endpoint principal de busca de editais/contratações no PNCP
 const splitPncpTerms = (value = '') => String(value || '')
@@ -6620,35 +7173,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
             seenIdsSet.add(itemId);
             addedCount++;
-            allItems.push({
-              id: itemId,
-              title: item.objetoCompra || '',
-              description: item.objetoCompra || '',
-              item_url: item.linkSistemaOrigem || null,
-              numero_controle_pncp: item.numeroControlePNCP,
-              numero_sequencial: item.sequencialCompra,
-              ano: item.anoCompra,
-              orgao_cnpj: item.cnpjOrgao || item.orgaoEntidade?.cnpj || '',
-              orgao_nome: item.nomeOrgao || item.orgaoEntidade?.razaoSocial || '',
-              unidade_codigo: item.codigoUnidadeOrgao || item.unidadeOrgao?.codigoUnidade || '',
-              unidade_nome: item.nomeUnidadeOrgao || item.unidadeOrgao?.nomeUnidade || '',
-              modalidade_licitacao_id: item.modalidadeId,
-              modalidade_licitacao_nome: item.modalidadeNome,
-              situacao_id: item.situacaoCompraId,
-              situacao_nome: item.situacaoCompraDescricao,
-              data_publicacao_pncp: item.dataPublicacaoPncp,
-              data_atualizacao_pncp: item.dataAtualizacaoPncp,
-              valor_global: item.valorTotalEstimado,
-              valor_total_estimado: item.valorTotalEstimado,
-              valor_total_homologado: item.valorTotalHomologado,
-              uf: item.unidadeOrgao?.ufSigla || item.ufSigla || '',
-              municipio_nome: item.unidadeOrgao?.municipioNome || item.municipioNome || '',
-              // Datas de abertura/encerramento de propostas (nomes possíveis no PNCP)
-              data_inicio_vigencia: item.dataAberturaPropostas || item.dataInicioPropostas || item.dataInicioVigencia || null,
-              data_fim_vigencia: item.dataEncerramentoProposta || item.dataEncerramentoPropostas || item.dataFimPropostas || item.dataFimVigencia || null,
-              __matched_termo: qText || entityQuerySeed,
-              __from_consulta_uasg: true,
-            });
+            allItems.push(mapPncpConsultaContratacaoToSearchItem(item, qText || entityQuerySeed, { __from_consulta_uasg: true }));
           }
 
           if (addedCount > 0) {
@@ -6666,7 +7191,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     }
 
     if (modo_disputa_id) {
-      const detailedItems = await Promise.all(allItems.map(async (item) => {
+      const detailedItems = await mapWithConcurrency(allItems, 3, async (item) => {
         const ids = extractPncpCompraIdentifiers(item);
         const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
         if (!detalhe) {
@@ -6679,9 +7204,17 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           tipo_id: item?.tipo_id || detalhe.tipo_instrumento_convocatorio_id,
           tipo_nome: item?.tipo_nome || detalhe.tipo_instrumento_convocatorio_nome,
         };
-      }));
+      });
 
-      allItems = detailedItems.filter(item => String(item?.modo_disputa_id || '') === String(modo_disputa_id));
+      // Mantém itens cujo modo de disputa é desconhecido (detalhe indisponível/rate limit)
+      // em vez de descartá-los silenciosamente; a UI pode exibir "n/d".
+      allItems = detailedItems.filter(item => {
+        if (!item?.modo_disputa_id) {
+          item.modo_disputa_unresolved = true;
+          return true;
+        }
+        return String(item.modo_disputa_id) === String(modo_disputa_id);
+      });
     }
 
     const iaRealmenteUsada = shouldUseAi;
@@ -6715,6 +7248,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           data_fim_vigencia: item?.data_fim_vigencia || enrichment.data_fim_vigencia,
           total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
           itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || '',
+          srp: item?.srp ?? enrichment.srp ?? null,
+          amparo_legal: item?.amparo_legal || enrichment.amparo_legal || null,
+          modo_disputa_id: item?.modo_disputa_id || enrichment.modo_disputa_id || null,
+          modo_disputa_nome: item?.modo_disputa_nome || enrichment.modo_disputa_nome || null,
         };
       });
     }
@@ -6867,9 +7404,17 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       totalItems = allItems.length;
     }
     const startIndex = (paginaNum - 1) * tamNum;
-    const paginatedItems = (iaRealmenteUsada || hasLocalFilterForPagination)
+    let paginatedItems = (iaRealmenteUsada || hasLocalFilterForPagination)
       ? allItems.slice(startIndex, startIndex + tamNum)
       : allItems;
+    // Garante valores/situação/prazo na janela visível (cache de 6h torna
+    // páginas quentes instantâneas; o gate limita a pressão sobre o PNCP).
+    if (paginatedItems.length > 0) {
+      paginatedItems = await fillValuesOnNormalizedPncpItems(paginatedItems, {
+        limit: Math.min(paginatedItems.length, Math.max(tamNum, 20)),
+        rateLimitWaitMs: 8000,
+      });
+    }
     const summary = createPncpSearchSummary(allItems);
     const pageSummary = createPncpSearchSummary(paginatedItems);
     const queryPlan = {
@@ -6936,24 +7481,146 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 });
 
 // Opções de status disponíveis para busca
-// Balanceador global de chamadas ao PNCP: várias buscas rodam ao mesmo tempo,
-// mas no máximo 2 requests simultâneas com intervalo mínimo — evita resets/429.
-const PNCP_GATE = { active: 0, queue: [], max: 2, gapMs: 350, last: 0 };
-const withPncpGate = async (fn) => {
-  if (PNCP_GATE.active >= PNCP_GATE.max) {
-    await new Promise(resolve => PNCP_GATE.queue.push(resolve));
+// Balanceador global adaptativo do PNCP.
+// O PNCP NÃO publica cota fixa; na prática responde 429 / reseta conexão quando
+// o ritmo sobe. Por isso: 1 request por vez, gap generoso, freia ao menor sinal
+// e só acelera de novo após sequência estável de sucesso.
+const PNCP_GATE = {
+  active: 0,
+  queue: [],
+  max: 1,
+  gapMs: 950,
+  gapMsMin: 700,
+  gapMsMax: 15_000,
+  gapMsBase: 950,
+  last: 0,
+  successStreak: 0,
+  failStreak: 0,
+  totalOk: 0,
+  totalThrottle: 0,
+  pausedUntil: 0,
+};
+
+const getPncpGateSnapshot = () => ({
+  gap_ms: PNCP_GATE.gapMs,
+  max_concurrent: PNCP_GATE.max,
+  paused_until: PNCP_GATE.pausedUntil || null,
+  paused_for_ms: Math.max(0, PNCP_GATE.pausedUntil - Date.now()),
+  success_streak: PNCP_GATE.successStreak,
+  fail_streak: PNCP_GATE.failStreak,
+  total_ok: PNCP_GATE.totalOk,
+  total_throttle: PNCP_GATE.totalThrottle,
+  queue_len: PNCP_GATE.queue.length,
+  active: PNCP_GATE.active,
+});
+
+const notePncpSuccess = () => {
+  PNCP_GATE.successStreak += 1;
+  PNCP_GATE.failStreak = 0;
+  PNCP_GATE.totalOk += 1;
+  // Acelera devagar: só após 12 sucessos seguidos, e nunca abaixo do mínimo.
+  if (PNCP_GATE.successStreak >= 12 && PNCP_GATE.gapMs > PNCP_GATE.gapMsMin) {
+    PNCP_GATE.gapMs = Math.max(PNCP_GATE.gapMsMin, Math.round(PNCP_GATE.gapMs * 0.9));
+    PNCP_GATE.successStreak = 0;
+    console.log(`[PNCP Gate] ritmo ok → gap ${PNCP_GATE.gapMs}ms`);
   }
+};
+
+notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
+  PNCP_GATE.failStreak += 1;
+  PNCP_GATE.successStreak = 0;
+  PNCP_GATE.totalThrottle += 1;
+  PNCP_GATE.max = 1;
+  // Freia o gap (backoff exponencial suave).
+  PNCP_GATE.gapMs = Math.min(
+    PNCP_GATE.gapMsMax,
+    Math.max(PNCP_GATE.gapMsBase, Math.round((PNCP_GATE.gapMs || PNCP_GATE.gapMsBase) * 1.75))
+  );
+  const pause = Number.isFinite(pauseMs)
+    ? pauseMs
+    : Math.min(6 * 60 * 1000, 50_000 * Math.min(PNCP_GATE.failStreak, 5));
+  PNCP_GATE.pausedUntil = Math.max(PNCP_GATE.pausedUntil, Date.now() + pause);
+  // Alinha o pauser de detalhes com o gate global.
+  pncpDetalheRateLimitedUntil = Math.max(pncpDetalheRateLimitedUntil, PNCP_GATE.pausedUntil);
+  console.warn(
+    `[PNCP Gate] throttle (${String(reason).slice(0, 100)}) → gap=${PNCP_GATE.gapMs}ms pause=${Math.round(pause / 1000)}s ` +
+    `(failStreak=${PNCP_GATE.failStreak})`
+  );
+};
+
+const waitForPncpGateSlot = async () => {
+  // Espera pausa global (429 recente) sem spamar a API.
+  while (Date.now() < PNCP_GATE.pausedUntil) {
+    const left = PNCP_GATE.pausedUntil - Date.now();
+    await sleep(Math.min(4000, Math.max(200, left)));
+  }
+  while (PNCP_GATE.active >= PNCP_GATE.max) {
+    await new Promise(resolve => PNCP_GATE.queue.push(resolve));
+    while (Date.now() < PNCP_GATE.pausedUntil) {
+      const left = PNCP_GATE.pausedUntil - Date.now();
+      await sleep(Math.min(4000, Math.max(200, left)));
+    }
+  }
+};
+
+const withPncpGate = async (fn) => {
+  await waitForPncpGateSlot();
   PNCP_GATE.active += 1;
   try {
     const wait = PNCP_GATE.last + PNCP_GATE.gapMs - Date.now();
-    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    if (wait > 0) await sleep(wait);
+    // Re-checa pausa após o gap (outro worker pode ter tomado 429).
+    while (Date.now() < PNCP_GATE.pausedUntil) {
+      await sleep(Math.min(4000, Math.max(200, PNCP_GATE.pausedUntil - Date.now())));
+    }
     PNCP_GATE.last = Date.now();
-    return await fn();
+    const result = await fn();
+    notePncpSuccess();
+    return result;
+  } catch (error) {
+    if (isPncpThrottleError(error)) {
+      notePncpThrottle(error.message || 'error');
+    }
+    throw error;
   } finally {
     PNCP_GATE.active -= 1;
     const next = PNCP_GATE.queue.shift();
     if (next) next();
   }
+};
+
+/** Orçamento de enriquecimento (valores) conforme o ritmo atual do gate. */
+const getPncpEnrichBudget = () => {
+  const paused = Date.now() < PNCP_GATE.pausedUntil || Date.now() < pncpDetalheRateLimitedUntil;
+  if (paused) return { limit: 0, delayMs: 0, rateLimitWaitMs: 0, paused: true };
+  if (PNCP_GATE.gapMs >= 4000 || PNCP_GATE.failStreak >= 2) {
+    return { limit: 12, delayMs: 450, rateLimitWaitMs: 0, paused: false };
+  }
+  if (PNCP_GATE.gapMs >= 1500) {
+    return { limit: 25, delayMs: 250, rateLimitWaitMs: 4000, paused: false };
+  }
+  return { limit: 45, delayMs: 150, rateLimitWaitMs: 8000, paused: false };
+};
+
+const getPncpSearchJobArchiveAt = (startedAt) => {
+  if (!startedAt) return null;
+  const base = startedAt instanceof Date ? startedAt.getTime() : Date.parse(startedAt);
+  if (!Number.isFinite(base)) return null;
+  return new Date(base + PNCP_SEARCH_JOB_ARCHIVE_DAYS * 24 * 60 * 60 * 1000);
+};
+
+const getPncpSearchJobDaysUntilArchive = (startedAt, now = Date.now()) => {
+  const archiveAt = getPncpSearchJobArchiveAt(startedAt);
+  if (!archiveAt) return null;
+  const msLeft = archiveAt.getTime() - now;
+  return Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
+};
+
+const isPncpSearchJobArchivable = (job) => {
+  if (!job || job.watchlist_id) return false;
+  const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
+  if (!archiveAt) return false;
+  return Date.now() >= archiveAt.getTime();
 };
 
 const cleanupPncpDeepJobs = () => {
@@ -6964,37 +7631,48 @@ const cleanupPncpDeepJobs = () => {
       PNCP_DEEP_SEARCH_CANCELLED.delete(id);
     }
   }
-  // Buscas antigas que não viraram watchlist somem do banco depois de 7 dias.
+  // Buscas antigas que não viraram watchlist somem do banco depois de 7 dias
+  // (desde a criação/started_at — reexecuções diárias não estendem o prazo).
   pool.query(
     `DELETE FROM ${PNCP_SEARCH_JOBS_TABLE}
-      WHERE watchlist_id IS NULL AND updated_at < NOW() - INTERVAL '7 days'`
+      WHERE watchlist_id IS NULL
+        AND started_at < NOW() - ($1::int * INTERVAL '1 day')`,
+    [PNCP_SEARCH_JOB_ARCHIVE_DAYS]
   ).catch(() => {});
 };
 
-const normalizePncpSearchJobRow = (row) => row ? ({
-  id: row.id,
-  account_id: row.account_id,
-  status: row.status,
-  nome: row.nome,
-  filters: row.filters || {},
-  terms: row.terms || [],
-  negative_terms: row.negative_terms || [],
-  accepted_positive_terms: row.accepted_positive_terms || [],
-  accepted_negative_terms: row.accepted_negative_terms || [],
-  suggested_positive_terms: row.suggested_positive_terms || [],
-  suggested_negative_terms: row.suggested_negative_terms || [],
-  progress: row.progress || {},
-  term_runs: row.term_runs || [],
-  items: row.items || [],
-  summary: row.summary || null,
-  query_plan: row.query_plan || null,
-  total: Number(row.total || 0),
-  error: row.error || null,
-  watchlist_id: row.watchlist_id || null,
-  started_at: row.started_at,
-  updated_at: row.updated_at,
-  completed_at: row.completed_at,
-}) : null;
+const normalizePncpSearchJobRow = (row) => {
+  if (!row) return null;
+  const archiveAt = getPncpSearchJobArchiveAt(row.started_at);
+  const daysUntilArchive = row.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(row.started_at);
+  return {
+    id: row.id,
+    account_id: row.account_id,
+    status: row.status,
+    nome: row.nome,
+    filters: row.filters || {},
+    terms: row.terms || [],
+    negative_terms: row.negative_terms || [],
+    accepted_positive_terms: row.accepted_positive_terms || [],
+    accepted_negative_terms: row.accepted_negative_terms || [],
+    suggested_positive_terms: row.suggested_positive_terms || [],
+    suggested_negative_terms: row.suggested_negative_terms || [],
+    progress: row.progress || {},
+    term_runs: row.term_runs || [],
+    items: row.items || [],
+    summary: row.summary || null,
+    query_plan: row.query_plan || null,
+    total: Number(row.total || 0),
+    error: row.error || null,
+    watchlist_id: row.watchlist_id || null,
+    started_at: row.started_at,
+    updated_at: row.updated_at,
+    completed_at: row.completed_at,
+    archive_at: archiveAt ? archiveAt.toISOString() : null,
+    days_until_archive: daysUntilArchive,
+    archive_days: PNCP_SEARCH_JOB_ARCHIVE_DAYS,
+  };
+};
 
 const stableJsonStringify = (value) => {
   if (Array.isArray(value)) {
@@ -7035,6 +7713,10 @@ const persistPncpDeepJob = async (job) => {
              query_plan = $7::jsonb,
              total = $8,
              error = $9,
+             terms = $10,
+             negative_terms = $11,
+             filters = COALESCE($12::jsonb, filters),
+             nome = COALESCE($13, nome),
              updated_at = NOW(),
              completed_at = CASE
                WHEN $2 IN ('completed','failed','cancelled') THEN NOW()
@@ -7053,6 +7735,10 @@ const persistPncpDeepJob = async (job) => {
       JSON.stringify(job.query_plan || null),
       Number(job.total || 0),
       job.error || null,
+      Array.isArray(job.terms) ? job.terms : [],
+      Array.isArray(job.negative_terms) ? job.negative_terms : [],
+      job.filters && typeof job.filters === 'object' ? JSON.stringify(job.filters) : null,
+      job.nome ? String(job.nome).slice(0, 160) : null,
     ]
   ).catch(error => console.warn('[PNCP Search Job] persist falhou:', error.message));
 };
@@ -7068,21 +7754,28 @@ const loadPncpDeepJob = async (jobId, accountId = null) => {
   return normalizePncpSearchJobRow(rows[0]);
 };
 
-const startPersistedPncpSearchJob = async (jobOrId, { force = false } = {}) => {
+const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
+  const { force = false } = opts;
   const job = typeof jobOrId === 'string'
     ? await loadPncpDeepJob(jobOrId)
     : jobOrId;
   if (!job?.id || !job?.account_id) return false;
-  if (!force && ['completed', 'cancelled'].includes(job.status)) return false;
-  if (job.status === 'cancelled') return false;
+  if (!force && ['completed', 'cancelled', 'failed'].includes(job.status)) return false;
   const current = PNCP_DEEP_SEARCH_JOBS.get(job.id);
   if (current && ['queued', 'running', 'cancelling'].includes(current.status)) {
     return true;
   }
+  // preserveResults: default true (reexecução diária/botão/retomada).
+  // Quem precisa limpar (troca de filtros) passa preserveResults: false.
+  const preserveResults = Object.prototype.hasOwnProperty.call(opts, 'preserveResults')
+    ? Boolean(opts.preserveResults)
+    : (job.preserve_results !== false);
   const nextJob = {
     ...job,
     status: 'queued',
     error: null,
+    preserve_results: preserveResults,
+    // Não reseta started_at: o countdown de arquivamento conta desde a criação.
     started_at: job.started_at ? new Date(job.started_at).getTime() : Date.now(),
     updated_at: Date.now(),
   };
@@ -7091,6 +7784,43 @@ const startPersistedPncpSearchJob = async (jobOrId, { force = false } = {}) => {
   await persistPncpDeepJob(nextJob);
   setImmediate(() => runPncpDeepSearchJob(job.id));
   return true;
+};
+
+// Reexecuta buscas ativas (sem watchlist, ainda no prazo de 7 dias) mantendo resultados.
+const runDailyPncpSearchJobRefresh = async ({ limit = 8 } = {}) => {
+  cleanupPncpDeepJobs();
+  const { rows } = await pool.query(
+    `
+      SELECT *
+        FROM ${PNCP_SEARCH_JOBS_TABLE}
+       WHERE watchlist_id IS NULL
+         AND status IN ('completed', 'failed')
+         AND started_at >= NOW() - ($1::int * INTERVAL '1 day')
+         AND (completed_at IS NULL OR completed_at <= NOW() - INTERVAL '18 hours')
+       ORDER BY completed_at ASC NULLS FIRST, updated_at ASC
+       LIMIT $2
+    `,
+    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, Math.max(1, Math.min(20, Number(limit) || 8))]
+  );
+  let started = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const job = normalizePncpSearchJobRow(row);
+    if (!job?.id) continue;
+    if (isPncpSearchJobArchivable(job)) {
+      skipped += 1;
+      continue;
+    }
+    const current = PNCP_DEEP_SEARCH_JOBS.get(job.id);
+    if (current && ['queued', 'running', 'cancelling', 'paused_rate_limit'].includes(current.status)) {
+      skipped += 1;
+      continue;
+    }
+    const ok = await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
+    if (ok) started += 1;
+    else skipped += 1;
+  }
+  return { candidates: rows.length, started, skipped };
 };
 
 const schedulePncpSearchResume = (jobId, delayMs = PNCP_RATE_LIMIT_RESUME_DELAY_MS) => {
@@ -7118,11 +7848,15 @@ const resumePausedPncpSearchJobs = async () => {
         SELECT *
           FROM ${PNCP_SEARCH_JOBS_TABLE}
          WHERE status = 'paused_rate_limit'
-           AND updated_at <= NOW() - INTERVAL '4 minutes'
+           AND updated_at <= NOW() - INTERVAL '6 minutes'
          ORDER BY updated_at ASC
-         LIMIT 3
+         LIMIT 2
       `
     );
+    // Não retoma se o gate ainda está em pausa por 429.
+    if (Date.now() < PNCP_GATE.pausedUntil) {
+      return;
+    }
     for (const row of rows) {
       if (PNCP_DEEP_SEARCH_RESUME_TIMERS.has(row.id)) continue;
       await startPersistedPncpSearchJob(normalizePncpSearchJobRow(row));
@@ -7130,6 +7864,99 @@ const resumePausedPncpSearchJobs = async () => {
   } catch (error) {
     console.warn('[PNCP Search Job] varredura de retomada falhou:', error.message);
   }
+};
+
+// Backfill resumível: completa valores de resultados de deep jobs recentes que
+// ficaram sem valor (orçamento do passe final/rate limit). Roda no cron de 5 min.
+const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
+  if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) {
+    return { updated: 0, skipped: 'rate_limited', gate: getPncpGateSnapshot() };
+  }
+  const budget = getPncpEnrichBudget();
+  const effectiveLimit = Math.min(limit, Math.max(8, budget.limit || 12));
+  const { rows } = await pool.query(
+    `
+      SELECT r.job_id, r.result_key, r.payload, r.account_id
+        FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
+        JOIN ${PNCP_SEARCH_JOBS_TABLE} j ON j.id = r.job_id
+       WHERE j.updated_at > NOW() - ($1::int * INTERVAL '1 day')
+         AND (
+           r.value_estimated IS NULL
+           OR r.value_matched IS NULL
+           OR COALESCE((r.payload->>'valor_total_estimado')::numeric, 0) <= 0
+           OR COALESCE((r.payload->>'valor_itens_pertinentes')::numeric, 0) <= 0
+         )
+       ORDER BY j.updated_at DESC, r.score DESC NULLS LAST
+       LIMIT $2
+    `,
+    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, effectiveLimit]
+  );
+  let updated = 0;
+  for (const row of rows) {
+    if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) break;
+    if (budget.delayMs > 0 && updated > 0) await sleep(budget.delayMs);
+    const item = row.payload || {};
+    if (!itemNeedsPncpValueEnrichment(item)) continue;
+    const ids = extractPncpCompraIdentifiers(item);
+    if (!ids.cnpj || !ids.ano || !ids.sequencial) continue;
+    const q = buildPncpEnrichmentQuery(item, item?.matched_termo || '');
+    const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages: 4 });
+    if (!enrichment) continue;
+    const merged = mergePncpEnrichmentIntoNormalizedItem(item, enrichment);
+    const estimated = Number(getPncpTotalEstimatedValue(merged) || 0);
+    const matched = Number(merged?.valor_itens_pertinentes || 0);
+    if (!(estimated > 0) && !(matched > 0)) continue;
+    await pool.query(
+      `
+        UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+           SET value_estimated = COALESCE($3, value_estimated),
+               value_matched = COALESCE($4, value_matched),
+               deadline_at = COALESCE($5::timestamp, deadline_at),
+               payload = $6::jsonb,
+               updated_at = NOW()
+         WHERE job_id = $1 AND result_key = $2
+      `,
+      [
+        row.job_id,
+        row.result_key,
+        estimated > 0 ? estimated : null,
+        matched > 0 ? matched : null,
+        merged.data_fim_vigencia || null,
+        JSON.stringify(merged),
+      ]
+    ).catch(error => console.warn('[PNCP Backfill] update falhou:', error.message));
+    updated += 1;
+  }
+  return { updated, scanned: rows.length, gate: getPncpGateSnapshot() };
+};
+
+// Enriquece a página visível sob demanda (valores vêm do detalhe da compra no PNCP,
+// não da /api/search/). Grava de volta no payload para as próximas aberturas.
+const enrichPncpJobResultPage = async (job, items = [], { limit = 25 } = {}) => {
+  if (!job?.id || !Array.isArray(items) || !items.length) return items;
+  if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) return items;
+  const budget = getPncpEnrichBudget();
+  if (budget.paused || budget.limit <= 0) return items;
+  const missing = items.filter(itemNeedsPncpValueEnrichment);
+  if (!missing.length) return items;
+  const query = String(job?.filters?.q || job?.nome || (job?.terms || [])[0] || '').trim();
+  const enriched = await fillValuesOnNormalizedPncpItems(items, {
+    limit: Math.min(limit, budget.limit, items.length),
+    rateLimitWaitMs: budget.rateLimitWaitMs,
+    query,
+    maxPages: 4,
+  });
+  const improved = enriched.filter((item, idx) => {
+    const beforeItem = itemHasPncpItemValue(items[idx]);
+    const beforeTotal = Boolean(getPncpTotalEstimatedValue(items[idx]));
+    const afterItem = itemHasPncpItemValue(item);
+    const afterTotal = Boolean(getPncpTotalEstimatedValue(item));
+    return (afterItem && !beforeItem) || (afterTotal && !beforeTotal);
+  });
+  if (improved.length) {
+    await persistPncpJobResults(job, improved);
+  }
+  return enriched;
 };
 
 const buildDeepSearchItemsSnapshot = async ({
@@ -7141,13 +7968,35 @@ const buildDeepSearchItemsSnapshot = async ({
   mappedStatus,
   shouldApplyReceivingProposalLocally,
   enrichValues = false,
+  enrichLimit = 350,
+  enrichDelayMs = 120,
 }) => {
-  const sourceItems = enrichValues
-    ? await fillPncpMissingEstimatedValues(rawItems, { limit: 350, delayMs: 400 })
-    : rawItems;
+  const cachedItems = applyCachedPncpEnrichment(rawItems, qText);
+  const budget = getPncpEnrichBudget();
+  const sourceItems = enrichValues && !budget.paused
+    ? await fillPncpMissingEstimatedValues(cachedItems, {
+      limit: Math.min(enrichLimit, Math.max(budget.limit * 3, 30)),
+      delayMs: Math.max(enrichDelayMs, budget.delayMs || 120),
+      rateLimitWaitMs: budget.rateLimitWaitMs,
+      query: qText,
+      maxPages: 6,
+    })
+    : cachedItems;
   let items = sourceItems.map(item => normalizePncpItem(item, item.__matched_termo || qText));
   if (shouldApplyReceivingProposalLocally) {
     items = items.filter(item => isPncpReceivingProposalOpen(item));
+  }
+  // Filtro local tolerante de modo de disputa: a API /api/search/ não suporta o
+  // parâmetro; itens sem detalhe resolvido (id null) são mantidos e marcados.
+  if (filters.modo_disputa_id) {
+    items = items.filter(item => {
+      const id = item?.modo_disputa?.id;
+      if (!id) {
+        item.modo_disputa_unresolved = true;
+        return true;
+      }
+      return String(id) === String(filters.modo_disputa_id);
+    });
   }
   items = items.map(item => decoratePncpSearchItem(item, {
     qText,
@@ -7240,12 +8089,24 @@ const persistPncpJobResults = async (job, items = []) => {
           score = EXCLUDED.score,
           score_label = EXCLUDED.score_label,
           commercial_stage = EXCLUDED.commercial_stage,
-          deadline_at = EXCLUDED.deadline_at,
-          value_estimated = EXCLUDED.value_estimated,
-          value_matched = EXCLUDED.value_matched,
-          matched_term = EXCLUDED.matched_term,
-          visibility = EXCLUDED.visibility,
-          payload = EXCLUDED.payload,
+          deadline_at = COALESCE(EXCLUDED.deadline_at, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.deadline_at),
+          value_estimated = COALESCE(EXCLUDED.value_estimated, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.value_estimated),
+          value_matched = COALESCE(EXCLUDED.value_matched, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.value_matched),
+          matched_term = COALESCE(EXCLUDED.matched_term, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.matched_term),
+          -- Reexecução não desfaz hide/pipeline do usuário.
+          visibility = ${PNCP_SEARCH_JOB_RESULTS_TABLE}.visibility,
+          -- Prefer payload com mais dados de valor (item + total).
+          payload = CASE
+            WHEN COALESCE((EXCLUDED.payload->>'valor_itens_pertinentes')::numeric, 0) >
+                 COALESCE((${PNCP_SEARCH_JOB_RESULTS_TABLE}.payload->>'valor_itens_pertinentes')::numeric, 0)
+              THEN EXCLUDED.payload
+            WHEN COALESCE((EXCLUDED.payload->>'valor_total_estimado')::numeric, 0) >
+                 COALESCE((${PNCP_SEARCH_JOB_RESULTS_TABLE}.payload->>'valor_total_estimado')::numeric, 0)
+             AND COALESCE((${PNCP_SEARCH_JOB_RESULTS_TABLE}.payload->>'valor_itens_pertinentes')::numeric, 0) = 0
+              THEN EXCLUDED.payload
+            WHEN ${PNCP_SEARCH_JOB_RESULTS_TABLE}.payload IS NULL THEN EXCLUDED.payload
+            ELSE ${PNCP_SEARCH_JOB_RESULTS_TABLE}.payload || EXCLUDED.payload
+          END,
           updated_at = NOW()
       `,
       params
@@ -7265,6 +8126,105 @@ const sortPncpJobResults = (items, ordenacao = 'relevancia_desc') => {
   return sorted;
 };
 
+// Complemento de cobertura: varre a API de consulta por data (que não depende de
+// casamento de terminologia no indexador da /api/search/) e agrega contratações
+// que os termos encontram no objeto da compra. Mesma ideia do branch UASG da
+// busca síncrona. Itens chegam com valores e campos Lei 14.133 já populados.
+const fetchConsultaComplementItems = async ({
+  qText,
+  terms = [],
+  filters = {},
+  mappedStatus,
+  shouldApplyReceivingProposalLocally,
+  seen,
+  rawItems,
+  maxPages = 10,
+}) => {
+  const run = {
+    term: '(consulta por data)',
+    source: 'pncp_consulta_complement',
+    endpoint: 'pncp_consulta',
+    pages_requested: 0,
+    pages_completed: 0,
+    total_reported: 0,
+    items_collected: 0,
+    errors: [],
+    stop_reason: null,
+    duration_ms: 0,
+  };
+  const startedAt = Date.now();
+  const textTerms = mergeUniqueTerms([qText], terms)
+    .filter(t => t && String(t).trim().length >= 3 && !/^\d+$/.test(String(t).trim()));
+  if (!textTerms.length) {
+    run.stop_reason = 'sem_termos';
+    return run;
+  }
+  const fmtDate = (d) => d.toISOString().split('T')[0].replace(/-/g, '');
+  const hoje = new Date();
+  const useProposta = shouldApplyReceivingProposalLocally || !mappedStatus || mappedStatus === 'todos';
+  const params = { tamanhoPagina: 50 };
+  let endpoint;
+  if (useProposta) {
+    endpoint = '/v1/contratacoes/proposta';
+    const fim = new Date(hoje);
+    fim.setDate(hoje.getDate() + 180);
+    params.dataFinal = fmtDate(fim);
+  } else {
+    endpoint = '/v1/contratacoes/publicacao';
+    if (!filters.modalidade_licitacao_id) {
+      // publicacao exige codigoModalidadeContratacao; sem modalidade não há varredura.
+      run.stop_reason = 'publicacao_requer_modalidade';
+      return run;
+    }
+    const inicio = new Date(hoje);
+    inicio.setDate(hoje.getDate() - 90);
+    params.dataInicial = fmtDate(inicio);
+    params.dataFinal = fmtDate(hoje);
+  }
+  if (filters.modalidade_licitacao_id) params.codigoModalidadeContratacao = filters.modalidade_licitacao_id;
+  if (filters.uf) params.uf = filters.uf;
+  let pagina = 1;
+  try {
+    while (pagina <= maxPages) {
+      run.pages_requested += 1;
+      const data = await withPncpGate(() => fetchPncpConsulta(endpoint, { ...params, pagina }));
+      run.pages_completed += 1;
+      const items = asPncpList(data);
+      if (pagina === 1) run.total_reported = Number(data?.totalRegistros) || 0;
+      if (!items.length) {
+        run.stop_reason = 'empty_page';
+        break;
+      }
+      for (const item of items) {
+        const text = normalizeSearchText(`${item.objetoCompra || ''} ${item.informacaoComplementar || ''}`);
+        const matched = textTerms.find(term => {
+          const tokens = normalizeSearchText(term).split(/\s+/).filter(t => t.length >= 3);
+          return tokens.length > 0 && tokens.some(t => text.includes(t));
+        });
+        if (!matched) continue;
+        const mapped = mapPncpConsultaContratacaoToSearchItem(item, matched, { __from_consulta: true });
+        const key = getPncpRawItemKey(mapped);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        rawItems.push(mapped);
+        run.items_collected += 1;
+      }
+      const totalPaginas = Number(data?.totalPaginas) || 1;
+      if (pagina >= totalPaginas || items.length < 50) {
+        run.stop_reason = 'total_reached';
+        break;
+      }
+      pagina += 1;
+    }
+  } catch (error) {
+    run.errors.push(error.message);
+    run.stop_reason = 'error';
+  }
+  if (!run.stop_reason) run.stop_reason = 'max_pages';
+  run.duration_ms = Date.now() - startedAt;
+  return run;
+};
+
 const runPncpDeepSearchJob = async (jobId) => {
   const job = PNCP_DEEP_SEARCH_JOBS.get(jobId);
   if (!job) return;
@@ -7274,6 +8234,8 @@ const runPncpDeepSearchJob = async (jobId) => {
   const negativeTerms = mergeUniqueTerms(splitPncpTerms(filters.negative_terms || ''), job.negative_terms || []);
   const mappedStatus = normalizeSearchText(filters.status) === 'suspenso' ? 'suspensa' : filters.status;
   const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
+  // Default: preservar acervo (reexecução diária / botão). Só limpa em troca de filtros.
+  const preserveResults = job.preserve_results !== false;
   const baseParams = {
     tipos_documento: filters.tipos_documento || 'edital',
     tam: 100,
@@ -7294,12 +8256,24 @@ const runPncpDeepSearchJob = async (jobId) => {
   const termRuns = [];
   let lastSnapshotAt = 0;
   try {
-    // Limpa resultados anteriores para o total do card e do popup baterem (re-run / filtros).
-    await clearPncpJobResults(jobId);
+    if (!preserveResults) {
+      // Troca de filtros: zera para o total do card/popup refletir só o novo conjunto.
+      await clearPncpJobResults(jobId);
+      job.total = 0;
+      job.items = [];
+    } else {
+      // Mantém totais existentes enquanto novos itens vão entrando via UPSERT.
+      job.total = await countPncpJobResults(jobId, job.account_id) || Number(job.total || 0);
+    }
     job.status = 'running';
-    job.total = 0;
-    job.items = [];
-    job.progress = { ...(job.progress || {}), current_term: '', terms_done: 0, terms_total: terms.length, items_collected: 0 };
+    job.progress = {
+      ...(job.progress || {}),
+      current_term: '',
+      terms_done: 0,
+      terms_total: terms.length,
+      items_collected: preserveResults ? Number(job.progress?.items_collected || job.total || 0) : 0,
+      preserve_results: preserveResults,
+    };
     await persistPncpDeepJob(job);
     for (let index = 0; index < terms.length; index += 1) {
       terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 12);
@@ -7333,16 +8307,16 @@ const runPncpDeepSearchJob = async (jobId) => {
         run.pages_requested += 1;
         let data;
         try {
-          data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 2 }));
+          data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 1 }));
         } catch (error) {
           run.errors.push(`pagina ${page}: ${error.message}`);
-          const errorText = normalizeSearchText(error.message || '');
-          // Conexão resetada/timeout é o PNCP throttling na prática: pausa e retoma
-          // automaticamente em vez de encerrar o termo com erro.
-          const isNetworkDrop = /reset|recv failure|econnreset|etimedout|timed out|socket|curl exit (28|52|56)/.test(errorText);
-          run.stop_reason = (errorText.includes('429') || errorText.includes('limite') || errorText.includes('rate') || isNetworkDrop)
-            ? 'rate_limited'
-            : (run.items_collected > 0 ? 'page_error_partial' : 'page_error');
+          // 429 / reset / timeout = throttle do PNCP: pausa o job e retoma depois.
+          if (isPncpThrottleError(error)) {
+            notePncpThrottle(error.message || 'search page');
+            run.stop_reason = 'rate_limited';
+          } else {
+            run.stop_reason = run.items_collected > 0 ? 'page_error_partial' : 'page_error';
+          }
           break;
         }
         run.pages_completed += 1;
@@ -7400,12 +8374,47 @@ const runPncpDeepSearchJob = async (jobId) => {
           break;
         }
         page += 1;
+        // Folga entre páginas (além do gap do gate) — buscas longas disparam menos 429.
+        if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && page <= budget.maxPages) {
+          const pagePause = Math.min(1500, Math.max(250, Math.round(PNCP_GATE.gapMs * 0.4)));
+          if (pagePause > 0) await sleep(pagePause);
+        }
       }
       if (!run.stop_reason) run.stop_reason = run.items_collected >= budget.maxItems ? 'target_reached' : 'max_pages';
       run.duration_ms = Date.now() - startedAt;
       termRuns.push(run);
       job.term_runs = termRuns;
       job.progress.terms_done = index + 1;
+      // Enriquecimento progressivo (cadência do gate — não disputa com a busca).
+      if (run.stop_reason !== 'rate_limited' && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
+        const enrichBudget = getPncpEnrichBudget();
+        if (!enrichBudget.paused && enrichBudget.limit > 0) {
+          const termItemsSemValor = rawItems
+            .filter(item => item.__matched_termo === term && !getPncpTotalEstimatedValue(item))
+            .slice(0, enrichBudget.limit);
+          if (termItemsSemValor.length) {
+            const filled = await fillPncpMissingEstimatedValues(termItemsSemValor, {
+              limit: enrichBudget.limit,
+              delayMs: enrichBudget.delayMs,
+              rateLimitWaitMs: enrichBudget.rateLimitWaitMs,
+              query: term || qText,
+              maxPages: 4,
+            });
+            const filledByKey = new Map(
+              filled.map(item => [getPncpRawItemKey(item) || getPncpSearchResultKey(item), item]).filter(([k]) => k)
+            );
+            for (let i = 0; i < rawItems.length; i += 1) {
+              const key = getPncpRawItemKey(rawItems[i]) || getPncpSearchResultKey(rawItems[i]);
+              const next = key ? filledByKey.get(key) : null;
+              if (next && getPncpTotalEstimatedValue(next)) rawItems[i] = next;
+            }
+          }
+        }
+      }
+      // Pausa leve entre termos (evita rajada ao trocar de frente).
+      if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && index + 1 < terms.length) {
+        await sleep(Math.min(2500, Math.max(400, PNCP_GATE.gapMs)));
+      }
       const partial = await buildDeepSearchItemsSnapshot({
         rawItems,
         qText,
@@ -7425,11 +8434,36 @@ const runPncpDeepSearchJob = async (jobId) => {
       await persistPncpDeepJob(job);
       if (run.stop_reason === 'rate_limited') {
         job.status = 'paused_rate_limit';
-        job.error = 'PNCP rate limit; busca pausada para retomar depois';
+        const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
+        const resumeIn = Math.max(PNCP_RATE_LIMIT_RESUME_DELAY_MS, pauseLeft + 30_000);
+        job.error = `PNCP limitou as requisições; pausada ~${Math.ceil(resumeIn / 60000)} min e retoma sozinha (gap ${PNCP_GATE.gapMs}ms).`;
+        job.progress = {
+          ...(job.progress || {}),
+          rate_limited: true,
+          gate: getPncpGateSnapshot(),
+          resume_in_ms: resumeIn,
+        };
         await persistPncpDeepJob(job);
-        schedulePncpSearchResume(job.id);
+        schedulePncpSearchResume(job.id, resumeIn);
         return;
       }
+    }
+
+    // Complemento de cobertura via consulta por data (terminologia que a
+    // /api/search/ não indexa); itens chegam com valores/Lei 14.133 prontos.
+    if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
+      const complementRun = await fetchConsultaComplementItems({
+        qText,
+        terms,
+        filters,
+        mappedStatus,
+        shouldApplyReceivingProposalLocally,
+        seen,
+        rawItems,
+      });
+      termRuns.push(complementRun);
+      job.term_runs = termRuns;
+      job.progress.items_collected = rawItems.length;
     }
 
     const finalSnapshot = await buildDeepSearchItemsSnapshot({
@@ -7441,21 +8475,37 @@ const runPncpDeepSearchJob = async (jobId) => {
       mappedStatus,
       shouldApplyReceivingProposalLocally,
       enrichValues: true,
+      enrichLimit: 500,
+      enrichDelayMs: 100,
     });
     job.status = 'completed';
-    // Snapshot final substitui o conjunto: limpa e grava de novo para não acumular órfãos.
-    await clearPncpJobResults(jobId);
+    if (!preserveResults) {
+      // Snapshot final substitui o conjunto (filtros novos): limpa órfãos e grava de novo.
+      await clearPncpJobResults(jobId);
+    }
+    // Com preserve: UPSERT só acrescenta/atualiza; resultados antigos permanecem.
     await persistPncpJobResults(job, finalSnapshot.items);
     job.items = finalSnapshot.items.slice(0, 200);
     // Total canônico = o que está na tabela de resultados (mesma fonte do popup).
     job.total = await countPncpJobResults(jobId, job.account_id) || finalSnapshot.items.length;
-    job.summary = finalSnapshot.summary;
+    job.summary = {
+      ...finalSnapshot.summary,
+      count: job.total,
+      run_count: finalSnapshot.summary?.count ?? finalSnapshot.items.length,
+    };
+    job.term_runs = termRuns;
     job.query_plan = {
       ...finalSnapshot.query_plan,
+      terms,
       term_runs: termRuns,
+      terms_planned: terms,
+      terms_executed: termRuns.filter(r => r?.term && r?.source !== 'pncp_consulta_complement').map(r => r.term),
       partial: false,
       results_persisted: job.total,
+      preserve_results: preserveResults,
+      sequential: true,
     };
+    job.preserve_results = true;
     job.updated_at = Date.now();
     await persistPncpDeepJob(job);
   } catch (error) {
@@ -7589,6 +8639,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
       startPersistedPncpSearchJob(job, { force: true }).catch(err => console.warn('[PNCP Search Job] resume parcial falhou:', err.message));
     }
   }
+  const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
   res.json({
     id: job.id,
     status: job.status,
@@ -7603,8 +8654,26 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     total: job.total,
     items: ['running', 'completed', 'paused_rate_limit', 'failed', 'cancelled'].includes(job.status) ? (job.items || []) : [],
     summary: job.summary || null,
-    query_plan: job.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
+    term_runs: job.term_runs || job.query_plan?.term_runs || [],
+    query_plan: {
+      mode: 'deep_background',
+      sequential: true,
+      terms: job.terms || [],
+      terms_planned: job.terms || [],
+      terms_executed: (job.term_runs || job.query_plan?.term_runs || [])
+        .filter(r => r?.term && r?.source !== 'pncp_consulta_complement')
+        .map(r => r.term),
+      ...(job.query_plan || {}),
+      term_runs: job.term_runs || job.query_plan?.term_runs || [],
+    },
     error: job.error || null,
+    watchlist_id: job.watchlist_id || null,
+    started_at: job.started_at,
+    updated_at: job.updated_at,
+    completed_at: job.completed_at,
+    archive_at: archiveAt ? archiveAt.toISOString() : null,
+    days_until_archive: job.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(job.started_at),
+    archive_days: PNCP_SEARCH_JOB_ARCHIVE_DAYS,
   });
 });
 
@@ -7644,13 +8713,20 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           LIMIT $3 OFFSET $4`,
         [job.id, accountId, tam, offset]
       );
+      let pageItems = rows.map(row => row.payload).filter(Boolean);
+      // Valores não vêm da busca textual do PNCP — completa a página aberta via detalhe.
+      const enrichOnRead = String(req.query.enrich || 'true') !== 'false';
+      if (enrichOnRead && pageItems.some(item => !getPncpBestEstimatedValue(item))) {
+        pageItems = await enrichPncpJobResultPage(job, pageItems, { limit: tam });
+      }
       return res.json({
-        items: rows.map(row => row.payload).filter(Boolean),
+        items: pageItems,
         total,
         pagina,
         tamanhoPagina: tam,
         totalPaginas: Math.max(1, Math.ceil(total / tam)),
         summary: job.summary || createPncpSearchSummary([]),
+        values_enriched_on_read: enrichOnRead,
       });
     }
 
@@ -7706,6 +8782,7 @@ const handlePncpSearchJobTerms = async (req, res) => {
     const accountId = getAccountId(req);
     const memoryJob = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
     const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, accountId);
+    // Preferir memória se existir (job ao vivo), senão DB.
     const job = memoryJob || dbJob;
     if (!job) return res.status(404).json({ error: 'Pesquisa nao encontrada' });
     if (job.account_id && Number(job.account_id) !== Number(accountId)) {
@@ -7722,28 +8799,94 @@ const handlePncpSearchJobTerms = async (req, res) => {
       return res.status(400).json({ error: 'Informe ao menos um termo' });
     }
 
+    const prevTerms = [...(job.terms || [])];
+    const prevNeg = [...(job.negative_terms || [])];
     job.terms = mergeUniqueTerms(job.terms || [], positiveTerms).slice(0, 12);
     job.negative_terms = mergeUniqueTerms(job.negative_terms || [], negativeTerms);
+    const addedPositive = job.terms.filter(t => !prevTerms.some(p => normalizeSearchText(p) === normalizeSearchText(t)));
+    const addedNegative = job.negative_terms.filter(t => !prevNeg.some(p => normalizeSearchText(p) === normalizeSearchText(t)));
+    if (!addedPositive.length && !addedNegative.length) {
+      return res.json({
+        ...normalizePncpSearchJobRow(job),
+        unchanged: true,
+        message: 'Termo(s) já estavam neste job',
+      });
+    }
+
     const signature = buildPncpJobSignature({ filters: job.filters || {}, terms: job.terms, negativeTerms: job.negative_terms });
+    const wasLive = ['queued', 'running', 'paused_rate_limit', 'cancelling'].includes(job.status);
+    const termsDone = Number(job.progress?.terms_done || 0);
+    const workerAlive = Boolean(memoryJob && ['queued', 'running', 'cancelling', 'paused_rate_limit'].includes(memoryJob.status));
+    // No meio do loop o worker re-lê job.terms a cada termo — basta atualizar a memória.
+    // Se já esgotou as frentes, worker morreu, pausou ou job terminou → reenfileira.
+    const canAbsorbInRunningLoop = workerAlive
+      && job.status === 'running'
+      && termsDone < Math.max(prevTerms.length, 1);
+    const needsRestart = !canAbsorbInRunningLoop;
+
     job.progress = {
       ...(job.progress || {}),
       signature,
       terms_total: job.terms.length,
+      ...(needsRestart && !wasLive ? { terms_done: 0, current_term: '' } : {}),
     };
-    if (['completed', 'failed'].includes(job.status)) {
-      job.status = 'queued';
-      job.error = null;
-      job.completed_at = null;
-    }
+    job.preserve_results = true;
+    job.error = null;
     job.updated_at = Date.now();
+
+    // Grava termos no banco de imediato (antes o persist ignorava terms e o chip sumia).
+    await pool.query(
+      `UPDATE ${PNCP_SEARCH_JOBS_TABLE}
+          SET terms = $2,
+              negative_terms = $3,
+              progress = $4::jsonb,
+              updated_at = NOW()
+        WHERE id = $1 AND account_id = $5`,
+      [
+        job.id,
+        job.terms,
+        job.negative_terms,
+        JSON.stringify(job.progress || {}),
+        accountId,
+      ]
+    );
+
+    // Atualiza o objeto do worker ao vivo (mesma referência) + mapa.
     if (memoryJob) {
-      PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+      memoryJob.terms = job.terms;
+      memoryJob.negative_terms = job.negative_terms;
+      memoryJob.progress = job.progress;
+      memoryJob.preserve_results = true;
+      memoryJob.updated_at = job.updated_at;
     }
-    await persistPncpDeepJob(job);
-    if (!['running', 'cancelling'].includes(job.status)) {
-      await startPersistedPncpSearchJob(job);
+    PNCP_DEEP_SEARCH_JOBS.set(job.id, memoryJob || job);
+    await persistPncpDeepJob(memoryJob || job);
+
+    let restarted = false;
+    if (needsRestart) {
+      if (workerAlive && ['running', 'cancelling', 'queued'].includes(job.status)) {
+        PNCP_DEEP_SEARCH_CANCELLED.add(job.id);
+        setTimeout(() => {
+          PNCP_DEEP_SEARCH_CANCELLED.delete(job.id);
+          startPersistedPncpSearchJob(job, { force: true, preserveResults: true }).catch(err =>
+            console.warn('[PNCP Search Job] restart apos novos termos falhou:', err.message)
+          );
+        }, 400);
+        restarted = true;
+      } else {
+        await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
+        restarted = true;
+      }
     }
-    res.json(normalizePncpSearchJobRow(job));
+
+    const fresh = PNCP_DEEP_SEARCH_JOBS.get(job.id) || job;
+    res.json({
+      ...normalizePncpSearchJobRow(fresh),
+      added_terms: addedPositive,
+      added_negative_terms: addedNegative,
+      restarted,
+      preserve_results: true,
+    });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar termos da pesquisa', details: error.message });
   }
@@ -7800,11 +8943,13 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
       terms_total: (job.terms || []).length,
       terms_done: 0,
       current_term: '',
-      items_collected: Number(job.progress?.items_collected || job.total || 0),
+      items_collected: 0,
     };
     job.error = null;
     job.completed_at = null;
     job.updated_at = Date.now();
+    // Troca de filtros = novo conjunto de resultados (não preserva o acervo antigo).
+    job.preserve_results = false;
 
     // Se estiver rodando, pede cancelamento e recomeça com os novos filtros
     if (['running', 'cancelling', 'queued', 'paused_rate_limit'].includes(job.status)) {
@@ -7844,7 +8989,7 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
     // Pequeno delay se estava cancelando, para o worker antigo soltar
     setTimeout(() => {
       PNCP_DEEP_SEARCH_CANCELLED.delete(job.id);
-      startPersistedPncpSearchJob(job, { force: true }).catch(err =>
+      startPersistedPncpSearchJob(job, { force: true, preserveResults: false }).catch(err =>
         console.warn('[PNCP Search Job] restart apos filtros falhou:', err.message)
       );
     }, 400);
@@ -7852,6 +8997,49 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
     res.json(normalizePncpSearchJobRow(job));
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar filtros da pesquisa', details: error.message });
+  }
+});
+
+// Reexecuta a coleta mantendo o que já foi encontrado (UPSERT). Não estende o prazo de arquivo.
+app.post('/api/licitacoes/pncp/search/deep/:jobId/rerun', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const memoryJob = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
+    const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, accountId);
+    const job = memoryJob || dbJob;
+    if (!job) return res.status(404).json({ error: 'Pesquisa não encontrada' });
+    if (job.account_id && Number(job.account_id) !== Number(accountId)) {
+      return res.status(404).json({ error: 'Pesquisa não encontrada' });
+    }
+    if (['queued', 'running', 'cancelling', 'paused_rate_limit'].includes(job.status)) {
+      return res.status(409).json({
+        error: 'Esta busca já está em coleta. Aguarde terminar ou use Parar.',
+        status: job.status,
+      });
+    }
+    if (isPncpSearchJobArchivable(job)) {
+      return res.status(410).json({
+        error: 'Esta busca expirou e será arquivada. Crie uma nova ou transforme em watchlist antes de expirar.',
+        archive_at: getPncpSearchJobArchiveAt(job.started_at)?.toISOString() || null,
+      });
+    }
+
+    const ok = await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
+    if (!ok) {
+      return res.status(500).json({ error: 'Não foi possível reexecutar a busca' });
+    }
+    const fresh = PNCP_DEEP_SEARCH_JOBS.get(job.id) || await loadPncpDeepJob(job.id, accountId);
+    res.json({
+      ok: true,
+      job_id: job.id,
+      status: fresh?.status || 'queued',
+      preserve_results: true,
+      total: Number(fresh?.total || job.total || 0),
+      archive_at: getPncpSearchJobArchiveAt(job.started_at)?.toISOString() || null,
+      days_until_archive: getPncpSearchJobDaysUntilArchive(job.started_at),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao reexecutar a busca', details: error.message });
   }
 });
 
@@ -8270,12 +9458,37 @@ const buildEditalWatchlistFilters = (value) => {
   return filters;
 };
 
+const matchesWatchlistEntityFilters = (normalized, filters = {}) => {
+  const orgaoFilter = String(filters.orgao_cnpj || '').trim();
+  const unidadeFilter = String(filters.unidade_codigo || '').trim();
+  if (orgaoFilter) {
+    const orgaoDigits = orgaoFilter.replace(/\D/g, '');
+    const itemCnpj = String(normalized.orgao?.cnpj || '').replace(/\D/g, '');
+    const orgaoText = normalizeSearchText(orgaoFilter);
+    const itemOrgaoText = normalizeSearchText(normalized.orgao?.nome || '');
+    if (!((orgaoDigits.length >= 3 && itemCnpj.includes(orgaoDigits)) || itemOrgaoText.includes(orgaoText))) {
+      return false;
+    }
+  }
+  if (unidadeFilter) {
+    const unidadeDigits = unidadeFilter.replace(/\D/g, '');
+    const itemUnidadeDigits = String(normalized.unidade?.codigo || '').replace(/\D/g, '');
+    const unidadeText = normalizeSearchText(unidadeFilter);
+    const itemUnidadeText = normalizeSearchText(`${normalized.unidade?.codigo || ''} ${normalized.unidade?.nome || ''}`);
+    if (!((unidadeDigits.length >= 4 && itemUnidadeDigits.includes(unidadeDigits)) || itemUnidadeText.includes(unidadeText))) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const listEditalSignalsQuery = `
   SELECT s.*, w.nome AS watchlist_nome, w.whatsapp_enabled, w.whatsapp_number,
          COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
   FROM ${EDITAL_SIGNALS_TABLE} s
   LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
   WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+    AND ($5::bigint IS NULL OR s.watchlist_id = $5)
   ORDER BY w.nome ASC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
   LIMIT $3 OFFSET $4
 `;
@@ -8305,12 +9518,60 @@ const runEditalWatchlistMatching = async () => {
       status: filters.status === 'todos' ? undefined : filters.status,
       modalidade_licitacao_id: filters.modalidade_licitacao_id,
       tipo_id: filters.tipo_id,
-      modo_disputa_id: filters.modo_disputa_id,
       uf: filters.uf,
       esfera_id: filters.esfera_id,
       tam: 50,
     };
     const seen = new Set();
+    const processEditalCandidate = async (raw, term, key) => {
+      const normalized = normalizePncpItem(raw, term);
+
+      if (!matchesWatchlistEntityFilters(normalized, filters)) return;
+      // modo_disputa não é suportado pela /api/search/: resolve via detalhe só
+      // para itens que já passaram nos demais filtros; desconhecido não descarta.
+      if (filters.modo_disputa_id && !normalized.modo_disputa?.id) {
+        const ids = extractPncpCompraIdentifiers(normalized);
+        const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
+        if (detalhe?.modo_disputa_id && String(detalhe.modo_disputa_id) !== String(filters.modo_disputa_id)) {
+          return;
+        }
+        if (detalhe) {
+          normalized.modo_disputa = { id: detalhe.modo_disputa_id, nome: detalhe.modo_disputa_nome };
+        }
+      } else if (filters.modo_disputa_id && normalized.modo_disputa?.id
+        && String(normalized.modo_disputa.id) !== String(filters.modo_disputa_id)) {
+        return;
+      }
+      const decorated = decoratePncpSearchItem(normalized, {
+        qText: term,
+        positiveTerms: positivos,
+        negativeTerms: negativos,
+        orgaoFilterRaw: filters.orgao_cnpj,
+        unidadeFilterRaw: filters.unidade_codigo,
+      });
+      const r = await pool.query(
+        `
+          INSERT INTO ${EDITAL_SIGNALS_TABLE}
+            (account_id, watchlist_id, fonte, chave_externa, payload, score, termos_matched, termos_excluidos)
+          VALUES ($1,$2,'pncp',$3,$4::jsonb,$5,$6,$7)
+          ON CONFLICT (account_id, watchlist_id, chave_externa) DO NOTHING
+          RETURNING id
+        `,
+        [watch.account_id, watch.id, key, JSON.stringify(decorated), Number(decorated.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
+      );
+      if (r.rowCount > 0) {
+        inserted += 1;
+        if (watch.whatsapp_enabled && watch.whatsapp_number) {
+          await enqueueWatchlistNotification({
+            source: 'edital',
+            watchlistId: watch.id,
+            signalId: r.rows[0].id,
+            recipient: watch.whatsapp_number,
+          });
+        }
+      }
+    };
+
     for (const term of positivos.slice(0, 6)) {
       let data;
       try {
@@ -8324,57 +9585,30 @@ const runEditalWatchlistMatching = async () => {
         const key = getPncpRawItemKey(raw);
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        const normalized = normalizePncpItem(raw, term);
-
-        const orgaoFilter = String(filters.orgao_cnpj || '').trim();
-        const unidadeFilter = String(filters.unidade_codigo || '').trim();
-        if (orgaoFilter) {
-          const orgaoDigits = orgaoFilter.replace(/\D/g, '');
-          const itemCnpj = String(normalized.orgao?.cnpj || '').replace(/\D/g, '');
-          const orgaoText = normalizeSearchText(orgaoFilter);
-          const itemOrgaoText = normalizeSearchText(normalized.orgao?.nome || '');
-          if (!((orgaoDigits.length >= 3 && itemCnpj.includes(orgaoDigits)) || itemOrgaoText.includes(orgaoText))) {
-            continue;
-          }
-        }
-        if (unidadeFilter) {
-          const unidadeDigits = unidadeFilter.replace(/\D/g, '');
-          const itemUnidadeDigits = String(normalized.unidade?.codigo || '').replace(/\D/g, '');
-          const unidadeText = normalizeSearchText(unidadeFilter);
-          const itemUnidadeText = normalizeSearchText(`${normalized.unidade?.codigo || ''} ${normalized.unidade?.nome || ''}`);
-          if (!((unidadeDigits.length >= 4 && itemUnidadeDigits.includes(unidadeDigits)) || itemUnidadeText.includes(unidadeText))) {
-            continue;
-          }
-        }
-        const decorated = decoratePncpSearchItem(normalized, {
-          qText: term,
-          positiveTerms: positivos,
-          negativeTerms: negativos,
-          orgaoFilterRaw: filters.orgao_cnpj,
-          unidadeFilterRaw: filters.unidade_codigo,
-        });
-        const r = await pool.query(
-          `
-            INSERT INTO ${EDITAL_SIGNALS_TABLE}
-              (account_id, watchlist_id, fonte, chave_externa, payload, score, termos_matched, termos_excluidos)
-            VALUES ($1,$2,'pncp',$3,$4::jsonb,$5,$6,$7)
-            ON CONFLICT (account_id, watchlist_id, chave_externa) DO NOTHING
-            RETURNING id
-          `,
-          [watch.account_id, watch.id, key, JSON.stringify(decorated), Number(decorated.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
-        );
-        if (r.rowCount > 0) {
-          inserted += 1;
-          if (watch.whatsapp_enabled && watch.whatsapp_number) {
-            await enqueueWatchlistNotification({
-              source: 'edital',
-              watchlistId: watch.id,
-              signalId: r.rows[0].id,
-              recipient: watch.whatsapp_number,
-            });
-          }
-        }
+        await processEditalCandidate(raw, term, key);
       }
+    }
+
+    // Complemento por data: contratações abertas cujo objeto casa com os termos
+    // mas que a /api/search/ não retorna por diferença de terminologia.
+    const complementItems = [];
+    const complementRun = await fetchConsultaComplementItems({
+      qText: positivos[0],
+      terms: positivos,
+      filters,
+      mappedStatus: filters.status === 'todos' ? null : filters.status,
+      shouldApplyReceivingProposalLocally: filters.status === 'recebendo_proposta',
+      seen,
+      rawItems: complementItems,
+      maxPages: 4,
+    });
+    if (complementRun.errors.length) {
+      console.warn('[editais] complemento consulta falhou para watchlist', watch.id, complementRun.errors.join('; '));
+    }
+    for (const raw of complementItems) {
+      const key = getPncpRawItemKey(raw);
+      if (!key) continue;
+      await processEditalCandidate(raw, raw.__matched_termo || positivos[0], key);
     }
   }
   const notifications = await processWatchlistNotifications().catch(error => {
@@ -8394,11 +9628,197 @@ app.post('/api/licitacoes/editais/sync', async (req, res) => {
   }
 });
 
+// ===== Sync diário de contratos e atas publicados no PNCP (aba Contratos/Resultados) =====
+
+const collectActiveWatchlistTerms = async () => {
+  const { rows } = await pool.query(
+    `SELECT palavras_chave, usar_ia FROM ${EDITAL_WATCHLIST_TABLE} WHERE ativo = TRUE`
+  );
+  const terms = new Set();
+  for (const row of rows) {
+    const palavras = Array.isArray(row.palavras_chave) ? row.palavras_chave.filter(Boolean) : [];
+    palavras.forEach(p => terms.add(String(p)));
+    if (row.usar_ia && palavras[0]) {
+      try {
+        const r = await getTermosCorrelatos(palavras[0]);
+        (r.positivos || r.correlatos || []).slice(0, 6).forEach(p => terms.add(String(p)));
+      } catch (error) {
+        console.warn('[contratos-sync] IA falhou para termos correlatos:', error.message);
+      }
+    }
+  }
+  return [...terms].filter(t => t && t.trim().length >= 3 && !/^\d+$/.test(t.trim()));
+};
+
+const pncpTextMatchesTerms = (text, terms) => {
+  const normalized = normalizeSearchText(text || '');
+  if (!normalized) return null;
+  for (const term of terms) {
+    const tokens = normalizeSearchText(term).split(/\s+/).filter(t => t.length >= 3);
+    if (tokens.length && tokens.some(t => normalized.includes(t))) return term;
+  }
+  return null;
+};
+
+// Varre contratos (/v1/contratos) e atas (/v1/atas/atualizacao) publicados na janela,
+// casa localmente com os termos das watchlists ativas e alimenta o pncp_result_cache.
+// Só matches entram no banco; top N ganham dossiê completo.
+const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossierBudget = 15 } = {}) => {
+  const summary = { contratos_scanned: 0, atas_scanned: 0, matched: 0, upserted: 0, dossiers: 0, errors: [] };
+  const terms = await collectActiveWatchlistTerms();
+  summary.terms = terms.length;
+  if (!terms.length) {
+    summary.skipped = 'sem_watchlists_ativas';
+    return summary;
+  }
+  const hoje = new Date();
+  const inicio = new Date(hoje);
+  inicio.setDate(hoje.getDate() - windowDays);
+  const fmtDate = (d) => d.toISOString().split('T')[0].replace(/-/g, '');
+  const dataInicial = fmtDate(inicio);
+  const dataFinal = fmtDate(hoje);
+  const matchesByKey = new Map();
+
+  const sweep = async (endpoint, onItem) => {
+    let pagina = 1;
+    while (pagina <= maxPages) {
+      let data;
+      try {
+        data = await withPncpGate(() => fetchPncpConsulta(endpoint, {
+          dataInicial, dataFinal, pagina, tamanhoPagina: 50,
+        }));
+      } catch (error) {
+        summary.errors.push(`${endpoint} p${pagina}: ${error.message}`);
+        break;
+      }
+      const rows = asPncpList(data);
+      if (!rows.length) break;
+      rows.forEach(onItem);
+      const totalPaginas = Number(data?.totalPaginas) || 1;
+      if (pagina >= totalPaginas || rows.length < 50) break;
+      pagina += 1;
+    }
+  };
+
+  await sweep('/v1/contratos', (raw) => {
+    summary.contratos_scanned += 1;
+    const texto = `${raw?.objetoContrato || ''} ${raw?.nomeRazaoSocialFornecedor || ''} ${raw?.orgaoEntidade?.razaoSocial || ''}`;
+    const matchedTerm = pncpTextMatchesTerms(texto, terms);
+    if (!matchedTerm) return;
+    const ids = parsePncpCompraControlNumber(raw?.numeroControlePncpCompra || raw?.numeroControlePNCPCompra);
+    if (!ids) return;
+    const pncpKey = `${ids.cnpj}/${ids.ano}/${ids.sequencial}`;
+    const entry = matchesByKey.get(pncpKey) || { ids, matchedTerm, contratos: [], atas: [] };
+    entry.contratos.push(raw);
+    matchesByKey.set(pncpKey, entry);
+  });
+
+  await sweep('/v1/atas/atualizacao', (raw) => {
+    summary.atas_scanned += 1;
+    const texto = `${raw?.objetoContratacao || raw?.objetoCompra || ''} ${raw?.nomeOrgao || raw?.orgao?.razaoSocial || raw?.orgaoEntidade?.razaoSocial || ''}`;
+    const matchedTerm = pncpTextMatchesTerms(texto, terms);
+    if (!matchedTerm) return;
+    const ids = parsePncpCompraControlNumber(raw?.numeroControlePNCPCompra || raw?.numeroControlePncpCompra);
+    if (!ids) return;
+    const pncpKey = `${ids.cnpj}/${ids.ano}/${ids.sequencial}`;
+    const entry = matchesByKey.get(pncpKey) || { ids, matchedTerm, contratos: [], atas: [] };
+    entry.atas.push(raw);
+    matchesByKey.set(pncpKey, entry);
+  });
+
+  summary.matched = matchesByKey.size;
+
+  for (const [pncpKey, entry] of matchesByKey) {
+    const contrato = entry.contratos[0] || null;
+    const ata = entry.atas[0] || null;
+    const row = {
+      pncp_key: pncpKey,
+      orgao_cnpj: contrato?.orgaoEntidade?.cnpj || entry.ids.cnpj,
+      orgao_nome: contrato?.orgaoEntidade?.razaoSocial || ata?.nomeOrgao || null,
+      ano: Number(entry.ids.ano) || null,
+      sequencial: Number(entry.ids.sequencial) || null,
+      numero_controle_pncp: contrato?.numeroControlePncpCompra || contrato?.numeroControlePNCPCompra
+        || ata?.numeroControlePNCPCompra || ata?.numeroControlePncpCompra || null,
+      titulo: contrato?.objetoContrato || ata?.objetoContratacao || ata?.objetoCompra || null,
+      descricao: contrato?.objetoContrato || ata?.objetoContratacao || null,
+      uf: contrato?.unidadeOrgao?.ufSigla || null,
+      modalidade: null,
+      etapa_comercial: entry.contratos.length ? 'contracted' : 'ata_available',
+      fornecedor_ni: contrato?.niFornecedor || null,
+      fornecedor_nome: contrato?.nomeRazaoSocialFornecedor || null,
+      valor_estimado: Number(contrato?.valorInicial) > 0 ? Number(contrato.valorInicial) : null,
+      valor_homologado: Number(contrato?.valorGlobal) > 0 ? Number(contrato.valorGlobal) : null,
+      data_publicacao: contrato?.dataPublicacaoPncp || ata?.dataPublicacaoPncp || null,
+      data_assinatura: contrato?.dataAssinatura || ata?.dataAssinatura || null,
+      search_text: [
+        contrato?.objetoContrato, contrato?.nomeRazaoSocialFornecedor, contrato?.orgaoEntidade?.razaoSocial,
+        ata?.objetoContratacao, ata?.nomeOrgao,
+      ].filter(Boolean).join(' '),
+      payload: {
+        source: 'contratos_daily_sync',
+        matched_term: entry.matchedTerm,
+        contratos_daily: entry.contratos.slice(0, 10),
+        atas_daily: entry.atas.slice(0, 10),
+      },
+    };
+    try {
+      await upsertPncpResultCacheLite(row);
+      summary.upserted += 1;
+    } catch (error) {
+      summary.errors.push(`upsert ${pncpKey}: ${error.message}`);
+    }
+  }
+
+  // Dossiê completo para os primeiros N matches (enriquece com itens/resultados).
+  for (const [, entry] of [...matchesByKey].slice(0, dossierBudget)) {
+    if (Date.now() < pncpDetalheRateLimitedUntil) {
+      summary.errors.push('dossiers interrompidos por rate limit');
+      break;
+    }
+    try {
+      const dossier = await fetchPncpCompraDossier(entry.ids.cnpj, entry.ids.ano, entry.ids.sequencial, {
+        query: entry.matchedTerm,
+      });
+      await upsertPncpResultCache(dossier, entry.matchedTerm);
+      summary.dossiers += 1;
+    } catch (error) {
+      summary.errors.push(`dossier ${entry.ids.cnpj}/${entry.ids.ano}/${entry.ids.sequencial}: ${error.message}`);
+    }
+  }
+
+  console.log('[contratos-sync] resumo:', JSON.stringify(summary));
+  return summary;
+};
+
+app.post('/api/licitacoes/pncp/contratos/sync', async (req, res) => {
+  try {
+    const windowDays = Math.max(1, Math.min(30, Number(req.body?.window_days) || 2));
+    const result = await runPncpContratosAtasSync({ windowDays });
+    res.json(result);
+  } catch (error) {
+    console.error('Error syncing PNCP contratos/atas:', error);
+    res.status(500).json({ error: 'Erro ao sincronizar contratos/atas do PNCP', details: error.message });
+  }
+});
+
 app.get('/api/licitacoes/editais/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const { rows } = await pool.query(
-      `SELECT * FROM ${EDITAL_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
+      `SELECT w.*,
+              COALESCE(sc.novo_count, 0)::int AS sinais_novos,
+              COALESCE(sc.total_count, 0)::int AS sinais_total
+         FROM ${EDITAL_WATCHLIST_TABLE} w
+         LEFT JOIN (
+           SELECT watchlist_id,
+                  COUNT(*) FILTER (WHERE status = 'novo')::int AS novo_count,
+                  COUNT(*)::int AS total_count
+             FROM ${EDITAL_SIGNALS_TABLE}
+            WHERE account_id = $1 AND watchlist_id IS NOT NULL
+            GROUP BY watchlist_id
+         ) sc ON sc.watchlist_id = w.id
+        WHERE w.account_id = $1
+        ORDER BY w.criado_em DESC`,
       [accountId]
     );
     res.json(rows);
@@ -8512,11 +9932,14 @@ app.get('/api/licitacoes/editais/signals', async (req, res) => {
     const status = req.query.status || 'novo';
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 1000, 1), 2000);
     const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
+    const watchlistId = toIntOrNull(req.query.watchlist_id);
     const [signalsResult, countResult] = await Promise.all([
-      pool.query(listEditalSignalsQuery, [accountId, status, limit, offset]),
+      pool.query(listEditalSignalsQuery, [accountId, status, limit, offset, watchlistId]),
       pool.query(
-        `SELECT COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE} WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL`,
-        [accountId, status]
+        `SELECT COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE}
+          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL
+            AND ($3::bigint IS NULL OR watchlist_id = $3)`,
+        [accountId, status, watchlistId]
       ),
     ]);
     const rows = signalsResult.rows;
@@ -9692,7 +11115,8 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
     const requestedOffset = Number.parseInt(req.query.offset, 10);
     const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 200, 1), 500);
     const offset = Math.max(Number.isFinite(requestedOffset) ? requestedOffset : 0, 0);
-    const params = [accountId, status, limit, offset];
+    const watchlistId = toIntOrNull(req.query.watchlist_id);
+    const params = [accountId, status, limit, offset, watchlistId];
     const { pageResult, countResult } = await withPcaReadTimeout(async (client) => {
       const page = await client.query(
         `
@@ -9700,6 +11124,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
           SELECT s.*
           FROM ${PCA_SIGNALS_TABLE} s
           WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+            AND ($5::bigint IS NULL OR s.watchlist_id = $5)
           ORDER BY s.criado_em DESC, s.id DESC
           LIMIT $3 OFFSET $4
         )
@@ -9721,9 +11146,10 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
           SELECT watchlist_id, COUNT(*)::int AS total
           FROM ${PCA_SIGNALS_TABLE}
           WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL
+            AND ($3::bigint IS NULL OR watchlist_id = $3)
           GROUP BY watchlist_id
         `,
-        [accountId, status]
+        [accountId, status, watchlistId]
       );
       return { pageResult: page, countResult: counts };
     });
@@ -10311,7 +11737,20 @@ app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const { rows } = await withPcaReadTimeout((client) => client.query(
-        `SELECT * FROM ${PCA_WATCHLIST_TABLE} WHERE account_id = $1 ORDER BY criado_em DESC`,
+        `SELECT w.*,
+                COALESCE(sc.novo_count, 0)::int AS sinais_novos,
+                COALESCE(sc.total_count, 0)::int AS sinais_total
+           FROM ${PCA_WATCHLIST_TABLE} w
+           LEFT JOIN (
+             SELECT watchlist_id,
+                    COUNT(*) FILTER (WHERE status = 'novo')::int AS novo_count,
+                    COUNT(*)::int AS total_count
+               FROM ${PCA_SIGNALS_TABLE}
+              WHERE account_id = $1 AND watchlist_id IS NOT NULL
+              GROUP BY watchlist_id
+           ) sc ON sc.watchlist_id = w.id
+          WHERE w.account_id = $1
+          ORDER BY w.criado_em DESC`,
         [accountId]
       ));
     res.json(rows);
@@ -11149,13 +12588,38 @@ app.get('/api/leads/cnae/search', async (req, res) => {
 
 // ============================================================
 // GOOGLE TRENDS → INTEL DE PROSPECÇÃO (Busca Lead B2B)
-// Fonte gratuita: RSS diário do Google Trends (geo=BR).
-// Cron diário + cache em Postgres. IA (OpenAI/Groq/OpenRouter)
-// transforma trends em filtros RFB (CNAE, UF, porte, idade…).
+// Fonte principal: pytrends related queries (top + rising) por
+// seeds do negócio (drones enterprise etc.), geo=BR.
+// Fallback: RSS "em alta" do país se pytrends falhar.
+// Cache diário (memória + Postgres): 1ª abertura do dia gera;
+// demais aberturas no mesmo dia reutilizam o resultado.
 // ============================================================
 
 const TRENDS_RSS_URL = process.env.TRENDS_RSS_URL || 'https://trends.google.com/trending/rss?geo=BR';
-const TRENDS_GEO = process.env.TRENDS_GEO || 'BR';
+// Google Trends espera ISO em maiúsculas (BR). Aceita "br" no .env.
+const TRENDS_GEO = String(process.env.TRENDS_GEO || 'BR').trim().toUpperCase() || 'BR';
+// Formato oficial: "today 3-m" (com espaço). Aceita "today-3m" / "today_3m" no .env.
+const normalizeTrendsTimeframe = (raw) => {
+  let v = String(raw || 'today 3-m').trim().replace(/["']/g, '');
+  if (!v) v = 'today 3-m';
+  // today-3m / today_3m / today3-m → today 3-m
+  v = v.replace(/^(today|now)[-_]?(\d+)\s*[-_]?([a-z]+)$/i, (_, a, n, u) => `${a.toLowerCase()} ${n}-${u.toLowerCase()}`);
+  v = v.replace(/^(today|now)[-_](\d+[-_][a-z]+)$/i, (_, a, rest) => `${a.toLowerCase()} ${rest.replace(/_/g, '-')}`);
+  // already "today 3-m"
+  if (/^(today|now)\s+\d+-[a-z]+$/i.test(v)) return v.toLowerCase().replace(/^(today|now)/, (m) => m.toLowerCase());
+  return v;
+};
+const TRENDS_TIMEFRAME = normalizeTrendsTimeframe(process.env.TRENDS_TIMEFRAME || 'today 3-m');
+// Poucas seeds de alto valor (1×/dia) — lista longa aumenta 429 no Google.
+const TRENDS_SEEDS = (process.env.TRENDS_SEEDS || [
+  'drone',
+  'drone enterprise',
+  'autel',
+].join(','))
+  .split(',')
+  .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+  .filter(Boolean);
+
 const AERION_PRODUCT_CONTEXT = `
 Produtos Aerion (drones enterprise Autel e ecossistema):
 - Autel EVO Lite Enterprise (640T/6K): inspeção ágil, segurança, mapeamento leve
@@ -11226,7 +12690,7 @@ const parseGoogleTrendsRss = (xml = '') => {
   return items;
 };
 
-const fetchGoogleTrendsDaily = async () => {
+const fetchGoogleTrendsRssFallback = async () => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
@@ -11250,9 +12714,218 @@ const fetchGoogleTrendsDaily = async () => {
       source: 'google_trends_rss',
       fetchedAt: new Date().toISOString(),
       trends,
+      seeds: [],
+      by_seed: {},
     };
   } finally {
     clearTimeout(timeout);
+  }
+};
+
+/**
+ * Fallback setorial estável (sem pytrends): Google News RSS no BR
+ * para as seeds do negócio. Funciona mesmo com 429 no Trends Explore.
+ */
+const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
+  const list = (seeds || []).map((s) => String(s).trim()).filter(Boolean).slice(0, 6);
+  if (!list.length) throw new Error('Sem TRENDS_SEEDS para news setorial');
+
+  const query = list
+    .map((s) => (s.includes(' ') ? `"${s}"` : s))
+    .join(' OR ');
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AerionSalesCommand/1.0; +https://aerion.com.br)',
+        Accept: 'application/rss+xml, application/xml, text/xml, */*',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Google News RSS HTTP ${res.status}`);
+    const xml = await res.text();
+    const itemBlocks = String(xml).match(/<item>[\s\S]*?<\/item>/gi) || [];
+    const trends = [];
+    const seen = new Set();
+    for (const block of itemBlocks) {
+      const title = extractXmlTag(block, 'title');
+      if (!title) continue;
+      const key = title.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const pubDate = extractXmlTag(block, 'pubDate') || null;
+      const link = extractXmlTag(block, 'link') || null;
+      const source = extractXmlTag(block, 'source') || null;
+      // descarta ruído óbvio de toy/celeb se título não tiver ângulo tech/B2B — IA ainda filtra
+      trends.push({
+        title,
+        kind: 'news',
+        seed: list[0] || null,
+        interest: null,
+        change: null,
+        traffic: 'news',
+        pubDate,
+        picture: null,
+        url: link || null,
+        source: source || null,
+        news: link ? [{ title, source: source || '', url: link }] : [],
+      });
+      if (trends.length >= 20) break;
+    }
+    if (!trends.length) throw new Error('Google News setorial vazio');
+    return {
+      geo: TRENDS_GEO,
+      source: 'google_news_sector',
+      fetchedAt: new Date().toISOString(),
+      timeframe: 'news-7d',
+      seeds: list,
+      by_seed: { _query: query },
+      trends,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const isSectorTrendsSource = (source = '') =>
+  /pytrends|related|news_sector|google_news/i.test(String(source || ''));
+
+/** Chama scripts/fetch_trends_related.py (pytrends/HTTP) e devolve correlatos por seed. */
+const fetchPytrendsRelated = async () => {
+  const scriptPath = path.join(__dirname, 'scripts', 'fetch_trends_related.py');
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  // Poucas seeds + delay curto: se Google rate-limitar (429), falha rápido e cai no RSS.
+  const seedsForRun = TRENDS_SEEDS.slice(0, 6);
+  const args = [
+    scriptPath,
+    '--geo', TRENDS_GEO,
+    '--timeframe', TRENDS_TIMEFRAME,
+    '--seeds', seedsForRun.join(','),
+    '--max-per-seed', '8',
+    '--delay', '2.5',
+  ];
+
+  console.log(`[trends-intel] pytrends spawn seeds=${seedsForRun.join('|')} geo=${TRENDS_GEO} tf=${TRENDS_TIMEFRAME}`);
+
+  const result = await new Promise((resolve, reject) => {
+    const py = spawn(pythonCmd, args, {
+      cwd: path.join(__dirname, 'scripts'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    // 45s: se 429 em todas as seeds, não prender a UI por minutos
+    const killTimer = setTimeout(() => {
+      try { py.kill(); } catch (_) { /* ignore */ }
+      reject(new Error('pytrends timeout (45s)'));
+    }, 45000);
+    py.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    py.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    py.on('error', (err) => {
+      clearTimeout(killTimer);
+      reject(err);
+    });
+    py.on('close', (code) => {
+      clearTimeout(killTimer);
+      const text = stdout.trim();
+      if (!text) {
+        reject(new Error(`pytrends sem stdout (code=${code}): ${(stderr || '').slice(0, 240)}`));
+        return;
+      }
+      // Última linha JSON (ignora lixo eventual)
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      let parsed = null;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        try {
+          parsed = JSON.parse(lines[i]);
+          break;
+        } catch (_) { /* try previous */ }
+      }
+      if (!parsed) {
+        reject(new Error(`pytrends JSON inválido: ${text.slice(0, 200)}`));
+        return;
+      }
+      if (!parsed.ok && !(parsed.trends || []).length) {
+        reject(new Error(parsed.error || `pytrends falhou (code=${code})`));
+        return;
+      }
+      resolve(parsed);
+    });
+  });
+
+  const trends = (result.trends || []).map((t) => ({
+    title: t.title,
+    kind: t.kind || null,
+    seed: t.seed || null,
+    interest: t.interest ?? null,
+    change: t.change || null,
+    traffic: t.traffic || t.change || (t.interest != null ? String(t.interest) : null),
+    pubDate: t.pubDate || null,
+    picture: t.picture || null,
+    news: Array.isArray(t.news) ? t.news : [],
+  }));
+
+  if (!trends.length) {
+    throw new Error(result.error || 'pytrends retornou zero correlatos');
+  }
+
+  return {
+    geo: result.geo || TRENDS_GEO,
+    source: 'pytrends_related',
+    fetchedAt: result.fetchedAt || new Date().toISOString(),
+    timeframe: result.timeframe || TRENDS_TIMEFRAME,
+    seeds: result.seeds || TRENDS_SEEDS,
+    by_seed: result.by_seed || {},
+    trends,
+    partial_errors: result.partial_errors || [],
+  };
+};
+
+/**
+ * Pipeline de coleta (geo=BR, seeds do negócio):
+ * 1) Related queries (pytrends/HTTP)
+ * 2) Google News setorial pelas seeds (estável sob 429 do Trends)
+ * 3) RSS "em alta" do país (último recurso)
+ */
+const fetchGoogleTrendsDaily = async () => {
+  let pytrendsError = null;
+  try {
+    const related = await fetchPytrendsRelated();
+    console.log(
+      `[trends-intel] related ok trends=${related.trends.length} seeds=${(related.seeds || []).length}`
+    );
+    return related;
+  } catch (err) {
+    pytrendsError = err.message;
+    console.warn(`[trends-intel] related/pytrends falhou: ${err.message}`);
+  }
+
+  try {
+    const news = await fetchSectorNewsForSeeds(TRENDS_SEEDS);
+    console.log(
+      `[trends-intel] news sector ok trends=${news.trends.length} seeds=${(news.seeds || []).length}`
+    );
+    return { ...news, pytrends_error: pytrendsError };
+  } catch (err) {
+    console.warn(`[trends-intel] news sector falhou: ${err.message}`);
+  }
+
+  try {
+    const rss = await fetchGoogleTrendsRssFallback();
+    return {
+      ...rss,
+      source: 'google_trends_rss_fallback',
+      seeds: TRENDS_SEEDS,
+      pytrends_error: pytrendsError,
+    };
+  } catch (err) {
+    throw new Error(
+      `Falha total trends (related + news + rss): ${pytrendsError || ''} | ${err.message}`
+    );
   }
 };
 
@@ -11600,49 +13273,65 @@ const normalizeIntelSuggestions = async (rawIntel = {}, trendsPayload = {}) => {
 };
 
 const buildTrendsIntelWithAI = async (trendsPayload) => {
-  const trendsForPrompt = (trendsPayload.trends || []).slice(0, 15).map((t, i) => ({
+  const trendsForPrompt = (trendsPayload.trends || []).slice(0, 40).map((t, i) => ({
     rank: i + 1,
     title: t.title,
+    kind: t.kind || null, // top | rising (pytrends) ou null (RSS)
+    seed: t.seed || null,
     traffic: t.traffic,
+    change: t.change || null,
+    interest: t.interest ?? null,
     headlines: (t.news || []).map((n) => n.title).filter(Boolean).slice(0, 2),
   }));
+
+  const src = String(trendsPayload.source || '');
+  const isRelatedSource = /pytrends|related/i.test(src);
+  const isNewsSector = /news_sector|google_news/i.test(src);
+  const sourceNote = isRelatedSource
+    ? `Fonte: Google Trends RELATED QUERIES (correlatos) geo=${TRENDS_GEO}, timeframe=${trendsPayload.timeframe || TRENDS_TIMEFRAME}.
+Seeds do negócio Aerion: ${(trendsPayload.seeds || TRENDS_SEEDS).join(', ')}.
+Cada item é correlato (top = mais frequente; rising = em alta) das buscas por esses termos no Brasil — NÃO é o ranking geral do país.
+Exemplos reais de rising úteis: prova ANAC, RBAC, inspeção, topografia, enterprise — use como sinal de demanda B2B.`
+    : isNewsSector
+      ? `Fonte: Google News RSS setorial (geo=BR) para seeds: ${(trendsPayload.seeds || TRENDS_SEEDS).join(', ')}.
+Cada item é manchete recente ligada a drones/enterprise/Autel no Brasil (Trends related estava indisponível/429).
+Trate como temas quentes do setor e gere buscas RFB de ICPs compradores — não invente UF sem citação na manchete.`
+      : `Fonte: Google Trends RSS "em alta" geo=${TRENDS_GEO} (último fallback — correlatos e news setorial indisponíveis).
+São buscas gerais no Brasil; conecte só o que tiver ângulo B2B drones/ICP.`;
 
   const system = `Você é estrategista de prospecção B2B da Aerion Technologies (drones enterprise Autel no Brasil).
 ${AERION_PRODUCT_CONTEXT}
 
-Fonte dos dados: Google Trends com geo=BR — isto significa o que PESSOAS NO BRASIL estão buscando agora.
-NÃO significa que o evento ocorre no Brasil. Ex.: um tufão na Ásia pode estar em alta no BR sem afetar um estado brasileiro.
+${sourceNote}
 
-Sua tarefa: a partir dos trends, sugerir BUSCAS práticas na base RFB (CNPJ) de empresas que possam comprar/usar drones enterprise, integradores ou canais.
-O foco NÃO é só desastres/emergência: priorize também construção, topografia, energia, inspeção industrial, segurança pública, canais/revendas, infraestrutura, agronegócio e qualquer tema B2B ligado aos ICPs Autel.
+Sua tarefa: a partir dos correlatos/trends, sugerir BUSCAS práticas na base RFB (CNPJ) de empresas que possam comprar/usar drones enterprise, integradores ou canais.
+Priorize rising (em alta) e temas ligados a construção, topografia, energia, inspeção industrial, segurança, agronegócio, infraestrutura e canais/revendas.
+Concorrentes (DJI, Mavic, etc.) também são sinal de demanda de mercado — use para achar ICPs, não para copiar o produto.
 
 ## Geografia (CRÍTICO — zero alucinação de UF)
 - Só preencha filters.uf se o TÍTULO ou as MANCHETES citarem explicitamente um estado, cidade ou região do BRASIL (ex.: "Bahia", "Salvador", "SP", "Minas Gerais").
 - geo_basis deve copiar a frase literal que justifica a UF. Sem citação → filters.uf = "" (busca nacional).
-- PROIBIDO inferir UF por semelhança fonética, rima, anagrama ou pedaço de nome:
-  - ERRADO: trend "supertufão Bavi" → UF Bahia (BA) só porque "Bavi" parece "Bahia".
-  - ERRADO: nome de pessoa/marca → estado brasileiro.
-  - CERTO: tufão internacional + tema resgate/defesa civil → CNAEs de resgate/segurança, uf:"" (nacional), rationale: demanda de drones em emergência sem fixar estado.
-- Evento internacional sem local BR: use ângulo de caso de uso (resgate, inspeção, energia) em escala nacional; NÃO invente cidade/UF.
+- PROIBIDO inferir UF por semelhança fonética, rima, anagrama ou pedaço de nome.
+- Evento/consulta sem local BR: escala nacional (uf:"").
 
 ## Outras regras
-- Conecte trends a casos de uso reais (inspeção, mapeamento, segurança, energia, obras, emergência, infraestrutura).
-- Ignore fofoca/celebridade/esporte sem ângulo B2B. Se o dia for barulhento, entregue 3–5 sugestões ICP sólidas.
+- Conecte correlatos a casos de uso reais (inspeção, mapeamento, segurança, energia, obras).
+- Ignore fofoca/celebridade/esporte sem ângulo B2B.
 - Filtros: CNAEs BR reais (0000-0/00), porte 01|03|05, capital e idade em números, situacao ["2"].
 - Varie perfis (novas/maduras/grandes). Máximo 5 sugestões, prioridade alta primeiro.
 - Responda SOMENTE JSON válido, sem markdown:
 {
-  "summary": "1-2 frases sobre o clima de busca do dia e o ângulo comercial",
+  "summary": "1-2 frases sobre o clima de busca do setor e o ângulo comercial",
   "opportunity_day": "tema comercial do dia em uma linha",
   "suggestions": [
     {
       "title": "rótulo curto da busca",
-      "rationale": "por que isso agora (liga trend → produto); se uf vazio diga que é nacional",
+      "rationale": "por que isso agora (liga correlato → produto); se uf vazio diga que é nacional",
       "related_trends": ["trend1"],
       "priority": "alta|media|baixa",
       "company_profile": "perfil sem inventar estado",
       "product_fit": "qual linha Autel encaixa",
-      "geo_basis": "trecho literal das manchetes que cita o local BR, ou string vazia",
+      "geo_basis": "trecho literal que cita o local BR, ou string vazia",
       "filters": {
         "uf": "",
         "cnae": ["4120-4/00"],
@@ -11662,10 +13351,11 @@ O foco NÃO é só desastres/emergência: priorize também construção, topogra
   ]
 }`;
 
-  const user = `Trends Google geo=BR (interesse de busca no Brasil) — ${brDayKey()}:
+  const user = `Correlatos Google Trends geo=${TRENDS_GEO} — ${brDayKey()}
+source=${trendsPayload.source || 'unknown'}
+seeds=${JSON.stringify(trendsPayload.seeds || TRENDS_SEEDS)}
+items:
 ${JSON.stringify(trendsForPrompt, null, 2)}
-
-Lembrete final: se um trend for desastre/evento no exterior, pode sugerir CNAE de resgate/defesa civil NACIONAL (uf vazio). Nunca invente UF por nome parecido (ex. Bavi ≠ Bahia).
 
 Gere o JSON de inteligência comercial.`;
 
@@ -11815,27 +13505,56 @@ const reSanitizeCachedIntel = async (intel, trends) => {
 
 const buildTrendsIntelPayload = async ({ force = false } = {}) => {
   const dayKey = brDayKey();
+
+  // Cache do dia: memória → DB. force=true só regenera se o cliente pedir explicitamente
+  // (UI normal NÃO força; 1ª abertura do dia gera e mantém até o dia seguinte).
+  const serveCached = async (raw, cacheLabel) => {
+    const intel = await reSanitizeCachedIntel(raw.intel, raw.trends);
+    const payload = {
+      day: raw.day || raw.dayKey || dayKey,
+      geo: raw.geo || TRENDS_GEO,
+      trends: raw.trends || [],
+      intel,
+      meta: {
+        ...(raw.meta || {}),
+        updatedAt: raw.meta?.updatedAt || raw.updatedAt || null,
+        geoSanitized: true,
+        dailyCache: true,
+      },
+      cached: true,
+      cache: cacheLabel,
+    };
+    trendsIntelMemory = { dayKey, payload, updatedAt: Date.now() };
+    return payload;
+  };
+
+  // Cache genérico do país (RSS) não serve se queremos radar setorial por seeds — regenera 1×.
+  const cacheIsUsableSector = (meta) => {
+    if (!TRENDS_SEEDS.length) return true;
+    return isSectorTrendsSource(meta?.source);
+  };
+
   if (!force && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
-    const mem = trendsIntelMemory.payload;
-    // Always re-apply geo sanitizer (fixes stale cache that still had BA from "Bavi", etc.)
-    const intel = await reSanitizeCachedIntel(mem.intel, mem.trends);
-    return { ...mem, intel, cached: true, cache: 'memory' };
+    if (cacheIsUsableSector(trendsIntelMemory.payload.meta)) {
+      return serveCached(trendsIntelMemory.payload, 'memory');
+    }
+    console.log('[trends-intel] cache memória é RSS geral — regenerando setorial');
   }
+
   if (!force) {
     const fromDb = await loadTrendsIntelFromDb(dayKey);
-    if (fromDb) {
-      const intel = await reSanitizeCachedIntel(fromDb.intel, fromDb.trends);
-      const payload = {
-        day: fromDb.dayKey,
-        geo: fromDb.geo,
-        trends: fromDb.trends,
-        intel,
-        meta: { ...(fromDb.meta || {}), updatedAt: fromDb.updatedAt, geoSanitized: true },
-        cached: true,
-        cache: 'db',
-      };
-      trendsIntelMemory = { dayKey, payload, updatedAt: Date.now() };
-      // Persist scrubbed intel so DB doesn't keep hallucinated UFs
+    if (fromDb && cacheIsUsableSector(fromDb.meta)) {
+      const payload = await serveCached(
+        {
+          day: fromDb.dayKey,
+          geo: fromDb.geo,
+          trends: fromDb.trends,
+          intel: fromDb.intel,
+          meta: fromDb.meta || {},
+          updatedAt: fromDb.updatedAt,
+        },
+        'db'
+      );
       await saveTrendsIntelToDb({
         dayKey,
         geo: payload.geo,
@@ -11845,15 +13564,33 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       });
       return payload;
     }
+    if (fromDb && !cacheIsUsableSector(fromDb.meta)) {
+      console.log('[trends-intel] cache DB é RSS geral — regenerando setorial');
+    }
   }
 
   if (trendsIntelRefreshRunning) {
-    // Wait briefly for in-flight refresh
-    for (let i = 0; i < 40; i += 1) {
+    // Espera a geração em andamento (1ª abertura do dia por outro request)
+    for (let i = 0; i < 120; i += 1) {
       await new Promise((r) => setTimeout(r, 500));
-      if (!trendsIntelRefreshRunning && trendsIntelMemory?.dayKey === dayKey) {
+      if (!trendsIntelRefreshRunning && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
         return { ...trendsIntelMemory.payload, cached: true, cache: 'memory' };
       }
+    }
+    // Se ainda rodando após 60s, tenta DB
+    const fromDb = await loadTrendsIntelFromDb(dayKey);
+    if (fromDb) {
+      return serveCached(
+        {
+          day: fromDb.dayKey,
+          geo: fromDb.geo,
+          trends: fromDb.trends,
+          intel: fromDb.intel,
+          meta: fromDb.meta || {},
+          updatedAt: fromDb.updatedAt,
+        },
+        'db'
+      );
     }
   }
 
@@ -11869,8 +13606,14 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       meta: {
         source: trendsPayload.source,
         fetchedAt: trendsPayload.fetchedAt,
+        timeframe: trendsPayload.timeframe || TRENDS_TIMEFRAME,
+        seeds: trendsPayload.seeds || TRENDS_SEEDS,
+        by_seed: trendsPayload.by_seed || {},
+        pytrends_error: trendsPayload.pytrends_error || null,
+        partial_errors: trendsPayload.partial_errors || [],
         ai,
         updatedAt: new Date().toISOString(),
+        dailyCache: true,
       },
       cached: false,
       cache: 'fresh',
@@ -11883,26 +13626,20 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       intel: payload.intel,
       meta: payload.meta,
     });
-    console.log(`[trends-intel] refreshed day=${dayKey} trends=${payload.trends.length} suggestions=${intel.suggestions?.length || 0} ai=${ai.provider || 'fallback'}`);
+    console.log(
+      `[trends-intel] refreshed day=${dayKey} source=${trendsPayload.source} trends=${payload.trends.length} suggestions=${intel.suggestions?.length || 0} ai=${ai.provider || 'fallback'}`
+    );
     return payload;
   } finally {
     trendsIntelRefreshRunning = false;
   }
 };
 
-const runDailyTrendsIntel = async (reason = 'scheduled') => {
-  try {
-    console.log(`[trends-intel] run (${reason})`);
-    await buildTrendsIntelPayload({ force: true });
-  } catch (err) {
-    console.error(`[trends-intel] run failed (${reason}):`, err.message);
-  }
-};
-
-// GET /api/trends/intel — cache do dia (gera se faltar)
+// GET /api/trends/intel — cache do dia; gera só se faltar (1ª abertura do dia)
+// ?force=1 regenera (admin/debug); UI normal não usa force.
 app.get('/api/trends/intel', async (req, res) => {
   try {
-    const force = String(req.query.refresh || '') === '1';
+    const force = String(req.query.force || req.query.refresh || '') === '1';
     const payload = await buildTrendsIntelPayload({ force });
     res.json(payload);
   } catch (err) {
@@ -11911,10 +13648,13 @@ app.get('/api/trends/intel', async (req, res) => {
   }
 });
 
-// POST /api/trends/intel/refresh — força nova coleta + IA
+// POST /api/trends/intel/refresh — por padrão devolve cache do dia (não re-consulta pytrends).
+// Body/query force=1 para regenerar de verdade.
 app.post('/api/trends/intel/refresh', async (req, res) => {
   try {
-    const payload = await buildTrendsIntelPayload({ force: true });
+    const force = String(req.query.force || req.body?.force || '') === '1'
+      || req.body?.force === true;
+    const payload = await buildTrendsIntelPayload({ force });
     res.json(payload);
   } catch (err) {
     console.error('[trends-intel] refresh error:', err);
@@ -13203,9 +14943,40 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Buscas de editais ainda ativas (sem watchlist, < 7 dias): recoleta diária mantendo o acervo.
+  cron.schedule('20 8 * * *', async () => {
+    if (!dataLayerReady) {
+      console.log('[pncp-search-jobs] daily refresh adiado: camada de dados ainda não inicializada');
+      return;
+    }
+    try {
+      const result = await runDailyPncpSearchJobRefresh({ limit: 10 });
+      console.log('[pncp-search-jobs] daily refresh ok:', result);
+    } catch (error) {
+      console.error('[pncp-search-jobs] daily refresh error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Contratos/atas publicados no PNCP: roda antes do compras sync (07:30) e do
+  // matcher de editais (08:00) para a aba Contratos/Resultados amanhecer fresca.
+  cron.schedule('15 7 * * *', async () => {
+    if (!dataLayerReady) {
+      console.log('[contratos-sync] adiado: camada de dados ainda não inicializada');
+      return;
+    }
+    try {
+      const result = await runPncpContratosAtasSync();
+      console.log('[contratos-sync] daily ok:', JSON.stringify(result));
+    } catch (error) {
+      console.error('[contratos-sync] daily error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   cron.schedule('*/5 * * * *', async () => {
     try {
       await resumePausedPncpSearchJobs();
+      const backfill = await runPncpJobValueBackfill();
+      if (backfill.updated > 0) console.log('[pncp-value-backfill] updated:', backfill);
       const result = await processWatchlistNotifications();
       if (result.processed > 0) console.log('[watchlist-notifications] processed:', result);
     } catch (error) {
