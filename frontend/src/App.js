@@ -14360,7 +14360,7 @@ function App() {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <label className={`${subtle} mb-1.5 block`} htmlFor="disparo-period">Período de envio</label>
-                        <select id="disparo-period" value={disparoConfig.sendPeriod} onChange={(e) => setDisparoConfig(c => ({ ...c, sendPeriod: e.target.value }))} className={`${select} w-full`}>
+                        <select id="disparo-period" value={disparoConfig.sendPeriod} onChange={(e) => setDisparoConfig(c => ({ ...c, sendPeriod: e.target.value }))} className={`${select} filter-select`}>
                           <option value="integral">Integral (24h)</option>
                           <option value="comercial">Comercial (8h–18h)</option>
                           <option value="tarde">Tarde (12h–18h)</option>
@@ -16334,7 +16334,7 @@ function App() {
                           <div>
                             <label className="block text-xs font-medium text-muted mb-1.5">Estágio no Chatwoot</label>
                             <select
-                              className={`${select} w-full`}
+                              className={`${select} filter-select`}
                               value={rfbImportDialogStage}
                               onChange={e => setRfbImportDialogStage(e.target.value)}
                             >
