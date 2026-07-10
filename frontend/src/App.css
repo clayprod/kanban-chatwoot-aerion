@@ -592,6 +592,17 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Board / filter selects: fill grid cells, never force horizontal overflow. */
+.board-filter-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* Keep long option labels from expanding the control past its cell. */
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 767px) {
   .kanban-group-label {
     left: 10px;
@@ -606,5 +617,11 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 
   .funnel-text {
     white-space: normal;
+  }
+
+  .board-filter-select {
+    font-size: 12px;
+    padding-left: 0.625rem;
+    padding-right: 1.5rem;
   }
 }

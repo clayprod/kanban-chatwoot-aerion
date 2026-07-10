@@ -55,7 +55,7 @@ export const input =
   'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 
 export const select =
-  'h-9 rounded-[11px] border border-line bg-bg2 px-3 text-sm text-ink transition ' +
+  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 px-3 text-sm text-ink transition ' +
   'dark:bg-[#0e1220] dark:text-[#eef1f8] dark:border-[#232c40] ' +
   'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 

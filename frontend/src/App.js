@@ -9857,8 +9857,8 @@ function App() {
           )}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <header className="shrink-0 px-3 sm:px-4 md:px-6 lg:px-8">
-              <div className={`z-header flex min-h-14 sm:min-h-16 items-center justify-between gap-2 sm:gap-3 border-b border-line bg-bg/80 backdrop-blur-[14px] overflow-visible py-2 ${globalSearchOpen ? 'z-overlay' : ''}`}>
+            <header className="shrink-0 min-w-0 px-3 sm:px-4 md:px-6 lg:px-8">
+              <div className={`z-header flex min-h-14 sm:min-h-16 min-w-0 items-center justify-between gap-2 sm:gap-3 border-b border-line bg-bg/80 backdrop-blur-[14px] overflow-visible py-2 ${globalSearchOpen || showNotifications ? 'z-overlay' : ''}`}>
                 <div className="min-w-0 flex items-center gap-2 sm:gap-3">
                   <button
                     type="button"
@@ -10135,116 +10135,122 @@ function App() {
               </div>
 
               {activeView === 'Board' && (
-                <div className="mt-4 sm:mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 sm:gap-4">
-                  <div className="relative w-full md:max-w-md min-w-0">
-                    <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-muted">
-                      <MagnifyingGlassIcon className="h-4 w-4" />
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="Buscar empresas, contatos, tags, CNPJ…"
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (!searchQuery.trim() || boardSearchMatches.length === 0) return;
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          goToBoardSearchMatch(event.shiftKey ? -1 : 1);
-                        } else if (event.key === 'F3') {
-                          event.preventDefault();
-                          goToBoardSearchMatch(event.shiftKey ? -1 : 1);
-                        }
-                      }}
-                      className={`${input} w-full pl-9 ${searchQuery.trim() ? 'pr-[9.5rem]' : 'pr-3'}`}
-                      aria-label="Buscar no funil"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    {searchQuery.trim() && (
-                      <div className="absolute right-1 top-1/2 z-[1] flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-bg2/95 pl-1 dark:bg-[#0e1220]/95">
-                        <span className="min-w-[2.25rem] px-1 text-center font-mono text-[11px] tabular-nums text-muted" aria-live="polite">
-                          {boardSearchMatches.length === 0
-                            ? '0'
-                            : `${Math.min(boardSearchFocusIndex, boardSearchMatches.length - 1) + 1}/${boardSearchMatches.length}`}
-                        </span>
-                        <button
-                          type="button"
-                          className={`${iconBtn} h-7 w-7 shrink-0`}
-                          disabled={boardSearchMatches.length === 0}
-                          onClick={() => goToBoardSearchMatch(-1)}
-                          aria-label="Resultado anterior"
-                          title="Anterior (Shift+Enter)"
-                        >
-                          <ChevronLeftIcon className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          className={`${iconBtn} h-7 w-7 shrink-0`}
-                          disabled={boardSearchMatches.length === 0}
-                          onClick={() => goToBoardSearchMatch(1)}
-                          aria-label="Próximo resultado"
-                          title="Próximo (Enter)"
-                        >
-                          <ChevronRightIcon className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          className={`${iconBtn} h-7 w-7 shrink-0`}
-                          onClick={() => {
-                            setSearchQuery('');
-                            setFocusedSearchContactId(null);
-                            setBoardSearchFocusIndex(0);
-                          }}
-                          aria-label="Limpar busca"
-                          title="Limpar"
-                        >
-                          <XMarkIcon className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
-                    <select
-                      value={priorityFilter}
-                      onChange={(event) => setPriorityFilter(event.target.value)}
-                      className={`${select} min-w-0 flex-1 sm:flex-none sm:min-w-[9.5rem]`}
-                    >
-                      <option value="all">Todas prioridades</option>
-                      <option value="alta">Alta</option>
-                      <option value="media">Média</option>
-                      <option value="baixa">Baixa</option>
-                      <option value="nenhuma">Nenhuma</option>
-                    </select>
-                    <select
-                      value={agentFilter}
-                      onChange={(event) => setAgentFilter(event.target.value)}
-                      className={`${select} min-w-0 flex-1 sm:flex-none sm:min-w-[9.5rem]`}
-                    >
-                      <option value="all">Todos agentes</option>
-                      {agentOptions.map(agent => (
-                        <option key={agent} value={agent}>{agent}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={labelFilter}
-                      onChange={(event) => setLabelFilter(event.target.value)}
-                      className={`${select} min-w-0 flex-1 sm:flex-none sm:min-w-[9.5rem]`}
-                    >
-                      <option value="all">Todas etiquetas</option>
-                      {labelOptions.map(label => (
-                        <option key={label} value={label}>{label}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={sortOption}
-                      onChange={(event) => setSortOption(event.target.value)}
-                      className={`${select} min-w-0 flex-1 sm:flex-none sm:min-w-[10.5rem]`}
-                    >
-                      <option value="name-asc">Nome (A-Z)</option>
-                      <option value="name-desc">Nome (Z-A)</option>
-                      <option value="opportunity-desc">Maior oportunidade</option>
-                      <option value="opportunity-asc">Menor oportunidade</option>
-                    </select>
+                <div className="mt-3 sm:mt-4 min-w-0 pb-3">
+                  <div className="grid min-w-0 grid-cols-1 gap-2.5 lg:grid-cols-12 lg:gap-3">
+                    <div className="relative min-w-0 lg:col-span-5 xl:col-span-4">
+                      <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-muted">
+                        <MagnifyingGlassIcon className="h-4 w-4" />
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Buscar empresas, contatos, tags, CNPJ…"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (!searchQuery.trim() || boardSearchMatches.length === 0) return;
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            goToBoardSearchMatch(event.shiftKey ? -1 : 1);
+                          } else if (event.key === 'F3') {
+                            event.preventDefault();
+                            goToBoardSearchMatch(event.shiftKey ? -1 : 1);
+                          }
+                        }}
+                        className={`${input} w-full min-w-0 max-w-full pl-9 ${searchQuery.trim() ? 'pr-[9.5rem]' : 'pr-3'}`}
+                        aria-label="Buscar no funil"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {searchQuery.trim() && (
+                        <div className="absolute right-1 top-1/2 z-[1] flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-bg2/95 pl-1 dark:bg-[#0e1220]/95">
+                          <span className="min-w-[2.25rem] px-1 text-center font-mono text-[11px] tabular-nums text-muted" aria-live="polite">
+                            {boardSearchMatches.length === 0
+                              ? '0'
+                              : `${Math.min(boardSearchFocusIndex, boardSearchMatches.length - 1) + 1}/${boardSearchMatches.length}`}
+                          </span>
+                          <button
+                            type="button"
+                            className={`${iconBtn} h-7 w-7 shrink-0`}
+                            disabled={boardSearchMatches.length === 0}
+                            onClick={() => goToBoardSearchMatch(-1)}
+                            aria-label="Resultado anterior"
+                            title="Anterior (Shift+Enter)"
+                          >
+                            <ChevronLeftIcon className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            className={`${iconBtn} h-7 w-7 shrink-0`}
+                            disabled={boardSearchMatches.length === 0}
+                            onClick={() => goToBoardSearchMatch(1)}
+                            aria-label="Próximo resultado"
+                            title="Próximo (Enter)"
+                          >
+                            <ChevronRightIcon className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            className={`${iconBtn} h-7 w-7 shrink-0`}
+                            onClick={() => {
+                              setSearchQuery('');
+                              setFocusedSearchContactId(null);
+                              setBoardSearchFocusIndex(0);
+                            }}
+                            aria-label="Limpar busca"
+                            title="Limpar"
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-2 lg:col-span-7 lg:grid-cols-4 xl:col-span-8">
+                      <select
+                        value={priorityFilter}
+                        onChange={(event) => setPriorityFilter(event.target.value)}
+                        className={`${select} board-filter-select w-full min-w-0 max-w-full`}
+                        aria-label="Filtrar por prioridade"
+                      >
+                        <option value="all">Todas prioridades</option>
+                        <option value="alta">Alta</option>
+                        <option value="media">Média</option>
+                        <option value="baixa">Baixa</option>
+                        <option value="nenhuma">Nenhuma</option>
+                      </select>
+                      <select
+                        value={agentFilter}
+                        onChange={(event) => setAgentFilter(event.target.value)}
+                        className={`${select} board-filter-select w-full min-w-0 max-w-full`}
+                        aria-label="Filtrar por agente"
+                      >
+                        <option value="all">Todos agentes</option>
+                        {agentOptions.map(agent => (
+                          <option key={agent} value={agent}>{agent}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={labelFilter}
+                        onChange={(event) => setLabelFilter(event.target.value)}
+                        className={`${select} board-filter-select w-full min-w-0 max-w-full`}
+                        aria-label="Filtrar por etiqueta"
+                      >
+                        <option value="all">Todas etiquetas</option>
+                        {labelOptions.map(label => (
+                          <option key={label} value={label}>{label}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={sortOption}
+                        onChange={(event) => setSortOption(event.target.value)}
+                        className={`${select} board-filter-select w-full min-w-0 max-w-full`}
+                        aria-label="Ordenar pipeline"
+                      >
+                        <option value="name-asc">Nome (A-Z)</option>
+                        <option value="name-desc">Nome (Z-A)</option>
+                        <option value="opportunity-desc">Maior oportunidade</option>
+                        <option value="opportunity-asc">Menor oportunidade</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
               )}
@@ -10351,8 +10357,8 @@ function App() {
           >
           {activeView === 'Board' && (
             <>
-              <div className="mt-4 sm:mt-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 sm:gap-4">
-                <div className="flex min-w-0 flex-wrap items-center gap-2.5 sm:gap-3">
+              <div className="mt-2 sm:mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
                   <div className="inline-flex max-w-full items-center gap-1 rounded-xl border border-line bg-bg2 p-1">
                     <button
                       type="button"
@@ -10375,7 +10381,7 @@ function App() {
                   const boardContacts = filteredContacts.filter(c => activeColumns.includes(c.custom_attributes?.Funil_Vendas));
                   const val = boardContacts.reduce((s, c) => s + (parseCurrency(c.custom_attributes?.Valor_Oportunidade) || 0), 0);
                   return (
-                    <span className="inline-flex items-center gap-2 self-start rounded-xl bg-amber/[0.16] px-3.5 py-2 font-mono text-sm font-semibold text-amber">
+                    <span className="inline-flex max-w-full shrink-0 items-center gap-2 rounded-xl bg-amber/[0.16] px-3 py-2 font-mono text-xs sm:text-sm font-semibold text-amber">
                       Pipeline {formatCompactCurrency(val) || 'R$ 0'}
                     </span>
                   );
