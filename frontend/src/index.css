@@ -3,7 +3,59 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
   body {
     @apply m-0 bg-surface text-ink antialiased;
+  }
+
+  /*
+   * Global scrollbars — kill Windows classic chrome (white track + arrow buttons)
+   * and use a thin dark thumb that matches Aerion Command.
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3a4663 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #3a4663;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #5a6a8a;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  /* Select dropdown panels (where supported) stay on dark chrome */
+  select,
+  option {
+    color-scheme: dark;
   }
 }

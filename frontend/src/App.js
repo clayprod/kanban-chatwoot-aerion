@@ -11481,7 +11481,7 @@ function App() {
                                     )}
                                   </div>
                                 </div>
-                                <div className="max-h-72 overflow-auto rounded-lg border border-line">
+                                <div className="max-h-72 overflow-auto rounded-lg border border-line scrollbar-theme">
                                   <table className="w-full text-left text-[11px]">
                                     <thead className="sticky top-0 bg-bg2 text-muted">
                                       <tr>
