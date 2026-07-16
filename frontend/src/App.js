@@ -175,7 +175,7 @@ const licitacaoColumns = [
   '14. Não Atendido',
   '15. Descartado',
 ];
-// Groupings for the Licitações board group-bar (Lei 14.133 phases → 4 macro stages).
+// Macro phases for Licitações board column tags (Lei 14.133).
 const LIC_STAGE_GROUPS = [
   { id: 'inteligencia', label: 'Inteligência', color: '#38d6e6', range: [1, 6] },
   { id: 'disputa',      label: 'Disputa',      color: '#7c5cff', range: [7, 9] },
@@ -183,6 +183,27 @@ const LIC_STAGE_GROUPS = [
   { id: 'encerrado',    label: 'Encerrado',    color: '#7b87a3', range: [13, 15] },
 ];
 const licGroupForStageNum = (n) => LIC_STAGE_GROUPS.find(g => n >= g.range[0] && n <= g.range[1]);
+
+/** Compact stage-group pill for kanban column headers (replaces the old top group-bar). */
+const StageGroupTag = ({ label, color, className = '' }) => {
+  if (!label) return null;
+  const hex = color || '#7b87a3';
+  return (
+    <span
+      title={label}
+      aria-label={`Etapa: ${label}`}
+      className={`kanban-stage-group-tag inline-flex max-w-[5.75rem] shrink-0 items-center truncate rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] leading-none ${className}`}
+      style={{
+        color: hex,
+        background: `${hex}1f`,
+        borderColor: `${hex}55`,
+      }}
+    >
+      {label}
+    </span>
+  );
+};
+
 const PNCP_SCORE_HIGH_THRESHOLD = 68;
 const PNCP_SCORE_MEDIUM_THRESHOLD = 38;
 
@@ -3576,6 +3597,7 @@ const KanbanColumn = memo(function KanbanColumn({
   const enableSortable = !isBoardDragging || isDragActiveColumn;
   const focusIdStr = focusedSearchContactId != null ? String(focusedSearchContactId) : '';
   const columnHasSearchFocus = Boolean(focusIdStr && itemIds.includes(focusIdStr));
+  const stageGroup = groupForStageNum(getStageNumber(title));
 
   const renderItem = useCallback(
     (index) => {
@@ -3603,35 +3625,40 @@ const KanbanColumn = memo(function KanbanColumn({
       data-column-title={title}
       className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''}`}
     >
-      <div className="flex items-start justify-between gap-2 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className={`h-2 w-2 rounded-full ${dotClass}`} />
-            <h3 className="text-sm font-semibold text-ink">{title}</h3>
-            <span className="text-xs px-2 py-0.5 rounded-full border border-border bg-card text-muted">
+      <div className="flex flex-col gap-1.5 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+            <h3 className="min-w-0 truncate text-sm font-semibold text-ink" title={title}>{title}</h3>
+            <span className="shrink-0 text-xs px-2 py-0.5 rounded-full border border-border bg-card text-muted">
               {contacts.length}
             </span>
           </div>
-          {formattedTotal && (
-            <span className="font-mono text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
-          )}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {stageGroup ? (
+              <StageGroupTag label={stageGroup.label} color={stageGroup.color} />
+            ) : null}
+            {newContactUrl ? (
+              <button
+                type="button"
+                className="h-7 w-7 flex shrink-0 items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  window.open(newContactUrl, '_blank', 'noreferrer');
+                }}
+                aria-label="Adicionar contato"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+            ) : null}
+          </div>
         </div>
-        {newContactUrl ? (
-          <button
-            type="button"
-            className="h-7 w-7 flex shrink-0 items-center justify-center rounded-lg text-muted hover:text-ink hover:bg-card"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              window.open(newContactUrl, '_blank', 'noreferrer');
-            }}
-            aria-label="Adicionar contato"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-        ) : null}
+        {formattedTotal && (
+          <span className="font-mono text-sm font-bold text-ink dark:text-[#e5e7eb]">{formattedTotal}</span>
+        )}
       </div>
       <VirtualizedColumnList
         itemIds={itemIds}
@@ -3863,6 +3890,7 @@ const LicitacaoColumn = memo(function LicitacaoColumn({
   const focusIdStr = focusedSearchOpportunityId != null ? String(focusedSearchOpportunityId) : '';
   const focusItemId = focusIdStr ? `opp:${focusIdStr}` : null;
   const columnHasSearchFocus = Boolean(focusItemId && itemIds.includes(focusItemId));
+  const stageGroup = licGroupForStageNum(getStageNumber(title));
 
   const renderItem = useCallback(
     (index) => {
@@ -3898,15 +3926,18 @@ const LicitacaoColumn = memo(function LicitacaoColumn({
       data-column-title={title}
       className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''}`}
     >
-      <div className="flex items-start justify-between gap-2 pb-2 border-b border-line bg-bg2 sticky top-0 z-10">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-secondary" />
-            <h3 className="text-sm font-semibold text-ink">{title}</h3>
-            <span className="font-mono text-xs px-2 py-0.5 rounded-full border border-line bg-surf text-muted">{opportunities.length}</span>
+      <div className="flex flex-col gap-1.5 pb-2 border-b border-line bg-bg2 sticky top-0 z-10">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-secondary" />
+            <h3 className="min-w-0 truncate text-sm font-semibold text-ink" title={title}>{title}</h3>
+            <span className="shrink-0 font-mono text-xs px-2 py-0.5 rounded-full border border-line bg-surf text-muted">{opportunities.length}</span>
           </div>
-          <span className="font-mono text-xs font-semibold text-ink">{formatCurrency(totalValue) || 'R$ 0,00'}</span>
+          {stageGroup ? (
+            <StageGroupTag label={stageGroup.label} color={stageGroup.color} />
+          ) : null}
         </div>
+        <span className="font-mono text-xs font-semibold text-ink">{formatCurrency(totalValue) || 'R$ 0,00'}</span>
       </div>
       <VirtualizedColumnList
         itemIds={itemIds}
@@ -6762,7 +6793,6 @@ function App() {
   const [boardScrollMetrics, setBoardScrollMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
   const boardScrollRef = useRef(null);
   const boardScrollbarRef = useRef(null);
-  const groupBarRef = useRef(null);
   const isSyncingRef = useRef(false);
   const dragScrollRafRef = useRef(null);
   const dragPointerXRef = useRef(null);
@@ -11713,9 +11743,6 @@ function App() {
     }
     isSyncingRef.current = true;
     boardScrollRef.current.scrollLeft = boardScrollbarRef.current.scrollLeft;
-    if (groupBarRef.current) {
-      groupBarRef.current.scrollLeft = boardScrollbarRef.current.scrollLeft;
-    }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
@@ -11728,9 +11755,6 @@ function App() {
     isSyncingRef.current = true;
     if (boardScrollbarRef.current) {
       boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
-    }
-    if (groupBarRef.current) {
-      groupBarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
     }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
@@ -11750,9 +11774,6 @@ function App() {
     isSyncingRef.current = true;
     if (boardScrollbarRef.current) {
       boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
-    }
-    if (groupBarRef.current) {
-      groupBarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
     }
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
@@ -13107,37 +13128,8 @@ function App() {
                 })()}
               </div>
 
-          <div ref={groupBarRef} className="kanban-group-bar mt-4 mb-2">
-            <div className="kanban-group-bar-track">
-              {(() => {
-                const spans = [];
-                activeColumns.forEach((column) => {
-                  const g = groupForStageNum(getStageNumber(column)) || { id: 'outros', label: 'Outros', color: '#6B7280' };
-                  const last = spans[spans.length - 1];
-                  if (last && last.id === g.id) {
-                    last.colCount += 1;
-                  } else {
-                    spans.push({ id: g.id, label: g.label, color: g.color, colCount: 1 });
-                  }
-                });
-                return spans.map((s) => (
-                  <div
-                    key={s.id}
-                    className="kanban-group-span"
-                    style={{
-                      width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * var(--kanban-col-gap))`,
-                      background: `${s.color}1f`,
-                      borderColor: `${s.color}55`,
-                    }}
-                  >
-                    <span className="kanban-group-label" style={{ color: s.color }}>{s.label}</span>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
           {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-            <div className="mt-1 flex items-center gap-2">
+            <div className="mt-3 flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => scrollBoardBy(-1)}
@@ -15511,35 +15503,8 @@ function App() {
                 </span>
               </div>
 
-              <div ref={groupBarRef} className="kanban-group-bar mt-4 mb-2">
-                <div className="kanban-group-bar-track">
-                  {(() => {
-                    const spans = [];
-                    licitacaoColumns.forEach((column) => {
-                      const g = licGroupForStageNum(getStageNumber(column)) || { id: 'outros', label: 'Outros', color: '#7b87a3' };
-                      const last = spans[spans.length - 1];
-                      if (last && last.id === g.id) last.colCount += 1;
-                      else spans.push({ id: g.id, label: g.label, color: g.color, colCount: 1 });
-                    });
-                    return spans.map((s) => (
-                      <div
-                        key={s.id}
-                        className="kanban-group-span"
-                        style={{
-                          width: `calc(${s.colCount} * var(--kanban-col-w) + ${s.colCount - 1} * var(--kanban-col-gap))`,
-                          background: `${s.color}1f`,
-                          borderColor: `${s.color}55`,
-                        }}
-                      >
-                        <span className="kanban-group-label" style={{ color: s.color }}>{s.label}</span>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-
               {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-3 flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => scrollBoardBy(-1)}

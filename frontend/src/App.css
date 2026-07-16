@@ -197,6 +197,66 @@ input[type="search"]::-ms-clear {
   height: 0;
 }
 
+/* Two accessible range inputs share one track, one handle for each bound. */
+.dual-range__input {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  outline: none;
+}
+
+.dual-range__input::-webkit-slider-runnable-track {
+  height: 4px;
+  border: 0;
+  background: transparent;
+}
+
+.dual-range__input::-moz-range-track {
+  height: 4px;
+  border: 0;
+  background: transparent;
+}
+
+.dual-range__input::-webkit-slider-thumb {
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  appearance: none;
+  cursor: grab;
+  border: 2px solid #c9c0ff;
+  border-radius: 999px;
+  background: #7c5cff;
+  box-shadow: 0 0 0 3px #0e1220;
+  margin-top: -6px;
+}
+
+.dual-range__input::-moz-range-thumb {
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  cursor: grab;
+  border: 2px solid #c9c0ff;
+  border-radius: 999px;
+  background: #7c5cff;
+  box-shadow: 0 0 0 3px #0e1220;
+}
+
+.dual-range__input:active::-webkit-slider-thumb,
+.dual-range__input:active::-moz-range-thumb {
+  cursor: grabbing;
+}
+
+.dual-range__input:focus-visible::-webkit-slider-thumb,
+.dual-range__input:focus-visible::-moz-range-thumb {
+  outline: 2px solid #9d86ff;
+  outline-offset: 3px;
+}
+
 .scroll-edge-btn {
   color: #8b95ad;
 }
@@ -502,40 +562,7 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   }
 }
 
-.kanban-group-bar {
-  overflow-x: hidden;
-}
-
-.kanban-group-bar-track {
-  display: flex;
-  gap: var(--kanban-col-gap);
-  width: max-content;
-}
-
-.kanban-group-span {
-  flex-shrink: 0;
-  height: 32px;
-  border-radius: 10px;
-  border-width: 1px;
-  border-style: solid;
-  display: flex;
-  align-items: center;
-  position: relative;
-  overflow: hidden;
-}
-
-.kanban-group-label {
-  position: sticky;
-  left: 16px;
-  right: 16px;
-  display: block;
-  width: 100%;
-  text-align: center;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  padding: 0 16px;
+.kanban-stage-group-tag {
   white-space: nowrap;
 }
 
@@ -747,15 +774,10 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
 }
 
 @media (max-width: 767px) {
-  .kanban-group-label {
-    left: 10px;
-    right: 10px;
-    padding: 0 10px;
-    font-size: 0.6875rem;
-  }
-
-  .kanban-group-span {
-    height: 30px;
+  .kanban-stage-group-tag {
+    max-width: 4.5rem;
+    font-size: 0.5625rem;
+    letter-spacing: 0.03em;
   }
 
   .funnel-text {
