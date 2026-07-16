@@ -1464,13 +1464,47 @@ const PaceDetailsPanel = ({
   );
 };
 
-/** Card compacto: meta × feito × faltam. Escopo: time/agente · métrica Qtd|R$. */
+/** Períodos do ritmo: default dia; metas escalam a partir do diário/mensal do blueprint. */
+const PACE_PERIODS = [
+  { value: 'day', label: 'Hoje', short: 'hoje', activity: 'Atividade de hoje', valueHeadline: 'Receita (fechamento) no dia', rowHint: 'hoje' },
+  { value: 'week', label: 'Semana', short: 'semana', activity: 'Atividade da semana', valueHeadline: 'Receita (fechamento) na semana', rowHint: 'semana' },
+  { value: 'month', label: 'Mês', short: 'mês', activity: 'Atividade do mês', valueHeadline: 'Receita (fechamento) no mês', rowHint: 'mês' },
+  { value: 'quarter', label: 'Trimestre', short: 'trimestre', activity: 'Atividade do trimestre', valueHeadline: 'Receita (fechamento) no trimestre', rowHint: 'trim.' },
+  { value: 'year', label: 'Ano', short: 'ano', activity: 'Atividade do ano', valueHeadline: 'Receita (fechamento) no ano', rowHint: 'ano' },
+];
+
+const getPacePeriodMeta = (period) => (
+  PACE_PERIODS.find((p) => p.value === period) || PACE_PERIODS[0]
+);
+
+/** Multiplicador de meta em relação ao mês (R$) ou ao dia (qtd). */
+const pacePeriodScale = (period, workingDays = 20) => {
+  const wd = Math.max(1, workingDays);
+  const workDaysWeek = 5;
+  switch (period) {
+    case 'week':
+      return { countFromDay: workDaysWeek, valueFromMonth: workDaysWeek / wd };
+    case 'month':
+      return { countFromDay: wd, valueFromMonth: 1 };
+    case 'quarter':
+      return { countFromDay: wd * 3, valueFromMonth: 3 };
+    case 'year':
+      return { countFromDay: wd * 12, valueFromMonth: 12 };
+    case 'day':
+    default:
+      return { countFromDay: 1, valueFromMonth: 1 / wd };
+  }
+};
+
+/** Card compacto: meta × feito × faltam. Escopo · período · métrica Qtd|R$. */
 const TeamPaceCard = ({
   stages,
   pace,
   agents = [],
   agentId = null,
   onAgentChange,
+  period = 'day',
+  onPeriodChange,
   metric = 'count',
   onMetricChange,
   onOpenDetails,
@@ -1479,11 +1513,13 @@ const TeamPaceCard = ({
 }) => {
   const loaded = pace != null;
   const day = pace?.day || {};
-  const month = pace?.month || {};
+  const range = pace?.range || (period === 'month' ? pace?.month : pace?.day) || {};
   const dayValue = day.value || {};
-  const monthValue = month.value || {};
+  const rangeValue = range.value || {};
   const workingDays = processBlueprint.revenueEngine.workingDays || 20;
   const isValue = metric === 'value';
+  const periodMeta = getPacePeriodMeta(period);
+  const scales = pacePeriodScale(period, workingDays);
   // Meta individual = time / nº vendedores (lista já vem só com is_seller, identidades unificadas).
   // Fallback do blueprint só se ainda não houver vendedores marcados.
   const headcount = Math.max(
@@ -1506,29 +1542,34 @@ const TeamPaceCard = ({
       const teamCountDay = step.daily != null
         ? step.daily
         : Math.max(1, Math.round((step.target || step.volume || 0) / workingDays));
+      const teamCountMonth = step.target || step.volume || teamCountDay * workingDays;
 
       let target;
       let done = null;
       let doneToday = null;
-      let periodLabel;
+      let periodLabel = periodMeta.short;
 
       if (isValue) {
-        // Meta do MÊS (funil reverso da receita). Feito = acumulado do mês.
+        // Funil reverso da receita mensal, escalado ao período (dia/sem/mês/trim/ano).
         const monthTarget = valueFunnel.month[step.key] || 0;
-        target = Math.max(0, Math.round(monthTarget * personScale));
-        periodLabel = 'mês';
+        target = Math.max(0, Math.round(monthTarget * scales.valueFromMonth * personScale));
         if (loaded) {
-          done = Number(monthValue[step.key]) || 0;
+          done = Number(rangeValue[step.key]) || 0;
           doneToday = Number(dayValue[step.key]) || 0;
         }
       } else {
-        target = Math.max(1, Math.round(teamCountDay * personScale));
-        periodLabel = 'dia';
+        // Preferir escala do diário; no mês/trim/ano usa meta mensal do funil (mais estável).
+        if (period === 'month' || period === 'quarter' || period === 'year') {
+          const months = period === 'year' ? 12 : period === 'quarter' ? 3 : 1;
+          target = Math.max(1, Math.round(teamCountMonth * months * personScale));
+        } else {
+          target = Math.max(1, Math.round(teamCountDay * scales.countFromDay * personScale));
+        }
         if (loaded) {
           if (step.key === 'contatos') {
-            done = Number(day.contatos?.total) || 0;
+            done = Number(range.contatos?.total) || 0;
           } else {
-            done = Number(day[step.key]) || 0;
+            done = Number(range[step.key]) || 0;
           }
         }
       }
@@ -1541,7 +1582,7 @@ const TeamPaceCard = ({
   // Em R$: o “total” é a meta de fechamento/receita — não a soma das etapas
   const closeRow = rows.find((r) => r.step.key === 'fechamento');
   const totalTarget = isValue
-    ? (closeRow?.target ?? valueFunnel.revenueMonth * personScale)
+    ? (closeRow?.target ?? Math.round(valueFunnel.revenueMonth * scales.valueFromMonth * personScale))
     : rows.reduce((s, r) => s + r.target, 0);
   const totalDone = isValue
     ? (loaded ? (closeRow?.done ?? 0) : null)
@@ -1560,13 +1601,16 @@ const TeamPaceCard = ({
     return isValue ? `−${formatCompactCurrency(n) || n}` : `−${n}`;
   };
   const ratePct = (r) => `${Math.round(r * 100)}%`;
+  const metricSubtitle = isValue
+    ? `R$ · ${periodMeta.short} · funil reverso`
+    : `Qtd · ${periodMeta.short}`;
 
   return (
     <ChartPanel
       className={`p-0 ${className}`}
       bodyClassName="!px-5 !pr-11 !pb-10"
       title="Ritmo do time"
-      subtitle={`${isValue ? 'R$ no mês · funil reverso' : 'Qtd hoje'} · ${scopeLabel}`}
+      subtitle={`${metricSubtitle} · ${scopeLabel}`}
       actions={(
         <button
           type="button"
@@ -1579,8 +1623,9 @@ const TeamPaceCard = ({
         </button>
       )}
     >
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0 flex-1">
+      {/* Linha 1: escopo full-width. Linha 2: período + Qtd/R$ — evita espremer o card. */}
+      <div className="mb-3 space-y-2">
+        <div className="min-w-0">
           <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Escopo</label>
           <select
             value={agentId == null || agentId === '' ? '' : String(agentId)}
@@ -1594,14 +1639,34 @@ const TeamPaceCard = ({
             ))}
           </select>
         </div>
-        {onMetricChange && (
-          <MetricToggle value={metric} onChange={onMetricChange} />
-        )}
+        <div className="flex flex-wrap items-end gap-2">
+          {onPeriodChange && (
+            <div className="min-w-0 flex-1">
+              <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Período</label>
+              <select
+                value={period}
+                onChange={(e) => onPeriodChange(e.target.value)}
+                className={`${select} h-9 w-full min-w-[7.5rem] text-xs`}
+                aria-label="Período do ritmo"
+              >
+                {PACE_PERIODS.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {onMetricChange && (
+            <div className="shrink-0">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Métrica</span>
+              <MetricToggle value={metric} onChange={onMetricChange} />
+            </div>
+          )}
+        </div>
       </div>
 
       {isValue && (
         <p className="mb-3 text-[11px] leading-snug text-muted">
-          Fechamento = meta de faturamento do mês.
+          Fechamento = meta de faturamento escalada ao {periodMeta.short}.
           Acima: divide pelas taxas ({ratePct(valueFunnel.rates.propToClose)} prop→venda, {ratePct(valueFunnel.rates.oppToProp)} opp→prop).
         </p>
       )}
@@ -1609,7 +1674,7 @@ const TeamPaceCard = ({
       <div className="mb-3 flex items-end justify-between gap-2">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-wide text-muted">
-            {isValue ? 'Receita (fechamento) no mês' : 'Atividade de hoje'}
+            {isValue ? periodMeta.valueHeadline : periodMeta.activity}
           </p>
           <p className="mt-0.5 font-mono text-[22px] font-bold leading-none text-ink dark:text-white">
             {fmt(totalDone)}
@@ -1626,7 +1691,7 @@ const TeamPaceCard = ({
 
       <div className="mb-1.5 grid grid-cols-[1fr_auto] gap-x-2 px-2 font-mono text-[10px] uppercase tracking-wide text-muted">
         <span>Etapa</span>
-        <span className="text-right">{isValue ? 'mês · faltam' : 'hoje: feito / meta · faltam'}</span>
+        <span className="text-right">{periodMeta.rowHint}: feito / meta · faltam</span>
       </div>
 
       <div className="space-y-1.5">
@@ -1659,7 +1724,7 @@ const TeamPaceCard = ({
                 <div className="min-w-0">
                   <span className="block text-[9px] uppercase tracking-wide text-muted">Feito</span>
                   <span className="block truncate text-[11px] font-bold text-ink dark:text-white">{fmt(done)}</span>
-                  {doneToday != null && (
+                  {period !== 'day' && doneToday != null && (
                     <span className="block truncate text-[9px] text-muted">Hoje {fmt(doneToday)}</span>
                   )}
                 </div>
@@ -4123,6 +4188,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   const [saveName, setSaveName] = useState('');
   const [saveWhatsappEnabled, setSaveWhatsappEnabled] = useState(false);
   const [saveWhatsappNumber, setSaveWhatsappNumber] = useState('');
+  const [saveWhatsappScoreBand, setSaveWhatsappScoreBand] = useState('all');
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveNotice, setSaveNotice] = useState(null);
   const [selecionados, setSelecionados] = useState({});
@@ -4284,8 +4350,9 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       setSaveNotice({ tone: 'error', message: 'Adicione ao menos um termo antes de salvar.' });
       return;
     }
-    if (saveWhatsappEnabled && !String(saveWhatsappNumber || '').replace(/\D/g, '')) {
-      setSaveNotice({ tone: 'error', message: 'Informe o número do WhatsApp com DDD.' });
+    const waPayload = buildWhatsappPayload(saveWhatsappEnabled, saveWhatsappNumber, saveWhatsappScoreBand);
+    if (saveWhatsappEnabled && !waPayload.whatsapp_numbers.length) {
+      setSaveNotice({ tone: 'error', message: 'Informe ao menos um WhatsApp válido com DDD.' });
       return;
     }
     setSaveBusy(true);
@@ -4297,13 +4364,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
         usar_ia: usarIa,
         valor_minimo: filtros.valor_min ? Number(filtros.valor_min) : null,
         valor_maximo: filtros.valor_max ? Number(filtros.valor_max) : null,
-        whatsapp_enabled: saveWhatsappEnabled,
-        whatsapp_number: saveWhatsappNumber || null,
+        ...waPayload,
       });
       setSaveDialog(false);
       setSaveName('');
       setSaveWhatsappEnabled(false);
       setSaveWhatsappNumber('');
+      setSaveWhatsappScoreBand('all');
       setSaveNotice({
         tone: 'success',
         message: `Busca salva como assinatura (${watchlistTerms.length} termo${watchlistTerms.length === 1 ? '' : 's'}).${saveWhatsappEnabled ? ' Alertas WhatsApp ligados para novidades.' : ' Você pode ligar o WhatsApp no card da assinatura.'}`,
@@ -4868,12 +4935,29 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               </span>
             </label>
             {saveWhatsappEnabled && (
-              <input
-                className={`${input} w-full`}
-                placeholder="WhatsApp com DDD (ex: 48999999999)"
-                value={saveWhatsappNumber}
-                onChange={e => setSaveWhatsappNumber(e.target.value)}
-              />
+              <div className="space-y-3">
+                <WhatsappScoreBandPicker
+                  value={saveWhatsappScoreBand}
+                  disabled={saveBusy}
+                  onChange={(bandId) => setSaveWhatsappScoreBand(bandId)}
+                />
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-muted">
+                    Celulares que recebem o alerta
+                  </label>
+                  <textarea
+                    className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+                    rows={3}
+                    placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
+                    value={saveWhatsappNumber}
+                    onChange={e => setSaveWhatsappNumber(e.target.value)}
+                  />
+                  <WhatsappNumbersFieldHelp
+                    count={parseWhatsappNumbers(saveWhatsappNumber).length}
+                    error={saveWhatsappEnabled && !parseWhatsappNumbers(saveWhatsappNumber).length}
+                  />
+                </div>
+              </div>
             )}
             <div className="space-y-2 rounded-[12px] bg-bg2/60 p-3">
               <div className="flex items-center justify-between gap-2">
@@ -4895,7 +4979,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               <button type="button" disabled={saveBusy} onClick={() => setSaveDialog(false)} className={btnSecondary}>Cancelar</button>
               <button
                 type="button"
-                disabled={saveBusy || !watchlistTerms.length || (saveWhatsappEnabled && !String(saveWhatsappNumber || '').replace(/\D/g, ''))}
+                disabled={saveBusy || !watchlistTerms.length || (saveWhatsappEnabled && !parseWhatsappNumbers(saveWhatsappNumber).length)}
                 onClick={salvarWatchlist}
                 className={btnPrimary}
               >
@@ -4976,25 +5060,216 @@ function SignalsPaginationBar({
   );
 }
 
+/** Aceita string CSV/linhas, array ou whatsapp_numbers da API. */
+function parseWhatsappNumbers(value, extra = null) {
+  const chunks = [];
+  const push = (raw) => {
+    if (raw == null || raw === '') return;
+    if (Array.isArray(raw)) {
+      raw.forEach(push);
+      return;
+    }
+    String(raw).split(/[,;\n|]+/).forEach((part) => {
+      const trimmed = String(part || '').trim();
+      if (trimmed) chunks.push(trimmed);
+    });
+  };
+  push(value);
+  push(extra);
+  const out = [];
+  const seen = new Set();
+  for (const chunk of chunks) {
+    const digits = chunk.replace(/\D/g, '');
+    if (digits.length < 10) continue;
+    if (seen.has(digits)) continue;
+    seen.add(digits);
+    out.push(chunk.replace(/\s+/g, ' ').trim());
+  }
+  return out;
+}
+
+function formatWhatsappAlertLabel(value, numbersProp = null, minScore = null) {
+  const nums = parseWhatsappNumbers(numbersProp, value);
+  if (!nums.length) return '';
+  const base = nums.length === 1 ? nums[0] : `${nums.length} números`;
+  const band = whatsappMinScoreToBandId(minScore);
+  if (band === 'high') return `${base} · só alta`;
+  if (band === 'medium') return `${base} · média+`;
+  return base;
+}
+
+/** Faixas iguais à UI de score: vermelho <38, amarelo >=38, verde >=68. */
+const WHATSAPP_SCORE_BANDS = [
+  {
+    id: 'all',
+    minScore: 0,
+    label: 'Todas',
+    hint: 'Inclui baixa (vermelho)',
+    swatch: 'bg-status-danger',
+    activeClass: 'border-status-danger/40 bg-status-danger/10 text-status-danger',
+  },
+  {
+    id: 'medium',
+    minScore: PNCP_SCORE_MEDIUM_THRESHOLD,
+    label: 'Média+',
+    hint: `Amarelo e verde (≥ ${PNCP_SCORE_MEDIUM_THRESHOLD})`,
+    swatch: 'bg-amber-500',
+    activeClass: 'border-amber-400/50 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-700',
+  },
+  {
+    id: 'high',
+    minScore: PNCP_SCORE_HIGH_THRESHOLD,
+    label: 'Só alta',
+    hint: `Somente verde (≥ ${PNCP_SCORE_HIGH_THRESHOLD})`,
+    swatch: 'bg-status-success',
+    activeClass: 'border-status-success/40 bg-status-success/10 text-status-success',
+  },
+];
+
+function normalizeWhatsappMinScore(value, bandId = null) {
+  if (bandId) {
+    const byId = WHATSAPP_SCORE_BANDS.find((b) => b.id === bandId);
+    if (byId) return byId.minScore;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n >= PNCP_SCORE_HIGH_THRESHOLD) return PNCP_SCORE_HIGH_THRESHOLD;
+  if (n >= PNCP_SCORE_MEDIUM_THRESHOLD) return PNCP_SCORE_MEDIUM_THRESHOLD;
+  return 0;
+}
+
+function whatsappMinScoreToBandId(value) {
+  const min = normalizeWhatsappMinScore(value);
+  if (min >= PNCP_SCORE_HIGH_THRESHOLD) return 'high';
+  if (min >= PNCP_SCORE_MEDIUM_THRESHOLD) return 'medium';
+  return 'all';
+}
+
+function buildWhatsappPayload(enabled, numbersInput, minScoreOrBand = 0) {
+  const numbers = parseWhatsappNumbers(numbersInput);
+  const minScore = normalizeWhatsappMinScore(minScoreOrBand, typeof minScoreOrBand === 'string' ? minScoreOrBand : null);
+  if (!enabled || !numbers.length) {
+    return {
+      whatsapp_enabled: false,
+      whatsapp_number: null,
+      whatsapp_numbers: [],
+      whatsapp_min_score: minScore,
+      whatsapp_score_band: whatsappMinScoreToBandId(minScore),
+    };
+  }
+  return {
+    whatsapp_enabled: true,
+    whatsapp_number: numbers.join(','),
+    whatsapp_numbers: numbers,
+    whatsapp_min_score: minScore,
+    whatsapp_score_band: whatsappMinScoreToBandId(minScore),
+  };
+}
+
+function numbersToWhatsappTextarea(value, numbersProp = null) {
+  return parseWhatsappNumbers(numbersProp, value).join('\n');
+}
+
+const WHATSAPP_NUMBERS_PLACEHOLDER =
+  '11941901424\n48999998888\nou: 11 94190-1424, 48 99999-8888';
+
+function WhatsappNumbersFieldHelp({ count = 0, error = false }) {
+  return (
+    <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-muted">
+      <ul className="list-disc space-y-0.5 pl-4">
+        <li>
+          <strong className="font-semibold text-ink">DDD obrigatório</strong>
+          {' '}(ex.: <span className="font-mono text-ink/90">11</span> + celular).
+        </li>
+        <li>
+          <strong className="font-semibold text-ink">DDI 55 opcional</strong>
+          {' '}— se não colocar, o sistema assume Brasil (<span className="font-mono text-ink/90">55</span>).
+        </li>
+        <li>
+          Vários números: <strong className="font-semibold text-ink">um por linha</strong>
+          {' '}ou separados por <strong className="font-semibold text-ink">vírgula</strong>.
+        </li>
+        <li>Espaços, traços e parênteses são ignorados.</li>
+      </ul>
+      {count > 0 ? (
+        <p className="text-status-success">
+          {count} número{count === 1 ? '' : 's'} válido{count === 1 ? '' : 's'} reconhecido{count === 1 ? '' : 's'}.
+        </p>
+      ) : (
+        <p>Ex.: <span className="font-mono text-ink/80">11941901424</span> ou <span className="font-mono text-ink/80">55 11 94190-1424</span></p>
+      )}
+      {error && (
+        <p className="text-status-danger">Informe ao menos um celular válido com DDD (10 ou 11 dígitos).</p>
+      )}
+    </div>
+  );
+}
+
+function WhatsappScoreBandPicker({ value = 'all', onChange, disabled = false }) {
+  const activeId = whatsappMinScoreToBandId(
+    typeof value === 'string' && ['all', 'medium', 'high'].includes(value)
+      ? WHATSAPP_SCORE_BANDS.find((b) => b.id === value)?.minScore
+      : value
+  );
+  const active = WHATSAPP_SCORE_BANDS.find((b) => b.id === activeId) || WHATSAPP_SCORE_BANDS[0];
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-medium text-muted">Enviar WhatsApp a partir de</p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {WHATSAPP_SCORE_BANDS.map((band) => {
+          const selected = band.id === activeId;
+          return (
+            <button
+              key={band.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange?.(band.id, band.minScore)}
+              className={`rounded-[12px] border px-2 py-2 text-left transition ${
+                selected ? band.activeClass : 'border-line bg-bg2/40 text-muted hover:bg-bg2'
+              } ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+              aria-pressed={selected}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${band.swatch}`} aria-hidden />
+                <span className="text-[12px] font-semibold leading-none">{band.label}</span>
+              </span>
+              <span className="mt-1 block text-[10px] leading-snug opacity-80">{band.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className={`${subtle} mt-1.5`}>
+        Filtro só do WhatsApp — o acervo da assinatura continua com todas as faixas. Agora: <strong className="text-ink">{active.hint}</strong>.
+      </p>
+    </div>
+  );
+}
+
 /** Modal de WhatsApp para watchlists (substitui window.prompt nativo). */
 function WatchlistWhatsappDialog({
   open,
   watchlistName,
   initialNumber = '',
+  initialNumbers = null,
   initialEnabled = false,
+  initialMinScore = 0,
+  initialScoreBand = null,
   saving = false,
   onClose,
   onSave,
 }) {
   const [enabled, setEnabled] = useState(false);
-  const [number, setNumber] = useState('');
+  const [numbersText, setNumbersText] = useState('');
+  const [scoreBand, setScoreBand] = useState('all');
   const inputRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
-    setEnabled(initialEnabled || Boolean(String(initialNumber || '').trim()));
-    setNumber(String(initialNumber || ''));
-  }, [open, initialEnabled, initialNumber]);
+    const text = numbersToWhatsappTextarea(initialNumber, initialNumbers);
+    setEnabled(initialEnabled || Boolean(text.trim()));
+    setNumbersText(text);
+    setScoreBand(initialScoreBand || whatsappMinScoreToBandId(initialMinScore));
+  }, [open, initialEnabled, initialNumber, initialNumbers, initialMinScore, initialScoreBand]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -5011,13 +5286,11 @@ function WatchlistWhatsappDialog({
 
   if (!open) return null;
 
+  const parsedNumbers = parseWhatsappNumbers(numbersText);
+  const numbersValid = !enabled || parsedNumbers.length > 0;
   const handleSave = () => {
-    const cleaned = String(number || '').trim();
-    if (enabled && !cleaned.replace(/\D/g, '')) return;
-    onSave?.({
-      whatsapp_enabled: enabled && Boolean(cleaned),
-      whatsapp_number: enabled && cleaned ? cleaned : null,
-    });
+    if (!numbersValid) return;
+    onSave?.(buildWhatsappPayload(enabled, numbersText, scoreBand));
   };
 
   return createPortal(
@@ -5060,36 +5333,31 @@ function WatchlistWhatsappDialog({
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-ink">Ativar alertas</span>
             <span className={`${subtle} mt-0.5 block`}>
-              Envia aviso quando a watchlist capturar novos sinais.
+              Envia aviso a todos os números quando a watchlist capturar novos sinais.
             </span>
           </span>
         </label>
 
         <div className={enabled ? '' : 'opacity-50 pointer-events-none'}>
-          <label htmlFor="watchlist-wa-number" className="mb-1.5 block text-xs font-medium text-muted">
-            Número com DDD
-          </label>
-          <input
-            id="watchlist-wa-number"
-            ref={inputRef}
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
+          <WhatsappScoreBandPicker
+            value={scoreBand}
             disabled={saving || !enabled}
-            className={`${input} w-full`}
-            placeholder="Ex.: 48 99999-9999"
-            value={number}
-            onChange={(event) => setNumber(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                handleSave();
-              }
-            }}
+            onChange={(bandId) => setScoreBand(bandId)}
           />
-          <p className={`${subtle} mt-1.5`}>
-            Use o número brasileiro com DDD. Deixe desativado para parar os alertas.
-          </p>
+          <label htmlFor="watchlist-wa-numbers" className="mb-1.5 mt-3 block text-xs font-medium text-muted">
+            Celulares que recebem o alerta
+          </label>
+          <textarea
+            id="watchlist-wa-numbers"
+            ref={inputRef}
+            rows={3}
+            disabled={saving || !enabled}
+            className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+            placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
+            value={numbersText}
+            onChange={(event) => setNumbersText(event.target.value)}
+          />
+          <WhatsappNumbersFieldHelp count={parsedNumbers.length} error={enabled && !numbersValid} />
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
@@ -5098,7 +5366,7 @@ function WatchlistWhatsappDialog({
           </button>
           <button
             type="button"
-            disabled={saving || (enabled && !String(number || '').replace(/\D/g, ''))}
+            disabled={saving || !numbersValid}
             onClick={handleSave}
             className={btnPrimary}
           >
@@ -5119,21 +5387,26 @@ function CreateEditalWatchlistDialog({
   saving = false,
   initialWhatsappEnabled = false,
   initialWhatsappNumber = '',
+  initialWhatsappNumbers = null,
+  initialWhatsappMinScore = 0,
+  initialWhatsappScoreBand = null,
   alreadySubscribed = false,
   onClose,
   onSave,
 }) {
   const [name, setName] = useState('');
   const [whatsappEnabled, setWhatsappEnabled] = useState(false);
-  const [whatsappNumber, setWhatsappNumber] = useState('');
+  const [whatsappNumbersText, setWhatsappNumbersText] = useState('');
+  const [whatsappScoreBand, setWhatsappScoreBand] = useState('all');
   const nameInputRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
     setName(String(defaultName || ''));
     setWhatsappEnabled(Boolean(initialWhatsappEnabled));
-    setWhatsappNumber(String(initialWhatsappNumber || ''));
-  }, [open, defaultName, initialWhatsappEnabled, initialWhatsappNumber]);
+    setWhatsappNumbersText(numbersToWhatsappTextarea(initialWhatsappNumber, initialWhatsappNumbers));
+    setWhatsappScoreBand(initialWhatsappScoreBand || whatsappMinScoreToBandId(initialWhatsappMinScore));
+  }, [open, defaultName, initialWhatsappEnabled, initialWhatsappNumber, initialWhatsappNumbers, initialWhatsappMinScore, initialWhatsappScoreBand]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -5154,15 +5427,14 @@ function CreateEditalWatchlistDialog({
   if (!open) return null;
 
   const cleanName = String(name || '').trim();
-  const cleanNumber = String(whatsappNumber || '').trim();
-  const numberIsValid = !whatsappEnabled || cleanNumber.replace(/\D/g, '').length >= 10;
+  const parsedNumbers = parseWhatsappNumbers(whatsappNumbersText);
+  const numberIsValid = !whatsappEnabled || parsedNumbers.length > 0;
   const canSave = Boolean(cleanName) && numberIsValid && !saving;
   const handleSave = () => {
     if (!canSave) return;
     onSave?.({
       nome: cleanName,
-      whatsapp_enabled: whatsappEnabled,
-      whatsapp_number: whatsappEnabled ? cleanNumber : null,
+      ...buildWhatsappPayload(whatsappEnabled, whatsappNumbersText, whatsappScoreBand),
     });
   };
 
@@ -5237,30 +5509,27 @@ function CreateEditalWatchlistDialog({
         </label>
 
         {whatsappEnabled && (
-          <div>
-            <label htmlFor="create-edital-watchlist-whatsapp" className="mb-1.5 block text-xs font-medium text-muted">
-              Número com DDD
-            </label>
-            <input
-              id="create-edital-watchlist-whatsapp"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              className={`${input} w-full`}
-              placeholder="Ex.: 48 99999-9999"
-              value={whatsappNumber}
+          <div className="space-y-3">
+            <WhatsappScoreBandPicker
+              value={whatsappScoreBand}
               disabled={saving}
-              onChange={(event) => setWhatsappNumber(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  handleSave();
-                }
-              }}
+              onChange={(bandId) => setWhatsappScoreBand(bandId)}
             />
-            {!numberIsValid && (
-              <p className="mt-1.5 text-xs text-status-danger">Informe um número válido com DDD.</p>
-            )}
+            <div>
+              <label htmlFor="create-edital-watchlist-whatsapp" className="mb-1.5 block text-xs font-medium text-muted">
+                Celulares que recebem o alerta
+              </label>
+              <textarea
+                id="create-edital-watchlist-whatsapp"
+                rows={3}
+                className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+                placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
+                value={whatsappNumbersText}
+                disabled={saving}
+                onChange={(event) => setWhatsappNumbersText(event.target.value)}
+              />
+              <WhatsappNumbersFieldHelp count={parsedNumbers.length} error={!numberIsValid} />
+            </div>
           </div>
         )}
 
@@ -5736,14 +6005,17 @@ function PcaWatchlistsPanel({ onPromoted }) {
 
   const [whatsappTarget, setWhatsappTarget] = useState(null);
 
-  const saveWhatsapp = async ({ whatsapp_enabled, whatsapp_number }) => {
+  const saveWhatsapp = async (payload) => {
     if (!whatsappTarget) return;
     const row = whatsappTarget;
     setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
     try {
       await axios.put(`/api/licitacoes/pca/watchlist/${row.id}`, {
-        whatsapp_enabled,
-        whatsapp_number,
+        whatsapp_enabled: payload.whatsapp_enabled,
+        whatsapp_number: payload.whatsapp_number,
+        whatsapp_numbers: payload.whatsapp_numbers,
+        whatsapp_min_score: payload.whatsapp_min_score,
+        whatsapp_score_band: payload.whatsapp_score_band,
       });
       setWhatsappTarget(null);
       await loadWatchlists({ background: true });
@@ -5799,9 +6071,12 @@ function PcaWatchlistsPanel({ onPromoted }) {
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    {w.whatsapp_enabled && w.whatsapp_number ? (
-                      <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}>
-                        Alertas · {w.whatsapp_number}
+                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? (
+                      <span
+                        className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
+                        title={parseWhatsappNumbers(w.whatsapp_numbers, w.whatsapp_number).join(', ')}
+                      >
+                        Alertas · {formatWhatsappAlertLabel(w.whatsapp_number, w.whatsapp_numbers, w.whatsapp_min_score)}
                       </span>
                     ) : (
                       <span className={metaChip}>Alertas off</span>
@@ -5845,7 +6120,7 @@ function PcaWatchlistsPanel({ onPromoted }) {
                     className={btnSecondaryXs}
                     title="Alertas WhatsApp desta busca salva"
                   >
-                    {w.whatsapp_enabled && w.whatsapp_number ? 'Alertas ✓' : 'Alertas'}
+                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? 'Alertas ✓' : 'Alertas'}
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -5861,7 +6136,10 @@ function PcaWatchlistsPanel({ onPromoted }) {
         open={Boolean(whatsappTarget)}
         watchlistName={whatsappTarget?.nome}
         initialNumber={whatsappTarget?.whatsapp_number || ''}
-        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && whatsappTarget?.whatsapp_number)}
+        initialNumbers={whatsappTarget?.whatsapp_numbers || null}
+        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && (whatsappTarget?.whatsapp_number || whatsappTarget?.whatsapp_numbers?.length))}
+        initialMinScore={whatsappTarget?.whatsapp_min_score}
+        initialScoreBand={whatsappTarget?.whatsapp_score_band}
         saving={Boolean(whatsappTarget && busy[`wa:${whatsappTarget.id}`])}
         onClose={() => { if (!(whatsappTarget && busy[`wa:${whatsappTarget.id}`])) setWhatsappTarget(null); }}
         onSave={saveWhatsapp}
@@ -5980,14 +6258,17 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
 
   const [whatsappTarget, setWhatsappTarget] = useState(null);
 
-  const saveWhatsapp = async ({ whatsapp_enabled, whatsapp_number }) => {
+  const saveWhatsapp = async (payload) => {
     if (!whatsappTarget) return;
     const row = whatsappTarget;
     setBusy(prev => ({ ...prev, [`wa:${row.id}`]: true }));
     try {
       await axios.put(`/api/licitacoes/editais/watchlist/${row.id}`, {
-        whatsapp_enabled,
-        whatsapp_number,
+        whatsapp_enabled: payload.whatsapp_enabled,
+        whatsapp_number: payload.whatsapp_number,
+        whatsapp_numbers: payload.whatsapp_numbers,
+        whatsapp_min_score: payload.whatsapp_min_score,
+        whatsapp_score_band: payload.whatsapp_score_band,
       });
       setWhatsappTarget(null);
       await loadWatchlists({ background: true });
@@ -6054,9 +6335,12 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    {w.whatsapp_enabled && w.whatsapp_number ? (
-                      <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}>
-                        Alertas · {w.whatsapp_number}
+                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? (
+                      <span
+                        className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
+                        title={parseWhatsappNumbers(w.whatsapp_numbers, w.whatsapp_number).join(', ')}
+                      >
+                        Alertas · {formatWhatsappAlertLabel(w.whatsapp_number, w.whatsapp_numbers, w.whatsapp_min_score)}
                       </span>
                     ) : (
                       <span className={metaChip}>Alertas off</span>
@@ -6100,7 +6384,7 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                     className={btnSecondaryXs}
                     title="Alertas WhatsApp"
                   >
-                    {w.whatsapp_enabled && w.whatsapp_number ? 'Alertas ✓' : 'Alertas'}
+                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? 'Alertas ✓' : 'Alertas'}
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -6116,7 +6400,10 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
         open={Boolean(whatsappTarget)}
         watchlistName={whatsappTarget?.nome}
         initialNumber={whatsappTarget?.whatsapp_number || ''}
-        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && whatsappTarget?.whatsapp_number)}
+        initialNumbers={whatsappTarget?.whatsapp_numbers || null}
+        initialEnabled={Boolean(whatsappTarget?.whatsapp_enabled && (whatsappTarget?.whatsapp_number || whatsappTarget?.whatsapp_numbers?.length))}
+        initialMinScore={whatsappTarget?.whatsapp_min_score}
+        initialScoreBand={whatsappTarget?.whatsapp_score_band}
         saving={Boolean(whatsappTarget && busy[`wa:${whatsappTarget.id}`])}
         onClose={() => { if (!(whatsappTarget && busy[`wa:${whatsappTarget.id}`])) setWhatsappTarget(null); }}
         onSave={saveWhatsapp}
@@ -6749,6 +7036,7 @@ function App() {
   const [chartWallboardActive, setChartWallboardActive] = useState(false);
   const [funnelPace, setFunnelPace] = useState(null);
   const [paceAgentId, setPaceAgentId] = useState(null); // null = time geral
+  const [pacePeriod, setPacePeriod] = useState('day'); // day|week|month|quarter|year
   const [paceMetric, setPaceMetric] = useState('count'); // 'count' | 'value' (R$ a partir de opp)
   const [showFunnelPaceModal, setShowFunnelPaceModal] = useState(false);
   const [recentActionsSource, setRecentActionsSource] = useState('all');
@@ -7884,16 +8172,19 @@ function App() {
     return () => window.removeEventListener('chart-wallboard', onWallboard);
   }, []);
 
-  // Ritmo do time: time geral ou um agente (feito do dia filtrado) — só Gestão de Leads
+  // Ritmo do time: time/agente + período (hoje/sem/mês/trim/ano) — só Gestão de Leads
   const loadFunnelPace = useCallback((background = false) => {
     if (!authStatus.authenticated) return;
-    const params = paceAgentId ? { agent_id: paceAgentId } : {};
+    const params = {
+      period: pacePeriod || 'day',
+      ...(paceAgentId ? { agent_id: paceAgentId } : {}),
+    };
     axios.get('/api/overview/funnel-pace', { params })
       .then((r) => setFunnelPace(r.data || null))
       .catch(() => {
         if (!background) setFunnelPace(null);
       });
-  }, [authStatus.authenticated, paceAgentId]);
+  }, [authStatus.authenticated, paceAgentId, pacePeriod]);
 
   useEffect(() => {
     if (!authStatus.authenticated || activeView !== 'Overview') return undefined;
@@ -9359,6 +9650,9 @@ function App() {
       alreadySubscribed: Boolean(job?.watchlist_id),
       initialWhatsappEnabled: Boolean(job?.whatsapp_enabled || job?.alerts_enabled),
       initialWhatsappNumber: job?.whatsapp_number || '',
+      initialWhatsappNumbers: job?.whatsapp_numbers || null,
+      initialWhatsappMinScore: job?.whatsapp_min_score,
+      initialWhatsappScoreBand: job?.whatsapp_score_band,
     });
   };
 
@@ -13763,8 +14057,11 @@ function App() {
                                   </span>
                                 )}
                                 {job.whatsapp_enabled || job.alerts_enabled ? (
-                                  <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`} title="WhatsApp ligado para editais *novos*">
-                                    Alertas · {job.whatsapp_number || 'on'}
+                                  <span
+                                    className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
+                                    title={parseWhatsappNumbers(job.whatsapp_numbers, job.whatsapp_number).join(', ') || 'WhatsApp ligado para editais novos'}
+                                  >
+                                    Alertas · {formatWhatsappAlertLabel(job.whatsapp_number, job.whatsapp_numbers, job.whatsapp_min_score) || 'on'}
                                   </span>
                                 ) : (
                                   <span className={metaChip}>Alertas off</span>
@@ -13873,6 +14170,9 @@ function App() {
                 alreadySubscribed={Boolean(pncpWatchlistDialog?.alreadySubscribed)}
                 initialWhatsappEnabled={Boolean(pncpWatchlistDialog?.initialWhatsappEnabled)}
                 initialWhatsappNumber={pncpWatchlistDialog?.initialWhatsappNumber || ''}
+                initialWhatsappNumbers={pncpWatchlistDialog?.initialWhatsappNumbers || null}
+                initialWhatsappMinScore={pncpWatchlistDialog?.initialWhatsappMinScore}
+                initialWhatsappScoreBand={pncpWatchlistDialog?.initialWhatsappScoreBand}
                 onClose={closePncpWatchlistDialog}
                 onSave={confirmPncpWatchlist}
               />
@@ -16782,6 +17082,8 @@ function App() {
                             agents={paceAgents}
                             agentId={paceAgentId}
                             onAgentChange={setPaceAgentId}
+                            period={pacePeriod}
+                            onPeriodChange={setPacePeriod}
                             metric={paceMetric}
                             onMetricChange={setPaceMetric}
                             revenueMeta={monthlyMeta}

@@ -2072,6 +2072,8 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS filtros JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;`);
+  // Limiar de score p/ WhatsApp: 0=todas faixas, 38=amarela+, 68=só verde (mesmas faixas da UI).
+  await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_min_score NUMERIC NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
   await pool.query(`ALTER TABLE ${EDITAL_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
@@ -2353,6 +2355,7 @@ const createLicitacaoTables = async () => {
   `);
   await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;`);
+  await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS whatsapp_min_score NUMERIC NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP NOT NULL DEFAULT NOW();`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account ON ${PCA_WATCHLIST_TABLE} (account_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pca_watchlist_account_name ON ${PCA_WATCHLIST_TABLE} (account_id, nome, id);`);
@@ -2485,6 +2488,122 @@ const normalizeWatchlistPhone = (raw) => {
   return digits.length >= 8 ? digits : null;
 };
 
+// Aceita 1+ números: string (vírgula/ponto-e-vírgula/quebra de linha), array, ou valor único.
+// Persistimos em whatsapp_number (TEXT) como CSV normalizado: "5511...,5519...".
+const parseWatchlistPhones = (raw) => {
+  if (raw == null || raw === '') return [];
+  const chunks = Array.isArray(raw)
+    ? raw.flatMap((part) => String(part ?? '').split(/[,;\n|]+/))
+    : String(raw).split(/[,;\n|]+/);
+  const out = [];
+  const seen = new Set();
+  for (const chunk of chunks) {
+    const number = normalizeWatchlistPhone(chunk);
+    if (!number || seen.has(number)) continue;
+    seen.add(number);
+    out.push(number);
+  }
+  return out;
+};
+
+const serializeWatchlistPhones = (raw) => {
+  const phones = parseWatchlistPhones(raw);
+  return phones.length ? phones.join(',') : null;
+};
+
+const watchlistPhonesFromRow = (row) => parseWatchlistPhones(row?.whatsapp_number);
+
+// Faixas de score iguais à UI: vermelho <38, amarelo >=38, verde >=68.
+const WATCHLIST_SCORE_MIN_ALL = 0;
+const WATCHLIST_SCORE_MIN_MEDIUM = 38;
+const WATCHLIST_SCORE_MIN_HIGH = 68;
+
+const normalizeWhatsappMinScore = (raw) => {
+  if (raw == null || raw === '') return WATCHLIST_SCORE_MIN_ALL;
+  const band = String(raw).trim().toLowerCase();
+  if (band === 'high' || band === 'alta' || band === 'verde' || band === 'green') {
+    return WATCHLIST_SCORE_MIN_HIGH;
+  }
+  if (band === 'medium' || band === 'media' || band === 'média' || band === 'amarelo' || band === 'yellow') {
+    return WATCHLIST_SCORE_MIN_MEDIUM;
+  }
+  if (band === 'all' || band === 'todas' || band === 'baixa' || band === 'vermelho' || band === 'red' || band === 'low') {
+    return WATCHLIST_SCORE_MIN_ALL;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return WATCHLIST_SCORE_MIN_ALL;
+  if (n >= WATCHLIST_SCORE_MIN_HIGH) return WATCHLIST_SCORE_MIN_HIGH;
+  if (n >= WATCHLIST_SCORE_MIN_MEDIUM) return WATCHLIST_SCORE_MIN_MEDIUM;
+  return WATCHLIST_SCORE_MIN_ALL;
+};
+
+const whatsappMinScoreToBand = (minScore) => {
+  const n = Number(minScore) || 0;
+  if (n >= WATCHLIST_SCORE_MIN_HIGH) return 'high';
+  if (n >= WATCHLIST_SCORE_MIN_MEDIUM) return 'medium';
+  return 'all';
+};
+
+const shouldSendWatchlistWhatsappForScore = (watch, score) => {
+  if (!watch) return false;
+  const enabled = watch.whatsapp_enabled === true
+    || watch.whatsapp_enabled === 't'
+    || watch.whatsapp_enabled === 1;
+  if (!enabled) return false;
+  if (!watchlistPhonesFromRow(watch).length) return false;
+  const minScore = normalizeWhatsappMinScore(watch.whatsapp_min_score);
+  return Number(score || 0) >= minScore;
+};
+
+const resolveWhatsappFieldsFromBody = (body = {}, { requireNumbersIfEnabled = true } = {}) => {
+  const wantWhatsapp = body.whatsapp_enabled === true;
+  const hasNumbersField = body.whatsapp_numbers !== undefined || body.whatsapp_number !== undefined;
+  const hasMinScoreField = body.whatsapp_min_score !== undefined || body.whatsapp_score_band !== undefined;
+  const phones = hasNumbersField
+    ? parseWatchlistPhones(
+      body.whatsapp_numbers !== undefined ? body.whatsapp_numbers : body.whatsapp_number
+    )
+    : null;
+  if (wantWhatsapp && requireNumbersIfEnabled && hasNumbersField && (!phones || phones.length === 0)) {
+    return { error: 'Informe ao menos um número de WhatsApp válido com DDD.' };
+  }
+  if (wantWhatsapp && requireNumbersIfEnabled && !hasNumbersField) {
+    return { error: 'Informe ao menos um número de WhatsApp válido com DDD.' };
+  }
+  const stored = phones && phones.length ? serializeWatchlistPhones(phones) : null;
+  const enabled = Boolean(wantWhatsapp && stored);
+  const minScore = hasMinScoreField
+    ? normalizeWhatsappMinScore(
+      body.whatsapp_min_score !== undefined ? body.whatsapp_min_score : body.whatsapp_score_band
+    )
+    : undefined;
+  return {
+    whatsapp_enabled: enabled,
+    whatsapp_number: enabled ? stored : null,
+    whatsapp_numbers: enabled ? parseWatchlistPhones(stored) : [],
+    whatsapp_min_score: minScore,
+    has_min_score: hasMinScoreField,
+  };
+};
+
+const decorateWatchlistWhatsapp = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  const numbers = watchlistPhonesFromRow(row);
+  const enabled = Boolean(
+    (row.whatsapp_enabled === true || row.whatsapp_enabled === 't' || row.whatsapp_enabled === 1)
+    && numbers.length
+  );
+  const minScore = normalizeWhatsappMinScore(row.whatsapp_min_score);
+  return {
+    ...row,
+    whatsapp_enabled: enabled,
+    whatsapp_number: numbers.length ? numbers.join(',') : null,
+    whatsapp_numbers: numbers,
+    whatsapp_min_score: minScore,
+    whatsapp_score_band: whatsappMinScoreToBand(minScore),
+  };
+};
+
 const enqueueWatchlistNotification = async ({ source, watchlistId, signalId, recipient }) => {
   const number = normalizeWatchlistPhone(recipient);
   if (!source || !watchlistId || !signalId || !number) return false;
@@ -2498,6 +2617,16 @@ const enqueueWatchlistNotification = async ({ source, watchlistId, signalId, rec
     [source, watchlistId, signalId, number]
   );
   return true;
+};
+
+const enqueueWatchlistNotificationsForRecipients = async ({ source, watchlistId, signalId, recipients }) => {
+  const phones = parseWatchlistPhones(recipients);
+  let enqueued = 0;
+  for (const recipient of phones) {
+    const ok = await enqueueWatchlistNotification({ source, watchlistId, signalId, recipient });
+    if (ok) enqueued += 1;
+  }
+  return enqueued;
 };
 
 const buildWatchlistNotificationMessage = (source, row) => {
@@ -5142,15 +5271,17 @@ app.get('/api/overview/recent-actions', async (req, res) => {
 });
 
 /**
- * Ritmo do funil (dia + mês):
+ * Ritmo do funil (dia + mês + período selecionado):
  * - Contatos = mensagens públicas enviadas (WhatsApp etc.)
  *   + notas privadas na conversa (messages.private)
  *   + notas do perfil do contato (tabela notes — aba Notas no Chatwoot)
  *   (regra operacional: ligação/e-mail/visita podem ser registrados em qualquer uma das notas).
  * - SQL / Oportunidade / Proposta / Fechamento = movimentações do card no funil
  *   (kanban_stage_history → to_stage).
- * Query opcional: agent_id — filtra feito do dia/mês por remetente (mensagens),
+ * Query opcional: agent_id — filtra feito por remetente (mensagens),
  *   autor da nota de contato (notes.user_id) e actor (moves).
+ * Query opcional: period = day|week|month|quarter|year (default day).
+ *   Sempre devolve day + month (modal/compat). range espelha o período pedido.
  */
 app.get('/api/overview/funnel-pace', async (req, res) => {
   try {
@@ -5159,6 +5290,9 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const agentId = agentIdRaw != null && String(agentIdRaw).trim() !== ''
       ? Number.parseInt(agentIdRaw, 10)
       : null;
+    const PACE_PERIODS = new Set(['day', 'week', 'month', 'quarter', 'year']);
+    const periodRaw = String(req.query.period || 'day').trim().toLowerCase();
+    const period = PACE_PERIODS.has(periodRaw) ? periodRaw : 'day';
     const sellerGroups = await getSellerGroups(accountId);
     const allSellerIds = sellerGroups.flatMap((g) => g.user_ids);
     // Individual: expande identidade (Clayton pessoal + Aerion).
@@ -5190,13 +5324,19 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       : '';
     const params = hasActorFilter ? [accountId, actorIds] : [accountId];
 
-    // Cortes de "hoje"/"mês" no fuso do negócio (America/Sao_Paulo, UTC-3), não em UTC.
+    // Cortes de período no fuso do negócio (America/Sao_Paulo, UTC-3), não em UTC.
     // As colunas created_at/changed_at são `timestamp without time zone` gravadas em UTC;
     // usar DATE_TRUNC('day', NOW()) puro corta à meia-noite UTC = 21h de Brasília, zerando
     // o "feito de hoje" no fim do expediente. Convertemos a meia-noite local de volta p/ UTC.
+    // week = ISO (segunda). quarter/year = calendário civil em SP.
     const SP_TZ = 'America/Sao_Paulo';
-    const spDayStart = `(DATE_TRUNC('day', NOW() AT TIME ZONE '${SP_TZ}') AT TIME ZONE '${SP_TZ}' AT TIME ZONE 'UTC')`;
-    const spMonthStart = `(DATE_TRUNC('month', NOW() AT TIME ZONE '${SP_TZ}') AT TIME ZONE '${SP_TZ}' AT TIME ZONE 'UTC')`;
+    const spTruncStart = (unit) => (
+      `(DATE_TRUNC('${unit}', NOW() AT TIME ZONE '${SP_TZ}') AT TIME ZONE '${SP_TZ}' AT TIME ZONE 'UTC')`
+    );
+    const spDayStart = spTruncStart('day');
+    const spMonthStart = spTruncStart('month');
+    const periodUnit = period; // day|week|month|quarter|year — válidos no DATE_TRUNC do PG
+    const spRangeStart = spTruncStart(periodUnit);
 
     // Marcos cumulativos (escadinha): 1 contato conta 1x por marco no período.
     // Ex.: mover para 7. Agendamento Demo conta SQL + Oportunidade (sem exigir passagem pelo 6).
@@ -5290,6 +5430,36 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       FROM per_contact
     `;
 
+    const buildLeadsSql = (sinceSql) => `
+      SELECT COUNT(DISTINCT h.contact_id)::int AS total
+      FROM ${HISTORY_TABLE} h
+      WHERE h.account_id = $1
+        AND h.source <> 'snapshot'
+        AND h.changed_at >= ${sinceSql}
+        AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
+        ${histAgentFilter}
+    `;
+
+    const needExtraRange = period !== 'day' && period !== 'month';
+
+    const queryBundle = await Promise.all([
+      pool.query(buildContactPaceSql(spDayStart), params),
+      pool.query(buildContactPaceSql(spMonthStart), params),
+      pool.query(buildMilestonePaceSql(spDayStart), params),
+      pool.query(buildMilestonePaceSql(spMonthStart), params),
+      pool.query(buildLeadsSql(spDayStart), params),
+      pool.query(buildLeadsSql(spMonthStart), params),
+      needExtraRange
+        ? pool.query(buildContactPaceSql(spRangeStart), params)
+        : Promise.resolve(null),
+      needExtraRange
+        ? pool.query(buildMilestonePaceSql(spRangeStart), params)
+        : Promise.resolve(null),
+      needExtraRange
+        ? pool.query(buildLeadsSql(spRangeStart), params)
+        : Promise.resolve(null),
+    ]);
+
     const [
       contactsDay,
       contactsMonth,
@@ -5297,36 +5467,10 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       stagesMonth,
       leadsDay,
       leadsMonth,
-    ] = await Promise.all([
-      pool.query(buildContactPaceSql(spDayStart), params),
-      pool.query(buildContactPaceSql(spMonthStart), params),
-      pool.query(buildMilestonePaceSql(spDayStart), params),
-      pool.query(buildMilestonePaceSql(spMonthStart), params),
-      pool.query(
-        `
-        SELECT COUNT(DISTINCT h.contact_id)::int AS total
-        FROM ${HISTORY_TABLE} h
-        WHERE h.account_id = $1
-          AND h.source <> 'snapshot'
-          AND h.changed_at >= ${spDayStart}
-          AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
-          ${histAgentFilter}
-        `,
-        params
-      ),
-      pool.query(
-        `
-        SELECT COUNT(DISTINCT h.contact_id)::int AS total
-        FROM ${HISTORY_TABLE} h
-        WHERE h.account_id = $1
-          AND h.source <> 'snapshot'
-          AND h.changed_at >= ${spMonthStart}
-          AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
-          ${histAgentFilter}
-        `,
-        params
-      ),
-    ]);
+      contactsRange,
+      stagesRange,
+      leadsRange,
+    ] = queryBundle;
 
     const buildContatos = (row) => {
       const messages = Number(row?.messages) || 0;
@@ -5342,13 +5486,51 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       };
     };
 
-    const cd = contactsDay.rows[0] || {};
-    const cm = contactsMonth.rows[0] || {};
-    const sd = stagesDay.rows[0] || {};
-    const sm = stagesMonth.rows[0] || {};
+    const buildPaceBucket = (contactsRow, stagesRow, leadsRow) => {
+      const c = contactsRow || {};
+      const s = stagesRow || {};
+      return {
+        contatos: buildContatos(c),
+        leads: Number(leadsRow?.total) || 0,
+        sql: Number(s.sql) || 0,
+        oportunidade: Number(s.oportunidade) || 0,
+        proposta: Number(s.proposta) || 0,
+        fechamento: Number(s.fechamento) || 0,
+        // R$: soma de Valor_Oportunidade dos cards movidos à etapa no período
+        value: {
+          oportunidade: Number(s.oportunidade_value) || 0,
+          proposta: Number(s.proposta_value) || 0,
+          fechamento: Number(s.fechamento_value) || 0,
+        },
+      };
+    };
+
+    const day = buildPaceBucket(
+      contactsDay.rows[0],
+      stagesDay.rows[0],
+      leadsDay.rows[0]
+    );
+    const month = buildPaceBucket(
+      contactsMonth.rows[0],
+      stagesMonth.rows[0],
+      leadsMonth.rows[0]
+    );
+    let range;
+    if (period === 'day') {
+      range = day;
+    } else if (period === 'month') {
+      range = month;
+    } else {
+      range = buildPaceBucket(
+        contactsRange?.rows?.[0],
+        stagesRange?.rows?.[0],
+        leadsRange?.rows?.[0]
+      );
+    }
 
     res.json({
       as_of: new Date().toISOString(),
+      period,
       agent_id: selectedAgentId,
       // Apenas vendedores; identidades unificadas (Clayton ×2 → 1 item)
       agents: sellerGroups.map((r) => ({
@@ -5356,33 +5538,9 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         name: r.name || `Agente #${r.id}`,
         user_ids: Array.isArray(r.user_ids) ? r.user_ids : [Number(r.id)],
       })),
-      day: {
-        contatos: buildContatos(cd),
-        leads: Number(leadsDay.rows[0]?.total) || 0,
-        sql: Number(sd.sql) || 0,
-        oportunidade: Number(sd.oportunidade) || 0,
-        proposta: Number(sd.proposta) || 0,
-        fechamento: Number(sd.fechamento) || 0,
-        // R$: soma de Valor_Oportunidade dos cards movidos à etapa no período
-        value: {
-          oportunidade: Number(sd.oportunidade_value) || 0,
-          proposta: Number(sd.proposta_value) || 0,
-          fechamento: Number(sd.fechamento_value) || 0,
-        },
-      },
-      month: {
-        contatos: buildContatos(cm),
-        leads: Number(leadsMonth.rows[0]?.total) || 0,
-        sql: Number(sm.sql) || 0,
-        oportunidade: Number(sm.oportunidade) || 0,
-        proposta: Number(sm.proposta) || 0,
-        fechamento: Number(sm.fechamento) || 0,
-        value: {
-          oportunidade: Number(sm.oportunidade_value) || 0,
-          proposta: Number(sm.proposta_value) || 0,
-          fechamento: Number(sm.fechamento_value) || 0,
-        },
-      },
+      day,
+      month,
+      range,
       rules: {
         contatos: 'Contatos distintos no período com mensagem enviada ou nota registrada. Mensagens e notas adicionais para a mesma pessoa contam apenas 1×. Ligação, e-mail e visita: registrar em Notas.',
         leads: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período).',
@@ -8116,10 +8274,14 @@ const normalizePncpSearchJobRow = (row) => {
   if (!row) return null;
   const archiveAt = getPncpSearchJobArchiveAt(row.started_at);
   const daysUntilArchive = row.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(row.started_at);
-  const whatsappEnabled = row.whatsapp_enabled === true
+  const whatsappNumbers = parseWatchlistPhones(row.whatsapp_number);
+  const whatsappEnabled = (
+    row.whatsapp_enabled === true
     || row.whatsapp_enabled === 't'
-    || row.whatsapp_enabled === 1;
-  const whatsappNumber = row.whatsapp_number || null;
+    || row.whatsapp_enabled === 1
+  ) && whatsappNumbers.length > 0;
+  const whatsappNumber = whatsappNumbers.length ? whatsappNumbers.join(',') : null;
+  const whatsappMinScore = normalizeWhatsappMinScore(row.whatsapp_min_score);
   return {
     id: row.id,
     account_id: row.account_id,
@@ -8141,9 +8303,12 @@ const normalizePncpSearchJobRow = (row) => {
     error: row.error || null,
     watchlist_id: row.watchlist_id || null,
     // Assinatura = watchlist 1:1 ligada ao card (alertas WhatsApp).
-    whatsapp_enabled: Boolean(whatsappEnabled && whatsappNumber),
+    whatsapp_enabled: Boolean(whatsappEnabled),
     whatsapp_number: whatsappNumber,
-    alerts_enabled: Boolean(whatsappEnabled && whatsappNumber),
+    whatsapp_numbers: whatsappNumbers,
+    whatsapp_min_score: whatsappMinScore,
+    whatsapp_score_band: whatsappMinScoreToBand(whatsappMinScore),
+    alerts_enabled: Boolean(whatsappEnabled),
     started_at: row.started_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
@@ -8225,7 +8390,7 @@ const persistPncpDeepJob = async (job) => {
 const loadPncpDeepJob = async (jobId, accountId = null) => {
   const params = [jobId];
   let sql = `
-    SELECT j.*, w.whatsapp_enabled, w.whatsapp_number
+    SELECT j.*, w.whatsapp_enabled, w.whatsapp_number, w.whatsapp_min_score
       FROM ${PNCP_SEARCH_JOBS_TABLE} j
       LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
      WHERE j.id = $1`;
@@ -9608,7 +9773,7 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
               j.suggested_positive_terms, j.suggested_negative_terms, j.progress, j.term_runs, j.summary,
               COALESCE(rc.cnt, j.total, 0)::int AS total,
               j.error, j.watchlist_id, j.started_at, j.updated_at, j.completed_at,
-              w.whatsapp_enabled, w.whatsapp_number
+              w.whatsapp_enabled, w.whatsapp_number, w.whatsapp_min_score
          FROM ${PNCP_SEARCH_JOBS_TABLE} j
          LEFT JOIN (
            SELECT job_id, COUNT(*)::int AS cnt
@@ -10199,11 +10364,17 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
     const job = await loadPncpDeepJob(req.params.jobId, accountId);
     if (!job) return res.status(404).json({ error: 'Pesquisa não encontrada' });
     const name = String(req.body?.nome || job.nome || job.filters?.q || 'Busca PNCP').trim().slice(0, 200);
-    const wantWhatsapp = req.body?.whatsapp_enabled === true;
-    const phone = wantWhatsapp ? normalizeWatchlistPhone(req.body?.whatsapp_number) : null;
-    if (wantWhatsapp && !phone) {
-      return res.status(400).json({ error: 'Informe um número de WhatsApp válido com DDD.' });
+    const wa = resolveWhatsappFieldsFromBody({
+      whatsapp_enabled: req.body?.whatsapp_enabled === true,
+      whatsapp_number: req.body?.whatsapp_number,
+      whatsapp_numbers: req.body?.whatsapp_numbers,
+      whatsapp_min_score: req.body?.whatsapp_min_score,
+      whatsapp_score_band: req.body?.whatsapp_score_band,
+    }, { requireNumbersIfEnabled: req.body?.whatsapp_enabled === true });
+    if (wa.error) {
+      return res.status(400).json({ error: wa.error });
     }
+    const waMinScore = wa.whatsapp_min_score !== undefined ? wa.whatsapp_min_score : WATCHLIST_SCORE_MIN_ALL;
 
     let watchlistRow = null;
     if (job.watchlist_id) {
@@ -10216,9 +10387,10 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
                  filtros = $4::jsonb,
                  whatsapp_enabled = $5,
                  whatsapp_number = $6,
+                 whatsapp_min_score = $7,
                  ativo = TRUE,
                  atualizado_em = NOW()
-           WHERE id = $7 AND account_id = $8
+           WHERE id = $8 AND account_id = $9
            RETURNING *
         `,
         [
@@ -10226,8 +10398,9 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
           job.terms || [],
           job.negative_terms || [],
           JSON.stringify(job.filters || {}),
-          Boolean(wantWhatsapp && phone),
-          phone,
+          wa.whatsapp_enabled,
+          wa.whatsapp_number,
+          waMinScore,
           job.watchlist_id,
           accountId,
         ]
@@ -10237,8 +10410,8 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
     if (!watchlistRow) {
       const { rows } = await pool.query(
         `INSERT INTO ${EDITAL_WATCHLIST_TABLE}
-           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
+           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number, whatsapp_min_score)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
          RETURNING *`,
         [
           accountId,
@@ -10247,8 +10420,9 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
           job.negative_terms || [],
           true,
           JSON.stringify(job.filters || {}),
-          Boolean(wantWhatsapp && phone),
-          phone,
+          wa.whatsapp_enabled,
+          wa.whatsapp_number,
+          waMinScore,
         ]
       );
       watchlistRow = rows[0];
@@ -10259,10 +10433,11 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) =
     }
 
     // Card deixa de ser “temporário 15 dias” — assinatura ligada à watchlist.
+    const decorated = decorateWatchlistWhatsapp(watchlistRow);
     res.json({
-      ...watchlistRow,
+      ...decorated,
       job_id: job.id,
-      alerts_enabled: Boolean(watchlistRow.whatsapp_enabled && watchlistRow.whatsapp_number),
+      alerts_enabled: Boolean(decorated.whatsapp_enabled),
       note: 'Alertas valem para oportunidades *novas* (matcher diário). O acervo já classificado nesta busca não gera WhatsApp retroativo.',
     });
   } catch (error) {
@@ -10281,14 +10456,23 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => 
       nome: req.body?.nome || job.nome || job.filters?.q,
       whatsapp_enabled: req.body?.whatsapp_enabled === true,
       whatsapp_number: req.body?.whatsapp_number,
+      whatsapp_numbers: req.body?.whatsapp_numbers,
+      whatsapp_min_score: req.body?.whatsapp_min_score,
+      whatsapp_score_band: req.body?.whatsapp_score_band,
     };
     // Inline call would recurse awkwardly; duplicate minimal path:
     const name = String(req.body.nome || job.nome || job.filters?.q || 'Busca PNCP').trim().slice(0, 200);
-    const wantWhatsapp = req.body.whatsapp_enabled === true;
-    const phone = wantWhatsapp ? normalizeWatchlistPhone(req.body.whatsapp_number) : null;
-    if (wantWhatsapp && !phone) {
-      return res.status(400).json({ error: 'Informe um número de WhatsApp válido com DDD.' });
+    const wa = resolveWhatsappFieldsFromBody({
+      whatsapp_enabled: req.body.whatsapp_enabled === true,
+      whatsapp_number: req.body.whatsapp_number,
+      whatsapp_numbers: req.body.whatsapp_numbers,
+      whatsapp_min_score: req.body.whatsapp_min_score,
+      whatsapp_score_band: req.body.whatsapp_score_band,
+    }, { requireNumbersIfEnabled: req.body.whatsapp_enabled === true });
+    if (wa.error) {
+      return res.status(400).json({ error: wa.error });
     }
+    const waMinScore = wa.whatsapp_min_score !== undefined ? wa.whatsapp_min_score : WATCHLIST_SCORE_MIN_ALL;
     let watchlistRow = null;
     if (job.watchlist_id) {
       const { rows } = await pool.query(
@@ -10296,18 +10480,19 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => 
             SET nome = COALESCE(NULLIF($1, ''), nome),
                 whatsapp_enabled = $2,
                 whatsapp_number = $3,
+                whatsapp_min_score = $4,
                 ativo = TRUE,
                 atualizado_em = NOW()
-          WHERE id = $4 AND account_id = $5
+          WHERE id = $5 AND account_id = $6
           RETURNING *`,
-        [name, Boolean(wantWhatsapp && phone), phone, job.watchlist_id, accountId]
+        [name, wa.whatsapp_enabled, wa.whatsapp_number, waMinScore, job.watchlist_id, accountId]
       );
       watchlistRow = rows[0];
     } else {
       const { rows } = await pool.query(
         `INSERT INTO ${EDITAL_WATCHLIST_TABLE}
-           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number)
-         VALUES ($1,$2,$3,$4,TRUE,$5::jsonb,$6,$7)
+           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number, whatsapp_min_score)
+         VALUES ($1,$2,$3,$4,TRUE,$5::jsonb,$6,$7,$8)
          RETURNING *`,
         [
           accountId,
@@ -10315,8 +10500,9 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => 
           job.terms || [],
           job.negative_terms || [],
           JSON.stringify(job.filters || {}),
-          Boolean(wantWhatsapp && phone),
-          phone,
+          wa.whatsapp_enabled,
+          wa.whatsapp_number,
+          waMinScore,
         ]
       );
       watchlistRow = rows[0];
@@ -10325,10 +10511,11 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => 
         [job.id, watchlistRow.id, accountId]
       );
     }
+    const decorated = decorateWatchlistWhatsapp(watchlistRow);
     res.json({
-      ...watchlistRow,
+      ...decorated,
       job_id: job.id,
-      alerts_enabled: Boolean(watchlistRow?.whatsapp_enabled && watchlistRow?.whatsapp_number),
+      alerts_enabled: Boolean(decorated?.whatsapp_enabled),
     });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar alertas da busca', details: error.message });
@@ -11160,7 +11347,7 @@ const matchesWatchlistEntityFilters = (normalized, filters = {}) => {
 };
 
 const listEditalSignalsQuery = `
-  SELECT s.*, w.nome AS watchlist_nome, w.whatsapp_enabled, w.whatsapp_number,
+  SELECT s.*, w.nome AS watchlist_nome, w.whatsapp_enabled, w.whatsapp_number, w.whatsapp_min_score,
          COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
   FROM ${EDITAL_SIGNALS_TABLE} s
   LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
@@ -11238,12 +11425,12 @@ const runEditalWatchlistMatching = async () => {
       );
       if (r.rowCount > 0) {
         inserted += 1;
-        if (watch.whatsapp_enabled && watch.whatsapp_number) {
-          await enqueueWatchlistNotification({
+        if (shouldSendWatchlistWhatsappForScore(watch, decorated?.score)) {
+          await enqueueWatchlistNotificationsForRecipients({
             source: 'edital',
             watchlistId: watch.id,
             signalId: r.rows[0].id,
-            recipient: watch.whatsapp_number,
+            recipients: watch.whatsapp_number,
           });
         }
         const signalTitle = decorated?.titulo || decorated?.title || decorated?.orgao?.nome || 'Edital PNCP';
@@ -11820,7 +12007,7 @@ app.get('/api/licitacoes/editais/watchlist', async (req, res) => {
         ORDER BY w.criado_em DESC`,
       [accountId]
     );
-    res.json(rows);
+    res.json(rows.map(decorateWatchlistWhatsapp));
   } catch (error) {
     res.status(500).json({ error: 'Erro ao listar watchlists de editais', details: error.message });
   }
@@ -11832,12 +12019,23 @@ app.post('/api/licitacoes/editais/watchlist', async (req, res) => {
     const b = req.body || {};
     const filtros = buildEditalWatchlistFilters(b.filtros || b);
     const nome = String(b.nome || filtros.q || 'Watchlist de editais').slice(0, 200);
+    let waEnabled = b.whatsapp_enabled === true;
+    let waNumber = null;
+    let waMinScore = WATCHLIST_SCORE_MIN_ALL;
+    if (b.whatsapp_enabled === true || b.whatsapp_number !== undefined || b.whatsapp_numbers !== undefined
+      || b.whatsapp_min_score !== undefined || b.whatsapp_score_band !== undefined) {
+      const wa = resolveWhatsappFieldsFromBody(b, { requireNumbersIfEnabled: b.whatsapp_enabled === true });
+      if (wa.error) return res.status(400).json({ error: wa.error });
+      waEnabled = wa.whatsapp_enabled;
+      waNumber = wa.whatsapp_number;
+      if (wa.whatsapp_min_score !== undefined) waMinScore = wa.whatsapp_min_score;
+    }
     const { rows } = await pool.query(
       `
         INSERT INTO ${EDITAL_WATCHLIST_TABLE}
           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros,
-           whatsapp_enabled, whatsapp_number, ativo)
-        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
+           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo)
+        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
         RETURNING *
       `,
       [
@@ -11847,12 +12045,13 @@ app.post('/api/licitacoes/editais/watchlist', async (req, res) => {
         asTextArray(b.termos_negativos || b.negative_terms),
         b.usar_ia !== false,
         JSON.stringify(filtros),
-        b.whatsapp_enabled === true,
-        normalizeWatchlistPhone(b.whatsapp_number),
+        waEnabled,
+        waNumber,
+        waMinScore,
         b.ativo !== false,
       ]
     );
-    res.status(201).json(rows[0]);
+    res.status(201).json(decorateWatchlistWhatsapp(rows[0]));
   } catch (error) {
     res.status(500).json({ error: 'Erro ao criar watchlist de editais', details: error.message });
   }
@@ -11864,6 +12063,27 @@ app.put('/api/licitacoes/editais/watchlist/:id', async (req, res) => {
     const id = toIntOrNull(req.params.id);
     const b = req.body || {};
     const filtros = b.filtros ? buildEditalWatchlistFilters(b.filtros) : null;
+    const touchingWhatsapp = typeof b.whatsapp_enabled === 'boolean'
+      || b.whatsapp_number !== undefined
+      || b.whatsapp_numbers !== undefined
+      || b.whatsapp_min_score !== undefined
+      || b.whatsapp_score_band !== undefined;
+    let waEnabled = null;
+    let waNumber = null;
+    let waMinScore = null;
+    if (touchingWhatsapp) {
+      const wa = resolveWhatsappFieldsFromBody({
+        whatsapp_enabled: b.whatsapp_enabled === true,
+        whatsapp_number: b.whatsapp_number,
+        whatsapp_numbers: b.whatsapp_numbers,
+        whatsapp_min_score: b.whatsapp_min_score,
+        whatsapp_score_band: b.whatsapp_score_band,
+      }, { requireNumbersIfEnabled: b.whatsapp_enabled === true });
+      if (wa.error) return res.status(400).json({ error: wa.error });
+      waEnabled = wa.whatsapp_enabled;
+      waNumber = wa.whatsapp_number;
+      waMinScore = wa.whatsapp_min_score !== undefined ? wa.whatsapp_min_score : WATCHLIST_SCORE_MIN_ALL;
+    }
     const { rows } = await pool.query(
       `
         UPDATE ${EDITAL_WATCHLIST_TABLE}
@@ -11873,7 +12093,8 @@ app.put('/api/licitacoes/editais/watchlist/:id', async (req, res) => {
                usar_ia = COALESCE($4, usar_ia),
                filtros = COALESCE($5::jsonb, filtros),
                whatsapp_enabled = COALESCE($6, whatsapp_enabled),
-               whatsapp_number = COALESCE($7, whatsapp_number),
+               whatsapp_number = CASE WHEN $11::boolean THEN $7 ELSE whatsapp_number END,
+               whatsapp_min_score = CASE WHEN $11::boolean THEN $12 ELSE whatsapp_min_score END,
                ativo = COALESCE($8, ativo),
                atualizado_em = NOW()
          WHERE id = $9 AND account_id = $10
@@ -11885,15 +12106,17 @@ app.put('/api/licitacoes/editais/watchlist/:id', async (req, res) => {
         b.termos_negativos !== undefined ? asTextArray(b.termos_negativos) : null,
         typeof b.usar_ia === 'boolean' ? b.usar_ia : null,
         filtros ? JSON.stringify(filtros) : null,
-        typeof b.whatsapp_enabled === 'boolean' ? b.whatsapp_enabled : null,
-        b.whatsapp_number !== undefined ? normalizeWatchlistPhone(b.whatsapp_number) : null,
+        waEnabled,
+        waNumber,
         typeof b.ativo === 'boolean' ? b.ativo : null,
         id,
         accountId,
+        touchingWhatsapp,
+        waMinScore,
       ]
     );
     if (!rows[0]) return res.status(404).json({ error: 'nao encontrado' });
-    res.json(rows[0]);
+    res.json(decorateWatchlistWhatsapp(rows[0]));
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar watchlist de editais', details: error.message });
   }
@@ -12843,12 +13066,12 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
       );
       if (r.rowCount > 0) {
         inserted += 1;
-        if (watch.whatsapp_enabled && watch.whatsapp_number) {
-          await enqueueWatchlistNotification({
+        if (shouldSendWatchlistWhatsappForScore(watch, item.score)) {
+          await enqueueWatchlistNotificationsForRecipients({
             source: 'pca',
             watchlistId: watch.id,
             signalId: r.rows[0].id,
-            recipient: watch.whatsapp_number,
+            recipients: watch.whatsapp_number,
           });
         }
         await notifyAccountUsers(pool, {
@@ -13765,7 +13988,7 @@ app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
           ORDER BY w.criado_em DESC`,
         [accountId]
       ));
-    res.json(rows);
+    res.json(rows.map(decorateWatchlistWhatsapp));
   } catch (error) {
     pcaReadErrorResponse(res, error, 'Erro ao listar watchlists PCA');
   }
@@ -13775,13 +13998,24 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const b = req.body || {};
+    let waEnabled = b.whatsapp_enabled === true;
+    let waNumber = null;
+    let waMinScore = WATCHLIST_SCORE_MIN_ALL;
+    if (b.whatsapp_enabled === true || b.whatsapp_number !== undefined || b.whatsapp_numbers !== undefined
+      || b.whatsapp_min_score !== undefined || b.whatsapp_score_band !== undefined) {
+      const wa = resolveWhatsappFieldsFromBody(b, { requireNumbersIfEnabled: b.whatsapp_enabled === true });
+      if (wa.error) return res.status(400).json({ error: wa.error });
+      waEnabled = wa.whatsapp_enabled;
+      waNumber = wa.whatsapp_number;
+      if (wa.whatsapp_min_score !== undefined) waMinScore = wa.whatsapp_min_score;
+    }
     const { rows } = await pool.query(
       `
         INSERT INTO ${PCA_WATCHLIST_TABLE}
           (account_id, nome, palavras_chave, termos_negativos, usar_ia,
            valor_minimo, valor_maximo, orgao_filtros, uasg_filtros,
-           whatsapp_enabled, whatsapp_number, ativo)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)
+           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13)
         RETURNING *
       `,
       [accountId,
@@ -13793,11 +14027,12 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
        toNullableNumber(b.valor_maximo),
        JSON.stringify(b.orgao_filtros || []),
        JSON.stringify(b.uasg_filtros || []),
-       b.whatsapp_enabled === true,
-       normalizeWatchlistPhone(b.whatsapp_number),
+       waEnabled,
+       waNumber,
+       waMinScore,
        b.ativo !== false]
     );
-    const created = rows[0];
+    const created = decorateWatchlistWhatsapp(rows[0]);
     res.status(201).json(created);
     if (created?.ativo && !pcaBootstrapState.running) {
       setImmediate(() => runPcaWatchlistMatching({ watchlistId: created.id }).catch((error) => {
@@ -13814,6 +14049,27 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
     const accountId = getAccountId(req);
     const id = toIntOrNull(req.params.id);
     const b = req.body || {};
+    const touchingWhatsapp = typeof b.whatsapp_enabled === 'boolean'
+      || b.whatsapp_number !== undefined
+      || b.whatsapp_numbers !== undefined
+      || b.whatsapp_min_score !== undefined
+      || b.whatsapp_score_band !== undefined;
+    let waEnabled = null;
+    let waNumber = null;
+    let waMinScore = null;
+    if (touchingWhatsapp) {
+      const wa = resolveWhatsappFieldsFromBody({
+        whatsapp_enabled: b.whatsapp_enabled === true,
+        whatsapp_number: b.whatsapp_number,
+        whatsapp_numbers: b.whatsapp_numbers,
+        whatsapp_min_score: b.whatsapp_min_score,
+        whatsapp_score_band: b.whatsapp_score_band,
+      }, { requireNumbersIfEnabled: b.whatsapp_enabled === true });
+      if (wa.error) return res.status(400).json({ error: wa.error });
+      waEnabled = wa.whatsapp_enabled;
+      waNumber = wa.whatsapp_number;
+      waMinScore = wa.whatsapp_min_score !== undefined ? wa.whatsapp_min_score : WATCHLIST_SCORE_MIN_ALL;
+    }
     const { rows } = await pool.query(
       `
         UPDATE ${PCA_WATCHLIST_TABLE}
@@ -13826,7 +14082,8 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
                orgao_filtros = COALESCE($7::jsonb, orgao_filtros),
                uasg_filtros = COALESCE($8::jsonb, uasg_filtros),
                whatsapp_enabled = COALESCE($9, whatsapp_enabled),
-               whatsapp_number = COALESCE($10, whatsapp_number),
+               whatsapp_number = CASE WHEN $14::boolean THEN $10 ELSE whatsapp_number END,
+               whatsapp_min_score = CASE WHEN $14::boolean THEN $15 ELSE whatsapp_min_score END,
                ativo = COALESCE($11, ativo),
                atualizado_em = NOW()
          WHERE id = $12 AND account_id = $13
@@ -13840,13 +14097,15 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
        toNullableNumber(b.valor_maximo),
        b.orgao_filtros ? JSON.stringify(b.orgao_filtros) : null,
        b.uasg_filtros ? JSON.stringify(b.uasg_filtros) : null,
-       typeof b.whatsapp_enabled === 'boolean' ? b.whatsapp_enabled : null,
-       b.whatsapp_number !== undefined ? normalizeWatchlistPhone(b.whatsapp_number) : null,
+       waEnabled,
+       waNumber,
        typeof b.ativo === 'boolean' ? b.ativo : null,
-       id, accountId]
+       id, accountId,
+       touchingWhatsapp,
+       waMinScore]
     );
     if (!rows[0]) return res.status(404).json({ error: 'não encontrado' });
-    const updated = rows[0];
+    const updated = decorateWatchlistWhatsapp(rows[0]);
     res.json(updated);
     const matchingRelevant = ['ativo', 'palavras_chave', 'termos_negativos', 'usar_ia',
       'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros']
