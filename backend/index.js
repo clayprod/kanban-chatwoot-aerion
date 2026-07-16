@@ -12,6 +12,8 @@ const {
   registerNotificationRoutes,
   notifyAccountUsers,
   emitDeadlineDigest,
+  emitFunnelStaleInboxDigest,
+  notifyFunnelStageChange,
   ensureVapidConfigured,
   getVapidConfig,
 } = require('./notifications');
@@ -618,15 +620,26 @@ app.put('/api/metas', requireAdmin, async (req, res) => {
          ON CONFLICT (ano, mes) DO UPDATE SET meta_valor = EXCLUDED.meta_valor`,
         [ano, mes, receita]
       );
-      return res.json({ ok: true });
+    } else {
+      await pool.query(
+        `INSERT INTO ${METAS_TABLE} (ano, mes, vendedor, receita_meta, updated_at)
+         VALUES ($1,$2,'',$3, now())
+         ON CONFLICT (ano, mes, vendedor) DO UPDATE SET receita_meta = EXCLUDED.receita_meta, updated_at = now()`,
+        [ano, mes, receita]
+      );
     }
-    await pool.query(
-      `INSERT INTO ${METAS_TABLE} (ano, mes, vendedor, receita_meta, updated_at)
-       VALUES ($1,$2,'',$3, now())
-       ON CONFLICT (ano, mes, vendedor) DO UPDATE SET receita_meta = EXCLUDED.receita_meta, updated_at = now()`,
-      [ano, mes, receita]
-    );
-    res.json({ ok: true });
+    const mesLabel = String(mes).padStart(2, '0');
+    const valorLabel = receita.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const actor = req.auth?.name || req.auth?.sub || 'Admin';
+    notifyAccountUsers(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      type: 'metas.updated',
+      title: `Meta ${mesLabel}/${ano} atualizada`,
+      body: `${valorLabel} · por ${actor}`,
+      data: { view: 'Metas', ano, mes, receita_meta: receita },
+      dedupeKey: `meta:${ano}:${mes}:${Math.round(receita)}`,
+    }).catch((err) => console.warn('[metas] notify failed:', err.message));
+    return res.json({ ok: true });
   } catch (error) {
     console.error('Error saving meta:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -986,7 +999,18 @@ app.post('/api/disparo/campanhas/:id/pausar', requireAdmin, async (req, res) => 
   if (!disparoBase()) return res.status(400).json({ configured: false, error: 'Webhook não configurado.' });
   if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
   try {
-    const resp = await disparoFetch('/pausar-campanha', { method: 'POST', body: { campanhaId: Number(req.params.id) } });
+    const campanhaId = Number(req.params.id);
+    const resp = await disparoFetch('/pausar-campanha', { method: 'POST', body: { campanhaId } });
+    if (resp.ok) {
+      notifyAccountUsers(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        type: 'disparo.paused',
+        title: `Campanha #${campanhaId} pausada`,
+        body: req.auth?.name ? `Por ${req.auth.name}` : null,
+        data: { view: 'Disparo WhatsApp', campanha_id: campanhaId },
+        dedupeKey: `campanha:${campanhaId}:paused:${Date.now()}`,
+      }).catch((err) => console.warn('[disparo] notify pause failed:', err.message));
+    }
     res.json({ configured: true, ok: resp.ok, ...(resp.data || {}) });
   } catch (error) {
     console.error('pausar campanha failed:', error.message);
@@ -1010,7 +1034,18 @@ app.post('/api/disparo/campanhas/:id/cancelar', requireAdmin, async (req, res) =
   if (!disparoBase()) return res.status(400).json({ configured: false, error: 'Webhook não configurado.' });
   if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'ID de campanha inválido.' });
   try {
-    const resp = await disparoFetch('/cancelar-campanha', { method: 'POST', body: { campanhaId: Number(req.params.id) } });
+    const campanhaId = Number(req.params.id);
+    const resp = await disparoFetch('/cancelar-campanha', { method: 'POST', body: { campanhaId } });
+    if (resp.ok) {
+      notifyAccountUsers(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        type: 'disparo.cancelled',
+        title: `Campanha #${campanhaId} cancelada`,
+        body: req.auth?.name ? `Por ${req.auth.name}` : null,
+        data: { view: 'Disparo WhatsApp', campanha_id: campanhaId },
+        dedupeKey: `campanha:${campanhaId}:cancelled:${Date.now()}`,
+      }).catch((err) => console.warn('[disparo] notify cancel failed:', err.message));
+    }
     res.json({ configured: true, ok: resp.ok, ...(resp.data || {}) });
   } catch (error) {
     console.error('cancelar campanha failed:', error.message);
@@ -1465,6 +1500,33 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
         });
       }
       const ok = campanhas.some(c => c.ok);
+      const totalEnfileirados = campanhas.reduce((sum, c) => sum + (Number(c.totalEnfileirados) || 0), 0);
+      const campanhaLabel = nomeCampanha || (campanhas.length === 1 && campanhas[0].campanhaId
+        ? `#${campanhas[0].campanhaId}`
+        : 'Disparo WhatsApp');
+      if (ok) {
+        notifyAccountUsers(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          type: 'disparo.started',
+          title: `Campanha iniciada · ${String(campanhaLabel).slice(0, 60)}`,
+          body: `${totalEnfileirados} destinatário(s) enfileirado(s).`,
+          data: {
+            view: 'Disparo WhatsApp',
+            campanha_id: campanhas.length === 1 ? campanhas[0].campanhaId : null,
+            total: totalEnfileirados,
+          },
+          dedupeKey: `disparo:start:${logId || Date.now()}`,
+        }).catch((err) => console.warn('[disparo] notify start failed:', err.message));
+      } else {
+        notifyAccountUsers(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          type: 'disparo.failed',
+          title: `Falha no disparo · ${String(campanhaLabel).slice(0, 60)}`,
+          body: campanhas.map(c => c.erro).filter(Boolean).join('; ').slice(0, 200) || 'Nenhuma instância enfileirou contatos.',
+          data: { view: 'Disparo WhatsApp' },
+          dedupeKey: `disparo:fail:${logId || Date.now()}`,
+        }).catch((err) => console.warn('[disparo] notify fail failed:', err.message));
+      }
       return res.json({
         configured: true,
         ok,
@@ -1473,13 +1535,38 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
         resumo,
         instancias_descartadas: instanciasDescartadas,
         campanhaId: campanhas.length === 1 ? campanhas[0].campanhaId : undefined,
-        totalEnfileirados: campanhas.reduce((sum, c) => sum + (Number(c.totalEnfileirados) || 0), 0),
+        totalEnfileirados,
       });
     }
 
     // 3b) Fallback: contrato original — o próprio n8n resolve o público.
     const payload = { destinatarios, nomeCampanha, mensagens, instancias, config };
     const resp = await disparoFetch('/iniciar-disparo', { method: 'POST', body: payload, timeoutMs: 90000 });
+    const campanhaLabel = nomeCampanha || (resp.data?.campanhaId ? `#${resp.data.campanhaId}` : 'Disparo WhatsApp');
+    if (resp.ok) {
+      notifyAccountUsers(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        type: 'disparo.started',
+        title: `Campanha iniciada · ${String(campanhaLabel).slice(0, 60)}`,
+        body: resp.data?.totalEnfileirados
+          ? `${resp.data.totalEnfileirados} destinatário(s) enfileirado(s).`
+          : null,
+        data: {
+          view: 'Disparo WhatsApp',
+          campanha_id: resp.data?.campanhaId || null,
+        },
+        dedupeKey: `disparo:start:${logId || Date.now()}`,
+      }).catch((err) => console.warn('[disparo] notify start failed:', err.message));
+    } else {
+      notifyAccountUsers(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        type: 'disparo.failed',
+        title: `Falha no disparo · ${String(campanhaLabel).slice(0, 60)}`,
+        body: String(resp.data?.error || `HTTP ${resp.status}`).slice(0, 200),
+        data: { view: 'Disparo WhatsApp' },
+        dedupeKey: `disparo:fail:${logId || Date.now()}`,
+      }).catch((err) => console.warn('[disparo] notify fail failed:', err.message));
+    }
     return res.json({ configured: true, ok: resp.ok, status: resp.status, log_id: logId, ...(resp.data || {}) });
   } catch (error) {
     console.error('disparo webhook failed:', error.message);
@@ -1488,6 +1575,14 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
     const cause = error.name === 'AbortError'
       ? 'Tempo esgotado aguardando o n8n (timeout).'
       : String(error.message || '').replace(/^Webhook\s+\/iniciar-disparo:\s*/, '');
+    notifyAccountUsers(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      type: 'disparo.failed',
+      title: 'Falha ao acionar o n8n',
+      body: String(cause || error.message || 'Erro desconhecido').slice(0, 200),
+      data: { view: 'Disparo WhatsApp' },
+      dedupeKey: `disparo:fail:ex:${Date.now()}`,
+    }).catch(() => {});
     return res.status(502).json({
       configured: true,
       error: 'Falha ao acionar o n8n.',
@@ -1741,6 +1836,27 @@ const pollStageChanges = async () => {
       `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id) VALUES ${inserts.join(', ')}`,
       values
     );
+
+    // Notifica marcos/ganhos/perdas vindos de fora do kanban (Chatwoot).
+    try {
+      const { rows: names } = await pool.query(
+        `SELECT id, name FROM contacts WHERE id = ANY($1)`,
+        [changedIds]
+      );
+      const nameMap = new Map(names.map((r) => [r.id, r.name]));
+      for (const ch of changed) {
+        await notifyFunnelStageChange(pool, {
+          accountId: ch.account_id || CHATWOOT_ACCOUNT_ID,
+          contactId: ch.id,
+          contactName: nameMap.get(ch.id),
+          fromStage: ch.fromStage,
+          toStage: ch.toStage,
+          actorName: null,
+        });
+      }
+    } catch (notifyErr) {
+      console.warn('[funil] poll notify failed:', notifyErr.message);
+    }
   } catch (err) {
     console.error('Error polling stage changes:', err);
   } finally {
@@ -5467,6 +5583,18 @@ app.post('/api/licitacoes/opportunities', async (req, res) => {
       entityName: created.titulo,
       details: { fase: created.fase },
     });
+    notifyAccountUsers(pool, {
+      accountId,
+      type: 'pipeline.opportunity_created',
+      title: `Nova oportunidade · ${String(created.titulo).slice(0, 80)}`,
+      body: created.fase ? `Fase: ${created.fase}` : null,
+      data: {
+        view: 'Licitações',
+        sub: 'board',
+        opportunity_id: created.id,
+      },
+      dedupeKey: `opp:${created.id}`,
+    }).catch((err) => console.warn('[licitacoes] notify create opp failed:', err.message));
     res.status(201).json(normalizeOpportunityRow(created));
   } catch (error) {
     await client.query('ROLLBACK');
@@ -13823,11 +13951,20 @@ app.put('/api/contacts/:id', async (req, res) => {
         );
 
         if (Funil_Vendas && previousStage !== Funil_Vendas) {
+          const actorName = req.auth?.name || req.auth?.sub || 'Usuario do painel';
           await pool.query(
             `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id, actor_name)
              VALUES ($1, $2, $3, $4, NOW(), 'kanban', $5, $6)`,
-            [id, rows[0].account_id, previousStage, Funil_Vendas, req.auth?.uid || null, req.auth?.name || req.auth?.sub || 'Usuario do painel']
+            [id, rows[0].account_id, previousStage, Funil_Vendas, req.auth?.uid || null, actorName]
           );
+          notifyFunnelStageChange(pool, {
+            accountId: rows[0].account_id || CHATWOOT_ACCOUNT_ID,
+            contactId: Number(id),
+            contactName: rows[0].name,
+            fromStage: previousStage,
+            toStage: Funil_Vendas,
+            actorName,
+          }).catch((err) => console.warn('[funil] notify stage failed:', err.message));
         }
 
         res.json({ message: 'Contact updated successfully' });
@@ -14244,6 +14381,23 @@ app.post('/api/leads/import', async (req, res) => {
       console.error('Import error for CNPJ', lead.cnpj, ':', err.message);
       results.errors.push({ cnpj: lead.cnpj, error: err.message });
     }
+  }
+
+  if ((results.imported || 0) > 0) {
+    const n = results.imported;
+    notifyAccountUsers(pool, {
+      accountId,
+      type: 'funil.lead_imported',
+      title: `${n} lead${n === 1 ? '' : 's'} importado${n === 1 ? '' : 's'}`,
+      body: `Busca B2B · ${results.updated || 0} atualizado(s), ${results.skipped || 0} ignorado(s).`,
+      data: {
+        view: 'Busca Lead B2B',
+        imported: n,
+        updated: results.updated || 0,
+        skipped: results.skipped || 0,
+      },
+      dedupeKey: `import:${Date.now()}:${n}`,
+    }).catch((err) => console.warn('[funil] notify import failed:', err.message));
   }
 
   res.json(results);
@@ -15726,12 +15880,23 @@ function startRFBImport({ force = false, staging = false, append = false, reason
     _rfbMunicipiosCache = null;
     _rfbCnaesCache = null;
     _rfbNaturezasCache = null;
+    const failed = rfbImportState.status === 'error' || code !== 0;
     importLogPromise.then((importLogId) => recordRFBImportFinish(
       importLogId,
-      rfbImportState.status === 'error' || code !== 0 ? 'error' : 'done',
+      failed ? 'error' : 'done',
       `code=${code}; records=${rfbImportState.records || 0}; message=${rfbImportState.message || ''}`
     ));
     console.log('[rfb_import] finished with code', code);
+    notifyAccountUsers(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      type: failed ? 'dados.rfb_import_failed' : 'dados.rfb_import_done',
+      title: failed ? 'Import RFB falhou' : 'Import RFB concluído',
+      body: failed
+        ? String(rfbImportState.error || rfbImportState.message || `código ${code}`).slice(0, 200)
+        : `${Number(rfbImportState.records || 0).toLocaleString('pt-BR')} registro(s) processados.`,
+      data: { view: 'Busca Lead B2B', records: rfbImportState.records || 0 },
+      dedupeKey: `rfb:${failed ? 'err' : 'ok'}:${rfbImportState.startedAt || Date.now()}`,
+    }).catch((err) => console.warn('[rfb] notify import failed:', err.message));
   });
 
   py.on('error', (err) => {
@@ -15740,6 +15905,14 @@ function startRFBImport({ force = false, staging = false, append = false, reason
     rfbImportState.message = `Falha ao iniciar script: ${err.message}`;
     importLogPromise.then((importLogId) => recordRFBImportFinish(importLogId, 'error', `spawn=${err.message}`));
     console.error('[rfb_import] spawn error:', err);
+    notifyAccountUsers(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      type: 'dados.rfb_import_failed',
+      title: 'Import RFB falhou',
+      body: String(err.message || 'spawn error').slice(0, 200),
+      data: { view: 'Busca Lead B2B' },
+      dedupeKey: `rfb:spawn:${Date.now()}`,
+    }).catch(() => {});
   });
 
   return true;
@@ -16961,6 +17134,20 @@ const registerBackgroundSchedules = () => {
       }
     } catch (error) {
       console.error('[notifications] deadline digest error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Leads parados no Inbox (etapa 1) há 3+ dias.
+  cron.schedule('30 9 * * 1-5', async () => {
+    if (!dataLayerReady) return;
+    try {
+      const result = await emitFunnelStaleInboxDigest(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        staleDays: 3,
+      });
+      if (result.count > 0) console.log('[notifications] stale inbox digest:', result);
+    } catch (error) {
+      console.error('[notifications] stale inbox digest error:', error);
     }
   }, { timezone: 'America/Sao_Paulo' });
 

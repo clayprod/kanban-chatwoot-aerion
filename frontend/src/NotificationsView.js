@@ -193,6 +193,33 @@ export default function NotificationsView({ onNavigate }) {
     savePrefs(next);
   };
 
+  /** Liga/desliga um grupo inteiro (categoria) e cascateia os tipos do grupo. */
+  const setGroupEnabled = (catId, enabled, typeList) => {
+    if (!prefs) return;
+    const typesPatch = {};
+    for (const t of typeList || []) {
+      const key = t.type;
+      typesPatch[key] = {
+        in_app: enabled,
+        // Ao reativar o grupo, push do tipo segue o default “ligado se master push on”
+        // mas o usuário pode refinar depois; ao desligar, zera push também.
+        push: enabled,
+      };
+    }
+    patchPrefs({
+      categories: {
+        [catId]: { in_app: enabled, push: enabled },
+      },
+      types: typesPatch,
+    });
+  };
+
+  const isGroupEnabled = (catId) => {
+    const c = prefs?.categories?.[catId];
+    // Grupo ativo se recebe in-app ou push no nível do grupo
+    return Boolean(c?.in_app || c?.push);
+  };
+
   const handleEnablePush = async () => {
     setPushBusy(true);
     setNotice(null);
@@ -309,8 +336,8 @@ export default function NotificationsView({ onNavigate }) {
         <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">Notificações</h1>
         <p className={`${subtle} max-w-xl`}>
           Ative push neste dispositivo (Chrome, Firefox, Edge, Safari e PWA no Android/iPhone)
-          e escolha o que entra no sino e no push. Alertas WhatsApp das assinaturas continuam
-          configurados em cada busca monitorada.
+          e escolha o que entra no sino e no push — funil, disparo, licitações, metas e base de dados.
+          Alertas WhatsApp por assinatura de edital/PCA continuam no card de cada busca monitorada.
         </p>
       </header>
 
@@ -428,12 +455,14 @@ export default function NotificationsView({ onNavigate }) {
         )}
       </section>
 
-      {/* Section 2: hierarchy */}
-      <section className={`${card} p-4 sm:p-5 space-y-5`}>
+      {/* Section 2: grupos + tipos */}
+      <section className={`${card} p-4 sm:p-5 space-y-4`}>
         <div>
           <h2 className={sectionTitle}>O que você recebe</h2>
           <p className={`${subtle} mt-0.5`}>
-            Hierarquia por categoria e tipo. WhatsApp de watchlist fica no card de cada assinatura em Licitações.
+            Ligue ou desligue cada <strong className="font-semibold text-ink">grupo</strong>.
+            Com o grupo ativo, refine por tipo (sino e push). WhatsApp de assinatura de edital/PCA
+            continua no card de cada busca monitorada.
           </p>
         </div>
 
@@ -441,80 +470,134 @@ export default function NotificationsView({ onNavigate }) {
           const types = catalog.types?.length
             ? catalog.types.filter((t) => t.category === cat.id)
             : typesByCategory(cat.id);
+          const groupOn = isGroupEnabled(cat.id);
+          const catPref = prefs.categories?.[cat.id] || { in_app: true, push: true };
           return (
-            <div key={cat.id} className="space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-ink">{cat.label}</p>
-                  <p className={subtle}>{cat.description}</p>
+            <div
+              key={cat.id}
+              className={[
+                'overflow-hidden rounded-[14px] border transition',
+                groupOn ? 'border-line bg-bg2/30' : 'border-line/70 bg-bg2/10 opacity-80',
+              ].join(' ')}
+            >
+              {/* Group master */}
+              <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-3 sm:px-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-ink">{cat.label}</p>
+                    <span className={[
+                      'rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                      groupOn ? 'bg-primary/15 text-primary' : 'bg-line/60 text-muted',
+                    ].join(' ')}>
+                      {groupOn ? 'Ativo' : 'Desligado'}
+                    </span>
+                  </div>
+                  <p className={`${subtle} mt-0.5`}>{cat.description}</p>
                 </div>
-                <div className="flex items-center gap-4 text-[11px] text-muted">
-                  <span className="inline-flex items-center gap-1.5">
-                    In-app
-                    <Toggle
-                      checked={Boolean(prefs.categories?.[cat.id]?.in_app)}
-                      label={`${cat.label} in-app`}
-                      disabled={saving}
-                      onChange={(v) => patchPrefs({
-                        categories: { [cat.id]: { in_app: v } },
-                      })}
-                    />
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-[11px] font-medium text-muted">
+                    Receber grupo
                   </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    Push
-                    <Toggle
-                      checked={Boolean(prefs.categories?.[cat.id]?.push)}
-                      label={`${cat.label} push`}
-                      disabled={saving || !prefs.push_enabled}
-                      onChange={(v) => patchPrefs({
-                        categories: { [cat.id]: { push: v } },
-                      })}
-                    />
-                  </span>
+                  <Toggle
+                    checked={groupOn}
+                    label={`Receber grupo ${cat.label}`}
+                    disabled={saving}
+                    onChange={(v) => setGroupEnabled(cat.id, v, types)}
+                  />
                 </div>
               </div>
 
-              <ul className="divide-y divide-line overflow-hidden rounded-[12px] border border-line">
-                {types.map((t) => {
-                  const typeKey = t.type;
-                  const typePref = prefs.types?.[typeKey] || { in_app: true, push: true };
-                  return (
-                    <li
-                      key={typeKey}
-                      className="flex flex-col gap-2 bg-bg2/40 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-medium text-ink">{t.label}</p>
-                        <p className="text-[11px] text-muted">{t.description}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-4 text-[11px] text-muted">
-                        <span className="inline-flex items-center gap-1.5">
-                          In-app
-                          <Toggle
-                            checked={Boolean(typePref.in_app)}
-                            label={`${t.label} in-app`}
-                            disabled={saving}
-                            onChange={(v) => patchPrefs({
-                              types: { [typeKey]: { in_app: v } },
-                            })}
-                          />
-                        </span>
-                        <span className="inline-flex items-center gap-1.5">
-                          Push
-                          <Toggle
-                            checked={Boolean(typePref.push)}
-                            label={`${t.label} push`}
-                            disabled={saving || !prefs.push_enabled}
-                            onChange={(v) => patchPrefs({
-                              types: { [typeKey]: { push: v } },
-                            })}
-                          />
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              {groupOn && (
+                <>
+                  {/* Canais do grupo */}
+                  <div className="flex flex-wrap items-center gap-4 border-t border-line/80 bg-surf/40 px-3.5 py-2.5 sm:px-4">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted2">
+                      Canais do grupo
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+                      Sino (in-app)
+                      <Toggle
+                        checked={Boolean(catPref.in_app)}
+                        label={`${cat.label} in-app`}
+                        disabled={saving}
+                        onChange={(v) => patchPrefs({
+                          categories: { [cat.id]: { in_app: v } },
+                        })}
+                      />
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+                      Push
+                      <Toggle
+                        checked={Boolean(catPref.push)}
+                        label={`${cat.label} push`}
+                        disabled={saving || !prefs.push_enabled}
+                        onChange={(v) => patchPrefs({
+                          categories: { [cat.id]: { push: v } },
+                        })}
+                      />
+                    </span>
+                  </div>
+
+                  {/* Tipos do grupo */}
+                  <ul className="divide-y divide-line border-t border-line">
+                    {types.map((t) => {
+                      const typeKey = t.type;
+                      const typePref = prefs.types?.[typeKey] || { in_app: true, push: true };
+                      const typeReceives = Boolean(
+                        (catPref.in_app && typePref.in_app)
+                        || (prefs.push_enabled && catPref.push && typePref.push)
+                      );
+                      return (
+                        <li
+                          key={typeKey}
+                          className="flex flex-col gap-2 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4"
+                        >
+                          <div className="min-w-0">
+                            <p className={[
+                              'text-[13px] font-medium',
+                              typeReceives ? 'text-ink' : 'text-muted',
+                            ].join(' ')}
+                            >
+                              {t.label}
+                            </p>
+                            <p className="text-[11px] text-muted">{t.description}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-4 text-[11px] text-muted">
+                            <span className="inline-flex items-center gap-1.5">
+                              Sino
+                              <Toggle
+                                checked={Boolean(typePref.in_app)}
+                                label={`${t.label} in-app`}
+                                disabled={saving || !catPref.in_app}
+                                onChange={(v) => patchPrefs({
+                                  types: { [typeKey]: { in_app: v } },
+                                })}
+                              />
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              Push
+                              <Toggle
+                                checked={Boolean(typePref.push)}
+                                label={`${t.label} push`}
+                                disabled={saving || !prefs.push_enabled || !catPref.push}
+                                onChange={(v) => patchPrefs({
+                                  types: { [typeKey]: { push: v } },
+                                })}
+                              />
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+
+              {!groupOn && types.length > 0 && (
+                <p className="border-t border-line/60 px-3.5 py-2.5 text-[11px] text-muted sm:px-4">
+                  {types.length} tipo{types.length === 1 ? '' : 's'} neste grupo — ative “Receber grupo” para configurar.
+                </p>
+              )}
             </div>
           );
         })}

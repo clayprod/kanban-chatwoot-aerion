@@ -10,10 +10,30 @@ const NOTIFICATION_PREFERENCES_TABLE = 'notification_preferences';
 const USER_NOTIFICATIONS_TABLE = 'user_notifications';
 
 const NOTIFICATION_CATEGORIES = {
+  funil: {
+    id: 'funil',
+    label: 'Funil e leads',
+    description: 'Importações B2B, marcos do funil, ganhos/perdas e leads parados.',
+  },
+  disparo: {
+    id: 'disparo',
+    label: 'Disparo WhatsApp',
+    description: 'Campanhas iniciadas, pausadas, canceladas ou com falha.',
+  },
   licitacoes: {
     id: 'licitacoes',
     label: 'Licitações',
     description: 'Sinais de watchlist, buscas PNCP e prazos do pipeline.',
+  },
+  metas: {
+    id: 'metas',
+    label: 'Metas',
+    description: 'Alterações nas metas de receita.',
+  },
+  dados: {
+    id: 'dados',
+    label: 'Dados e base',
+    description: 'Importações RFB e manutenção da base local.',
   },
   sistema: {
     id: 'sistema',
@@ -23,6 +43,72 @@ const NOTIFICATION_CATEGORIES = {
 };
 
 const NOTIFICATION_TYPE_CATALOG = {
+  // —— Funil ——
+  'funil.lead_imported': {
+    type: 'funil.lead_imported',
+    category: 'funil',
+    label: 'Leads importados (B2B)',
+    description: 'Resumo ao importar contatos da Busca Lead B2B / CNPJ.',
+    channels: ['in_app', 'push'],
+  },
+  'funil.won': {
+    type: 'funil.won',
+    category: 'funil',
+    label: 'Lead ganho / novo cliente',
+    description: 'Quando um lead vai para Fechado-Ganho ou Novos Clientes.',
+    channels: ['in_app', 'push'],
+  },
+  'funil.lost': {
+    type: 'funil.lost',
+    category: 'funil',
+    label: 'Lead perdido ou descartado',
+    description: 'Quando um lead vai para Fechado-Perdido ou Descartado.',
+    channels: ['in_app', 'push'],
+  },
+  'funil.milestone': {
+    type: 'funil.milestone',
+    category: 'funil',
+    label: 'Marcos do funil',
+    description: 'Qualificado (SQL), Demo realizada ou Proposta enviada.',
+    channels: ['in_app', 'push'],
+  },
+  'funil.stale_inbox': {
+    type: 'funil.stale_inbox',
+    category: 'funil',
+    label: 'Leads parados no Inbox',
+    description: 'Digest diário de leads no Inbox (Novos) sem avanço.',
+    channels: ['in_app', 'push'],
+  },
+  // —— Disparo ——
+  'disparo.started': {
+    type: 'disparo.started',
+    category: 'disparo',
+    label: 'Campanha iniciada',
+    description: 'Quando um disparo WhatsApp é enfileirado com sucesso.',
+    channels: ['in_app', 'push'],
+  },
+  'disparo.failed': {
+    type: 'disparo.failed',
+    category: 'disparo',
+    label: 'Falha no disparo',
+    description: 'Quando o envio da campanha falha ou nenhuma instância envia.',
+    channels: ['in_app', 'push'],
+  },
+  'disparo.paused': {
+    type: 'disparo.paused',
+    category: 'disparo',
+    label: 'Campanha pausada',
+    description: 'Quando uma campanha em andamento é pausada.',
+    channels: ['in_app', 'push'],
+  },
+  'disparo.cancelled': {
+    type: 'disparo.cancelled',
+    category: 'disparo',
+    label: 'Campanha cancelada',
+    description: 'Quando uma campanha é cancelada.',
+    channels: ['in_app', 'push'],
+  },
+  // —— Licitações ——
   'watchlist.edital_match': {
     type: 'watchlist.edital_match',
     category: 'licitacoes',
@@ -58,6 +144,37 @@ const NOTIFICATION_TYPE_CATALOG = {
     description: 'Oportunidades com prazo de envio de proposta em até 48 horas.',
     channels: ['in_app', 'push'],
   },
+  'pipeline.opportunity_created': {
+    type: 'pipeline.opportunity_created',
+    category: 'licitacoes',
+    label: 'Nova oportunidade no pipeline',
+    description: 'Quando uma licitação é criada no board de oportunidades.',
+    channels: ['in_app', 'push'],
+  },
+  // —— Metas ——
+  'metas.updated': {
+    type: 'metas.updated',
+    category: 'metas',
+    label: 'Meta de receita alterada',
+    description: 'Quando um admin salva ou altera a meta mensal.',
+    channels: ['in_app', 'push'],
+  },
+  // —— Dados ——
+  'dados.rfb_import_done': {
+    type: 'dados.rfb_import_done',
+    category: 'dados',
+    label: 'Import RFB concluído',
+    description: 'Base da Receita Federal atualizada com sucesso.',
+    channels: ['in_app', 'push'],
+  },
+  'dados.rfb_import_failed': {
+    type: 'dados.rfb_import_failed',
+    category: 'dados',
+    label: 'Import RFB falhou',
+    description: 'A importação da base RFB terminou com erro.',
+    channels: ['in_app', 'push'],
+  },
+  // —— Sistema ——
   'system.test': {
     type: 'system.test',
     category: 'sistema',
@@ -70,18 +187,45 @@ const NOTIFICATION_TYPE_CATALOG = {
 const DEFAULT_NOTIFICATION_PREFS = {
   push_enabled: false,
   categories: {
+    funil: { in_app: true, push: true },
+    disparo: { in_app: true, push: true },
     licitacoes: { in_app: true, push: true },
+    metas: { in_app: true, push: false },
+    dados: { in_app: true, push: true },
     sistema: { in_app: true, push: true },
   },
   types: {
+    'funil.lead_imported': { in_app: true, push: false },
+    'funil.won': { in_app: true, push: true },
+    'funil.lost': { in_app: true, push: true },
+    'funil.milestone': { in_app: true, push: false },
+    'funil.stale_inbox': { in_app: true, push: false },
+    'disparo.started': { in_app: true, push: true },
+    'disparo.failed': { in_app: true, push: true },
+    'disparo.paused': { in_app: true, push: false },
+    'disparo.cancelled': { in_app: true, push: true },
     'watchlist.edital_match': { in_app: true, push: true },
     'watchlist.pca_match': { in_app: true, push: true },
     'search.job_completed': { in_app: true, push: true },
     'pipeline.overdue': { in_app: true, push: true },
     'pipeline.due_48h': { in_app: true, push: false },
+    'pipeline.opportunity_created': { in_app: true, push: true },
+    'metas.updated': { in_app: true, push: false },
+    'dados.rfb_import_done': { in_app: true, push: false },
+    'dados.rfb_import_failed': { in_app: true, push: true },
     'system.test': { in_app: true, push: true },
   },
 };
+
+/** Número da etapa a partir de "13. Fechado-Ganho". */
+const stageNumberFromLabel = (stage) => {
+  const m = String(stage || '').trim().match(/^(\d+)/);
+  return m ? Number(m[1]) : null;
+};
+
+const FUNIL_WON_STAGES = new Set([13, 18]); // Fechado-Ganho, Novos Clientes
+const FUNIL_LOST_STAGES = new Set([14, 16]); // Fechado-Perdido, Descartado
+const FUNIL_MILESTONE_STAGES = new Set([6, 8, 10]); // Qualificado, Demo, Proposta
 
 const deepMergePrefs = (base, patch) => {
   const out = {
@@ -192,21 +336,26 @@ const getUserNotificationPrefs = async (pool, userId) => {
   return deepMergePrefs(DEFAULT_NOTIFICATION_PREFS, rows[0].prefs);
 };
 
+/**
+ * Resolução de preferências:
+ * 1) master push_enabled (só canal push)
+ * 2) grupo/categoria deve estar ligado no canal (gate)
+ * 3) tipo individual deve estar ligado no canal
+ * Tipo NÃO sobrescreve um grupo desligado.
+ */
 const shouldNotify = (prefs, type, channel) => {
   const meta = NOTIFICATION_TYPE_CATALOG[type];
   if (!meta) return false;
   if (channel === 'push' && !prefs?.push_enabled) return false;
   if (!meta.channels.includes(channel)) return false;
 
-  const typePref = prefs?.types?.[type];
-  if (typePref && typeof typePref[channel] === 'boolean') {
-    return typePref[channel];
-  }
   const catPref = prefs?.categories?.[meta.category];
-  if (catPref && typeof catPref[channel] === 'boolean') {
-    return catPref[channel];
-  }
-  return channel === 'in_app';
+  const catOn = typeof catPref?.[channel] === 'boolean' ? catPref[channel] : true;
+  if (!catOn) return false;
+
+  const typePref = prefs?.types?.[type];
+  const typeOn = typeof typePref?.[channel] === 'boolean' ? typePref[channel] : true;
+  return typeOn;
 };
 
 const getAccountUserIds = async (pool, accountId) => {
@@ -399,6 +548,90 @@ const notifyAccountUsers = async (pool, {
     data,
     dedupeKey,
   });
+};
+
+/**
+ * Classifica mudança de etapa do funil e dispara won / lost / milestone.
+ */
+const notifyFunnelStageChange = async (pool, {
+  accountId = 2,
+  contactId,
+  contactName,
+  fromStage,
+  toStage,
+  actorName = null,
+}) => {
+  const toNum = stageNumberFromLabel(toStage);
+  if (!toNum) return { created: 0, pushed: 0 };
+  const name = String(contactName || `Lead #${contactId}`).slice(0, 80);
+  const who = actorName ? ` por ${actorName}` : '';
+  const baseData = {
+    view: 'Board',
+    contact_id: contactId,
+    from_stage: fromStage,
+    to_stage: toStage,
+  };
+
+  if (FUNIL_WON_STAGES.has(toNum)) {
+    return notifyAccountUsers(pool, {
+      accountId,
+      type: 'funil.won',
+      title: `Ganho · ${name}`,
+      body: `${fromStage || '—'} → ${toStage}${who}`,
+      data: baseData,
+      dedupeKey: `contact:${contactId}:won:${toNum}`,
+    });
+  }
+  if (FUNIL_LOST_STAGES.has(toNum)) {
+    return notifyAccountUsers(pool, {
+      accountId,
+      type: 'funil.lost',
+      title: `Perdido · ${name}`,
+      body: `${fromStage || '—'} → ${toStage}${who}`,
+      data: baseData,
+      dedupeKey: `contact:${contactId}:lost:${toNum}:${Date.now()}`,
+    });
+  }
+  if (FUNIL_MILESTONE_STAGES.has(toNum)) {
+    return notifyAccountUsers(pool, {
+      accountId,
+      type: 'funil.milestone',
+      title: `Marco · ${name}`,
+      body: `${fromStage || '—'} → ${toStage}${who}`,
+      data: baseData,
+      dedupeKey: `contact:${contactId}:milestone:${toNum}`,
+    });
+  }
+  return { created: 0, pushed: 0 };
+};
+
+/** Digest diário: leads no Inbox (etapa 1) sem atualização há N dias. */
+const emitFunnelStaleInboxDigest = async (pool, {
+  accountId = 2,
+  staleDays = 3,
+}) => {
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const { rows } = await pool.query(
+    `
+      SELECT COUNT(*)::int AS n
+        FROM contacts c
+       WHERE c.account_id = $1
+         AND COALESCE(c.custom_attributes->>'Funil_Vendas', '') LIKE '1.%'
+         AND c.updated_at < NOW() - ($2::text || ' days')::interval
+    `,
+    [accountId, String(Math.max(1, Number(staleDays) || 3))]
+  );
+  const n = Number(rows[0]?.n) || 0;
+  if (n <= 0) return { count: 0, created: 0, pushed: 0 };
+  const r = await notifyAccountUsers(pool, {
+    accountId,
+    type: 'funil.stale_inbox',
+    title: `${n} lead${n === 1 ? '' : 's'} parado${n === 1 ? '' : 's'} no Inbox`,
+    body: `Sem avanço há ${staleDays}+ dias. Vale priorizar no funil.`,
+    data: { view: 'Board', count: n, stale_days: staleDays },
+    dedupeKey: `account:${accountId}:day:${dayKey}`,
+  });
+  return { count: n, ...r };
 };
 
 const emitDeadlineDigest = async (pool, { accountId = 2, getPrazoStatusSql }) => {
@@ -788,6 +1021,9 @@ module.exports = {
   getUserNotificationPrefs,
   shouldNotify,
   emitDeadlineDigest,
+  emitFunnelStaleInboxDigest,
+  notifyFunnelStageChange,
+  stageNumberFromLabel,
   getVapidConfig,
   ensureVapidConfigured,
 };
