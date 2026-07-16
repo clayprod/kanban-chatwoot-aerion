@@ -1,7 +1,7 @@
 FROM node:18-alpine
 
 # Install Python3 + pip for rfb_import.py
-RUN apk add --no-cache python3 py3-pip
+RUN apk add --no-cache curl python3 py3-pip
 
 WORKDIR /app
 

@@ -7,6 +7,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
+const {
+  createNotificationTables,
+  registerNotificationRoutes,
+  notifyAccountUsers,
+  emitDeadlineDigest,
+  ensureVapidConfigured,
+  getVapidConfig,
+} = require('./notifications');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -246,6 +254,15 @@ pool.on('error', (err) => {
 // role. Page-level access ('allowed_views') is stored app-side, editable by admin.
 const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '2', 10) || 2;
 const APP_ACCESS_TABLE = 'app_user_access';
+
+// Web Push (VAPID) — inbox + push multi-navegador. Ver backend/notifications.js
+registerNotificationRoutes(app, { pool, defaultAccountId: CHATWOOT_ACCOUNT_ID });
+if (getVapidConfig()) {
+  ensureVapidConfigured();
+  console.log('[notifications] Web Push VAPID configurado');
+} else {
+  console.warn('[notifications] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY ausentes — push desabilitado até configurar');
+}
 
 /** Slug estável para agrupar contas do mesmo vendedor no ranking (ex.: Clayton pessoal + Aerion). */
 const sellerIdentityFromLabel = (label) => {
@@ -1046,9 +1063,15 @@ const personalizarMensagemDisparo = (msg, contato) => ({
 
 // Enriquecer contatos para o n8n: nome legível + campos já resolvidos (fallback se o
 // workflow não fizer replace de {nome} no pool de mensagens).
+//
+// Contrato do Disparo Massivo v6 (n8n): cada item em destinatarios.contatos precisa de
+// `contact_id` + `phone_number` (nodes "1. Preparar Dados" e "7b. Usar Contatos Diretos").
+// Mantemos também `id`/`telefone`/`nome` para compatibilidade com o restante do app.
 const enriquecerContatosDisparo = (contatos, mensagens) => contatos.map((c, i) => {
   const nomeCompleto = String(c.nome || '').trim();
   const primeiro = disparoPrimeiroNome(nomeCompleto);
+  const telefone = String(c.telefone || c.phone_number || '').trim();
+  const contactId = Number(c.id ?? c.contact_id);
   const ctx = {
     nome: nomeCompleto,
     nome_completo: nomeCompleto,
@@ -1059,8 +1082,11 @@ const enriquecerContatosDisparo = (contatos, mensagens) => contatos.map((c, i) =
   const resolvida = personalizarMensagemDisparo(base, ctx);
   const textoFinal = resolvida.texto || resolvida.legenda || null;
   return {
-    id: c.id,
-    telefone: c.telefone,
+    id: Number.isFinite(contactId) ? contactId : c.id,
+    // Aliases exigidos pelo workflow n8n (sem isso a fila fica com 0 destinatários)
+    contact_id: Number.isFinite(contactId) ? contactId : c.id,
+    telefone,
+    phone_number: telefone,
     // `nome` = primeiro nome: é o que o n8n costuma injetar em {nome}
     nome: primeiro,
     nome_completo: nomeCompleto || null,
@@ -1669,10 +1695,9 @@ const pollStageChanges = async () => {
     );
 
     const lastStageMap = new Map(lastStages.map(row => [row.contact_id, row.to_stage]));
-    const inserts = [];
-    const values = [];
-    let index = 1;
 
+    // Contatos que realmente trocaram de etapa neste ciclo.
+    const changed = [];
     contacts.forEach(contact => {
       const toStage = contact.custom_attributes?.Funil_Vendas || null;
       if (!toStage) {
@@ -1682,17 +1707,40 @@ const pollStageChanges = async () => {
       if (fromStage === toStage) {
         return;
       }
-      values.push(contact.id, contact.account_id, fromStage, toStage, 'polling');
-      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, NOW(), $${index + 4})`);
-      index += 5;
+      changed.push({ id: contact.id, account_id: contact.account_id, fromStage, toStage });
     });
 
-    if (inserts.length > 0) {
-      await pool.query(
-        `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source) VALUES ${inserts.join(', ')}`,
-        values
-      );
+    if (changed.length === 0) {
+      return;
     }
+
+    // Atribuição: o move é creditado ao agente responsável (assignee) da conversa mais
+    // recente do contato. Sem isso todo move via polling fica sem autor e some ao
+    // segmentar o Ritmo por agente. NULL quando a conversa não tem responsável.
+    const changedIds = changed.map(c => c.id);
+    const { rows: assigneeRows } = await pool.query(
+      `SELECT DISTINCT ON (contact_id) contact_id, assignee_id
+         FROM conversations
+        WHERE contact_id = ANY($1)
+        ORDER BY contact_id, updated_at DESC`,
+      [changedIds]
+    );
+    const assigneeMap = new Map(assigneeRows.map(row => [row.contact_id, row.assignee_id]));
+
+    const inserts = [];
+    const values = [];
+    let index = 1;
+    changed.forEach(({ id, account_id, fromStage, toStage }) => {
+      const actorId = assigneeMap.get(id) ?? null;
+      values.push(id, account_id, fromStage, toStage, 'polling', actorId);
+      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, NOW(), $${index + 4}, $${index + 5})`);
+      index += 6;
+    });
+
+    await pool.query(
+      `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id) VALUES ${inserts.join(', ')}`,
+      values
+    );
   } catch (err) {
     console.error('Error polling stage changes:', err);
   } finally {
@@ -1964,6 +2012,8 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${WATCHLIST_NOTIFICATIONS_TABLE} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_watchlist_notifications_pending ON ${WATCHLIST_NOTIFICATIONS_TABLE} (status, attempts, created_at);`);
 
+  await createNotificationTables(pool);
+
   await pool.query(`CREATE EXTENSION IF NOT EXISTS unaccent`).catch(() => {});
   await pool.query(`
     CREATE OR REPLACE FUNCTION immutable_unaccent(text)
@@ -2014,24 +2064,46 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS has_contract BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS has_ata BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ${PNCP_RESULT_CACHE_TABLE} ADD COLUMN IF NOT EXISTS fornecedores JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`UPDATE ${PNCP_RESULT_CACHE_TABLE} SET fornecedores = '[]'::jsonb WHERE jsonb_typeof(fornecedores) IS DISTINCT FROM 'array';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_types ON ${PNCP_RESULT_CACHE_TABLE} (has_result, has_contract, has_ata);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_result_cache_fornecedores ON ${PNCP_RESULT_CACHE_TABLE} USING GIN (fornecedores);`);
   // Backfill idempotente para linhas criadas antes das flags independentes.
   await pool.query(`
     UPDATE ${PNCP_RESULT_CACHE_TABLE}
        SET has_result = has_result OR etapa_comercial = 'resulted'
-          OR jsonb_typeof(payload->'resultados') = 'array' AND jsonb_array_length(payload->'resultados') > 0,
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'resultados') = 'array' THEN payload->'resultados' ELSE '[]'::jsonb END) > 0,
            has_contract = has_contract OR etapa_comercial = 'contracted'
-          OR jsonb_typeof(payload->'contratos') = 'array' AND jsonb_array_length(payload->'contratos') > 0
-          OR jsonb_typeof(payload->'contratos_daily') = 'array' AND jsonb_array_length(payload->'contratos_daily') > 0,
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'contratos') = 'array' THEN payload->'contratos' ELSE '[]'::jsonb END) > 0
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'contratos_daily') = 'array' THEN payload->'contratos_daily' ELSE '[]'::jsonb END) > 0,
            has_ata = has_ata OR etapa_comercial = 'ata_available'
-          OR jsonb_typeof(payload->'atas') = 'array' AND jsonb_array_length(payload->'atas') > 0
-          OR jsonb_typeof(payload->'atas_daily') = 'array' AND jsonb_array_length(payload->'atas_daily') > 0,
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'atas') = 'array' THEN payload->'atas' ELSE '[]'::jsonb END) > 0
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'atas_daily') = 'array' THEN payload->'atas_daily' ELSE '[]'::jsonb END) > 0,
            fornecedores = CASE
-             WHEN jsonb_array_length(fornecedores) = 0 AND (fornecedor_ni IS NOT NULL OR fornecedor_nome IS NOT NULL)
+             WHEN jsonb_array_length(CASE WHEN jsonb_typeof(fornecedores) = 'array' THEN fornecedores ELSE '[]'::jsonb END) = 0
+              AND (fornecedor_ni IS NOT NULL OR fornecedor_nome IS NOT NULL)
              THEN jsonb_build_array(jsonb_build_object('ni', fornecedor_ni, 'nome', fornecedor_nome))
              ELSE fornecedores END
-     WHERE NOT has_result OR NOT has_contract OR NOT has_ata OR jsonb_array_length(fornecedores) = 0;
+     WHERE (
+          NOT has_result AND (
+            etapa_comercial = 'resulted'
+            OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'resultados') = 'array' THEN payload->'resultados' ELSE '[]'::jsonb END) > 0
+          )
+        ) OR (
+          NOT has_contract AND (
+            etapa_comercial = 'contracted'
+            OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'contratos') = 'array' THEN payload->'contratos' ELSE '[]'::jsonb END) > 0
+            OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'contratos_daily') = 'array' THEN payload->'contratos_daily' ELSE '[]'::jsonb END) > 0
+          )
+        ) OR (
+          NOT has_ata AND (
+            etapa_comercial = 'ata_available'
+            OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'atas') = 'array' THEN payload->'atas' ELSE '[]'::jsonb END) > 0
+            OR jsonb_array_length(CASE WHEN jsonb_typeof(payload->'atas_daily') = 'array' THEN payload->'atas_daily' ELSE '[]'::jsonb END) > 0
+          )
+        ) OR (
+          jsonb_array_length(CASE WHEN jsonb_typeof(fornecedores) = 'array' THEN fornecedores ELSE '[]'::jsonb END) = 0
+          AND (fornecedor_ni IS NOT NULL OR fornecedor_nome IS NOT NULL)
+        );
   `);
 
   await pool.query(`
@@ -2354,15 +2426,18 @@ const sendEvolutionTextMessage = async (number, text) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
+    // Evolution v2 (Baileys) exige { number, text }. O formato legado
+    // { textMessage: { text } } responde 400 "requires property text".
     const response = await fetch(`${baseUrl}/message/sendText/${encodeURIComponent(instance)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        apikey: apiKey,
         ApiKey: apiKey,
       },
       body: JSON.stringify({
-        number,
-        textMessage: { text },
+        number: String(number || '').replace(/\D/g, ''),
+        text: String(text || ''),
       }),
       signal: controller.signal,
     });
@@ -2970,9 +3045,9 @@ const extractPncpCompraIdentifiers = (item = {}) => {
   }
 
   const control = String(item.numero_controle_pncp || item.numeroControlePNCP || '').trim();
-  const controlMatch = control.match(/^(\d{14})-\d+-\d+\/(\d{4})\/(\d+)$/) || control.match(/^(\d{14}).*?(\d{4}).*?(\d+)$/);
+  const controlMatch = control.match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/);
   if (controlMatch) {
-    return { cnpj: controlMatch[1], ano: controlMatch[2], sequencial: controlMatch[3] };
+    return { cnpj: controlMatch[1], ano: controlMatch[3], sequencial: String(Number(controlMatch[2])) };
   }
 
   return { cnpj: '', ano: '', sequencial: '' };
@@ -3174,7 +3249,7 @@ const normalizePncpItemUrl = (itemUrl) => {
   return `https://pncp.gov.br${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`;
 };
 
-const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
+const getPncpCompraDetalhe = async (cnpj, ano, sequencial, { priority = 'sync' } = {}) => {
   if (!cnpj || !ano || !sequencial) {
     return null;
   }
@@ -3189,7 +3264,7 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
   }
 
   try {
-    const detail = await withPncpGate(() => fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`));
+    const detail = await withPncpGate(() => fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`), { priority });
     const value = {
       srp: typeof detail?.srp === 'boolean' ? detail.srp : null,
       amparo_legal: detail?.amparoLegal ? {
@@ -3208,16 +3283,13 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
       data_encerramento_proposta: detail?.dataEncerramentoProposta || detail?.dataEncerramentoPropostas || detail?.dataFimProposta || detail?.dataFimPropostas || null,
       valor_total_estimado: Number.isFinite(Number(detail?.valorTotalEstimado)) && Number(detail?.valorTotalEstimado) > 0 ? Number(detail.valorTotalEstimado) : null,
       valor_total_homologado: Number.isFinite(Number(detail?.valorTotalHomologado)) && Number(detail?.valorTotalHomologado) > 0 ? Number(detail.valorTotalHomologado) : null,
+      tem_resultado: detail?.temResultado === true || detail?.tem_resultado === true,
     };
     pncpCompraDetalheCache.set(cacheKey, { value, timestamp: Date.now() });
     return value;
   } catch (error) {
     if (isPncpThrottleError(error) || String(error?.message || '').includes('429')) {
-      if (typeof notePncpThrottle === 'function') {
-        notePncpThrottle(error.message || 'detalhe 429', 90_000);
-      } else {
-        pncpDetalheRateLimitedUntil = Date.now() + 90 * 1000;
-      }
+      // O gate já registrou o throttle (notePncpThrottle) ao relançar o erro.
       return null;
     }
     if (error?.name !== 'AbortError') {
@@ -3230,6 +3302,7 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial) => {
 const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
   const pageSize = Math.max(1, Math.min(200, Number(options.pageSize) || 100));
   const maxPages = Math.max(1, Math.min(20, Number(options.maxPages) || 10));
+  const priority = options.priority || 'sync';
 
   const allItems = [];
   let page = 1;
@@ -3238,7 +3311,7 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
     const itensData = await withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
       pagina: page,
       tamanhoPagina: pageSize,
-    }));
+    }), { priority });
 
     const pageItems = Array.isArray(itensData?.data)
       ? itensData.data
@@ -3262,19 +3335,17 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
   return allItems;
 };
 
-const fetchPncpOptional = async (pathName, query = {}, { source = 'pncp' } = {}) => {
+const fetchPncpOptional = async (pathName, query = {}, { source = 'pncp', priority = 'sync' } = {}) => {
   try {
-    return source === 'consulta'
-      ? await fetchPncpConsulta(pathName, query)
-      : await fetchPncp(pathName, query);
+    return await withPncpGate(
+      () => (source === 'consulta' ? fetchPncpConsulta(pathName, query) : fetchPncp(pathName, query)),
+      { priority }
+    );
   } catch (error) {
     if (String(error?.message || '').includes('404')) {
       return null;
     }
-    if (isPncpThrottleError(error) || String(error?.message || '').includes('429')) {
-      if (typeof notePncpThrottle === 'function') notePncpThrottle(error.message || 'optional 429', 90_000);
-      else pncpDetalheRateLimitedUntil = Date.now() + 90 * 1000;
-    }
+    // Throttle já registrado pelo gate ao relançar o erro.
     console.warn(`[PNCP Dossier] ${pathName} falhou: ${error.message}`);
     return null;
   }
@@ -3287,12 +3358,19 @@ const asPncpList = (value) => {
   return [];
 };
 
-const fetchPncpCompraResultados = async (cnpj, ano, sequencial, itens = []) => {
+const fetchPncpCompraResultados = async (
+  cnpj,
+  ano,
+  sequencial,
+  itens = [],
+  { priority = 'sync', maxItems = 30 } = {}
+) => {
   const resultRows = [];
-  for (const item of itens.slice(0, 120)) {
+  const safeMaxItems = Math.max(1, Math.min(60, Number(maxItems) || 30));
+  for (const item of itens.slice(0, safeMaxItems)) {
     const numeroItem = item?.numeroItem ?? item?.numero_item;
     if (numeroItem === null || numeroItem === undefined || numeroItem === '') continue;
-    const data = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens/${numeroItem}/resultados`);
+    const data = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens/${numeroItem}/resultados`, {}, { priority });
     const rows = asPncpList(data);
     rows.forEach(row => {
       resultRows.push({
@@ -3309,13 +3387,14 @@ const fetchPncpCompraResultados = async (cnpj, ano, sequencial, itens = []) => {
 };
 
 // O endpoint de contratos por contratação exige paginação (retorna 400 sem `pagina`).
-const fetchPncpContratosByCompra = async (cnpj, ano, sequencial) => {
+const fetchPncpContratosByCompra = async (cnpj, ano, sequencial, { priority = 'sync' } = {}) => {
   const contratos = [];
   let pagina = 1;
   while (pagina <= 5) {
     const data = await fetchPncpOptional(
       `/v1/orgaos/${cnpj}/contratos/contratacao/${ano}/${sequencial}`,
-      { pagina, tamanhoPagina: 50 }
+      { pagina, tamanhoPagina: 50 },
+      { priority }
     );
     const rows = asPncpList(data);
     if (!rows.length) break;
@@ -3327,24 +3406,39 @@ const fetchPncpContratosByCompra = async (cnpj, ano, sequencial) => {
   return contratos;
 };
 
-const fetchPncpCompraDossier = async (cnpj, ano, sequencial, { query = '', includeResultados = true } = {}) => {
-  const compra = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`, {}, { source: 'consulta' });
-  const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize: 100, maxPages: 20 }).catch(error => {
+const fetchPncpCompraDossier = async (
+  cnpj,
+  ano,
+  sequencial,
+  { query = '', includeResultados = true, priority = 'sync', maxResultItems } = {}
+) => {
+  const compra = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`, {}, { source: 'consulta', priority });
+  const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize: 100, maxPages: 20, priority }).catch(error => {
     console.warn(`[PNCP Dossier] itens ${cnpj}/${ano}/${sequencial} falhou: ${error.message}`);
     return [];
   });
-  const resultados = includeResultados
-    ? await fetchPncpCompraResultados(cnpj, ano, sequencial, itens)
-    : [];
-  const contratos = await fetchPncpContratosByCompra(cnpj, ano, sequencial);
-  const atasData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/atas`);
-  const arquivosData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`);
-  const atas = asPncpList(atasData);
-  const arquivos = asPncpList(arquivosData);
   const normalizedQuery = normalizeSearchText(query).trim();
   const itensPertinentes = normalizedQuery
     ? itens.filter(item => isPncpCompraItemRelevantToQuery(item, normalizedQuery))
     : [];
+  const resultItemBudget = Math.max(
+    1,
+    Math.min(60, Number(maxResultItems) || (priority === 'interactive' ? 40 : 24))
+  );
+  const resultItems = itensPertinentes.length
+    ? [
+        ...itensPertinentes,
+        ...itens.filter(item => !itensPertinentes.includes(item)),
+      ].slice(0, resultItemBudget)
+    : itens.slice(0, resultItemBudget);
+  const resultados = includeResultados
+    ? await fetchPncpCompraResultados(cnpj, ano, sequencial, resultItems, { priority, maxItems: resultItemBudget })
+    : [];
+  const contratos = await fetchPncpContratosByCompra(cnpj, ano, sequencial, { priority });
+  const atasData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/atas`, {}, { priority });
+  const arquivosData = await fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`, {}, { priority });
+  const atas = asPncpList(atasData);
+  const arquivos = asPncpList(arquivosData);
   const valorItensPertinentes = itensPertinentes.reduce((sum, item) => {
     const value = Number(item?.valorTotal);
     return sum + (Number.isFinite(value) && value > 0 ? value : 0);
@@ -3393,29 +3487,62 @@ const fetchPncpCompraDossier = async (cnpj, ano, sequencial, { query = '', inclu
   };
 };
 
+const collectPncpFornecedores = (dossier = {}) => {
+  const fornecedores = new Map();
+  const add = (row, fonte) => {
+    if (!row || typeof row !== 'object') return;
+    const nested = row.fornecedor && typeof row.fornecedor === 'object' ? row.fornecedor : {};
+    const ni = row.niFornecedor || row.numeroDocumentoFornecedor || nested.niFornecedor
+      || nested.numeroDocumentoFornecedor || null;
+    const nome = row.nomeRazaoSocialFornecedor || row.razaoSocialFornecedor
+      || nested.nomeRazaoSocialFornecedor || nested.razaoSocialFornecedor || null;
+    if (!ni && !nome) return;
+    const normalizedNi = ni ? String(ni).replace(/\D/g, '') : '';
+    const normalizedNome = nome ? String(nome).trim() : '';
+    const key = normalizedNi || normalizeSearchText(normalizedNome);
+    if (!key) return;
+    const current = fornecedores.get(key) || {};
+    fornecedores.set(key, {
+      ni: normalizedNi || current.ni || null,
+      nome: normalizedNome || current.nome || null,
+      fonte: current.fonte || fonte,
+    });
+  };
+  (dossier.resultados || []).forEach(row => add(row, 'resultado'));
+  (dossier.contratos || []).forEach(row => add(row, 'contrato'));
+  (dossier.atas || []).forEach(row => add(row, 'ata'));
+  (dossier.contratos_daily || []).forEach(row => add(row, 'contrato'));
+  (dossier.atas_daily || []).forEach(row => add(row, 'ata'));
+  return [...fornecedores.values()];
+};
+
 const buildPncpResultCachePayload = (dossier, query = '') => {
   const item = dossier?.normalized_item || {};
   const compra = dossier?.compra || {};
   const firstResult = (dossier?.resultados || [])[0] || {};
   const firstContract = (dossier?.contratos || [])[0] || {};
-  const fornecedorNi = firstResult?.niFornecedor || firstContract?.niFornecedor || firstContract?.fornecedor?.niFornecedor || null;
-  const fornecedorNome = firstResult?.nomeRazaoSocialFornecedor || firstContract?.nomeRazaoSocialFornecedor || firstContract?.fornecedor?.nomeRazaoSocialFornecedor || null;
+  const fornecedores = collectPncpFornecedores(dossier);
+  const fornecedorNi = fornecedores[0]?.ni || null;
+  const fornecedorNome = fornecedores[0]?.nome || null;
   const titulo = item.titulo || compra?.objetoCompra || compra?.numeroControlePNCP || `Compra ${dossier?.ids?.sequencial}/${dossier?.ids?.ano}`;
   const descricao = item.descricao || compra?.objetoCompra || '';
   const searchText = [
-    query,
     titulo,
     descricao,
     item.orgao?.nome,
     item.unidade?.nome,
-    fornecedorNi,
-    fornecedorNome,
+    ...fornecedores.flatMap(row => [row.ni, row.nome]),
     ...(dossier?.itens || []).slice(0, 50).map(row => row?.descricao),
     ...(dossier?.resultados || []).slice(0, 50).map(row => `${row?.descricaoItem || ''} ${row?.nomeRazaoSocialFornecedor || ''}`),
     ...(dossier?.contratos || []).slice(0, 20).map(row => `${row?.objetoContrato || ''} ${row?.nomeRazaoSocialFornecedor || ''}`),
   ].filter(Boolean).join(' ');
+  const hasResult = (Array.isArray(dossier?.resultados) && dossier.resultados.length > 0)
+    || Boolean(compra?.temResultado || item?.tem_resultado);
+  const hasContract = Array.isArray(dossier?.contratos) && dossier.contratos.length > 0;
+  const hasAta = Array.isArray(dossier?.atas) && dossier.atas.length > 0;
+  const hasValidIds = dossier?.ids?.cnpj && dossier?.ids?.ano && dossier?.ids?.sequencial;
   return {
-    pncp_key: `${dossier?.ids?.cnpj}/${dossier?.ids?.ano}/${dossier?.ids?.sequencial}`,
+    pncp_key: hasValidIds ? `${dossier.ids.cnpj}/${dossier.ids.ano}/${dossier.ids.sequencial}` : null,
     orgao_cnpj: item.orgao?.cnpj || dossier?.ids?.cnpj || null,
     orgao_nome: item.orgao?.nome || compra?.orgaoEntidade?.razaoSocial || null,
     ano: Number(dossier?.ids?.ano) || null,
@@ -3435,6 +3562,10 @@ const buildPncpResultCachePayload = (dossier, query = '') => {
     data_assinatura: firstContract?.dataAssinatura || null,
     srp: typeof compra?.srp === 'boolean' ? compra.srp : (typeof item.srp === 'boolean' ? item.srp : null),
     amparo_legal: compra?.amparoLegal?.nome || item.amparo_legal?.nome || null,
+    has_result: hasResult,
+    has_contract: hasContract,
+    has_ata: hasAta,
+    fornecedores,
     search_text: searchText,
     payload: dossier,
   };
@@ -3448,8 +3579,9 @@ const upsertPncpResultCache = async (dossier, query = '') => {
       INSERT INTO ${PNCP_RESULT_CACHE_TABLE}
         (pncp_key, orgao_cnpj, orgao_nome, ano, sequencial, numero_controle_pncp, titulo, descricao,
          uf, modalidade, etapa_comercial, fornecedor_ni, fornecedor_nome, valor_estimado, valor_homologado,
-         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, search_text, payload, refreshed_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,NOW())
+         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, has_result, has_contract,
+         has_ata, fornecedores, search_text, payload, refreshed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25,$26::jsonb,NOW())
       ON CONFLICT (pncp_key) DO UPDATE SET
         orgao_cnpj = EXCLUDED.orgao_cnpj,
         orgao_nome = EXCLUDED.orgao_nome,
@@ -3473,8 +3605,30 @@ const upsertPncpResultCache = async (dossier, query = '') => {
         data_publicacao = COALESCE(EXCLUDED.data_publicacao, ${PNCP_RESULT_CACHE_TABLE}.data_publicacao),
         data_resultado = COALESCE(EXCLUDED.data_resultado, ${PNCP_RESULT_CACHE_TABLE}.data_resultado),
         data_assinatura = COALESCE(EXCLUDED.data_assinatura, ${PNCP_RESULT_CACHE_TABLE}.data_assinatura),
-        search_text = EXCLUDED.search_text,
-        payload = EXCLUDED.payload,
+        has_result = ${PNCP_RESULT_CACHE_TABLE}.has_result OR EXCLUDED.has_result,
+        has_contract = ${PNCP_RESULT_CACHE_TABLE}.has_contract OR EXCLUDED.has_contract,
+        has_ata = ${PNCP_RESULT_CACHE_TABLE}.has_ata OR EXCLUDED.has_ata,
+        fornecedores = (
+          SELECT COALESCE(jsonb_agg(entry.value), '[]'::jsonb)
+          FROM (
+            SELECT DISTINCT ON (supplier_key) value
+            FROM (
+              SELECT value,
+                     COALESCE(NULLIF(value->>'ni', ''), lower(NULLIF(value->>'nome', '')), value::text) AS supplier_key
+                FROM jsonb_array_elements(
+                  (CASE WHEN jsonb_typeof(${PNCP_RESULT_CACHE_TABLE}.fornecedores) = 'array' THEN ${PNCP_RESULT_CACHE_TABLE}.fornecedores ELSE '[]'::jsonb END)
+                  || (CASE WHEN jsonb_typeof(EXCLUDED.fornecedores) = 'array' THEN EXCLUDED.fornecedores ELSE '[]'::jsonb END)
+                ) merged(value)
+            ) suppliers
+            ORDER BY supplier_key, (value->>'nome' IS NOT NULL) DESC
+          ) entry
+        ),
+        search_text = CASE
+          WHEN EXCLUDED.search_text IS NULL OR EXCLUDED.search_text = '' THEN ${PNCP_RESULT_CACHE_TABLE}.search_text
+          WHEN ${PNCP_RESULT_CACHE_TABLE}.search_text IS NULL THEN EXCLUDED.search_text
+          WHEN position(EXCLUDED.search_text IN ${PNCP_RESULT_CACHE_TABLE}.search_text) > 0 THEN ${PNCP_RESULT_CACHE_TABLE}.search_text
+          ELSE ${PNCP_RESULT_CACHE_TABLE}.search_text || ' ' || EXCLUDED.search_text END,
+        payload = ${PNCP_RESULT_CACHE_TABLE}.payload || EXCLUDED.payload,
         refreshed_at = NOW()
     `,
     [
@@ -3482,7 +3636,8 @@ const upsertPncpResultCache = async (dossier, query = '') => {
       row.titulo, row.descricao, row.uf, row.modalidade, row.etapa_comercial, row.fornecedor_ni,
       row.fornecedor_nome, row.valor_estimado, row.valor_homologado, row.data_publicacao,
       row.data_resultado, row.data_assinatura, row.srp ?? null, row.amparo_legal ?? null,
-      row.search_text, JSON.stringify(row.payload),
+      Boolean(row.has_result), Boolean(row.has_contract), Boolean(row.has_ata),
+      JSON.stringify(row.fornecedores || []), row.search_text, JSON.stringify(row.payload),
     ]
   );
   return row;
@@ -3497,8 +3652,9 @@ const upsertPncpResultCacheLite = async (row) => {
       INSERT INTO ${PNCP_RESULT_CACHE_TABLE}
         (pncp_key, orgao_cnpj, orgao_nome, ano, sequencial, numero_controle_pncp, titulo, descricao,
          uf, modalidade, etapa_comercial, fornecedor_ni, fornecedor_nome, valor_estimado, valor_homologado,
-         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, search_text, payload, refreshed_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,NOW())
+         data_publicacao, data_resultado, data_assinatura, srp, amparo_legal, has_result, has_contract,
+         has_ata, fornecedores, search_text, payload, refreshed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25,$26::jsonb,NOW())
       ON CONFLICT (pncp_key) DO UPDATE SET
         srp = COALESCE(${PNCP_RESULT_CACHE_TABLE}.srp, EXCLUDED.srp),
         amparo_legal = COALESCE(${PNCP_RESULT_CACHE_TABLE}.amparo_legal, EXCLUDED.amparo_legal),
@@ -3521,6 +3677,24 @@ const upsertPncpResultCacheLite = async (row) => {
         data_publicacao = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_publicacao, EXCLUDED.data_publicacao),
         data_resultado = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_resultado, EXCLUDED.data_resultado),
         data_assinatura = COALESCE(${PNCP_RESULT_CACHE_TABLE}.data_assinatura, EXCLUDED.data_assinatura),
+        has_result = ${PNCP_RESULT_CACHE_TABLE}.has_result OR EXCLUDED.has_result,
+        has_contract = ${PNCP_RESULT_CACHE_TABLE}.has_contract OR EXCLUDED.has_contract,
+        has_ata = ${PNCP_RESULT_CACHE_TABLE}.has_ata OR EXCLUDED.has_ata,
+        fornecedores = (
+          SELECT COALESCE(jsonb_agg(entry.value), '[]'::jsonb)
+          FROM (
+            SELECT DISTINCT ON (supplier_key) value
+            FROM (
+              SELECT value,
+                     COALESCE(NULLIF(value->>'ni', ''), lower(NULLIF(value->>'nome', '')), value::text) AS supplier_key
+                FROM jsonb_array_elements(
+                  (CASE WHEN jsonb_typeof(${PNCP_RESULT_CACHE_TABLE}.fornecedores) = 'array' THEN ${PNCP_RESULT_CACHE_TABLE}.fornecedores ELSE '[]'::jsonb END)
+                  || (CASE WHEN jsonb_typeof(EXCLUDED.fornecedores) = 'array' THEN EXCLUDED.fornecedores ELSE '[]'::jsonb END)
+                ) merged(value)
+            ) suppliers
+            ORDER BY supplier_key, (value->>'nome' IS NOT NULL) DESC
+          ) entry
+        ),
         search_text = CASE
           WHEN EXCLUDED.search_text IS NULL OR EXCLUDED.search_text = '' THEN ${PNCP_RESULT_CACHE_TABLE}.search_text
           WHEN ${PNCP_RESULT_CACHE_TABLE}.search_text IS NULL THEN EXCLUDED.search_text
@@ -3535,6 +3709,10 @@ const upsertPncpResultCacheLite = async (row) => {
       row.modalidade || null, row.etapa_comercial || null, row.fornecedor_ni || null, row.fornecedor_nome || null,
       row.valor_estimado || null, row.valor_homologado || null, row.data_publicacao || null,
       row.data_resultado || null, row.data_assinatura || null, row.srp ?? null, row.amparo_legal || null,
+      Boolean(row.has_result || row.etapa_comercial === 'resulted'),
+      Boolean(row.has_contract || row.etapa_comercial === 'contracted'),
+      Boolean(row.has_ata || row.etapa_comercial === 'ata_available'),
+      JSON.stringify(row.fornecedores || collectPncpFornecedores(row.payload || {})),
       row.search_text || null, JSON.stringify(row.payload || {}),
     ]
   );
@@ -3562,11 +3740,57 @@ const normalizePncpResultCacheRow = (row) => ({
   data_assinatura: row.data_assinatura,
   srp: typeof row.srp === 'boolean' ? row.srp : null,
   amparo_legal: row.amparo_legal || null,
+  has_result: Boolean(row.has_result),
+  has_contract: Boolean(row.has_contract),
+  has_ata: Boolean(row.has_ata),
+  fornecedores: Array.isArray(row.fornecedores) ? row.fornecedores : [],
   refreshed_at: row.refreshed_at,
   dossier: row.payload || null,
-  url: row.orgao_cnpj && row.ano && row.sequencial
+  doc_type: row.payload?.live_document?.doc_type || null,
+  doc_ids: row.payload?.live_document?.doc_ids || null,
+  url: row.payload?.live_document?.url || (row.orgao_cnpj && row.ano && row.sequencial
     ? `https://pncp.gov.br/app/editais/${row.orgao_cnpj}/${row.ano}/${row.sequencial}`
-    : null,
+    : null),
+});
+
+const pncpOutcomeSyncState = {
+  running: false,
+  status: 'idle',
+  phase: null,
+  processed: 0,
+  total: 0,
+  cached: 0,
+  errors: 0,
+  reason: null,
+  started_at: null,
+  finished_at: null,
+  error: null,
+  summary: null,
+};
+const pncpOutcomeCandidateChecks = new Map();
+
+const getPncpOutcomeCacheStats = async () => {
+  const { rows } = await pool.query(`
+    SELECT COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE has_result)::int AS has_result,
+           COUNT(*) FILTER (WHERE has_contract)::int AS has_contract,
+           COUNT(*) FILTER (WHERE has_ata)::int AS has_ata,
+           MAX(refreshed_at) AS last_refreshed
+      FROM ${PNCP_RESULT_CACHE_TABLE}
+  `);
+  const row = rows[0] || {};
+  return {
+    total: Number(row.total) || 0,
+    has_result: Number(row.has_result) || 0,
+    has_contract: Number(row.has_contract) || 0,
+    has_ata: Number(row.has_ata) || 0,
+    last_refreshed: row.last_refreshed || null,
+  };
+};
+
+const getPncpOutcomeSyncSnapshot = () => ({
+  ...pncpOutcomeSyncState,
+  gate: getPncpGateSnapshot(),
 });
 
 const isPncpCompraItemRelevantToQuery = (item, query) => {
@@ -3607,6 +3831,7 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
   }
 
   const normalizedQuery = normalizeSearchText(query).trim();
+  const priority = options.priority || 'sync';
   const maxPages = Math.max(1, Math.min(15, Number(options.maxPages) || (normalizedQuery ? 8 : 1)));
   const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || (normalizedQuery ? 100 : 50)));
   const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}|p:${maxPages}`;
@@ -3616,14 +3841,14 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
   }
 
   try {
-    const detalhe = await getPncpCompraDetalhe(cnpj, ano, sequencial);
+    const detalhe = await getPncpCompraDetalhe(cnpj, ano, sequencial, { priority });
 
     let itensResumoTexto = '';
     let totalItens = 0;
     let valorItensPertinentes = null;
     let itensPertinentes = [];
     try {
-      const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize, maxPages });
+      const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize, maxPages, priority });
       totalItens = itens.length;
       itensResumoTexto = itens
         .map(item => `${item?.descricao || ''} ${item?.itemCategoriaNome || ''} ${item?.catalogoCodigoItem || ''} ${item?.numeroItem || ''}`.trim())
@@ -3797,6 +4022,7 @@ const fillPncpMissingEstimatedValues = async (items = [], {
   rateLimitWaitMs = 0,
   query = '',
   maxPages = 6,
+  priority = 'sync',
 } = {}) => {
   const result = [];
   let checked = 0;
@@ -3813,12 +4039,12 @@ const fillPncpMissingEstimatedValues = async (items = [], {
       continue;
     }
     const q = buildPncpEnrichmentQuery(item, query);
-    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages, priority });
     if (!enrichment && Date.now() < pncpDetalheRateLimitedUntil && rateLimitWaitBudget > 0) {
       const waitMs = Math.min(pncpDetalheRateLimitedUntil - Date.now(), rateLimitWaitBudget);
       rateLimitWaitBudget -= waitMs;
       await sleep(waitMs);
-      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages, priority });
     }
     if (!enrichment) {
       result.push(item);
@@ -3874,6 +4100,7 @@ const fillValuesOnNormalizedPncpItems = async (items = [], {
   rateLimitWaitMs = 8000,
   query = '',
   maxPages = 4,
+  priority = 'interactive',
 } = {}) => {
   const result = [];
   let checked = 0;
@@ -3890,12 +4117,12 @@ const fillValuesOnNormalizedPncpItems = async (items = [], {
       continue;
     }
     const q = buildPncpEnrichmentQuery(item, query);
-    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+    let enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages, priority });
     if (!enrichment && Date.now() < pncpDetalheRateLimitedUntil && rateLimitWaitBudget > 0) {
       const waitMs = Math.min(pncpDetalheRateLimitedUntil - Date.now(), rateLimitWaitBudget);
       rateLimitWaitBudget -= waitMs;
       await sleep(waitMs);
-      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages });
+      enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages, priority });
     }
     result.push(enrichment ? mergePncpEnrichmentIntoNormalizedItem(item, enrichment) : item);
   }
@@ -4381,20 +4608,49 @@ app.get('/api/overview/summary', async (req, res) => {
       WITH base AS (
         SELECT
           id,
+          created_at,
           custom_attributes->>'Funil_Vendas' AS stage,
           ${valueNumExpr()} AS value_num
         FROM contacts
       ), parsed AS (
         SELECT
           id,
+          created_at,
           stage,
           value_num,
           NULLIF(TRIM(SPLIT_PART(stage, '.', 1)), '')::int AS stage_num
         FROM base
+      ), month_events AS (
+        SELECT
+          h.contact_id,
+          NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int AS stage_num
+        FROM ${HISTORY_TABLE} h
+        WHERE h.source <> 'snapshot'
+          AND h.changed_at >= (
+            DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')
+            AT TIME ZONE 'America/Sao_Paulo' AT TIME ZONE 'UTC'
+          )
       )
       SELECT
         COUNT(*) FILTER (WHERE stage_num BETWEEN 1 AND 17) AS leads_count,
+        COUNT(*) FILTER (WHERE stage_num BETWEEN 7 AND 13) AS opportunities_count,
         COUNT(*) FILTER (WHERE stage_num BETWEEN 18 AND 26) AS customers_count,
+        COUNT(*) FILTER (
+          WHERE created_at >= (
+            DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')
+            AT TIME ZONE 'America/Sao_Paulo' AT TIME ZONE 'UTC'
+          )
+        ) AS leads_month_count,
+        (
+          SELECT COUNT(DISTINCT contact_id)
+          FROM month_events
+          WHERE stage_num BETWEEN 7 AND 13
+        ) AS opportunities_month_count,
+        (
+          SELECT COUNT(DISTINCT contact_id)
+          FROM month_events
+          WHERE stage_num BETWEEN 18 AND 25
+        ) AS active_customers_month_count,
         COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value,
         COALESCE(AVG(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS avg_value
       FROM parsed;
@@ -4818,6 +5074,14 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       : '';
     const params = hasActorFilter ? [accountId, actorIds] : [accountId];
 
+    // Cortes de "hoje"/"mês" no fuso do negócio (America/Sao_Paulo, UTC-3), não em UTC.
+    // As colunas created_at/changed_at são `timestamp without time zone` gravadas em UTC;
+    // usar DATE_TRUNC('day', NOW()) puro corta à meia-noite UTC = 21h de Brasília, zerando
+    // o "feito de hoje" no fim do expediente. Convertemos a meia-noite local de volta p/ UTC.
+    const SP_TZ = 'America/Sao_Paulo';
+    const spDayStart = `(DATE_TRUNC('day', NOW() AT TIME ZONE '${SP_TZ}') AT TIME ZONE '${SP_TZ}' AT TIME ZONE 'UTC')`;
+    const spMonthStart = `(DATE_TRUNC('month', NOW() AT TIME ZONE '${SP_TZ}') AT TIME ZONE '${SP_TZ}' AT TIME ZONE 'UTC')`;
+
     // Marcos cumulativos (escadinha): 1 contato conta 1x por marco no período.
     // Ex.: mover para 7. Agendamento Demo conta SQL + Oportunidade (sem exigir passagem pelo 6).
     // Faixa 6–13 = pipeline qualificado + ganho; 14–17 (perdido/pausa/descarte/nurture) não promovem marcos.
@@ -4858,78 +5122,77 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       FROM per_contact
     `;
 
+    // "Contatos" mede pessoas distintas alcançadas, não volume de mensagens.
+    // Unifica todas as atividades válidas por contact_id para que follow-ups
+    // (ou uma mensagem + uma nota) não inflem o ritmo do vendedor.
+    const buildContactPaceSql = (sinceSql) => `
+      WITH activity AS (
+        SELECT
+          conv.contact_id,
+          BOOL_OR(m.message_type = 1 AND COALESCE(m."private", false) = false) AS via_message,
+          BOOL_OR(COALESCE(m."private", false) = true) AS via_private_note,
+          false AS via_contact_note
+        FROM messages m
+        INNER JOIN conversations conv ON conv.id = m.conversation_id
+        WHERE m.account_id = $1
+          AND m.created_at >= ${sinceSql}
+          AND (
+            (m.message_type = 1 AND COALESCE(m."private", false) = false)
+            OR COALESCE(m."private", false) = true
+          )
+          ${msgAgentFilter}
+        GROUP BY conv.contact_id
+
+        UNION ALL
+
+        SELECT
+          n.contact_id,
+          false AS via_message,
+          false AS via_private_note,
+          true AS via_contact_note
+        FROM notes n
+        WHERE n.account_id = $1
+          AND n.created_at >= ${sinceSql}
+          ${contactNoteAgentFilter}
+      ),
+      per_contact AS (
+        SELECT
+          contact_id,
+          BOOL_OR(via_message) AS via_message,
+          BOOL_OR(via_private_note) AS via_private_note,
+          BOOL_OR(via_contact_note) AS via_contact_note
+        FROM activity
+        WHERE contact_id IS NOT NULL
+        GROUP BY contact_id
+      )
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE via_message)::int AS messages,
+        COUNT(*) FILTER (WHERE via_private_note)::int AS private_notes,
+        COUNT(*) FILTER (WHERE via_contact_note)::int AS contact_notes,
+        COUNT(*) FILTER (WHERE via_private_note OR via_contact_note)::int AS notes
+      FROM per_contact
+    `;
+
     const [
       contactsDay,
       contactsMonth,
-      contactNotesDay,
-      contactNotesMonth,
       stagesDay,
       stagesMonth,
       leadsDay,
       leadsMonth,
     ] = await Promise.all([
+      pool.query(buildContactPaceSql(spDayStart), params),
+      pool.query(buildContactPaceSql(spMonthStart), params),
+      pool.query(buildMilestonePaceSql(spDayStart), params),
+      pool.query(buildMilestonePaceSql(spMonthStart), params),
       pool.query(
         `
-        SELECT
-          COUNT(*) FILTER (
-            WHERE m.message_type = 1 AND COALESCE(m."private", false) = false
-          )::int AS messages,
-          COUNT(*) FILTER (
-            WHERE COALESCE(m."private", false) = true
-          )::int AS private_notes
-        FROM messages m
-        WHERE m.account_id = $1
-          AND m.created_at >= DATE_TRUNC('day', NOW())
-          ${msgAgentFilter}
-        `,
-        params
-      ),
-      pool.query(
-        `
-        SELECT
-          COUNT(*) FILTER (
-            WHERE m.message_type = 1 AND COALESCE(m."private", false) = false
-          )::int AS messages,
-          COUNT(*) FILTER (
-            WHERE COALESCE(m."private", false) = true
-          )::int AS private_notes
-        FROM messages m
-        WHERE m.account_id = $1
-          AND m.created_at >= DATE_TRUNC('month', NOW())
-          ${msgAgentFilter}
-        `,
-        params
-      ),
-      // Notas do perfil do contato (Contato → aba Notas no Chatwoot)
-      pool.query(
-        `
-        SELECT COUNT(*)::int AS contact_notes
-        FROM notes n
-        WHERE n.account_id = $1
-          AND n.created_at >= DATE_TRUNC('day', NOW())
-          ${contactNoteAgentFilter}
-        `,
-        params
-      ),
-      pool.query(
-        `
-        SELECT COUNT(*)::int AS contact_notes
-        FROM notes n
-        WHERE n.account_id = $1
-          AND n.created_at >= DATE_TRUNC('month', NOW())
-          ${contactNoteAgentFilter}
-        `,
-        params
-      ),
-      pool.query(buildMilestonePaceSql("DATE_TRUNC('day', NOW())"), params),
-      pool.query(buildMilestonePaceSql("DATE_TRUNC('month', NOW())"), params),
-      pool.query(
-        `
-        SELECT COUNT(*)::int AS total
+        SELECT COUNT(DISTINCT h.contact_id)::int AS total
         FROM ${HISTORY_TABLE} h
         WHERE h.account_id = $1
           AND h.source <> 'snapshot'
-          AND h.changed_at >= DATE_TRUNC('day', NOW())
+          AND h.changed_at >= ${spDayStart}
           AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
           ${histAgentFilter}
         `,
@@ -4937,11 +5200,11 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       ),
       pool.query(
         `
-        SELECT COUNT(*)::int AS total
+        SELECT COUNT(DISTINCT h.contact_id)::int AS total
         FROM ${HISTORY_TABLE} h
         WHERE h.account_id = $1
           AND h.source <> 'snapshot'
-          AND h.changed_at >= DATE_TRUNC('month', NOW())
+          AND h.changed_at >= ${spMonthStart}
           AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
           ${histAgentFilter}
         `,
@@ -4949,13 +5212,13 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       ),
     ]);
 
-    const buildContatos = (msgRow, contactNotesRow) => {
-      const messages = Number(msgRow?.messages) || 0;
-      const privateNotes = Number(msgRow?.private_notes) || 0;
-      const contactNotes = Number(contactNotesRow?.contact_notes) || 0;
-      const notes = privateNotes + contactNotes;
+    const buildContatos = (row) => {
+      const messages = Number(row?.messages) || 0;
+      const privateNotes = Number(row?.private_notes) || 0;
+      const contactNotes = Number(row?.contact_notes) || 0;
+      const notes = Number(row?.notes) || 0;
       return {
-        total: messages + notes,
+        total: Number(row?.total) || 0,
         messages,
         notes,
         private_notes: privateNotes,
@@ -4965,8 +5228,6 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
 
     const cd = contactsDay.rows[0] || {};
     const cm = contactsMonth.rows[0] || {};
-    const cnd = contactNotesDay.rows[0] || {};
-    const cnm = contactNotesMonth.rows[0] || {};
     const sd = stagesDay.rows[0] || {};
     const sm = stagesMonth.rows[0] || {};
 
@@ -4980,7 +5241,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         user_ids: Array.isArray(r.user_ids) ? r.user_ids : [Number(r.id)],
       })),
       day: {
-        contatos: buildContatos(cd, cnd),
+        contatos: buildContatos(cd),
         leads: Number(leadsDay.rows[0]?.total) || 0,
         sql: Number(sd.sql) || 0,
         oportunidade: Number(sd.oportunidade) || 0,
@@ -4994,7 +5255,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         },
       },
       month: {
-        contatos: buildContatos(cm, cnm),
+        contatos: buildContatos(cm),
         leads: Number(leadsMonth.rows[0]?.total) || 0,
         sql: Number(sm.sql) || 0,
         oportunidade: Number(sm.oportunidade) || 0,
@@ -5007,8 +5268,8 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         },
       },
       rules: {
-        contatos: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas na conversa + notas do perfil do contato (aba Notas). Ligação, e-mail e visita: registrar em Notas.',
-        leads: 'Card movido para Inbox / etapa 1 do funil.',
+        contatos: 'Contatos distintos no período com mensagem enviada ou nota registrada. Mensagens e notas adicionais para a mesma pessoa contam apenas 1×. Ligação, e-mail e visita: registrar em Notas.',
+        leads: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período).',
         sql: 'Marco cumulativo: 1× por contato no período ao atingir etapa ≥ 6 (SQL, demo, proposta ou ganho). Pular o 6 e ir para Agendamento Demo ainda conta como SQL. Perdido/pausa/descarte/nurture (14–17) não contam sozinhos.',
         oportunidade: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 7 (demo em diante até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
         proposta: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 9 (elaborando proposta até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
@@ -6845,7 +7106,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
           while (collected.length < targetForTerm && page <= budget.maxPages) {
             run.pages_requested += 1;
-            const data = await fetchPncpSearchStable({ ...baseParams, q: termo, pagina: page, tam: pncpTermPageSize });
+            const data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: termo, pagina: page, tam: pncpTermPageSize }), { priority: 'interactive' });
             run.pages_completed += 1;
             const items = Array.isArray(data?.items) ? data.items : [];
             if (page === 1) {
@@ -6920,7 +7181,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         let apiPageSize = tamNum;
         try {
           run.pages_requested += 1;
-          const firstData = await fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: 1, tam: tamNum });
+          const firstData = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: 1, tam: tamNum }), { priority: 'interactive' });
           run.pages_completed += 1;
           const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
           totalFromApi = Number(firstData?.total) || 0;
@@ -6933,7 +7194,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           let page = 2;
           while (!run.stop_reason && page <= maxPages && ((page - 1) * apiPageSize) < totalFromApi) {
             run.pages_requested += 1;
-            const nextData = await fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: page, tam: tamNum });
+            const nextData = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: searchTerm, pagina: page, tam: tamNum }), { priority: 'interactive' });
             run.pages_completed += 1;
             const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
             if (nextItems.length === 0) {
@@ -7047,7 +7308,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         allItems = combined;
       } else {
         // Busca simples sem filtro de entidade - paginação direta da API
-        const firstData = await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum });
+        const firstData = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: 1, tam: tamNum }), { priority: 'interactive' });
         const firstItems = Array.isArray(firstData?.items) ? firstData.items : [];
         const totalFromApi = Number(firstData?.total) || 0;
         const apiPageSize = firstItems.length > 0 ? firstItems.length : 10;
@@ -7059,13 +7320,13 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
         const pageData = apiPage === 1
           ? firstData
-          : await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+          : await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum }), { priority: 'interactive' });
         const pageItems = Array.isArray(pageData?.items) ? pageData.items : [];
         fetched.push(...pageItems.slice(offsetInFirstPage));
 
         while (fetched.length < tamNum && (startOffset + fetched.length) < totalFromApi) {
           apiPage += 1;
-          const nextData = await fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum });
+          const nextData = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: effectiveSearchTerm, pagina: apiPage, tam: tamNum }), { priority: 'interactive' });
           const nextItems = Array.isArray(nextData?.items) ? nextData.items : [];
           if (nextItems.length === 0) {
             break;
@@ -7115,13 +7376,13 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
         while (consultaHasMore && consultaPage <= maxConsultaPages) {
           consultaRun.pages_requested += 1;
-          const data = await fetchPncp('v1/contratacoes/publicacao', {
+          const data = await withPncpGate(() => fetchPncp('v1/contratacoes/publicacao', {
             codigoUnidadeOrgao: entityQuerySeed,
             dataInicial: fmtDate(doisAnosAtras),
             dataFinal: fmtDate(seisM),
             pagina: consultaPage,
             tamanhoPagina: consultaPageSize,
-          });
+          }), { priority: 'interactive' });
           consultaRun.pages_completed += 1;
           const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
           if (items.length === 0) {
@@ -7193,7 +7454,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     if (modo_disputa_id) {
       const detailedItems = await mapWithConcurrency(allItems, 3, async (item) => {
         const ids = extractPncpCompraIdentifiers(item);
-        const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial);
+        const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial, { priority: 'interactive' });
         if (!detalhe) {
           return item;
         }
@@ -7230,7 +7491,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
           return item;
         }
         const ids = extractPncpCompraIdentifiers(item);
-        const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, qText);
+        const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, qText, { priority: 'interactive' });
         if (!enrichment) {
           return item;
         }
@@ -7260,6 +7521,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       allItems = await fillPncpMissingEstimatedValues(allItems, {
         limit: iaRealmenteUsada ? 140 : Math.max(tamNum, 80),
         delayMs: 300,
+        priority: 'interactive',
       });
     }
 
@@ -7487,7 +7749,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 // e só acelera de novo após sequência estável de sucesso.
 const PNCP_GATE = {
   active: 0,
-  queue: [],
+  // Filas por prioridade: interactive (usuário esperando na tela) fura a fila;
+  // sync (watchlists/syncs agendados) no meio; bulk (deep jobs, PCA, backfill)
+  // só roda com o gate saudável e orçamento folgado.
+  queues: { interactive: [], sync: [], bulk: [] },
   max: 1,
   gapMs: 950,
   gapMsMin: 700,
@@ -7499,6 +7764,40 @@ const PNCP_GATE = {
   totalOk: 0,
   totalThrottle: 0,
   pausedUntil: 0,
+  // Orçamento horário agregado (token bucket): dosa o VOLUME total, não só o
+  // ritmo. bulk para de consumir com <30% restante; sync com <10%; o resto
+  // fica reservado para o uso interativo.
+  budget: {
+    capacity: Math.max(300, Number(process.env.PNCP_HOURLY_BUDGET) || 1500),
+    tokens: Math.max(300, Number(process.env.PNCP_HOURLY_BUDGET) || 1500),
+    lastRefill: Date.now(),
+  },
+};
+
+const refillPncpBudget = () => {
+  const b = PNCP_GATE.budget;
+  const now = Date.now();
+  if (now <= b.lastRefill) return;
+  b.tokens = Math.min(b.capacity, b.tokens + ((now - b.lastRefill) * b.capacity) / 3_600_000);
+  b.lastRefill = now;
+};
+
+const isPncpGateDegraded = () => PNCP_GATE.gapMs >= 4000 || PNCP_GATE.failStreak >= 2;
+
+const canRunPncpPriority = (priority) => {
+  refillPncpBudget();
+  const b = PNCP_GATE.budget;
+  if (priority === 'interactive') return b.tokens >= 1;
+  if (priority === 'bulk') {
+    return !isPncpGateDegraded() && b.tokens > b.capacity * 0.3;
+  }
+  return b.tokens > b.capacity * 0.1; // sync
+};
+
+const hasHigherPncpPriorityWaiter = (priority) => {
+  if (priority === 'interactive') return false;
+  if (priority === 'sync') return PNCP_GATE.queues.interactive.length > 0;
+  return PNCP_GATE.queues.interactive.length > 0 || PNCP_GATE.queues.sync.length > 0;
 };
 
 const getPncpGateSnapshot = () => ({
@@ -7510,7 +7809,14 @@ const getPncpGateSnapshot = () => ({
   fail_streak: PNCP_GATE.failStreak,
   total_ok: PNCP_GATE.totalOk,
   total_throttle: PNCP_GATE.totalThrottle,
-  queue_len: PNCP_GATE.queue.length,
+  queue_len: PNCP_GATE.queues.interactive.length + PNCP_GATE.queues.sync.length + PNCP_GATE.queues.bulk.length,
+  queue_by_priority: {
+    interactive: PNCP_GATE.queues.interactive.length,
+    sync: PNCP_GATE.queues.sync.length,
+    bulk: PNCP_GATE.queues.bulk.length,
+  },
+  budget_tokens: Math.round(PNCP_GATE.budget.tokens),
+  budget_capacity: PNCP_GATE.budget.capacity,
   active: PNCP_GATE.active,
 });
 
@@ -7536,10 +7842,18 @@ notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
     PNCP_GATE.gapMsMax,
     Math.max(PNCP_GATE.gapMsBase, Math.round((PNCP_GATE.gapMs || PNCP_GATE.gapMsBase) * 1.75))
   );
+  // curl 56 / Recv failure: PNCP costuma precisar de pausa mais longa que um 429 curto.
+  const reasonText = String(reason || '').toLowerCase();
+  const isHardReset = /curl exit 56|recv failure|econnreset|socket hang|empty reply|curl exit 52/.test(reasonText);
+  const defaultPause = Math.min(6 * 60 * 1000, 50_000 * Math.min(PNCP_GATE.failStreak, 5));
+  const hardPause = Math.min(8 * 60 * 1000, Math.max(120_000, defaultPause));
   const pause = Number.isFinite(pauseMs)
     ? pauseMs
-    : Math.min(6 * 60 * 1000, 50_000 * Math.min(PNCP_GATE.failStreak, 5));
+    : (isHardReset ? hardPause : defaultPause);
   PNCP_GATE.pausedUntil = Math.max(PNCP_GATE.pausedUntil, Date.now() + pause);
+  if (isHardReset && PNCP_GATE.gapMs < 2000) {
+    PNCP_GATE.gapMs = Math.min(PNCP_GATE.gapMsMax, Math.max(2000, PNCP_GATE.gapMs));
+  }
   // Alinha o pauser de detalhes com o gate global.
   pncpDetalheRateLimitedUntil = Math.max(pncpDetalheRateLimitedUntil, PNCP_GATE.pausedUntil);
   console.warn(
@@ -7548,32 +7862,41 @@ notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
   );
 };
 
-const waitForPncpGateSlot = async () => {
-  // Espera pausa global (429 recente) sem spamar a API.
-  while (Date.now() < PNCP_GATE.pausedUntil) {
-    const left = PNCP_GATE.pausedUntil - Date.now();
-    await sleep(Math.min(4000, Math.max(200, left)));
-  }
-  while (PNCP_GATE.active >= PNCP_GATE.max) {
-    await new Promise(resolve => PNCP_GATE.queue.push(resolve));
+const waitForPncpGateSlot = async (priority = 'sync') => {
+  for (;;) {
+    // Espera pausa global (429/reset recente) sem spamar a API.
     while (Date.now() < PNCP_GATE.pausedUntil) {
       const left = PNCP_GATE.pausedUntil - Date.now();
       await sleep(Math.min(4000, Math.max(200, left)));
     }
+    // Dosagem por classe: bulk/sync aguardam quando o gate está degradado ou o
+    // orçamento horário está na reserva; interactive só espera repor tokens.
+    if (!canRunPncpPriority(priority)) {
+      await sleep(priority === 'interactive' ? 500 : 3000);
+      continue;
+    }
+    if (PNCP_GATE.active < PNCP_GATE.max && !hasHigherPncpPriorityWaiter(priority)) {
+      return;
+    }
+    await new Promise(resolve => PNCP_GATE.queues[priority].push(resolve));
   }
 };
 
-const withPncpGate = async (fn) => {
-  await waitForPncpGateSlot();
+const withPncpGate = async (fn, { priority = 'sync' } = {}) => {
+  await waitForPncpGateSlot(priority);
   PNCP_GATE.active += 1;
   try {
-    const wait = PNCP_GATE.last + PNCP_GATE.gapMs - Date.now();
+    // Jitter no gap: cadência fixa parece bot para o WAF do PNCP.
+    const pacedGap = Math.round(PNCP_GATE.gapMs * (0.85 + Math.random() * 0.5));
+    const wait = PNCP_GATE.last + pacedGap - Date.now();
     if (wait > 0) await sleep(wait);
     // Re-checa pausa após o gap (outro worker pode ter tomado 429).
     while (Date.now() < PNCP_GATE.pausedUntil) {
       await sleep(Math.min(4000, Math.max(200, PNCP_GATE.pausedUntil - Date.now())));
     }
     PNCP_GATE.last = Date.now();
+    refillPncpBudget();
+    PNCP_GATE.budget.tokens = Math.max(0, PNCP_GATE.budget.tokens - 1);
     const result = await fn();
     notePncpSuccess();
     return result;
@@ -7584,7 +7907,27 @@ const withPncpGate = async (fn) => {
     throw error;
   } finally {
     PNCP_GATE.active -= 1;
-    const next = PNCP_GATE.queue.shift();
+    const next = PNCP_GATE.queues.interactive.shift()
+      || PNCP_GATE.queues.sync.shift()
+      || PNCP_GATE.queues.bulk.shift();
+    if (next) next();
+  }
+};
+
+// Serializa os varredores pesados (deep job, PCA, sync de contratos): rodar
+// mais de um ao mesmo tempo foi o que derrubou a cota do PNCP na prática.
+const PNCP_HEAVY_JOB = { current: null, queue: [] };
+const withPncpHeavyJobSlot = async (name, work) => {
+  if (PNCP_HEAVY_JOB.current) {
+    console.log(`[PNCP Heavy] "${name}" aguardando "${PNCP_HEAVY_JOB.current}" terminar`);
+    await new Promise(resolve => PNCP_HEAVY_JOB.queue.push(resolve));
+  }
+  PNCP_HEAVY_JOB.current = name;
+  try {
+    return await work();
+  } finally {
+    PNCP_HEAVY_JOB.current = null;
+    const next = PNCP_HEAVY_JOB.queue.shift();
     if (next) next();
   }
 };
@@ -7645,6 +7988,10 @@ const normalizePncpSearchJobRow = (row) => {
   if (!row) return null;
   const archiveAt = getPncpSearchJobArchiveAt(row.started_at);
   const daysUntilArchive = row.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(row.started_at);
+  const whatsappEnabled = row.whatsapp_enabled === true
+    || row.whatsapp_enabled === 't'
+    || row.whatsapp_enabled === 1;
+  const whatsappNumber = row.whatsapp_number || null;
   return {
     id: row.id,
     account_id: row.account_id,
@@ -7665,6 +8012,10 @@ const normalizePncpSearchJobRow = (row) => {
     total: Number(row.total || 0),
     error: row.error || null,
     watchlist_id: row.watchlist_id || null,
+    // Assinatura = watchlist 1:1 ligada ao card (alertas WhatsApp).
+    whatsapp_enabled: Boolean(whatsappEnabled && whatsappNumber),
+    whatsapp_number: whatsappNumber,
+    alerts_enabled: Boolean(whatsappEnabled && whatsappNumber),
     started_at: row.started_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
@@ -7745,12 +8096,16 @@ const persistPncpDeepJob = async (job) => {
 
 const loadPncpDeepJob = async (jobId, accountId = null) => {
   const params = [jobId];
-  const accountClause = accountId ? ' AND account_id = $2' : '';
-  if (accountId) params.push(accountId);
-  const { rows } = await pool.query(
-    `SELECT * FROM ${PNCP_SEARCH_JOBS_TABLE} WHERE id = $1${accountClause}`,
-    params
-  );
+  let sql = `
+    SELECT j.*, w.whatsapp_enabled, w.whatsapp_number
+      FROM ${PNCP_SEARCH_JOBS_TABLE} j
+      LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
+     WHERE j.id = $1`;
+  if (accountId) {
+    params.push(accountId);
+    sql += ' AND j.account_id = $2';
+  }
+  const { rows } = await pool.query(sql, params);
   return normalizePncpSearchJobRow(rows[0]);
 };
 
@@ -7900,7 +8255,7 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
     const ids = extractPncpCompraIdentifiers(item);
     if (!ids.cnpj || !ids.ano || !ids.sequencial) continue;
     const q = buildPncpEnrichmentQuery(item, item?.matched_termo || '');
-    const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages: 4 });
+    const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages: 4, priority: 'bulk' });
     if (!enrichment) continue;
     const merged = mergePncpEnrichmentIntoNormalizedItem(item, enrichment);
     const estimated = Number(getPncpTotalEstimatedValue(merged) || 0);
@@ -7945,6 +8300,7 @@ const enrichPncpJobResultPage = async (job, items = [], { limit = 25 } = {}) => 
     rateLimitWaitMs: budget.rateLimitWaitMs,
     query,
     maxPages: 4,
+    priority: 'interactive',
   });
   const improved = enriched.filter((item, idx) => {
     const beforeItem = itemHasPncpItemValue(items[idx]);
@@ -7955,6 +8311,9 @@ const enrichPncpJobResultPage = async (job, items = [], { limit = 25 } = {}) => 
   });
   if (improved.length) {
     await persistPncpJobResults(job, improved);
+    // Mantém "Valor na lista" alinhado após enriquecer a página aberta.
+    await refreshPncpJobSummaryTotals(job).catch(() => null);
+    await persistPncpDeepJob(job).catch(() => null);
   }
   return enriched;
 };
@@ -7980,6 +8339,7 @@ const buildDeepSearchItemsSnapshot = async ({
       rateLimitWaitMs: budget.rateLimitWaitMs,
       query: qText,
       maxPages: 6,
+      priority: 'bulk',
     })
     : cachedItems;
   let items = sourceItems.map(item => normalizePncpItem(item, item.__matched_termo || qText));
@@ -8041,6 +8401,125 @@ const countPncpJobResults = async (jobId, accountId = null) => {
   }
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total: 0 }] }));
   return Number(rows[0]?.total || 0);
+};
+
+/**
+ * Soma canônica do "Valor na lista": colunas indexadas + fallback no payload
+ * (enriquecimento às vezes grava só no JSON antes das colunas atualizarem).
+ */
+const sumPncpJobResultsValue = async (jobId, accountId = null) => {
+  if (!jobId) return 0;
+  const params = [jobId];
+  let sql = `
+    SELECT COALESCE(SUM(
+      COALESCE(
+        NULLIF(value_matched, 0),
+        NULLIF(value_estimated, 0),
+        NULLIF((payload->>'valor_itens_pertinentes')::numeric, 0),
+        NULLIF((payload->>'valor_total_estimado')::numeric, 0),
+        NULLIF((payload->>'valor_global')::numeric, 0),
+        NULLIF((payload->>'valor_total_homologado')::numeric, 0),
+        0
+      )
+    ), 0)::float AS total_value
+      FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+     WHERE job_id = $1`;
+  if (accountId != null) {
+    params.push(accountId);
+    sql += ' AND account_id = $2';
+  }
+  const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total_value: 0 }] }));
+  const n = Number(rows[0]?.total_value || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+const refreshPncpJobSummaryTotals = async (job) => {
+  if (!job?.id) return job?.summary || null;
+  const count = await countPncpJobResults(job.id, job.account_id);
+  const totalValue = await sumPncpJobResultsValue(job.id, job.account_id);
+  job.summary = {
+    ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
+    count,
+    total_value: totalValue,
+  };
+  job.total = count || job.total || 0;
+  return job.summary;
+};
+
+/** Contagens por visibility (para chips Todos/Ocultos/Pipeline do popup). */
+const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
+  const empty = { all: 0, visible: 0, hidden: 0, pipeline: 0 };
+  if (!jobId) return empty;
+  const params = [jobId];
+  let sql = `
+    SELECT visibility, COUNT(*)::int AS cnt
+      FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+     WHERE job_id = $1`;
+  if (accountId != null) {
+    params.push(accountId);
+    sql += ' AND account_id = $2';
+  }
+  sql += ' GROUP BY visibility';
+  const { rows } = await pool.query(sql, params).catch(() => ({ rows: [] }));
+  const counts = { ...empty };
+  for (const row of rows) {
+    const vis = String(row.visibility || 'visible');
+    const n = Number(row.cnt || 0);
+    if (vis === 'hidden') counts.hidden = n;
+    else if (vis === 'pipeline') counts.pipeline = n;
+    else counts.visible += n;
+    counts.all += n;
+  }
+  return counts;
+};
+
+/** Chaves já persistidas — evita recontar e permite retomada sem reprocessar. */
+const loadPncpJobResultKeys = async (jobId) => {
+  if (!jobId) return new Set();
+  const { rows } = await pool.query(
+    `SELECT result_key FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`,
+    [jobId]
+  ).catch(() => ({ rows: [] }));
+  return new Set(rows.map(r => String(r.result_key || '').trim()).filter(Boolean));
+};
+
+const PNCP_TERM_RUN_DONE_STOPS = new Set([
+  'total_reached', 'short_page', 'empty_page', 'target_reached', 'max_pages',
+]);
+// slice_yield = cedeu a vez no rodízio (ainda não terminou o universo do termo).
+const PNCP_TERM_RUN_RESUME_STOPS = new Set([
+  'rate_limited', 'page_error', 'page_error_partial', 'slice_yield',
+]);
+// Páginas por fatia no rodízio: evita um termo com 4k+ resultados monopolizar a fila
+// e deixar correlatos (uav, rpa…) eternamente "aguardando vez".
+const PNCP_DEEP_PAGES_PER_SLICE = Math.max(3, Math.min(15, Number(process.env.PNCP_DEEP_PAGES_PER_SLICE) || 6));
+
+const getPreviousTermRun = (termRuns = [], term = '') => {
+  const needle = normalizeSearchText(term);
+  if (!needle) return null;
+  // Última execução desse termo (pode haver várias se o job retomou várias vezes).
+  for (let i = termRuns.length - 1; i >= 0; i -= 1) {
+    const run = termRuns[i];
+    if (run?.term && normalizeSearchText(run.term) === needle && run.source !== 'pncp_consulta_complement') {
+      return run;
+    }
+  }
+  return null;
+};
+
+/** Upsert do run de um termo na lista (mantém 1 entrada por termo + complementos). */
+const upsertTermRun = (termRuns, run) => {
+  if (!run?.term) {
+    termRuns.push(run);
+    return termRuns;
+  }
+  const needle = normalizeSearchText(run.term);
+  const idx = termRuns.findIndex(
+    (r) => r?.term && normalizeSearchText(r.term) === needle && r.source !== 'pncp_consulta_complement'
+  );
+  if (idx >= 0) termRuns[idx] = run;
+  else termRuns.push(run);
+  return termRuns;
 };
 
 const persistPncpJobResults = async (job, items = []) => {
@@ -8130,6 +8609,8 @@ const sortPncpJobResults = (items, ordenacao = 'relevancia_desc') => {
 // casamento de terminologia no indexador da /api/search/) e agrega contratações
 // que os termos encontram no objeto da compra. Mesma ideia do branch UASG da
 // busca síncrona. Itens chegam com valores e campos Lei 14.133 já populados.
+// Suporta fatias (startPage + pagesThisSlice) para intercalar cedo no deep job
+// sem recomeçar do zero em retomadas.
 const fetchConsultaComplementItems = async ({
   qText,
   terms = [],
@@ -8139,18 +8620,28 @@ const fetchConsultaComplementItems = async ({
   seen,
   rawItems,
   maxPages = 10,
+  startPage = 1,
+  pagesThisSlice = null,
+  priorRun = null,
+  priority = 'sync',
 }) => {
+  const prior = priorRun && priorRun.source === 'pncp_consulta_complement' ? priorRun : null;
   const run = {
     term: '(consulta por data)',
     source: 'pncp_consulta_complement',
     endpoint: 'pncp_consulta',
-    pages_requested: 0,
-    pages_completed: 0,
-    total_reported: 0,
-    items_collected: 0,
-    errors: [],
+    pages_requested: prior ? Number(prior.pages_requested || 0) : 0,
+    pages_completed: prior ? Number(prior.pages_completed || 0) : 0,
+    total_reported: prior ? Number(prior.total_reported || 0) : 0,
+    items_collected: prior ? Number(prior.items_collected || 0) : 0,
+    unique_new: prior ? Number(prior.unique_new || 0) : 0,
+    duplicates_skipped: prior ? Number(prior.duplicates_skipped || 0) : 0,
+    classified_added: prior ? Number(prior.classified_added || 0) : 0,
+    errors: Array.isArray(prior?.errors) ? [...prior.errors].slice(-8) : [],
     stop_reason: null,
-    duration_ms: 0,
+    duration_ms: Number(prior?.duration_ms || 0),
+    resumed_from_page: null,
+    slices: Number(prior?.slices || 0) + 1,
   };
   const startedAt = Date.now();
   const textTerms = mergeUniqueTerms([qText], terms)
@@ -8183,14 +8674,20 @@ const fetchConsultaComplementItems = async ({
   }
   if (filters.modalidade_licitacao_id) params.codigoModalidadeContratacao = filters.modalidade_licitacao_id;
   if (filters.uf) params.uf = filters.uf;
-  let pagina = 1;
+  const pageStart = Math.max(1, Number(startPage) || (Number(prior?.pages_completed || 0) + 1) || 1);
+  const sliceCap = Math.max(1, Number(pagesThisSlice) || Number(maxPages) || 10);
+  const hardCap = Math.max(pageStart + sliceCap - 1, Math.min(80, Number(maxPages) || 10));
+  run.resumed_from_page = pageStart > 1 ? pageStart : null;
+  let pagina = pageStart;
+  let pagesInThisCall = 0;
   try {
-    while (pagina <= maxPages) {
+    while (pagina <= hardCap && pagesInThisCall < sliceCap) {
       run.pages_requested += 1;
-      const data = await withPncpGate(() => fetchPncpConsulta(endpoint, { ...params, pagina }));
-      run.pages_completed += 1;
+      const data = await withPncpGate(() => fetchPncpConsulta(endpoint, { ...params, pagina }), { priority });
+      run.pages_completed = pagina;
+      pagesInThisCall += 1;
       const items = asPncpList(data);
-      if (pagina === 1) run.total_reported = Number(data?.totalRegistros) || 0;
+      if (pagina === 1 || !run.total_reported) run.total_reported = Number(data?.totalRegistros) || run.total_reported || 0;
       if (!items.length) {
         run.stop_reason = 'empty_page';
         break;
@@ -8204,10 +8701,15 @@ const fetchConsultaComplementItems = async ({
         if (!matched) continue;
         const mapped = mapPncpConsultaContratacaoToSearchItem(item, matched, { __from_consulta: true });
         const key = getPncpRawItemKey(mapped);
-        if (!key || seen.has(key)) continue;
+        if (!key) continue;
+        if (seen.has(key)) {
+          run.duplicates_skipped = Number(run.duplicates_skipped || 0) + 1;
+          continue;
+        }
         seen.add(key);
         rawItems.push(mapped);
         run.items_collected += 1;
+        run.unique_new = Number(run.unique_new || 0) + 1;
       }
       const totalPaginas = Number(data?.totalPaginas) || 1;
       if (pagina >= totalPaginas || items.length < 50) {
@@ -8217,15 +8719,30 @@ const fetchConsultaComplementItems = async ({
       pagina += 1;
     }
   } catch (error) {
-    run.errors.push(error.message);
-    run.stop_reason = 'error';
+    run.errors.push(`pagina ${pagina}: ${error.message}`);
+    run.errors = run.errors.slice(-12);
+    if (isPncpThrottleError(error)) {
+      notePncpThrottle(error.message || 'consulta complement');
+      run.stop_reason = 'rate_limited';
+    } else {
+      run.stop_reason = run.items_collected > 0 ? 'page_error_partial' : 'page_error';
+    }
   }
-  if (!run.stop_reason) run.stop_reason = 'max_pages';
-  run.duration_ms = Date.now() - startedAt;
+  if (!run.stop_reason) {
+    // Fatia parcial (ainda há páginas) vs teto desta chamada.
+    run.stop_reason = pagesInThisCall >= sliceCap ? 'slice_yield' : 'max_pages';
+  }
+  run.duration_ms = Number(run.duration_ms || 0) + (Date.now() - startedAt);
   return run;
 };
 
 const runPncpDeepSearchJob = async (jobId) => {
+  const job = PNCP_DEEP_SEARCH_JOBS.get(jobId);
+  if (!job) return;
+  return withPncpHeavyJobSlot(`deep-search:${String(job.nome || jobId).slice(0, 40)}`, () => runPncpDeepSearchJobUnlocked(jobId));
+};
+
+const runPncpDeepSearchJobUnlocked = async (jobId) => {
   const job = PNCP_DEEP_SEARCH_JOBS.get(jobId);
   if (!job) return;
   const filters = job.filters || {};
@@ -8246,213 +8763,209 @@ const runPncpDeepSearchJob = async (jobId) => {
   if (filters.uf) baseParams.uf = filters.uf;
   if (filters.esfera_id) baseParams.esfera_id = filters.esfera_id;
 
-  const getBudget = (term, index) => {
-    if (index === 0) return { maxPages: 1000, maxItems: Number.MAX_SAFE_INTEGER, reason: 'termo_original_ate_total_api' };
-    return { maxPages: 1000, maxItems: Number.MAX_SAFE_INTEGER, reason: 'termo_correlato_ate_total_api' };
-  };
-
+  const maxPagesPerTerm = 1000;
   const seen = new Set();
   const rawItems = [];
+  // Runs anteriores (completos/parciais) — base do checkpoint de retomada.
+  const priorTermRuns = Array.isArray(job.term_runs) ? [...job.term_runs] : [];
+  // termRuns vira o estado vivo (1 entrada por termo); complementos entram no final.
   const termRuns = [];
   let lastSnapshotAt = 0;
+  let classifiedBaseline = 0;
+  // Checkpoint: NÃO re-pede páginas já lidas. Ativo quando há progresso parcial
+  // (rate limit / slice_yield / erro) OU páginas concluídas em frentes incompletas.
+  // Reexecução de job 100% done (recoleta diária) recomeça do zero, mas UPSERT
+  // preserva a lista classificada — só gasta cota PNCP em páginas novas/repetidas.
+  const checkpointMode = Boolean(preserveResults && priorTermRuns.some((r) => {
+    if (!r || r.source === 'pncp_consulta_complement') return false;
+    if (PNCP_TERM_RUN_RESUME_STOPS.has(r.stop_reason)) return true;
+    const pages = Number(r.pages_completed || 0);
+    if (pages > 0 && !PNCP_TERM_RUN_DONE_STOPS.has(r.stop_reason)) return true;
+    return false;
+  }));
   try {
     if (!preserveResults) {
       // Troca de filtros: zera para o total do card/popup refletir só o novo conjunto.
       await clearPncpJobResults(jobId);
       job.total = 0;
       job.items = [];
+      priorTermRuns.length = 0;
     } else {
       // Mantém totais existentes enquanto novos itens vão entrando via UPSERT.
       job.total = await countPncpJobResults(jobId, job.account_id) || Number(job.total || 0);
-    }
-    job.status = 'running';
-    job.progress = {
-      ...(job.progress || {}),
-      current_term: '',
-      terms_done: 0,
-      terms_total: terms.length,
-      items_collected: preserveResults ? Number(job.progress?.items_collected || job.total || 0) : 0,
-      preserve_results: preserveResults,
-    };
-    await persistPncpDeepJob(job);
-    for (let index = 0; index < terms.length; index += 1) {
-      terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 12);
-      job.progress.terms_total = terms.length;
-      if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
-      const term = terms[index];
-      const budget = getBudget(term, index);
-      const run = {
-        term,
-        source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
-        endpoint: 'pncp_search',
-        pages_requested: 0,
-        pages_completed: 0,
-        total_reported: 0,
-        items_collected: 0,
-        observed_page_size: null,
-        max_pages: budget.maxPages,
-        target_items: budget.maxItems,
-        budget_reason: budget.reason,
-        errors: [],
-        stop_reason: null,
-        duration_ms: 0,
-      };
-      const startedAt = Date.now();
-      let page = 1;
-      let observedPageSize = 0;
-      let totalFromApi = 0;
-      job.progress.current_term = term;
-      while (run.items_collected < budget.maxItems && page <= budget.maxPages) {
-        if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
-        run.pages_requested += 1;
-        let data;
-        try {
-          data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: page }, { retries: 1 }));
-        } catch (error) {
-          run.errors.push(`pagina ${page}: ${error.message}`);
-          // 429 / reset / timeout = throttle do PNCP: pausa o job e retoma depois.
-          if (isPncpThrottleError(error)) {
-            notePncpThrottle(error.message || 'search page');
-            run.stop_reason = 'rate_limited';
-          } else {
-            run.stop_reason = run.items_collected > 0 ? 'page_error_partial' : 'page_error';
-          }
-          break;
-        }
-        run.pages_completed += 1;
-        const items = Array.isArray(data?.items) ? data.items : [];
-        if (page === 1) {
-          totalFromApi = Number(data?.total) || 0;
-          run.total_reported = totalFromApi;
-        }
-        if (!items.length) {
-          run.stop_reason = 'empty_page';
-          break;
-        }
-        if (!observedPageSize) {
-          observedPageSize = items.length;
-          run.observed_page_size = observedPageSize;
-        }
-        items.forEach(item => {
-          const key = getPncpRawItemKey(item);
-          if (key && !seen.has(key)) {
-            seen.add(key);
-            rawItems.push({ ...item, __matched_termo: term });
-          }
-        });
-        run.items_collected += items.length;
-        job.progress.items_collected = rawItems.length;
-        job.progress.current_page = page;
-        job.progress.current_term_collected = run.items_collected;
-        job.progress.current_term_total_reported = totalFromApi || null;
-        job.updated_at = Date.now();
-        if (page === 1 || page % 3 === 0 || Date.now() - lastSnapshotAt > 2500) {
-          const pageSnapshot = await buildDeepSearchItemsSnapshot({
-            rawItems,
-            qText,
-            terms,
-            negativeTerms,
-            filters,
-            mappedStatus,
-            shouldApplyReceivingProposalLocally,
-            enrichValues: false,
-          });
-          await persistPncpJobResults(job, pageSnapshot.items);
-          job.items = pageSnapshot.items.slice(0, 200);
-          job.total = await countPncpJobResults(jobId, job.account_id) || pageSnapshot.items.length;
-          job.summary = pageSnapshot.summary;
-          job.query_plan = { ...pageSnapshot.query_plan, term_runs: [...termRuns, run], partial: true };
-          await persistPncpDeepJob(job);
-          lastSnapshotAt = Date.now();
-        }
-        if (items.length < observedPageSize) {
-          run.stop_reason = 'short_page';
-          break;
-        }
-        if (totalFromApi > 0 && run.items_collected >= totalFromApi) {
-          run.stop_reason = 'total_reached';
-          break;
-        }
-        page += 1;
-        // Folga entre páginas (além do gap do gate) — buscas longas disparam menos 429.
-        if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && page <= budget.maxPages) {
-          const pagePause = Math.min(1500, Math.max(250, Math.round(PNCP_GATE.gapMs * 0.4)));
-          if (pagePause > 0) await sleep(pagePause);
-        }
-      }
-      if (!run.stop_reason) run.stop_reason = run.items_collected >= budget.maxItems ? 'target_reached' : 'max_pages';
-      run.duration_ms = Date.now() - startedAt;
-      termRuns.push(run);
-      job.term_runs = termRuns;
-      job.progress.terms_done = index + 1;
-      // Enriquecimento progressivo (cadência do gate — não disputa com a busca).
-      if (run.stop_reason !== 'rate_limited' && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
-        const enrichBudget = getPncpEnrichBudget();
-        if (!enrichBudget.paused && enrichBudget.limit > 0) {
-          const termItemsSemValor = rawItems
-            .filter(item => item.__matched_termo === term && !getPncpTotalEstimatedValue(item))
-            .slice(0, enrichBudget.limit);
-          if (termItemsSemValor.length) {
-            const filled = await fillPncpMissingEstimatedValues(termItemsSemValor, {
-              limit: enrichBudget.limit,
-              delayMs: enrichBudget.delayMs,
-              rateLimitWaitMs: enrichBudget.rateLimitWaitMs,
-              query: term || qText,
-              maxPages: 4,
-            });
-            const filledByKey = new Map(
-              filled.map(item => [getPncpRawItemKey(item) || getPncpSearchResultKey(item), item]).filter(([k]) => k)
-            );
-            for (let i = 0; i < rawItems.length; i += 1) {
-              const key = getPncpRawItemKey(rawItems[i]) || getPncpSearchResultKey(rawItems[i]);
-              const next = key ? filledByKey.get(key) : null;
-              if (next && getPncpTotalEstimatedValue(next)) rawItems[i] = next;
-            }
-          }
-        }
-      }
-      // Pausa leve entre termos (evita rajada ao trocar de frente).
-      if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && index + 1 < terms.length) {
-        await sleep(Math.min(2500, Math.max(400, PNCP_GATE.gapMs)));
-      }
-      const partial = await buildDeepSearchItemsSnapshot({
-        rawItems,
-        qText,
-        terms,
-        negativeTerms,
-        filters,
-        mappedStatus,
-        shouldApplyReceivingProposalLocally,
-        enrichValues: false,
-      });
-      await persistPncpJobResults(job, partial.items);
-      job.items = partial.items.slice(0, 200);
-      job.total = await countPncpJobResults(jobId, job.account_id) || partial.items.length;
-      job.summary = partial.summary;
-      job.query_plan = { ...partial.query_plan, term_runs: termRuns, partial: true };
-      job.updated_at = Date.now();
-      await persistPncpDeepJob(job);
-      if (run.stop_reason === 'rate_limited') {
-        job.status = 'paused_rate_limit';
-        const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
-        const resumeIn = Math.max(PNCP_RATE_LIMIT_RESUME_DELAY_MS, pauseLeft + 30_000);
-        job.error = `PNCP limitou as requisições; pausada ~${Math.ceil(resumeIn / 60000)} min e retoma sozinha (gap ${PNCP_GATE.gapMs}ms).`;
-        job.progress = {
-          ...(job.progress || {}),
-          rate_limited: true,
-          gate: getPncpGateSnapshot(),
-          resume_in_ms: resumeIn,
-        };
-        await persistPncpDeepJob(job);
-        schedulePncpSearchResume(job.id, resumeIn);
-        return;
-      }
+      classifiedBaseline = job.total;
+      // Seed de chaves já classificadas: retomada não regrava o mesmo acervo.
+      const existingKeys = await loadPncpJobResultKeys(jobId);
+      existingKeys.forEach((k) => seen.add(k));
     }
 
-    // Complemento de cobertura via consulta por data (terminologia que a
-    // /api/search/ não indexa); itens chegam com valores/Lei 14.133 prontos.
-    if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
-      const complementRun = await fetchConsultaComplementItems({
+    // Estado por termo para o rodízio (round-robin por fatias de páginas).
+    const buildTermState = (term, index) => {
+      const prev = (preserveResults && checkpointMode) ? getPreviousTermRun(priorTermRuns, term) : null;
+      const prevPages = Number(prev?.pages_completed || 0);
+      const prevItems = Number(prev?.items_collected || 0);
+      const prevStop = prev?.stop_reason || null;
+      // short_page/total_reached com 0 páginas é estado inconsistente (ex.: uav 0/0) — não marcar done.
+      const legitDone = Boolean(
+        prev
+        && PNCP_TERM_RUN_DONE_STOPS.has(prevStop)
+        && (prevPages > 0 || prevItems > 0 || prevStop === 'empty_page')
+      );
+      const shouldResume = Boolean(
+        prev
+        && !legitDone
+        && (
+          PNCP_TERM_RUN_RESUME_STOPS.has(prevStop)
+          || prevPages > 0
+          || prevItems > 0
+        )
+      );
+      // Próxima página a pedir: nunca recomeça abaixo do que já completou.
+      const page = shouldResume
+        ? Math.max(1, prevPages + 1, Number(prev?.next_page || 0) || 0)
+        : 1;
+      return {
+        term,
+        index,
+        done: legitDone,
+        page,
+        zeroUniqueStreak: 0,
+        run: {
+          term,
+          source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
+          endpoint: 'pncp_search',
+          pages_requested: shouldResume ? Number(prev.pages_requested || prevPages || 0) : 0,
+          pages_completed: shouldResume ? prevPages : 0,
+          total_reported: shouldResume ? Number(prev.total_reported || 0) : 0,
+          items_collected: shouldResume ? prevItems : 0,
+          unique_new: shouldResume ? Number(prev.unique_new || 0) : 0,
+          duplicates_skipped: shouldResume ? Number(prev.duplicates_skipped || 0) : 0,
+          classified_added: shouldResume ? Number(prev.classified_added || 0) : 0,
+          observed_page_size: shouldResume ? (prev.observed_page_size || null) : null,
+          max_pages: maxPagesPerTerm,
+          target_items: Number.MAX_SAFE_INTEGER,
+          budget_reason: 'rodizio_fatias',
+          errors: Array.isArray(prev?.errors) ? [...prev.errors].slice(-8) : [],
+          stop_reason: legitDone ? (prevStop || 'total_reached') : (shouldResume ? prevStop : null),
+          duration_ms: Number(prev?.duration_ms || 0),
+          resumed_from_page: shouldResume && page > 1 ? page : null,
+          next_page: shouldResume ? page : null,
+          slices: Number(prev?.slices || 0),
+        },
+      };
+    };
+
+    // Referência viva do complemento (atualizada por runComplementSlice).
+    // syncTermRunsList precisa dela — senão regrava o prior antigo e apaga progresso.
+    let liveComplementRun = priorTermRuns.find((r) => r?.source === 'pncp_consulta_complement') || null;
+
+    const syncTermRunsList = (states) => {
+      // Mantém ordem dos termos atuais + run de complemento vivo (ou prior).
+      const next = [];
+      states.forEach((st) => upsertTermRun(next, st.run));
+      const comp = liveComplementRun
+        || priorTermRuns.find((r) => r?.source === 'pncp_consulta_complement')
+        || null;
+      if (comp) next.push(comp);
+      termRuns.length = 0;
+      termRuns.push(...next);
+      job.term_runs = termRuns;
+    };
+
+    const persistSliceProgress = async (states, activeRun, sessionRawFrom) => {
+      const snapshotSource = rawItems.slice(sessionRawFrom);
+      let classifiedThisSlice = 0;
+      if (snapshotSource.length) {
+        const pageSnapshot = await buildDeepSearchItemsSnapshot({
+          rawItems: snapshotSource,
+          qText,
+          terms,
+          negativeTerms,
+          filters,
+          mappedStatus,
+          shouldApplyReceivingProposalLocally,
+          enrichValues: false,
+        });
+        classifiedThisSlice = Array.isArray(pageSnapshot.items) ? pageSnapshot.items.length : 0;
+        if (activeRun) {
+          activeRun.classified_added = Number(activeRun.classified_added || 0) + classifiedThisSlice;
+        }
+        await persistPncpJobResults(job, pageSnapshot.items);
+        job.items = pageSnapshot.items.slice(0, 200);
+        job.summary = {
+          ...(pageSnapshot.summary || {}),
+          count: undefined,
+        };
+        job.query_plan = {
+          ...pageSnapshot.query_plan,
+          term_runs: termRuns,
+          partial: true,
+          raw_unique_collected: seen.size,
+          schedule: 'round_robin_slices',
+          pages_per_slice: PNCP_DEEP_PAGES_PER_SLICE,
+          preserve_checkpoint: true,
+        };
+      }
+      job.total = await countPncpJobResults(jobId, job.account_id) || job.total || 0;
+      job.progress.classified_total = job.total;
+      // Summary de valor: soma de toda a tabela (não só da fatia em memória).
+      await refreshPncpJobSummaryTotals(job);
+      job.progress.items_collected = Math.max(
+        classifiedBaseline,
+        seen.size,
+        Number(job.progress.items_collected || 0)
+      );
+      job.progress.raw_unique_session = rawItems.length;
+      job.progress.current_term = activeRun?.term || job.progress.current_term;
+      job.progress.current_page = activeRun?.pages_completed || job.progress.current_page;
+      job.progress.current_term_collected = activeRun?.items_collected ?? job.progress.current_term_collected;
+      job.progress.current_term_total_reported = activeRun?.total_reported || job.progress.current_term_total_reported;
+      job.progress.current_term_unique_new = activeRun?.unique_new ?? job.progress.current_term_unique_new;
+      job.progress.current_term_duplicates = activeRun?.duplicates_skipped ?? job.progress.current_term_duplicates;
+      job.progress.current_term_classified = activeRun?.classified_added ?? job.progress.current_term_classified;
+      job.progress.terms_done = states.filter((s) => s.done).length;
+      job.progress.terms_total = states.length;
+      job.progress.schedule = 'round_robin_slices';
+      job.progress.pages_per_slice = PNCP_DEEP_PAGES_PER_SLICE;
+      job.progress.checkpoint = true;
+      job.progress.gate = getPncpGateSnapshot();
+      syncTermRunsList(states);
+      job.updated_at = Date.now();
+      await persistPncpDeepJob(job);
+      lastSnapshotAt = Date.now();
+      return classifiedThisSlice;
+    };
+
+    // Complemento consulta/proposta: intercala cedo (abertos úteis) e retoma página.
+    // liveComplementRun já seedado acima a partir de priorTermRuns.
+    let complementRun = liveComplementRun ? { ...liveComplementRun } : null;
+    liveComplementRun = complementRun;
+    let complementPage = Math.max(
+      1,
+      Number(complementRun?.pages_completed || 0) + 1,
+      Number(complementRun?.next_page || 0) || 0
+    );
+    let complementDone = Boolean(
+      complementRun
+      && PNCP_TERM_RUN_DONE_STOPS.has(complementRun.stop_reason)
+      && (Number(complementRun.pages_completed || 0) > 0 || complementRun.stop_reason === 'empty_page')
+    );
+    const COMPLEMENT_PAGES_PER_SLICE = Math.max(1, Math.min(4, Number(process.env.PNCP_COMPLEMENT_PAGES_PER_SLICE) || 2));
+
+    const runComplementSlice = async (states, reason = 'interleave') => {
+      if (complementDone || PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) return { paused: false, classified: 0 };
+      if (!shouldApplyReceivingProposalLocally && mappedStatus && mappedStatus !== 'todos') {
+        // Sem filtro de abertos e sem “todos”, publicacao exige modalidade — skip se não tiver.
+        if (!filters.modalidade_licitacao_id) return { paused: false, classified: 0 };
+      }
+      const sessionRawFrom = rawItems.length;
+      console.log(
+        `[PNCP Deep Search] job ${jobId} complemento consulta pág.${complementPage}+ ` +
+        `(${reason}, ${COMPLEMENT_PAGES_PER_SLICE} pág/fatia)`
+      );
+      job.progress.current_term = '(consulta por data)';
+      job.progress.current_page = complementPage;
+      const run = await fetchConsultaComplementItems({
         qText,
         terms,
         filters,
@@ -8460,40 +8973,462 @@ const runPncpDeepSearchJob = async (jobId) => {
         shouldApplyReceivingProposalLocally,
         seen,
         rawItems,
+        maxPages: 40,
+        startPage: complementPage,
+        pagesThisSlice: COMPLEMENT_PAGES_PER_SLICE,
+        priorRun: complementRun,
+        priority: 'bulk',
       });
-      termRuns.push(complementRun);
-      job.term_runs = termRuns;
-      job.progress.items_collected = rawItems.length;
+      complementRun = run;
+      liveComplementRun = run;
+      if (PNCP_TERM_RUN_DONE_STOPS.has(run.stop_reason) || run.stop_reason === 'sem_termos' || run.stop_reason === 'publicacao_requer_modalidade') {
+        complementDone = true;
+      } else {
+        complementPage = Math.max(complementPage, Number(run.pages_completed || 0) + 1);
+        run.next_page = complementPage;
+      }
+      const classified = await persistSliceProgress(states, run, sessionRawFrom);
+      if (run.stop_reason === 'rate_limited') {
+        job.status = 'paused_rate_limit';
+        const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
+        const resumeIn = Math.max(PNCP_RATE_LIMIT_RESUME_DELAY_MS, pauseLeft + 30_000);
+        job.error = (
+          `PNCP limitou no complemento (consulta abertos) pág.${complementPage} ` +
+          `(${job.total} na lista). Pausa ~${Math.ceil(resumeIn / 60000)} min; ` +
+          `retoma sem recomeçar — acervo preservado · gap ${PNCP_GATE.gapMs}ms.`
+        );
+        job.progress = {
+          ...(job.progress || {}),
+          rate_limited: true,
+          gate: getPncpGateSnapshot(),
+          resume_in_ms: resumeIn,
+          resume_from_page: complementPage,
+          current_term: '(consulta por data)',
+          classified_total: job.total,
+          checkpoint: true,
+        };
+        await persistPncpDeepJob(job);
+        schedulePncpSearchResume(job.id, resumeIn);
+        return { paused: true, classified };
+      }
+      return { paused: false, classified };
+    };
+
+    job.status = 'running';
+    job.progress = {
+      ...(job.progress || {}),
+      current_term: '',
+      terms_done: 0,
+      terms_total: terms.length,
+      items_collected: preserveResults ? Number(job.progress?.items_collected || job.total || 0) : 0,
+      classified_total: job.total,
+      preserve_results: preserveResults,
+      resumed: Boolean(preserveResults && checkpointMode),
+      checkpoint_mode: Boolean(preserveResults && checkpointMode),
+      checkpoint: Boolean(preserveResults && checkpointMode),
+      schedule: 'round_robin_slices',
+      pages_per_slice: PNCP_DEEP_PAGES_PER_SLICE,
+      gate: getPncpGateSnapshot(),
+    };
+    await persistPncpDeepJob(job);
+
+    // Inicializa estados; termos já concluídos ficam done (não re-pedem páginas).
+    let states = terms.map((t, i) => buildTermState(t, i));
+    syncTermRunsList(states);
+    // Preferência de rodízio: quem tem menos páginas feitas primeiro (novos termos
+    // na fila saltam na frente do monstro de 4k+ resultados). Termos com streak
+    // de zero únicos novos caem no fim (diminishing returns / overlap).
+    const orderForRound = () => {
+      const pending = states.filter((s) => !s.done);
+      pending.sort((a, b) => {
+        const za = Number(a.zeroUniqueStreak || 0);
+        const zb = Number(b.zeroUniqueStreak || 0);
+        if (za !== zb) return za - zb;
+        const pa = Number(a.run.pages_completed || 0);
+        const pb = Number(b.run.pages_completed || 0);
+        if (pa !== pb) return pa - pb;
+        return a.index - b.index;
+      });
+      return pending;
+    };
+
+    console.log(
+      `[PNCP Deep Search] job ${jobId} rodízio: ${states.length} termo(s), ` +
+      `${PNCP_DEEP_PAGES_PER_SLICE} pág/fatia, checkpoint=${checkpointMode}, ` +
+      `preserve=${preserveResults}, lista=${job.total}`
+    );
+
+    // Fatia inicial de consulta/proposta: enche a lista com abertos cedo.
+    if (shouldApplyReceivingProposalLocally && !complementDone) {
+      const early = await runComplementSlice(states, 'early');
+      if (early?.paused) return;
     }
 
-    const finalSnapshot = await buildDeepSearchItemsSnapshot({
-      rawItems,
-      qText,
-      negativeTerms,
-      terms,
-      filters,
-      mappedStatus,
-      shouldApplyReceivingProposalLocally,
-      enrichValues: true,
-      enrichLimit: 500,
-      enrichDelayMs: 100,
+    // Loop de rodízio até todos terminarem ou rate-limit.
+    let safetyRounds = 0;
+    const maxRounds = Math.max(50, states.length * Math.ceil(maxPagesPerTerm / PNCP_DEEP_PAGES_PER_SLICE) + 10);
+    while (states.some((s) => !s.done) && safetyRounds < maxRounds) {
+      if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
+      // Termos anexados no meio da corrida entram no rodízio.
+      terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 12);
+      const known = new Set(states.map((s) => normalizeSearchText(s.term)));
+      terms.forEach((t, i) => {
+        const key = normalizeSearchText(t);
+        if (!known.has(key)) {
+          states.push(buildTermState(t, states.length || i));
+          known.add(key);
+        }
+      });
+      job.progress.terms_total = states.length;
+
+      const round = orderForRound();
+      if (!round.length) break;
+      safetyRounds += 1;
+      let progressedThisRound = false;
+
+      for (const st of round) {
+        if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
+        if (st.done) continue;
+
+        const run = st.run;
+        const sessionRawFrom = rawItems.length;
+        const sliceStartPage = st.page;
+        let pagesThisSlice = 0;
+        let observedPageSize = Number(run.observed_page_size || 0);
+        let totalFromApi = Number(run.total_reported || 0);
+        const sliceStartedAt = Date.now();
+        run.stop_reason = null;
+        run.next_page = st.page;
+        job.progress.current_term = st.term;
+        job.progress.current_page = st.page;
+        job.progress.resume_from_page = sliceStartPage > 1 ? sliceStartPage : null;
+        job.progress.slice_pages = PNCP_DEEP_PAGES_PER_SLICE;
+        job.progress.checkpoint = true;
+
+        if (sliceStartPage > 1) {
+          console.log(
+            `[PNCP Deep Search] job ${jobId} fatia "${st.term}" pág.${sliceStartPage}+ ` +
+            `(${run.items_collected}/${run.total_reported || '?'} brutos, ` +
+            `únicos=${run.unique_new || 0}, lista=${job.total}) — sem recomeçar`
+          );
+        }
+
+        while (
+          pagesThisSlice < PNCP_DEEP_PAGES_PER_SLICE
+          && st.page <= maxPagesPerTerm
+          && !st.done
+        ) {
+          if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
+          const page = st.page;
+          run.pages_requested += 1;
+          let data;
+          try {
+            // retries: 0 — retry imediato em 56/reset piora o throttle; o gate pausa e retoma.
+            data = await withPncpGate(
+              () => fetchPncpSearchStable({ ...baseParams, q: st.term, pagina: page }, { retries: 0 }),
+              { priority: 'bulk' }
+            );
+          } catch (error) {
+            run.errors.push(`pagina ${page}: ${error.message}`);
+            run.errors = run.errors.slice(-12);
+            run.next_page = page; // mesma página na retomada (não pular)
+            if (isPncpThrottleError(error)) {
+              notePncpThrottle(error.message || 'search page');
+              run.stop_reason = 'rate_limited';
+            } else {
+              run.stop_reason = run.items_collected > 0 ? 'page_error_partial' : 'page_error';
+            }
+            break;
+          }
+
+          run.pages_completed = page;
+          st.page = page;
+          const items = Array.isArray(data?.items) ? data.items : [];
+          if (page === 1 || !totalFromApi) {
+            totalFromApi = Number(data?.total) || totalFromApi || 0;
+            run.total_reported = totalFromApi;
+          }
+          if (!items.length) {
+            run.stop_reason = 'empty_page';
+            st.done = true;
+            break;
+          }
+          if (!observedPageSize) {
+            observedPageSize = items.length;
+            run.observed_page_size = observedPageSize;
+          }
+          let newUnique = 0;
+          let dups = 0;
+          items.forEach((item) => {
+            const key = getPncpRawItemKey(item);
+            if (!key) return;
+            if (seen.has(key)) {
+              dups += 1;
+              return;
+            }
+            seen.add(key);
+            rawItems.push({ ...item, __matched_termo: st.term });
+            newUnique += 1;
+          });
+          run.items_collected += items.length;
+          run.unique_new = Number(run.unique_new || 0) + newUnique;
+          run.duplicates_skipped = Number(run.duplicates_skipped || 0) + dups;
+          if (newUnique === 0) st.zeroUniqueStreak = Number(st.zeroUniqueStreak || 0) + 1;
+          else st.zeroUniqueStreak = 0;
+          pagesThisSlice += 1;
+          progressedThisRound = true;
+          job.progress.items_collected = Math.max(classifiedBaseline, seen.size, Number(job.progress.items_collected || 0));
+          job.progress.raw_unique_session = rawItems.length;
+          job.progress.current_page = page;
+          job.progress.current_term_collected = run.items_collected;
+          job.progress.current_term_total_reported = totalFromApi || null;
+          job.progress.new_unique_last_page = newUnique;
+          job.progress.current_term_unique_new = run.unique_new;
+          job.progress.current_term_duplicates = run.duplicates_skipped;
+          job.updated_at = Date.now();
+
+          if (
+            (page === 1 || page === sliceStartPage || page % 2 === 0 || Date.now() - lastSnapshotAt > 2500)
+            && rawItems.length > sessionRawFrom
+          ) {
+            syncTermRunsList(states);
+            await persistSliceProgress(states, run, sessionRawFrom);
+          }
+
+          if (items.length < observedPageSize) {
+            run.stop_reason = 'short_page';
+            st.done = true;
+            break;
+          }
+          if (totalFromApi > 0 && run.items_collected >= totalFromApi) {
+            run.stop_reason = 'total_reached';
+            st.done = true;
+            break;
+          }
+          // Overlap alto: 3 páginas seguidas sem único novo → cede a vez (não marca done).
+          if (st.zeroUniqueStreak >= 3 && pagesThisSlice >= 2) {
+            run.stop_reason = 'slice_yield';
+            st.page = page + 1;
+            run.next_page = st.page;
+            break;
+          }
+          st.page = page + 1;
+          run.next_page = st.page;
+          // Folga entre páginas (além do gap do gate).
+          if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && pagesThisSlice < PNCP_DEEP_PAGES_PER_SLICE) {
+            const pagePause = Math.min(1500, Math.max(250, Math.round(PNCP_GATE.gapMs * 0.4)));
+            if (pagePause > 0) await sleep(pagePause);
+          }
+        }
+
+        run.slices = Number(run.slices || 0) + 1;
+        run.duration_ms = Number(run.duration_ms || 0) + (Date.now() - sliceStartedAt);
+
+        if (run.stop_reason === 'rate_limited' || run.stop_reason === 'page_error' || run.stop_reason === 'page_error_partial') {
+          // Checkpoint e pausa — lista e páginas já lidas ficam; retoma da próxima página.
+          syncTermRunsList(states);
+          await persistSliceProgress(states, run, sessionRawFrom);
+          if (run.stop_reason === 'rate_limited') {
+            job.status = 'paused_rate_limit';
+            const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
+            const resumeIn = Math.max(PNCP_RATE_LIMIT_RESUME_DELAY_MS, pauseLeft + 30_000);
+            const nextPage = Number(run.next_page || (Number(run.pages_completed || 0) + 1));
+            run.next_page = nextPage;
+            const pendingNames = states.filter((s) => !s.done && s.term !== st.term).map((s) => s.term).slice(0, 4);
+            job.error = (
+              `PNCP limitou em “${st.term}” pág.${nextPage} ` +
+              `(${run.items_collected}/${run.total_reported || '?'} brutos · ${job.total} na lista preservada). ` +
+              `Pausa ~${Math.ceil(resumeIn / 60000)} min; retoma da pág.${nextPage} sem recomeçar` +
+              (pendingNames.length ? ` · também: ${pendingNames.join(', ')}` : '') +
+              ` · gap ${PNCP_GATE.gapMs}ms.`
+            );
+            job.progress = {
+              ...(job.progress || {}),
+              rate_limited: true,
+              gate: getPncpGateSnapshot(),
+              resume_in_ms: resumeIn,
+              resume_from_page: nextPage,
+              current_term: st.term,
+              current_page: run.pages_completed,
+              current_term_collected: run.items_collected,
+              current_term_total_reported: run.total_reported || null,
+              current_term_unique_new: run.unique_new,
+              current_term_duplicates: run.duplicates_skipped,
+              current_term_classified: run.classified_added,
+              classified_total: job.total,
+              schedule: 'round_robin_slices',
+              pages_per_slice: PNCP_DEEP_PAGES_PER_SLICE,
+              terms_done: states.filter((s) => s.done).length,
+              terms_total: states.length,
+              checkpoint: true,
+            };
+            await persistPncpDeepJob(job);
+            schedulePncpSearchResume(job.id, resumeIn);
+            return;
+          }
+          // Erro não-throttle: cede a vez; tenta a mesma/próxima página em outra rodada.
+          run.stop_reason = 'slice_yield';
+          st.page = Math.max(st.page, Number(run.next_page || 0), Number(run.pages_completed || 0) + 1);
+          run.next_page = st.page;
+        } else if (!st.done) {
+          // Fatia esgotada sem terminar o universo → cede a vez aos outros termos.
+          run.stop_reason = 'slice_yield';
+          run.next_page = st.page;
+        }
+
+        syncTermRunsList(states);
+        await persistSliceProgress(states, run, sessionRawFrom);
+
+        // Pausa leve entre frentes do rodízio.
+        if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && states.some((s) => !s.done)) {
+          await sleep(Math.min(2000, Math.max(300, Math.round(PNCP_GATE.gapMs * 0.5))));
+        }
+      }
+
+      // Intercala complemento de abertos entre rodadas (lista útil cresce cedo).
+      if (!complementDone && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && shouldApplyReceivingProposalLocally) {
+        const mid = await runComplementSlice(states, `round_${safetyRounds}`);
+        if (mid?.paused) return;
+        if (mid?.classified > 0) progressedThisRound = true;
+      }
+
+      if (!progressedThisRound) {
+        // Nenhum termo avançou (todos erro/vazio): evita loop quente.
+        // NÃO marca done permanente se ainda há páginas — pausa e retoma.
+        console.warn(`[PNCP Deep Search] job ${jobId} rodada sem progresso — pausando para retomar (acervo preservado)`);
+        states.forEach((s) => {
+          if (!s.done) {
+            s.run.stop_reason = s.run.stop_reason || 'slice_yield';
+            s.run.next_page = Math.max(s.page, Number(s.run.pages_completed || 0) + 1);
+          }
+        });
+        syncTermRunsList(states);
+        job.status = 'paused_rate_limit';
+        const resumeIn = Math.max(60_000, PNCP_RATE_LIMIT_RESUME_DELAY_MS);
+        job.error = (
+          `Sem progresso nesta rodada (PNCP lento ou throttle). ` +
+          `${job.total} na lista preservados. Retoma em ~${Math.ceil(resumeIn / 60000)} min sem recomeçar.`
+        );
+        job.progress = {
+          ...(job.progress || {}),
+          rate_limited: true,
+          gate: getPncpGateSnapshot(),
+          resume_in_ms: resumeIn,
+          checkpoint: true,
+          classified_total: job.total,
+        };
+        await persistPncpDeepJob(job);
+        schedulePncpSearchResume(job.id, resumeIn);
+        return;
+      }
+    }
+
+    // Marca fatias abertas como concluídas se o safety cortou (não deveria).
+    states.forEach((s) => {
+      if (!s.done && s.run.stop_reason === 'slice_yield') {
+        // Ainda havia páginas — se saímos do while por maxRounds, deixa como partial via slice_yield
+        // e NÃO marca completed globalmente sem terminar.
+      }
     });
+    const allDone = states.every((s) => s.done);
+    if (!allDone) {
+      // Ainda há fatias pendentes: pausa curta e retoma (evita travar o heavy slot por horas).
+      states.forEach((s) => {
+        if (!s.done && !PNCP_TERM_RUN_DONE_STOPS.has(s.run.stop_reason)) {
+          s.run.stop_reason = 'slice_yield';
+        }
+      });
+      syncTermRunsList(states);
+      job.status = 'paused_rate_limit';
+      const resumeIn = Math.max(45_000, PNCP_RATE_LIMIT_RESUME_DELAY_MS / 2);
+      job.error = (
+        `Rodízio parcial: ainda há frentes incompletas · ${job.total} na lista preservados. ` +
+        `Retoma em ~${Math.ceil(resumeIn / 60000)} min sem recomeçar as páginas já lidas.`
+      );
+      job.progress = {
+        ...(job.progress || {}),
+        rate_limited: false,
+        slice_yield_pause: true,
+        resume_in_ms: resumeIn,
+        schedule: 'round_robin_slices',
+        terms_done: states.filter((s) => s.done).length,
+        terms_total: states.length,
+        classified_total: job.total,
+        checkpoint: true,
+        gate: getPncpGateSnapshot(),
+      };
+      await persistPncpDeepJob(job);
+      schedulePncpSearchResume(job.id, resumeIn);
+      return;
+    }
+
+    // Complemento final: esgota páginas restantes da consulta (já intercalado antes).
+    // Não recomeça do zero — continua de complementPage / priorRun.
+    if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && !complementDone) {
+      let complementGuard = 0;
+      while (!complementDone && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && complementGuard < 25) {
+        complementGuard += 1;
+        const fin = await runComplementSlice(states, 'final');
+        if (fin?.paused) return;
+        if (complementDone) break;
+        if (complementRun?.stop_reason === 'slice_yield') continue;
+        // rate_limited já retornou; demais stops encerram o complemento.
+        break;
+      }
+      job.progress.items_collected = Math.max(classifiedBaseline, seen.size, rawItems.length);
+    }
+    if (complementRun) {
+      const withoutComp = termRuns.filter((r) => r?.source !== 'pncp_consulta_complement');
+      termRuns.length = 0;
+      termRuns.push(...withoutComp, complementRun);
+      job.term_runs = termRuns;
+    }
+
+    // Snapshot final só dos itens brutos desta execução (acervo antigo já está no DB).
+    const finalSnapshot = rawItems.length
+      ? await buildDeepSearchItemsSnapshot({
+        rawItems,
+        qText,
+        negativeTerms,
+        terms,
+        filters,
+        mappedStatus,
+        shouldApplyReceivingProposalLocally,
+        enrichValues: true,
+        enrichLimit: 500,
+        enrichDelayMs: 100,
+      })
+      : { items: [], summary: createPncpSearchSummary([]), query_plan: { mode: 'deep_background', terms } };
     job.status = 'completed';
     if (!preserveResults) {
       // Snapshot final substitui o conjunto (filtros novos): limpa órfãos e grava de novo.
       await clearPncpJobResults(jobId);
     }
     // Com preserve: UPSERT só acrescenta/atualiza; resultados antigos permanecem.
-    await persistPncpJobResults(job, finalSnapshot.items);
+    if (finalSnapshot.items.length) {
+      await persistPncpJobResults(job, finalSnapshot.items);
+    }
     job.items = finalSnapshot.items.slice(0, 200);
     // Total canônico = o que está na tabela de resultados (mesma fonte do popup).
-    job.total = await countPncpJobResults(jobId, job.account_id) || finalSnapshot.items.length;
+    await refreshPncpJobSummaryTotals(job);
+    job.total = Number(job.summary?.count || job.total || finalSnapshot.items.length);
     job.summary = {
       ...finalSnapshot.summary,
+      ...job.summary,
       count: job.total,
       run_count: finalSnapshot.summary?.count ?? finalSnapshot.items.length,
+      total_value: Number(job.summary?.total_value || finalSnapshot.summary?.total_value || 0),
     };
     job.term_runs = termRuns;
+    job.progress = {
+      ...(job.progress || {}),
+      classified_total: job.total,
+      items_collected: Math.max(classifiedBaseline, seen.size, job.total),
+      rate_limited: false,
+      resume_from_page: null,
+      checkpoint: false,
+      gate: getPncpGateSnapshot(),
+    };
     job.query_plan = {
       ...finalSnapshot.query_plan,
       terms,
@@ -8503,11 +9438,30 @@ const runPncpDeepSearchJob = async (jobId) => {
       partial: false,
       results_persisted: job.total,
       preserve_results: preserveResults,
-      sequential: true,
+      sequential: false,
+      schedule: 'round_robin_slices',
+      pages_per_slice: PNCP_DEEP_PAGES_PER_SLICE,
+      raw_unique_collected: seen.size,
+      filtered_total: job.total,
     };
     job.preserve_results = true;
+    job.error = null;
     job.updated_at = Date.now();
     await persistPncpDeepJob(job);
+    const jobLabel = job.nome || job.filters?.q || 'PNCP';
+    const totalResults = Number(job.total || 0);
+    await notifyAccountUsers(pool, {
+      accountId: job.account_id || CHATWOOT_ACCOUNT_ID,
+      type: 'search.job_completed',
+      title: `Busca concluída · "${String(jobLabel).slice(0, 60)}"`,
+      body: `${totalResults.toLocaleString('pt-BR')} resultado${totalResults === 1 ? '' : 's'} encontrados.`,
+      data: {
+        view: 'Licitações',
+        sub: 'editais',
+        job_id: jobId,
+      },
+      dedupeKey: `job:${jobId}:completed`,
+    }).catch((err) => console.warn('[pncp-job] push/inbox falhou:', err.message));
   } catch (error) {
     job.status = error.message === 'cancelled' ? 'cancelled' : 'failed';
     job.error = error.message === 'cancelled' ? null : error.message;
@@ -8525,13 +9479,15 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
       `SELECT j.id, j.nome, j.status, j.filters, j.terms, j.negative_terms, j.accepted_positive_terms, j.accepted_negative_terms,
               j.suggested_positive_terms, j.suggested_negative_terms, j.progress, j.term_runs, j.summary,
               COALESCE(rc.cnt, j.total, 0)::int AS total,
-              j.error, j.watchlist_id, j.started_at, j.updated_at, j.completed_at
+              j.error, j.watchlist_id, j.started_at, j.updated_at, j.completed_at,
+              w.whatsapp_enabled, w.whatsapp_number
          FROM ${PNCP_SEARCH_JOBS_TABLE} j
          LEFT JOIN (
            SELECT job_id, COUNT(*)::int AS cnt
              FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
             GROUP BY job_id
          ) rc ON rc.job_id = j.id
+         LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
         WHERE j.account_id = $1
         ORDER BY j.updated_at DESC
         LIMIT 20`,
@@ -8652,7 +9608,11 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     suggested_negative_terms: job.suggested_negative_terms || [],
     progress: job.progress,
     total: job.total,
-    items: ['running', 'completed', 'paused_rate_limit', 'failed', 'cancelled'].includes(job.status) ? (job.items || []) : [],
+    // Inclui 'queued': entre retomadas o status vira queued por um instante; o UI
+    // não deve apagar a lista (itens/total vêm do último snapshot + tabela).
+    items: ['queued', 'running', 'completed', 'paused_rate_limit', 'failed', 'cancelled'].includes(job.status)
+      ? (job.items || [])
+      : [],
     summary: job.summary || null,
     term_runs: job.term_runs || job.query_plan?.term_runs || [],
     query_plan: {
@@ -8697,48 +9657,108 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           : ordenacao === 'data_asc'
             ? 'deadline_at ASC NULLS LAST, updated_at DESC'
             : 'score DESC NULLS LAST, COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC';
-    const visibilityClause = scope === 'all' ? '' : ` AND visibility = 'visible'`;
+    // scope=all: lista tudo; visible (default legado): só não ocultos/pipeline no DB.
+    // Ocultos/pipeline do frontend (localStorage + board) ainda filtrados no client.
+    const visibilityClause = scope === 'all'
+      ? ''
+      : scope === 'hidden'
+        ? ` AND visibility = 'hidden'`
+        : scope === 'pipeline'
+          ? ` AND visibility = 'pipeline'`
+          : ` AND visibility = 'visible'`;
 
+    const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId);
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1 AND account_id = $2${visibilityClause}`,
       [job.id, accountId]
     );
     const total = Number(countResult.rows[0]?.total || 0);
-    if (total > 0) {
-      const { rows } = await pool.query(
-        `SELECT payload
-           FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
-          WHERE job_id = $1 AND account_id = $2${visibilityClause}
-          ORDER BY ${orderSql}
-          LIMIT $3 OFFSET $4`,
-        [job.id, accountId, tam, offset]
-      );
+    if (total > 0 || visibilityCounts.all > 0) {
+      const { rows } = total > 0
+        ? await pool.query(
+          `SELECT payload
+             FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+            WHERE job_id = $1 AND account_id = $2${visibilityClause}
+            ORDER BY ${orderSql}
+            LIMIT $3 OFFSET $4`,
+          [job.id, accountId, tam, offset]
+        )
+        : { rows: [] };
       let pageItems = rows.map(row => row.payload).filter(Boolean);
       // Valores não vêm da busca textual do PNCP — completa a página aberta via detalhe.
       const enrichOnRead = String(req.query.enrich || 'true') !== 'false';
       if (enrichOnRead && pageItems.some(item => !getPncpBestEstimatedValue(item))) {
-        pageItems = await enrichPncpJobResultPage(job, pageItems, { limit: tam });
+        // Prazo curto: com o gate lento (job pesado coletando), responde com o que
+        // tem e deixa o enriquecimento terminar em background — ele persiste os
+        // valores e a próxima carga da página já os traz.
+        const enrichPromise = enrichPncpJobResultPage(job, pageItems, { limit: tam })
+          .catch(err => {
+            console.warn('[PNCP Job Results] enrich on read falhou:', err.message);
+            return null;
+          });
+        const enriched = await Promise.race([
+          enrichPromise,
+          new Promise(resolve => setTimeout(resolve, 3500, null)),
+        ]);
+        if (enriched) pageItems = enriched;
+      }
+      // Soma de valor da lista completa (não do summary parcial do deep job).
+      const listTotalValue = await sumPncpJobResultsValue(job.id, accountId);
+      const summary = {
+        ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
+        count: total || visibilityCounts.all,
+        total_value: listTotalValue,
+      };
+      // Se enriquecemos a página, o SUM já pode ter subido; persiste no job p/ o card.
+      if (listTotalValue > 0 && Number(job.summary?.total_value || 0) !== listTotalValue) {
+        job.summary = summary;
+        persistPncpDeepJob(job).catch(() => null);
       }
       return res.json({
         items: pageItems,
-        total,
+        total: total || visibilityCounts.all,
         pagina,
         tamanhoPagina: tam,
-        totalPaginas: Math.max(1, Math.ceil(total / tam)),
-        summary: job.summary || createPncpSearchSummary([]),
+        totalPaginas: Math.max(1, Math.ceil((total || visibilityCounts.all) / tam)),
+        summary,
         values_enriched_on_read: enrichOnRead,
+        visibility_counts: visibilityCounts,
+        // Progresso da coleta (auditoria/UI): brutos da API ≠ classificados no filtro.
+        collection: {
+          classified: visibilityCounts.all,
+          current_term: job.progress?.current_term || null,
+          current_page: job.progress?.current_page || null,
+          resume_from_page: job.progress?.resume_from_page || null,
+          term_collected: job.progress?.current_term_collected || null,
+          term_total_api: job.progress?.current_term_total_reported || null,
+        },
       });
     }
 
     const fallbackItems = sortPncpJobResults(job.items || [], ordenacao);
     const fallbackTotal = fallbackItems.length;
+    const fallbackSummary = createPncpSearchSummary(fallbackItems);
     res.json({
       items: fallbackItems.slice(offset, offset + tam),
       total: fallbackTotal,
       pagina,
       tamanhoPagina: tam,
       totalPaginas: Math.max(1, Math.ceil(fallbackTotal / tam)),
-      summary: job.summary || createPncpSearchSummary(fallbackItems),
+      summary: {
+        ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
+        ...fallbackSummary,
+        count: fallbackTotal,
+        total_value: Math.max(
+          Number(job.summary?.total_value || 0),
+          Number(fallbackSummary.total_value || 0)
+        ),
+      },
+      visibility_counts: {
+        all: fallbackTotal,
+        visible: fallbackTotal,
+        hidden: 0,
+        pipeline: 0,
+      },
     });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao paginar resultados da busca PNCP', details: error.message });
@@ -9043,32 +10063,147 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/rerun', async (req, res) => {
   }
 });
 
+// O card de busca É a assinatura: cria/atualiza watchlist 1:1 + alertas WhatsApp.
+// Não notifica o acervo histórico — só sinais *novos* do matcher (dedupe por chave).
 app.post('/api/licitacoes/pncp/search/deep/:jobId/watchlist', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const job = await loadPncpDeepJob(req.params.jobId, accountId);
     if (!job) return res.status(404).json({ error: 'Pesquisa não encontrada' });
-    const name = String(req.body?.nome || job.nome || job.filters?.q || 'Watchlist PNCP').trim();
-    const { rows } = await pool.query(
-      `INSERT INTO ${EDITAL_WATCHLIST_TABLE}
-         (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
-       RETURNING *`,
-      [
-        accountId,
-        name,
-        job.terms || [],
-        job.negative_terms || [],
-        true,
-        JSON.stringify(job.filters || {}),
-        Boolean(req.body?.whatsapp_number),
-        req.body?.whatsapp_number || null,
-      ]
-    );
-    await pool.query(`UPDATE ${PNCP_SEARCH_JOBS_TABLE} SET watchlist_id = $2, updated_at = NOW() WHERE id = $1`, [job.id, rows[0].id]);
-    res.json(rows[0]);
+    const name = String(req.body?.nome || job.nome || job.filters?.q || 'Busca PNCP').trim().slice(0, 200);
+    const wantWhatsapp = req.body?.whatsapp_enabled === true;
+    const phone = wantWhatsapp ? normalizeWatchlistPhone(req.body?.whatsapp_number) : null;
+    if (wantWhatsapp && !phone) {
+      return res.status(400).json({ error: 'Informe um número de WhatsApp válido com DDD.' });
+    }
+
+    let watchlistRow = null;
+    if (job.watchlist_id) {
+      const { rows } = await pool.query(
+        `
+          UPDATE ${EDITAL_WATCHLIST_TABLE}
+             SET nome = $1,
+                 palavras_chave = $2,
+                 termos_negativos = $3,
+                 filtros = $4::jsonb,
+                 whatsapp_enabled = $5,
+                 whatsapp_number = $6,
+                 ativo = TRUE,
+                 atualizado_em = NOW()
+           WHERE id = $7 AND account_id = $8
+           RETURNING *
+        `,
+        [
+          name,
+          job.terms || [],
+          job.negative_terms || [],
+          JSON.stringify(job.filters || {}),
+          Boolean(wantWhatsapp && phone),
+          phone,
+          job.watchlist_id,
+          accountId,
+        ]
+      );
+      watchlistRow = rows[0];
+    }
+    if (!watchlistRow) {
+      const { rows } = await pool.query(
+        `INSERT INTO ${EDITAL_WATCHLIST_TABLE}
+           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
+         RETURNING *`,
+        [
+          accountId,
+          name,
+          job.terms || [],
+          job.negative_terms || [],
+          true,
+          JSON.stringify(job.filters || {}),
+          Boolean(wantWhatsapp && phone),
+          phone,
+        ]
+      );
+      watchlistRow = rows[0];
+      await pool.query(
+        `UPDATE ${PNCP_SEARCH_JOBS_TABLE} SET watchlist_id = $2, updated_at = NOW() WHERE id = $1 AND account_id = $3`,
+        [job.id, watchlistRow.id, accountId]
+      );
+    }
+
+    // Card deixa de ser “temporário 15 dias” — assinatura ligada à watchlist.
+    res.json({
+      ...watchlistRow,
+      job_id: job.id,
+      alerts_enabled: Boolean(watchlistRow.whatsapp_enabled && watchlistRow.whatsapp_number),
+      note: 'Alertas valem para oportunidades *novas* (matcher diário). O acervo já classificado nesta busca não gera WhatsApp retroativo.',
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao transformar pesquisa em watchlist', details: error.message });
+    res.status(500).json({ error: 'Erro ao ativar assinatura/alertas da busca', details: error.message });
+  }
+});
+
+// Atalho: só liga/desliga WhatsApp no card (cria watchlist se ainda não existir).
+app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const job = await loadPncpDeepJob(req.params.jobId, accountId);
+    if (!job) return res.status(404).json({ error: 'Pesquisa não encontrada' });
+    // Reutiliza o endpoint de watchlist com body de alertas.
+    req.body = {
+      nome: req.body?.nome || job.nome || job.filters?.q,
+      whatsapp_enabled: req.body?.whatsapp_enabled === true,
+      whatsapp_number: req.body?.whatsapp_number,
+    };
+    // Inline call would recurse awkwardly; duplicate minimal path:
+    const name = String(req.body.nome || job.nome || job.filters?.q || 'Busca PNCP').trim().slice(0, 200);
+    const wantWhatsapp = req.body.whatsapp_enabled === true;
+    const phone = wantWhatsapp ? normalizeWatchlistPhone(req.body.whatsapp_number) : null;
+    if (wantWhatsapp && !phone) {
+      return res.status(400).json({ error: 'Informe um número de WhatsApp válido com DDD.' });
+    }
+    let watchlistRow = null;
+    if (job.watchlist_id) {
+      const { rows } = await pool.query(
+        `UPDATE ${EDITAL_WATCHLIST_TABLE}
+            SET nome = COALESCE(NULLIF($1, ''), nome),
+                whatsapp_enabled = $2,
+                whatsapp_number = $3,
+                ativo = TRUE,
+                atualizado_em = NOW()
+          WHERE id = $4 AND account_id = $5
+          RETURNING *`,
+        [name, Boolean(wantWhatsapp && phone), phone, job.watchlist_id, accountId]
+      );
+      watchlistRow = rows[0];
+    } else {
+      const { rows } = await pool.query(
+        `INSERT INTO ${EDITAL_WATCHLIST_TABLE}
+           (account_id, nome, palavras_chave, termos_negativos, usar_ia, filtros, whatsapp_enabled, whatsapp_number)
+         VALUES ($1,$2,$3,$4,TRUE,$5::jsonb,$6,$7)
+         RETURNING *`,
+        [
+          accountId,
+          name,
+          job.terms || [],
+          job.negative_terms || [],
+          JSON.stringify(job.filters || {}),
+          Boolean(wantWhatsapp && phone),
+          phone,
+        ]
+      );
+      watchlistRow = rows[0];
+      await pool.query(
+        `UPDATE ${PNCP_SEARCH_JOBS_TABLE} SET watchlist_id = $2, updated_at = NOW() WHERE id = $1 AND account_id = $3`,
+        [job.id, watchlistRow.id, accountId]
+      );
+    }
+    res.json({
+      ...watchlistRow,
+      job_id: job.id,
+      alerts_enabled: Boolean(watchlistRow?.whatsapp_enabled && watchlistRow?.whatsapp_number),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar alertas da busca', details: error.message });
   }
 });
 
@@ -9313,22 +10448,279 @@ app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/arquivos', async (re
   }
 });
 
+// Dossiê: acervo primeiro (resposta imediata), ao vivo com prazo. Se o gate do
+// PNCP estiver lento a montagem continua em background e alimenta o acervo — o
+// "Tentar novamente" do popup resolve do cache em vez de estourar o proxy (504).
+const PNCP_DOSSIER_ROUTE_TIMEOUT_MS = 45_000;
+const pncpDossierInFlight = new Map(); // `${cnpj}/${ano}/${seq}` -> Promise
+
 app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/dossier', async (req, res) => {
   try {
-    const { cnpj, ano, sequencial } = req.params;
-    const dossier = await fetchPncpCompraDossier(cnpj, ano, sequencial, {
-      query: req.query.q || '',
-      includeResultados: String(req.query.include_resultados || 'true') !== 'false',
-    });
-    await upsertPncpResultCache(dossier, req.query.q || '').catch(error => {
-      console.warn('[PNCP Dossier] cache falhou:', error.message);
-    });
-    res.json(dossier);
+    const cnpj = String(req.params.cnpj || '').replace(/\D/g, '');
+    const ano = String(req.params.ano || '').replace(/\D/g, '');
+    const sequencial = String(Number(req.params.sequencial) || '');
+    if (!cnpj || !ano || !sequencial) {
+      return res.status(400).json({ error: 'Identificadores da compra inválidos' });
+    }
+    const query = req.query.q || '';
+    const includeResultados = String(req.query.include_resultados || 'true') !== 'false';
+    const wantsRefresh = String(req.query.refresh || 'false') === 'true';
+    const dossierKey = `${cnpj}/${ano}/${sequencial}`;
+
+    if (!wantsRefresh) {
+      const cachedRow = await pool.query(
+        `SELECT payload, refreshed_at FROM ${PNCP_RESULT_CACHE_TABLE}
+          WHERE orgao_cnpj = $1 AND ano = $2 AND sequencial = $3
+          LIMIT 1`,
+        [cnpj, Number(ano), Number(sequencial)]
+      );
+      const payload = cachedRow.rows[0]?.payload;
+      // Só serve payload que é um dossiê completo (linhas "lite" não têm totais).
+      if (payload?.ids?.cnpj && payload?.totais) {
+        const ageMs = Date.now() - new Date(cachedRow.rows[0].refreshed_at || 0).getTime();
+        if (ageMs > 6 * 60 * 60 * 1000 && !pncpDossierInFlight.has(dossierKey)) {
+          const refreshPromise = fetchPncpCompraDossier(cnpj, ano, sequencial, { query, includeResultados, priority: 'sync' })
+            .then(dossier => upsertPncpResultCache(dossier, query))
+            .catch(error => console.warn('[PNCP Dossier] refresh em background falhou:', error.message))
+            .finally(() => pncpDossierInFlight.delete(dossierKey));
+          pncpDossierInFlight.set(dossierKey, refreshPromise);
+        }
+        return res.json({ ...payload, from_cache: true });
+      }
+    }
+
+    let live = pncpDossierInFlight.get(dossierKey);
+    if (!live) {
+      live = fetchPncpCompraDossier(cnpj, ano, sequencial, { query, includeResultados, priority: 'interactive' })
+        .then(async (dossier) => {
+          await upsertPncpResultCache(dossier, query).catch(error => {
+            console.warn('[PNCP Dossier] cache falhou:', error.message);
+          });
+          return dossier;
+        })
+        .finally(() => pncpDossierInFlight.delete(dossierKey));
+      pncpDossierInFlight.set(dossierKey, live);
+    }
+    const timed = await Promise.race([
+      live,
+      new Promise(resolve => setTimeout(resolve, PNCP_DOSSIER_ROUTE_TIMEOUT_MS, '__timeout__')),
+    ]);
+    if (timed === '__timeout__') {
+      live.catch(() => {}); // segue em background e alimenta o acervo
+      return res.status(503).json({
+        error: 'O PNCP está limitando as consultas e o dossiê ainda está sendo montado em segundo plano. Tente novamente em alguns instantes.',
+        retry_in_ms: 15000,
+      });
+    }
+    res.json(timed);
   } catch (error) {
     console.error('Error fetching PNCP dossier:', error);
     res.status(502).json({ error: 'Erro ao montar dossiê PNCP', details: error.message });
   }
 });
+
+// ===== Aba Contratos/Resultados: página de BUSCA de licitações finalizadas =====
+// Independente da busca de editais: busca ao vivo no índice textual do PNCP
+// (tipos contrato/ata — o índice cobre objeto E fornecedor), sempre com
+// priority 'interactive' no gate: os jobs de editais (bulk) esperam.
+// tipo=resultado consulta o cache local (homologações vindas dos dossiês).
+
+const PNCP_CONTRATO_DETALHE_TTL_MS = 6 * 60 * 60 * 1000;
+const pncpContratoDetalheCache = new Map(); // `${cnpj}/${ano}/${seq}` -> { at, data }
+
+const getPncpContratoDetalhe = async (cnpj, ano, sequencial, { priority = 'interactive' } = {}) => {
+  const key = `${cnpj}/${ano}/${Number(sequencial)}`;
+  const cached = pncpContratoDetalheCache.get(key);
+  if (cached && Date.now() - cached.at < PNCP_CONTRATO_DETALHE_TTL_MS) return cached.data;
+  const data = await withPncpGate(
+    () => fetchPncp(`v1/orgaos/${cnpj}/contratos/${ano}/${Number(sequencial)}`),
+    { priority }
+  );
+  pncpContratoDetalheCache.set(key, { at: Date.now(), data });
+  if (pncpContratoDetalheCache.size > 2000) {
+    pncpContratoDetalheCache.delete(pncpContratoDetalheCache.keys().next().value);
+  }
+  return data;
+};
+
+// Documento da /api/search/ (contrato|ata) -> mesmo shape das linhas do cache.
+// ano/sequencial ficam nulos até o detalhe revelar a COMPRA de origem (dossiê).
+const mapPncpOutcomeSearchDoc = (raw) => {
+  const docType = String(raw?.document_type || '').toLowerCase();
+  const cnpj = String(raw?.orgao_cnpj || '').replace(/\D/g, '');
+  const docIds = cnpj && raw?.ano && raw?.numero_sequencial
+    ? { cnpj, ano: String(raw.ano), sequencial: String(raw.numero_sequencial) }
+    : null;
+  const documentKey = docIds ? `documento:${docType}:${docIds.cnpj}/${docIds.ano}/${Number(docIds.sequencial)}` : null;
+  const hasResult = raw?.tem_resultado === true || raw?.temResultado === true || raw?.possui_resultado === true;
+  return {
+    // A chave do documento permite persistir imediatamente contratos e atas,
+    // antes de conhecermos a compra de origem pelo endpoint de detalhe.
+    pncp_key: documentKey,
+    doc_type: docType,
+    doc_ids: docIds,
+    orgao_cnpj: cnpj || null,
+    orgao_nome: raw?.orgao_nome || null,
+    ano: null,
+    sequencial: null,
+    numero_controle_pncp: raw?.numero_controle_pncp || null,
+    titulo: raw?.title || null,
+    descricao: raw?.description || null,
+    uf: raw?.uf || null,
+    modalidade: raw?.modalidade_licitacao_nome || null,
+    etapa_comercial: docType === 'ata' ? 'ata_available' : 'contracted',
+    fornecedor_ni: null,
+    fornecedor_nome: null,
+    valor_estimado: null,
+    valor_homologado: Number(raw?.valor_global) > 0 ? Number(raw.valor_global) : null,
+    data_publicacao: raw?.data_publicacao_pncp || null,
+    data_resultado: null,
+    data_assinatura: raw?.data_assinatura || null,
+    data_inicio_vigencia: raw?.data_inicio_vigencia || null,
+    data_fim_vigencia: raw?.data_fim_vigencia || null,
+    srp: null,
+    amparo_legal: null,
+    has_result: hasResult,
+    has_contract: docType === 'contrato',
+    has_ata: docType === 'ata',
+    fornecedores: [],
+    refreshed_at: raw?.data_atualizacao_pncp || null,
+    dossier: null,
+    url: raw?.item_url ? `https://pncp.gov.br${raw.item_url}` : null,
+    live: true,
+  };
+};
+
+const persistPncpOutcomeLiveItem = async (item) => {
+  if (!item?.pncp_key) return null;
+  return upsertPncpResultCacheLite({
+    pncp_key: item.pncp_key,
+    orgao_cnpj: item.orgao_cnpj,
+    orgao_nome: item.orgao_nome,
+    // ano/sequencial abaixo pertencem à compra. Os ids do documento ficam no
+    // payload até o enriquecimento revelar a contratação de origem.
+    ano: item.ano,
+    sequencial: item.sequencial,
+    numero_controle_pncp: item.numero_controle_pncp,
+    titulo: item.titulo,
+    descricao: item.descricao,
+    uf: item.uf,
+    modalidade: item.modalidade,
+    etapa_comercial: item.etapa_comercial,
+    fornecedor_ni: item.fornecedor_ni,
+    fornecedor_nome: item.fornecedor_nome,
+    valor_estimado: item.valor_estimado,
+    valor_homologado: item.valor_homologado,
+    data_publicacao: item.data_publicacao,
+    data_resultado: item.data_resultado,
+    data_assinatura: item.data_assinatura,
+    has_result: item.has_result,
+    has_contract: item.has_contract,
+    has_ata: item.has_ata,
+    fornecedores: item.fornecedores || [],
+    search_text: [item.titulo, item.descricao, item.orgao_nome, item.fornecedor_nome, item.fornecedor_ni].filter(Boolean).join(' '),
+    payload: {
+      source: 'resultados_live_search',
+      live_document: {
+        doc_type: item.doc_type,
+        doc_ids: item.doc_ids,
+        url: item.url,
+      },
+    },
+  });
+};
+
+const summarizePncpOutcomeItems = (items) => items.reduce((acc, item) => {
+  const value = Number(item.valor_homologado || item.valor_estimado || 0);
+  acc.total_value += Number.isFinite(value) ? value : 0;
+  const key = item.etapa_comercial || 'sem_etapa';
+  acc.by_stage[key] = acc.by_stage[key] || { count: 0, total_value: 0 };
+  acc.by_stage[key].count += 1;
+  acc.by_stage[key].total_value += Number.isFinite(value) ? value : 0;
+  return acc;
+}, { count: items.length, total_value: 0, by_stage: {} });
+
+// Preenche fornecedor/valores (e o vínculo com a compra, para o dossiê) nos
+// contratos da página visível. Time-box: devolve o que der no prazo; o cache
+// de detalhe (6h) torna as próximas cargas instantâneas.
+// Detalhe de um contrato -> bundle de campos que enriquecem o item da busca
+// (fornecedor, valores, vínculo com a compra) + upsert no acervo em background.
+const buildPncpOutcomeContratoEnrichment = async ({ cnpj, ano, sequencial }, baseItem = {}) => {
+  const detalhe = await getPncpContratoDetalhe(cnpj, ano, sequencial);
+  if (!detalhe) return null;
+  const fields = {
+    fornecedor_ni: detalhe.niFornecedor || null,
+    fornecedor_nome: detalhe.nomeRazaoSocialFornecedor || null,
+  };
+  if (fields.fornecedor_ni || fields.fornecedor_nome) {
+    fields.fornecedores = [{ ni: fields.fornecedor_ni, nome: fields.fornecedor_nome }];
+  }
+  if (Number(detalhe.valorInicial) > 0) fields.valor_estimado = Number(detalhe.valorInicial);
+  if (Number(detalhe.valorGlobal) > 0) fields.valor_homologado = Number(detalhe.valorGlobal);
+  if (detalhe.dataAssinatura) fields.data_assinatura = detalhe.dataAssinatura;
+  const compraIds = parsePncpCompraControlNumber(detalhe.numeroControlePncpCompra || detalhe.numeroControlePNCPCompra);
+  if (compraIds) {
+    fields.ano = Number(compraIds.ano) || null;
+    fields.sequencial = Number(compraIds.sequencial) || null;
+    fields.numero_controle_pncp = detalhe.numeroControlePncpCompra || detalhe.numeroControlePNCPCompra;
+    fields.pncp_key = baseItem.pncp_key || `${compraIds.cnpj}/${compraIds.ano}/${Number(compraIds.sequencial)}`;
+    const compraDetalhe = await getPncpCompraDetalhe(compraIds.cnpj, compraIds.ano, compraIds.sequencial, { priority: 'interactive' });
+    if (compraDetalhe) {
+      fields.has_result = compraDetalhe.tem_resultado === true;
+      fields.srp = compraDetalhe.srp;
+      fields.amparo_legal = compraDetalhe.amparo_legal?.nome || null;
+      if (!fields.valor_estimado && compraDetalhe.valor_total_estimado) fields.valor_estimado = compraDetalhe.valor_total_estimado;
+      if (!fields.valor_homologado && compraDetalhe.valor_total_homologado) fields.valor_homologado = compraDetalhe.valor_total_homologado;
+    }
+    // Alimenta o acervo (chave da compra) sem travar a resposta.
+    upsertPncpResultCacheLite({
+      pncp_key: fields.pncp_key,
+      orgao_cnpj: compraIds.cnpj,
+      orgao_nome: baseItem.orgao_nome || null,
+      ano: fields.ano,
+      sequencial: fields.sequencial,
+      numero_controle_pncp: fields.numero_controle_pncp,
+      titulo: baseItem.titulo || null,
+      descricao: baseItem.descricao || null,
+      uf: baseItem.uf || null,
+      modalidade: baseItem.modalidade || null,
+      etapa_comercial: 'contracted',
+      fornecedor_ni: fields.fornecedor_ni,
+      fornecedor_nome: fields.fornecedor_nome,
+      valor_estimado: fields.valor_estimado || null,
+      valor_homologado: fields.valor_homologado || null,
+      data_publicacao: baseItem.data_publicacao || null,
+      data_assinatura: fields.data_assinatura || null,
+      srp: fields.srp ?? null,
+      amparo_legal: fields.amparo_legal || null,
+      has_result: fields.has_result === true,
+      has_contract: true,
+      fornecedores: fields.fornecedores || [],
+      search_text: [baseItem.titulo, baseItem.descricao, fields.fornecedor_nome, fields.fornecedor_ni, baseItem.orgao_nome].filter(Boolean).join(' '),
+      payload: { source: 'resultados_live_search', contrato_detalhe: detalhe },
+    }).catch(err => console.warn('[resultados] upsert live falhou:', err.message));
+  }
+  return fields;
+};
+
+const enrichPncpOutcomeLiveItems = async (items, { deadlineMs = 3500, maxDetails = 10 } = {}) => {
+  const deadline = Date.now() + deadlineMs;
+  let fetched = 0;
+  for (const item of items) {
+    if (item.doc_type !== 'contrato' || !item.doc_ids) continue;
+    if (fetched >= maxDetails || Date.now() >= deadline) break;
+    try {
+      const { cnpj, ano, sequencial } = item.doc_ids;
+      const wasCached = pncpContratoDetalheCache.has(`${cnpj}/${ano}/${Number(sequencial)}`);
+      const fields = await buildPncpOutcomeContratoEnrichment(item.doc_ids, item);
+      if (!wasCached) fetched += 1;
+      if (fields) Object.assign(item, fields);
+    } catch (error) {
+      if (Date.now() < PNCP_GATE.pausedUntil) break; // gate pausou: não insiste
+    }
+  }
+  return items;
+};
 
 app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
   try {
@@ -9338,26 +10730,140 @@ app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
     const orgaoCnpj = String(req.query.orgao_cnpj || '').replace(/\D/g, '');
     const uf = String(req.query.uf || '').trim().toUpperCase();
     const tipo = normalizeSearchText(req.query.tipo || 'todos');
+    const ordenacao = normalizeSearchText(req.query.ordenacao || 'data_desc');
+    const enrichOnRead = String(req.query.enrich || 'true') !== 'false';
     const pagina = Math.max(1, Number(req.query.pagina) || 1);
     const tam = Math.max(1, Math.min(50, Number(req.query.tam) || 20));
     const offset = (pagina - 1) * tam;
+
+    // Página de busca, não acervo: sem critério nenhum não despeja o cache
+    // (que é abastecido pelos jobs de editais — outro contexto).
+    const hasCriteria = Boolean(qText || fornecedor || fornecedorNi || orgaoCnpj || uf || (tipo && tipo !== 'todos'));
+    if (!hasCriteria) {
+      return res.json({
+        items: [],
+        total: 0,
+        pagina,
+        tamanhoPagina: tam,
+        totalPaginas: 1,
+        summary: { count: 0, total_value: 0, by_stage: {} },
+        requires_query: true,
+        live_fetch_used: false,
+        cache: await getPncpOutcomeCacheStats(),
+        sync: getPncpOutcomeSyncSnapshot(),
+      });
+    }
+
+    // Busca ao vivo (contratos/atas) — resultado imediato, prioridade máxima no gate.
+    let liveError = null;
+    const livePref = String(req.query.live || 'true') !== 'false';
+    if (livePref && tipo !== 'resultado') {
+      try {
+        const liveQ = [qText, fornecedor, fornecedorNi].filter(Boolean).join(' ').trim();
+        const tiposDocumento = tipo === 'contrato' ? ['contrato'] : tipo === 'ata' ? ['ata'] : ['contrato', 'ata'];
+        const sources = [];
+        for (const tipoDoc of tiposDocumento) {
+          const data = await withPncpGate(() => fetchPncpSearchStable({
+            q: liveQ,
+            tipos_documento: tipoDoc,
+            // O índice do PNCP só ordena por data/relevância; valor é ordenado
+            // localmente (na página) pelo frontend.
+            ordenacao: ordenacao === 'data_asc' ? 'data' : ordenacao === 'relevancia' ? 'relevancia' : '-data',
+            pagina,
+            tam_pagina: tam,
+            ...(uf ? { uf } : {}),
+          }, { retries: 1 }), { priority: 'interactive' });
+          sources.push(data);
+        }
+        let liveItems = sources.flatMap(data => (Array.isArray(data?.items) ? data.items : []).map(mapPncpOutcomeSearchDoc));
+        if (orgaoCnpj) {
+          liveItems = liveItems.filter(item => String(item.orgao_cnpj || '').includes(orgaoCnpj));
+        }
+        if (ordenacao !== 'relevancia') {
+          liveItems.sort((a, b) => ordenacao === 'data_asc'
+            ? new Date(a.data_publicacao || 0) - new Date(b.data_publicacao || 0)
+            : new Date(b.data_publicacao || 0) - new Date(a.data_publicacao || 0));
+        }
+        if (enrichOnRead) await enrichPncpOutcomeLiveItems(liveItems);
+        if (fornecedorNi) {
+          // Só descarta quando o NI é conhecido e não bate; desconhecido fica
+          // (a busca textual já restringiu pelos dígitos).
+          liveItems = liveItems.filter(item => !item.fornecedor_ni
+            || String(item.fornecedor_ni).replace(/\D/g, '').includes(fornecedorNi));
+        }
+        // Materializa tudo que veio da busca ao vivo. Assim atas e contratos
+        // continuam disponíveis se o PNCP oscilar ao trocar/voltar de página.
+        await Promise.allSettled(liveItems.map(item => persistPncpOutcomeLiveItem(item)));
+        const total = sources.reduce((acc, data) => acc + (Number(data?.total) || 0), 0);
+        const totalPaginas = Math.max(1, ...sources.map(data => Math.ceil((Number(data?.total) || 0) / tam)));
+        return res.json({
+          items: liveItems,
+          total,
+          pagina,
+          tamanhoPagina: tam,
+          totalPaginas,
+          summary: summarizePncpOutcomeItems(liveItems),
+          live_fetch_used: true,
+          gate: getPncpGateSnapshot(),
+          cache: await getPncpOutcomeCacheStats(),
+          sync: getPncpOutcomeSyncSnapshot(),
+        });
+      } catch (error) {
+        const isThrottle = isPncpThrottleError(error);
+        // live_only=true: a carga progressiva do frontend não pode cair no
+        // cache (página N do índice ≠ página N do acervo local). Devolve
+        // 503/502 estruturado para o cliente pausar e retomar a MESMA página.
+        const liveOnly = String(req.query.live_only || '') === 'true';
+        if (isThrottle || liveOnly) {
+          if (isThrottle) notePncpThrottle(error.message || 'resultados live');
+          const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
+          const retryAfter = Math.max(
+            15_000,
+            pauseLeft > 0 ? pauseLeft + 5_000 : (isThrottle ? 45_000 : 8_000)
+          );
+          console.warn(
+            `[resultados] busca ao vivo ${isThrottle ? 'rate-limited' : 'falhou'} ` +
+            `(p=${pagina}, live_only=${liveOnly}): ${error.message}`
+          );
+          return res.status(isThrottle ? 503 : 502).json({
+            error: isThrottle
+              ? 'PNCP limitou as requisições — pausando e retomando automaticamente'
+              : 'Erro ao consultar o PNCP',
+            details: error.message,
+            rate_limited: isThrottle,
+            retry_after_ms: retryAfter,
+            gate: getPncpGateSnapshot(),
+            live_fetch_used: false,
+            pagina,
+          });
+        }
+        console.warn('[resultados] busca ao vivo falhou, caindo para o cache:', error.message);
+        liveError = error.message;
+      }
+    }
+
     const values = [];
     const clauses = [];
     const addValue = (value) => {
       values.push(value);
       return `$${values.length}`;
     };
+    // Só finalizadas: resultado homologado, contrato ou ata (a aba é das concluídas).
+    clauses.push('(has_result = TRUE OR has_contract = TRUE OR has_ata = TRUE)');
     if (qText) {
       const p = addValue(qText);
       clauses.push(`to_tsvector('portuguese', immutable_unaccent(coalesce(search_text,''))) @@ plainto_tsquery('portuguese', immutable_unaccent(${p}))`);
     }
     if (fornecedor) {
       const p = addValue(`%${fornecedor}%`);
-      clauses.push(`fornecedor_nome ILIKE ${p}`);
+      clauses.push(`(fornecedor_nome ILIKE ${p} OR fornecedores::text ILIKE ${p})`);
     }
     if (fornecedorNi) {
       const p = addValue(`%${fornecedorNi}%`);
-      clauses.push(`regexp_replace(coalesce(fornecedor_ni,''), '\\D', '', 'g') LIKE ${p}`);
+      clauses.push(`(
+        regexp_replace(coalesce(fornecedor_ni,''), '\\D', '', 'g') LIKE ${p}
+        OR regexp_replace(fornecedores::text, '\\D', '', 'g') LIKE ${p}
+      )`);
     }
     if (orgaoCnpj) {
       const p = addValue(`%${orgaoCnpj}%`);
@@ -9367,76 +10873,119 @@ app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
       clauses.push(`uf = ${addValue(uf)}`);
     }
     if (tipo && tipo !== 'todos') {
-      if (tipo === 'resultado') clauses.push(`etapa_comercial IN ('resulted')`);
-      else if (tipo === 'contrato') clauses.push(`etapa_comercial IN ('contracted')`);
-      else if (tipo === 'ata') clauses.push(`etapa_comercial IN ('ata_available')`);
+      if (tipo === 'resultado') clauses.push('has_result = TRUE');
+      else if (tipo === 'contrato') clauses.push('has_contract = TRUE');
+      else if (tipo === 'ata') clauses.push('has_ata = TRUE');
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const orderSql = ordenacao === 'valor_desc'
+      ? 'COALESCE(valor_homologado, valor_estimado, 0) DESC, refreshed_at DESC'
+      : ordenacao === 'valor_asc'
+        ? 'COALESCE(valor_homologado, valor_estimado, 0) ASC, refreshed_at DESC'
+        : ordenacao === 'data_asc'
+          ? 'COALESCE(data_resultado, data_assinatura, data_publicacao) ASC NULLS LAST, refreshed_at ASC'
+          : 'COALESCE(data_resultado, data_assinatura, data_publicacao) DESC NULLS LAST, refreshed_at DESC';
     const cached = await pool.query(
       `
         SELECT *, COUNT(*) OVER()::int AS total_count
         FROM ${PNCP_RESULT_CACHE_TABLE}
         ${where}
-        ORDER BY refreshed_at DESC
+        ORDER BY ${orderSql}
         LIMIT ${addValue(tam)} OFFSET ${addValue(offset)}
       `,
       values
     );
-    let items = cached.rows.map(normalizePncpResultCacheRow);
-    let total = Number(cached.rows[0]?.total_count || items.length);
-
-    const shouldFetchLive = qText && pagina === 1 && (!items.length || String(req.query.refresh || '') === 'true');
-    if (shouldFetchLive) {
-      const data = await fetchPncpSearchStable({
-        q: qText,
-        tipos_documento: 'edital,ata,contrato',
-        pagina: 1,
-        tam: Math.max(30, tam),
-      }, { retries: 2 }).catch(error => {
-        console.warn('[PNCP Resultados] busca ao vivo falhou:', error.message);
-        return { items: [] };
-      });
-      const candidates = [];
-      const seen = new Set(items.map(item => item.pncp_key));
-      for (const raw of Array.isArray(data?.items) ? data.items : []) {
-        const ids = extractPncpCompraIdentifiers(raw);
-        const key = ids.cnpj && ids.ano && ids.sequencial ? `${ids.cnpj}/${ids.ano}/${ids.sequencial}` : null;
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        candidates.push(ids);
-        if (candidates.length >= 12) break;
-      }
-      for (const ids of candidates) {
-        const dossier = await fetchPncpCompraDossier(ids.cnpj, ids.ano, ids.sequencial, { query: qText, includeResultados: true });
-        const row = await upsertPncpResultCache(dossier, qText);
-        if (row) items.push(normalizePncpResultCacheRow({ ...row, payload: dossier, refreshed_at: new Date().toISOString() }));
-        if (Date.now() < pncpDetalheRateLimitedUntil) break;
-      }
-      total = Math.max(total, items.length);
-    }
-
-    const summary = items.reduce((acc, item) => {
-      const value = Number(item.valor_homologado || item.valor_estimado || 0);
-      acc.total_value += Number.isFinite(value) ? value : 0;
-      const key = item.etapa_comercial || 'sem_etapa';
-      acc.by_stage[key] = acc.by_stage[key] || { count: 0, total_value: 0 };
-      acc.by_stage[key].count += 1;
-      acc.by_stage[key].total_value += Number.isFinite(value) ? value : 0;
-      return acc;
-    }, { count: items.length, total_value: 0, by_stage: {} });
+    const items = cached.rows.map(normalizePncpResultCacheRow);
+    const total = Number(cached.rows[0]?.total_count || items.length);
 
     res.json({
-      items: items.slice(0, tam),
+      items,
       total,
       pagina,
       tamanhoPagina: tam,
       totalPaginas: Math.max(1, Math.ceil(total / tam)),
-      summary,
-      live_fetch_used: shouldFetchLive,
+      summary: summarizePncpOutcomeItems(items),
+      live_fetch_used: false,
+      ...(liveError ? { live_error: liveError } : {}),
+      gate: getPncpGateSnapshot(),
+      cache: await getPncpOutcomeCacheStats(),
+      sync: getPncpOutcomeSyncSnapshot(),
     });
   } catch (error) {
     console.error('Error searching PNCP resultados:', error);
-    res.status(502).json({ error: 'Erro ao buscar resultados/contratos PNCP', details: error.message });
+    const isThrottle = isPncpThrottleError(error);
+    if (isThrottle) notePncpThrottle(error.message || 'resultados search');
+    const pauseLeft = Math.max(0, PNCP_GATE.pausedUntil - Date.now());
+    res.status(isThrottle ? 503 : 502).json({
+      error: isThrottle
+        ? 'PNCP limitou as requisições — pausando e retomando automaticamente'
+        : 'Erro ao buscar resultados/contratos PNCP',
+      details: error.message,
+      rate_limited: isThrottle,
+      retry_after_ms: Math.max(15_000, pauseLeft > 0 ? pauseLeft + 5_000 : 30_000),
+      gate: getPncpGateSnapshot(),
+    });
+  }
+});
+
+// Enriquecimento progressivo da aba Contratos/Resultados: o frontend manda
+// lotes de contratos da página visível e vai preenchendo fornecedor/valores
+// conforme o gate permite. Sempre 'interactive'.
+app.post('/api/licitacoes/pncp/resultados/enrich', async (req, res) => {
+  try {
+    const contratos = Array.isArray(req.body?.contratos) ? req.body.contratos.slice(0, 20) : [];
+    const budgetMs = Math.max(1000, Math.min(8000, Number(req.body?.budget_ms) || 4000));
+    const deadline = Date.now() + budgetMs;
+    const enriched = {};
+    const wanted = [];
+    for (const entry of contratos) {
+      const cnpj = String(entry?.cnpj || '').replace(/\D/g, '');
+      const ano = String(entry?.ano || '').replace(/\D/g, '');
+      const sequencial = String(entry?.sequencial || '').replace(/\D/g, '');
+      if (!/^\d{14}$/.test(cnpj) || !/^\d{4}$/.test(ano) || !sequencial) continue;
+      wanted.push({ key: `${cnpj}/${ano}/${Number(sequencial)}`, ids: { cnpj, ano, sequencial }, entry });
+    }
+    for (const item of wanted) {
+      const isCached = pncpContratoDetalheCache.has(item.key);
+      // Sem cache e sem prazo/gate: fica pendente para a próxima rodada do frontend.
+      if (!isCached && (Date.now() >= deadline || Date.now() < PNCP_GATE.pausedUntil)) continue;
+      try {
+        const fields = await buildPncpOutcomeContratoEnrichment(item.ids, item.entry);
+        if (fields) enriched[item.key] = fields;
+      } catch (error) {
+        if (Date.now() < PNCP_GATE.pausedUntil) break;
+      }
+    }
+    res.json({
+      enriched,
+      pending: wanted.filter(item => !enriched[item.key]).map(item => item.key),
+      gate_paused_ms: Math.max(0, PNCP_GATE.pausedUntil - Date.now()),
+      gate: getPncpGateSnapshot(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao enriquecer contratos', details: error.message });
+  }
+});
+
+app.get('/api/licitacoes/pncp/resultados/status', async (req, res) => {
+  try {
+    res.json({
+      state: getPncpOutcomeSyncSnapshot(),
+      cache: await getPncpOutcomeCacheStats(),
+    });
+  } catch (error) {
+    console.error('Error fetching PNCP resultados status:', error);
+    res.status(500).json({ error: 'Erro ao consultar o status da atualização PNCP', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/pncp/resultados/sync', requireAdmin, async (req, res) => {
+  try {
+    const start = startPncpOutcomeSync({ reason: 'manual' });
+    res.status(start.started ? 202 : 200).json(start);
+  } catch (error) {
+    console.error('Error starting PNCP resultados sync:', error);
+    res.status(500).json({ error: 'Erro ao iniciar a atualização PNCP', details: error.message });
   }
 });
 
@@ -9569,13 +11118,28 @@ const runEditalWatchlistMatching = async () => {
             recipient: watch.whatsapp_number,
           });
         }
+        const signalTitle = decorated?.titulo || decorated?.title || decorated?.orgao?.nome || 'Edital PNCP';
+        await notifyAccountUsers(pool, {
+          accountId: watch.account_id || CHATWOOT_ACCOUNT_ID,
+          type: 'watchlist.edital_match',
+          title: `Novo edital · ${watch.nome || 'Assinatura'}`,
+          body: String(signalTitle).slice(0, 180),
+          data: {
+            view: 'Licitações',
+            sub: 'editais',
+            watchlist_id: watch.id,
+            signal_id: r.rows[0].id,
+            url: decorated?.url || null,
+          },
+          dedupeKey: `edital:${r.rows[0].id}`,
+        }).catch((err) => console.warn('[editais] push/inbox falhou:', err.message));
       }
     };
 
     for (const term of positivos.slice(0, 6)) {
       let data;
       try {
-        data = await fetchPncpSearchStable({ ...baseParams, q: term, pagina: 1, tam: 50 });
+        data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: 1, tam: 50 }), { priority: 'sync' });
       } catch (e) {
         console.warn('[editais] busca PNCP falhou para watchlist', watch.id, e.message);
         continue;
@@ -9630,10 +11194,235 @@ app.post('/api/licitacoes/editais/sync', async (req, res) => {
 
 // ===== Sync diário de contratos e atas publicados no PNCP (aba Contratos/Resultados) =====
 
+const extractPncpOutcomeCandidateIds = (source = {}) => {
+  const links = source.links && typeof source.links === 'object' ? source.links : {};
+  const metadados = source.metadados && typeof source.metadados === 'object' ? source.metadados : {};
+  const payload = source.payload && typeof source.payload === 'object' ? source.payload : {};
+  const merged = {
+    ...source,
+    ...metadados,
+    ...payload,
+    orgao_cnpj: payload.orgao_cnpj || source.orgao_cnpj || metadados.orgao_cnpj,
+    numero_controle_pncp: payload.numero_controle_pncp || payload.numeroControlePNCP
+      || source.numero_controle_pncp || source.numero_compra
+      || metadados.pncp_numero_controle || metadados.numero_controle_pncp,
+    links_pncp: payload.links_pncp || payload.url || source.url || links.pncp
+      || links.pncp_url || metadados.pncp_url,
+  };
+  let ids = extractPncpCompraIdentifiers(merged);
+  if (ids.cnpj && ids.ano && ids.sequencial) return ids;
+
+  const serialized = JSON.stringify({ links, metadados, payload, numero_compra: source.numero_compra });
+  const urlMatch = serialized.match(/\/app\/editais\/(\d{14})\/(\d{4})\/(\d+)/);
+  if (urlMatch) return { cnpj: urlMatch[1], ano: urlMatch[2], sequencial: urlMatch[3] };
+  const controlMatch = serialized.match(/(\d{14}-\d+-(\d+)\/(\d{4}))/);
+  if (controlMatch) return parsePncpCompraControlNumber(controlMatch[1]) || { cnpj: '', ano: '', sequencial: '' };
+  return { cnpj: '', ano: '', sequencial: '' };
+};
+
+const collectPncpOutcomeCandidates = async ({ limit = 20 } = {}) => {
+  const safeLimit = Math.max(5, Math.min(80, Number(limit) || 20));
+  const [jobsResult, opportunitiesResult] = await Promise.all([
+    pool.query(
+      `
+        SELECT r.payload, r.matched_term, r.commercial_stage, r.score, r.updated_at,
+               j.filters, j.terms
+          FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
+          JOIN ${PNCP_SEARCH_JOBS_TABLE} j ON j.id = r.job_id
+         WHERE r.visibility = 'visible'
+           AND r.updated_at > NOW() - INTERVAL '180 days'
+         ORDER BY (r.commercial_stage IN ('resulted','contracted','ata_available')) DESC,
+                  r.score DESC NULLS LAST,
+                  r.updated_at DESC
+         LIMIT $1
+      `,
+      [safeLimit * 2]
+    ),
+    pool.query(
+      `
+        SELECT titulo, fase, status, orgao_cnpj, numero_compra, palavras_chave,
+               links, metadados, updated_at
+          FROM ${LICITACAO_TABLE}
+         WHERE updated_at > NOW() - INTERVAL '365 days'
+           AND (
+             numero_compra ~ '^\\d{14}-\\d+-\\d+/\\d{4}$'
+             OR links::text LIKE '%/app/editais/%'
+             OR metadados::text ILIKE '%pncp%'
+           )
+         ORDER BY updated_at DESC
+         LIMIT $1
+      `,
+      [safeLimit * 2]
+    ),
+  ]);
+
+  const candidates = new Map();
+  const add = (source, metadata = {}) => {
+    const ids = extractPncpOutcomeCandidateIds(source);
+    if (!/^\d{14}$/.test(String(ids.cnpj || '')) || !/^\d{4}$/.test(String(ids.ano || ''))
+      || !/^\d+$/.test(String(ids.sequencial || ''))) return;
+    const key = `${ids.cnpj}/${ids.ano}/${Number(ids.sequencial)}`;
+    const existing = candidates.get(key);
+    const next = {
+      pncp_key: key,
+      ids: { cnpj: ids.cnpj, ano: ids.ano, sequencial: String(Number(ids.sequencial)) },
+      query: metadata.query || '',
+      commercial_stage: metadata.commercial_stage || null,
+      source: metadata.source || 'unknown',
+    };
+    if (!existing || (
+      ['resulted', 'contracted', 'ata_available'].includes(next.commercial_stage)
+      && !['resulted', 'contracted', 'ata_available'].includes(existing.commercial_stage)
+    )) candidates.set(key, next);
+  };
+
+  jobsResult.rows.forEach(row => add(row, {
+    source: 'search_job',
+    commercial_stage: row.commercial_stage || row.payload?.commercial_stage?.id || row.payload?.commercial_stage,
+    query: row.matched_term || row.filters?.q || row.terms?.[0] || '',
+  }));
+  opportunitiesResult.rows.forEach(row => add(row, {
+    source: 'pipeline',
+    commercial_stage: String(row.fase || '').startsWith('12.') ? 'contracted' : null,
+    query: row.palavras_chave?.[0] || row.titulo || '',
+  }));
+
+  const candidateList = [...candidates.values()];
+  const { rows: cachedRows } = candidateList.length
+    ? await pool.query(
+        `SELECT pncp_key FROM ${PNCP_RESULT_CACHE_TABLE}
+          WHERE pncp_key = ANY($1::text[])
+            AND refreshed_at > NOW() - INTERVAL '6 hours'`,
+        [candidateList.map(candidate => candidate.pncp_key)]
+      )
+    : { rows: [] };
+  const recentlyCached = new Set(cachedRows.map(row => row.pncp_key));
+  const recentlyCheckedCutoff = Date.now() - (6 * 60 * 60 * 1000);
+
+  return candidateList
+    .sort((a, b) => {
+      const aRecent = recentlyCached.has(a.pncp_key)
+        || Number(pncpOutcomeCandidateChecks.get(a.pncp_key) || 0) > recentlyCheckedCutoff;
+      const bRecent = recentlyCached.has(b.pncp_key)
+        || Number(pncpOutcomeCandidateChecks.get(b.pncp_key) || 0) > recentlyCheckedCutoff;
+      if (aRecent !== bRecent) return Number(aRecent) - Number(bRecent);
+      const stagePriority = Number(['resulted', 'contracted', 'ata_available'].includes(b.commercial_stage))
+        - Number(['resulted', 'contracted', 'ata_available'].includes(a.commercial_stage));
+      if (stagePriority !== 0) return stagePriority;
+      return Number(b.source === 'pipeline') - Number(a.source === 'pipeline');
+    })
+    .slice(0, safeLimit);
+};
+
+const runPncpOutcomeCandidateSync = async ({ limit = 20 } = {}) => {
+  const candidates = await collectPncpOutcomeCandidates({ limit });
+  const summary = { candidates: candidates.length, processed: 0, cached: 0, without_outcome: 0, errors: [] };
+  pncpOutcomeSyncState.phase = 'candidates';
+  pncpOutcomeSyncState.total = candidates.length;
+
+  for (const candidate of candidates) {
+    try {
+      const { cnpj, ano, sequencial } = candidate.ids;
+      const [compra, contratos, atasData] = await Promise.all([
+        fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`, {}, { source: 'consulta', priority: 'sync' }),
+        fetchPncpContratosByCompra(cnpj, ano, sequencial, { priority: 'sync' }),
+        fetchPncpOptional(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/atas`, {}, { priority: 'sync' }),
+      ]);
+      const atas = asPncpList(atasData);
+      const firstContract = contratos[0] || {};
+      const firstAta = atas[0] || {};
+      const normalized = normalizePncpItem({
+        ...(compra || {}),
+        orgao_cnpj: cnpj,
+        ano,
+        numero_sequencial: sequencial,
+        numeroControlePNCP: compra?.numeroControlePNCP,
+        title: compra?.objetoCompra || compra?.numeroControlePNCP || `Compra ${sequencial}/${ano}`,
+        description: compra?.objetoCompra || '',
+        tem_resultado: compra?.temResultado,
+      });
+      const hasResult = Boolean(compra?.temResultado || normalized?.tem_resultado || candidate.commercial_stage === 'resulted');
+      const hasContract = contratos.length > 0;
+      const hasAta = atas.length > 0;
+      const hasOutcome = hasResult || hasContract || hasAta;
+      if (hasOutcome) {
+        const fornecedores = collectPncpFornecedores({ contratos, atas });
+        const fornecedor = fornecedores[0] || {};
+        await upsertPncpResultCacheLite({
+          pncp_key: `${cnpj}/${ano}/${sequencial}`,
+          orgao_cnpj: normalized?.orgao?.cnpj || compra?.orgaoEntidade?.cnpj || cnpj,
+          orgao_nome: normalized?.orgao?.nome || compra?.orgaoEntidade?.razaoSocial
+            || firstContract?.orgaoEntidade?.razaoSocial || firstAta?.nomeOrgao || null,
+          ano: Number(ano) || null,
+          sequencial: Number(sequencial) || null,
+          numero_controle_pncp: normalized?.numero_controle_pncp || compra?.numeroControlePNCP
+            || firstContract?.numeroControlePncpCompra || firstAta?.numeroControlePNCPCompra || null,
+          titulo: normalized?.titulo || compra?.objetoCompra || firstContract?.objetoContrato
+            || firstAta?.objetoContratacao || `Compra ${sequencial}/${ano}`,
+          descricao: normalized?.descricao || compra?.objetoCompra || firstContract?.objetoContrato || null,
+          uf: normalized?.uf || compra?.unidadeOrgao?.ufSigla || firstContract?.unidadeOrgao?.ufSigla || null,
+          modalidade: normalized?.modalidade?.nome || compra?.modalidadeNome || null,
+          etapa_comercial: hasContract ? 'contracted' : hasAta ? 'ata_available' : 'resulted',
+          fornecedor_ni: fornecedor.ni || null,
+          fornecedor_nome: fornecedor.nome || null,
+          fornecedores,
+          valor_estimado: Number(compra?.valorTotalEstimado) || Number(firstContract?.valorInicial) || null,
+          valor_homologado: Number(compra?.valorTotalHomologado) || Number(firstContract?.valorGlobal) || null,
+          data_publicacao: compra?.dataPublicacaoPncp || firstContract?.dataPublicacaoPncp || firstAta?.dataPublicacaoPncp || null,
+          data_assinatura: firstContract?.dataAssinatura || firstAta?.dataAssinatura || null,
+          srp: typeof compra?.srp === 'boolean' ? compra.srp : null,
+          amparo_legal: compra?.amparoLegal?.nome || null,
+          has_result: hasResult,
+          has_contract: hasContract,
+          has_ata: hasAta,
+          search_text: [
+            normalized?.titulo, normalized?.descricao, normalized?.orgao?.nome,
+            ...fornecedores.flatMap(row => [row.ni, row.nome]),
+            ...contratos.slice(0, 10).map(row => row?.objetoContrato),
+            ...atas.slice(0, 10).map(row => row?.objetoContratacao || row?.objetoCompra),
+          ].filter(Boolean).join(' '),
+          payload: {
+            source: 'candidate_sync',
+            compra: compra || null,
+            contratos_daily: contratos.slice(0, 20),
+            atas_daily: atas.slice(0, 20),
+          },
+        });
+        summary.cached += 1;
+      } else {
+        summary.without_outcome += 1;
+      }
+    } catch (error) {
+      summary.errors.push(`${candidate.ids.cnpj}/${candidate.ids.ano}/${candidate.ids.sequencial}: ${error.message}`);
+    }
+    summary.processed += 1;
+    pncpOutcomeCandidateChecks.set(candidate.pncp_key, Date.now());
+    pncpOutcomeSyncState.processed = summary.processed;
+    pncpOutcomeSyncState.cached = summary.cached;
+    pncpOutcomeSyncState.errors = summary.errors.length;
+    if (Date.now() < pncpDetalheRateLimitedUntil) break;
+  }
+  return summary;
+};
+
 const collectActiveWatchlistTerms = async () => {
-  const { rows } = await pool.query(
-    `SELECT palavras_chave, usar_ia FROM ${EDITAL_WATCHLIST_TABLE} WHERE ativo = TRUE`
-  );
+  const [{ rows }, { rows: jobRows }, { rows: opportunityRows }] = await Promise.all([
+    pool.query(`SELECT palavras_chave, usar_ia FROM ${EDITAL_WATCHLIST_TABLE} WHERE ativo = TRUE`),
+    pool.query(`
+      SELECT terms, filters
+        FROM ${PNCP_SEARCH_JOBS_TABLE}
+       WHERE updated_at > NOW() - INTERVAL '180 days'
+       ORDER BY updated_at DESC
+       LIMIT 30
+    `),
+    pool.query(`
+      SELECT palavras_chave
+        FROM ${LICITACAO_TABLE}
+       WHERE updated_at > NOW() - INTERVAL '365 days'
+       ORDER BY updated_at DESC
+       LIMIT 40
+    `),
+  ]);
   const terms = new Set();
   for (const row of rows) {
     const palavras = Array.isArray(row.palavras_chave) ? row.palavras_chave.filter(Boolean) : [];
@@ -9647,7 +11436,17 @@ const collectActiveWatchlistTerms = async () => {
       }
     }
   }
-  return [...terms].filter(t => t && t.trim().length >= 3 && !/^\d+$/.test(t.trim()));
+  jobRows.forEach(row => {
+    (Array.isArray(row.terms) ? row.terms : []).slice(0, 8).forEach(term => terms.add(String(term)));
+    if (row.filters?.q) terms.add(String(row.filters.q));
+  });
+  opportunityRows.forEach(row => {
+    (Array.isArray(row.palavras_chave) ? row.palavras_chave : []).slice(0, 5).forEach(term => terms.add(String(term)));
+  });
+  return [...terms]
+    .map(term => term.trim())
+    .filter(term => term.length >= 3 && !/^\d+$/.test(term))
+    .slice(0, 40);
 };
 
 const pncpTextMatchesTerms = (text, terms) => {
@@ -9663,7 +11462,10 @@ const pncpTextMatchesTerms = (text, terms) => {
 // Varre contratos (/v1/contratos) e atas (/v1/atas/atualizacao) publicados na janela,
 // casa localmente com os termos das watchlists ativas e alimenta o pncp_result_cache.
 // Só matches entram no banco; top N ganham dossiê completo.
-const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossierBudget = 15 } = {}) => {
+const runPncpContratosAtasSync = async (opts = {}) =>
+  withPncpHeavyJobSlot('contratos-atas-sync', () => runPncpContratosAtasSyncUnlocked(opts));
+
+const runPncpContratosAtasSyncUnlocked = async ({ windowDays = 2, maxPages = 40, dossierBudget = 15 } = {}) => {
   const summary = { contratos_scanned: 0, atas_scanned: 0, matched: 0, upserted: 0, dossiers: 0, errors: [] };
   const terms = await collectActiveWatchlistTerms();
   summary.terms = terms.length;
@@ -9686,7 +11488,7 @@ const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossier
       try {
         data = await withPncpGate(() => fetchPncpConsulta(endpoint, {
           dataInicial, dataFinal, pagina, tamanhoPagina: 50,
-        }));
+        }), { priority: 'sync' });
       } catch (error) {
         summary.errors.push(`${endpoint} p${pagina}: ${error.message}`);
         break;
@@ -9750,13 +11552,19 @@ const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossier
       valor_homologado: Number(contrato?.valorGlobal) > 0 ? Number(contrato.valorGlobal) : null,
       data_publicacao: contrato?.dataPublicacaoPncp || ata?.dataPublicacaoPncp || null,
       data_assinatura: contrato?.dataAssinatura || ata?.dataAssinatura || null,
+      has_result: false,
+      has_contract: entry.contratos.length > 0,
+      has_ata: entry.atas.length > 0,
+      fornecedores: collectPncpFornecedores({ contratos: entry.contratos, atas: entry.atas }),
       search_text: [
-        contrato?.objetoContrato, contrato?.nomeRazaoSocialFornecedor, contrato?.orgaoEntidade?.razaoSocial,
-        ata?.objetoContratacao, ata?.nomeOrgao,
+        ...entry.contratos.slice(0, 10).flatMap(item => [
+          item?.objetoContrato, item?.nomeRazaoSocialFornecedor, item?.niFornecedor,
+          item?.orgaoEntidade?.razaoSocial,
+        ]),
+        ...entry.atas.slice(0, 10).flatMap(item => [item?.objetoContratacao, item?.objetoCompra, item?.nomeOrgao]),
       ].filter(Boolean).join(' '),
       payload: {
         source: 'contratos_daily_sync',
-        matched_term: entry.matchedTerm,
         contratos_daily: entry.contratos.slice(0, 10),
         atas_daily: entry.atas.slice(0, 10),
       },
@@ -9778,6 +11586,7 @@ const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossier
     try {
       const dossier = await fetchPncpCompraDossier(entry.ids.cnpj, entry.ids.ano, entry.ids.sequencial, {
         query: entry.matchedTerm,
+        priority: 'sync',
       });
       await upsertPncpResultCache(dossier, entry.matchedTerm);
       summary.dossiers += 1;
@@ -9790,11 +11599,73 @@ const runPncpContratosAtasSync = async ({ windowDays = 2, maxPages = 40, dossier
   return summary;
 };
 
-app.post('/api/licitacoes/pncp/contratos/sync', async (req, res) => {
+const runPncpOutcomeSync = async () => {
+  const candidates = await runPncpOutcomeCandidateSync({ limit: 20 });
+  let daily = { skipped: 'rate_limited' };
+  if (Date.now() >= pncpDetalheRateLimitedUntil && Date.now() >= PNCP_GATE.pausedUntil) {
+    pncpOutcomeSyncState.phase = 'recent_publications';
+    daily = await runPncpContratosAtasSync({ windowDays: 7, maxPages: 8, dossierBudget: 4 });
+  }
+  return { candidates, recent_publications: daily, cache: await getPncpOutcomeCacheStats() };
+};
+
+const startPncpOutcomeSync = ({ reason = 'manual' } = {}) => {
+  if (pncpOutcomeSyncState.running) {
+    return { started: false, reason: 'already_running', state: getPncpOutcomeSyncSnapshot() };
+  }
+  Object.assign(pncpOutcomeSyncState, {
+    running: true,
+    status: 'running',
+    phase: 'preparing',
+    processed: 0,
+    total: 0,
+    cached: 0,
+    errors: 0,
+    reason,
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    error: null,
+    summary: null,
+  });
+
+  setImmediate(async () => {
+    try {
+      const summary = await runPncpOutcomeSync();
+      Object.assign(pncpOutcomeSyncState, {
+        running: false,
+        status: 'completed',
+        phase: 'completed',
+        finished_at: new Date().toISOString(),
+        summary,
+      });
+      console.log('[pncp-outcomes] sync concluído:', JSON.stringify(summary));
+    } catch (error) {
+      Object.assign(pncpOutcomeSyncState, {
+        running: false,
+        status: 'failed',
+        phase: 'failed',
+        finished_at: new Date().toISOString(),
+        error: error.message,
+      });
+      console.error('[pncp-outcomes] sync falhou:', error);
+    }
+  });
+  return { started: true, state: getPncpOutcomeSyncSnapshot() };
+};
+
+const ensurePncpOutcomeBootstrap = async () => {
+  if (pncpOutcomeSyncState.running) return { started: false, reason: 'already_running' };
+  const cache = await getPncpOutcomeCacheStats();
+  const lastRefresh = cache.last_refreshed ? new Date(cache.last_refreshed).getTime() : 0;
+  const stale = !lastRefresh || (Date.now() - lastRefresh) > (24 * 60 * 60 * 1000);
+  if (cache.total > 0 && !stale) return { started: false, reason: 'up_to_date', cache };
+  return { ...startPncpOutcomeSync({ reason: cache.total === 0 ? 'startup_empty' : 'startup_stale' }), cache };
+};
+
+app.post('/api/licitacoes/pncp/contratos/sync', requireAdmin, async (req, res) => {
   try {
-    const windowDays = Math.max(1, Math.min(30, Number(req.body?.window_days) || 2));
-    const result = await runPncpContratosAtasSync({ windowDays });
-    res.json(result);
+    const start = startPncpOutcomeSync({ reason: 'legacy_manual' });
+    res.status(start.started ? 202 : 200).json(start);
   } catch (error) {
     console.error('Error syncing PNCP contratos/atas:', error);
     res.status(500).json({ error: 'Erro ao sincronizar contratos/atas do PNCP', details: error.message });
@@ -10494,7 +12365,7 @@ const fetchPncpPcaPagina = async ({ dataInicio, dataFim, pagina, tamanhoPagina =
   let lastErr;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     try {
-      return await fetchPncpConsulta('/v1/pca/atualizacao', { dataInicio, dataFim, pagina, tamanhoPagina });
+      return await withPncpGate(() => fetchPncpConsulta('/v1/pca/atualizacao', { dataInicio, dataFim, pagina, tamanhoPagina }), { priority: 'bulk' });
     } catch (e) {
       lastErr = e;
       const wait = Math.min(2000 * attempt, 15000);
@@ -10650,9 +12521,9 @@ const runPcaDailySyncUnlocked = async (opts = {}, onProgress = null) => {
 
 const runPcaDailySync = async (opts = {}, onProgress = null) => {
   if (opts.lockAlreadyHeld) {
-    return runPcaDailySyncUnlocked(opts, onProgress);
+    return withPncpHeavyJobSlot('pca-sync', () => runPcaDailySyncUnlocked(opts, onProgress));
   }
-  return withPcaSyncLock(() => runPcaDailySyncUnlocked(opts, onProgress));
+  return withPcaSyncLock(() => withPncpHeavyJobSlot('pca-sync', () => runPcaDailySyncUnlocked(opts, onProgress)));
 };
 
 // Estado in-memory do bootstrap — sobrevive a desconexões do client mas
@@ -10852,6 +12723,19 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
             recipient: watch.whatsapp_number,
           });
         }
+        await notifyAccountUsers(pool, {
+          accountId: watch.account_id || CHATWOOT_ACCOUNT_ID,
+          type: 'watchlist.pca_match',
+          title: `Novo PCA · ${watch.nome || 'Assinatura'}`,
+          body: String(item.descricao || item.orgao_razao_social || 'Item de PCA').slice(0, 180),
+          data: {
+            view: 'Licitações',
+            sub: 'pca',
+            watchlist_id: watch.id,
+            signal_id: r.rows[0].id,
+          },
+          dedupeKey: `pca:${r.rows[0].id}`,
+        }).catch((err) => console.warn('[pca] push/inbox falhou:', err.message));
       }
     }
   }
@@ -12664,6 +14548,15 @@ const extractXmlTag = (block, tag) => {
   return m ? decodeXmlEntities(m[1]) : '';
 };
 
+const extractRssImage = (block = '') => {
+  const source = String(block);
+  const direct = source.match(/<(?:media:content|media:thumbnail|enclosure)\b[^>]*\burl=["']([^"']+)["']/i);
+  const description = extractXmlTag(source, 'description');
+  const embedded = description.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+  const value = decodeXmlEntities(direct?.[1] || embedded?.[1] || '');
+  return /^https?:\/\//i.test(value) ? value : null;
+};
+
 const parseGoogleTrendsRss = (xml = '') => {
   const items = [];
   const itemBlocks = String(xml).match(/<item>[\s\S]*?<\/item>/gi) || [];
@@ -12678,6 +14571,7 @@ const parseGoogleTrendsRss = (xml = '') => {
       title: extractXmlTag(nb, 'ht:news_item_title') || extractXmlTag(nb, 'news_item_title'),
       source: extractXmlTag(nb, 'ht:news_item_source') || extractXmlTag(nb, 'news_item_source'),
       url: extractXmlTag(nb, 'ht:news_item_url') || extractXmlTag(nb, 'news_item_url'),
+      picture: extractRssImage(nb),
     })).filter((n) => n.title);
     items.push({
       title,
@@ -12759,6 +14653,7 @@ const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
       const pubDate = extractXmlTag(block, 'pubDate') || null;
       const link = extractXmlTag(block, 'link') || null;
       const source = extractXmlTag(block, 'source') || null;
+      const picture = extractRssImage(block);
       // descarta ruído óbvio de toy/celeb se título não tiver ângulo tech/B2B — IA ainda filtra
       trends.push({
         title,
@@ -12768,7 +14663,7 @@ const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
         change: null,
         traffic: 'news',
         pubDate,
-        picture: null,
+        picture,
         url: link || null,
         source: source || null,
         news: link ? [{ title, source: source || '', url: link }] : [],
@@ -13635,11 +15530,72 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
   }
 };
 
+const loadTrendsIntelCacheOnly = async () => {
+  const dayKey = brDayKey();
+  let raw = null;
+  let cache = 'memory';
+
+  if (trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
+    raw = trendsIntelMemory.payload;
+  } else {
+    const fromDb = await loadTrendsIntelFromDb(dayKey);
+    if (fromDb) {
+      raw = {
+        day: fromDb.dayKey,
+        geo: fromDb.geo,
+        trends: fromDb.trends,
+        intel: fromDb.intel,
+        meta: fromDb.meta || {},
+        updatedAt: fromDb.updatedAt,
+      };
+      cache = 'db';
+    }
+  }
+
+  if (!raw || (TRENDS_SEEDS.length && !isSectorTrendsSource(raw.meta?.source))) return null;
+  const intel = await reSanitizeCachedIntel(raw.intel, raw.trends);
+  const payload = {
+    day: raw.day || raw.dayKey || dayKey,
+    geo: raw.geo || TRENDS_GEO,
+    trends: raw.trends || [],
+    intel,
+    meta: {
+      ...(raw.meta || {}),
+      updatedAt: raw.meta?.updatedAt || raw.updatedAt || null,
+      geoSanitized: true,
+      dailyCache: true,
+    },
+    cached: true,
+    cache,
+  };
+  trendsIntelMemory = { dayKey, payload, updatedAt: Date.now() };
+  return payload;
+};
+
 // GET /api/trends/intel — cache do dia; gera só se faltar (1ª abertura do dia)
 // ?force=1 regenera (admin/debug); UI normal não usa force.
 app.get('/api/trends/intel', async (req, res) => {
   try {
     const force = String(req.query.force || req.query.refresh || '') === '1';
+    const asyncMode = String(req.query.async || '') === '1';
+    if (asyncMode) {
+      const cached = force ? null : await loadTrendsIntelCacheOnly();
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+      if (!trendsIntelRefreshRunning) {
+        void buildTrendsIntelPayload({ force }).catch((err) => {
+          console.error('[trends-intel] background refresh error:', err);
+        });
+      }
+      res.status(202).json({
+        status: 'processing',
+        day: brDayKey(),
+        retry_after_ms: 2500,
+      });
+      return;
+    }
     const payload = await buildTrendsIntelPayload({ force });
     res.json(payload);
   } catch (err) {
@@ -14670,6 +16626,11 @@ app.get('/api/rfb/search', async (req, res) => {
       socioJoins.length,
     ].filter(Boolean).length;
     const hasCombinedHeavyFilters = positiveFilterGroupCount > 1;
+    // Uma busca nacional por CNAE pode produzir centenas de milhares de candidatos.
+    // Nessa situação, contar e ordenar todo o conjunto repete o CTE pesado e costuma
+    // consumir o timeout mesmo quando os primeiros resultados já estão disponíveis.
+    const hasBroadCnaeSearch = cnaeCtes.length > 0 && cnaeSecNarrow.length === 0;
+    const usesProgressiveTotal = hasCombinedHeavyFilters || hasBroadCnaeSearch;
 
     // Ordenação
     // Quando o CTE de nome está ativo, o conjunto já foi materializado (~29K CNPJs) →
@@ -14690,7 +16651,7 @@ app.get('/api/rfb/search', async (req, res) => {
     // Sem filtro nenhum, ORDER BY coluna não-PK ordena 49M linhas → timeout;
     // mantemos ORDER BY cnpj_basico (PK) + JS sort por página só nesse caso extremo.
     // only_matriz='0001' já está em where[] por padrão, então useSqlOrder é quase sempre true.
-    const useSqlOrder = !hasCombinedHeavyFilters && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0);
+    const useSqlOrder = !usesProgressiveTotal && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0);
     const sqlOrderClause = useSqlOrder
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
       : 'e.cnpj_basico NULLS LAST';
@@ -14789,8 +16750,8 @@ app.get('/api/rfb/search', async (req, res) => {
     // Se o cliente já tem o total (paginação page>1), pula a query de count para economizar
     // ~12s em buscas filtradas (ELG+SC etc.). O total não muda entre páginas.
     const cachedTotal    = known_total !== '' ? parseInt(known_total, 10) : NaN;
-    const skipCount      = (!isNaN(cachedTotal) && cachedTotal >= 0) || hasCombinedHeavyFilters;
-    const queryLimit     = hasCombinedHeavyFilters ? limit + 1 : limit;
+    const skipCount      = (!isNaN(cachedTotal) && cachedTotal >= 0) || usesProgressiveTotal;
+    const queryLimit     = usesProgressiveTotal ? limit + 1 : limit;
     const countQueryFull = skipCount ? null : `${ctePrefix} SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`;
 
     let dataRows, countRow;
@@ -14820,9 +16781,9 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
-    const hasMoreRows = hasCombinedHeavyFilters && dataRows.rows.length > limit;
+    const hasMoreRows = usesProgressiveTotal && dataRows.rows.length > limit;
     if (hasMoreRows) dataRows.rows = dataRows.rows.slice(0, limit);
-    if (hasCombinedHeavyFilters) {
+    if (usesProgressiveTotal) {
       const visibleTotal = offset + dataRows.rows.length + (hasMoreRows ? 1 : 0);
       const currentTotal = parseInt(countRow.rows[0].count, 10) || 0;
       countRow.rows[0].count = String(Math.max(currentTotal, visibleTotal));
@@ -14862,7 +16823,10 @@ app.get('/api/rfb/search', async (req, res) => {
     });
   } catch (err) {
     console.error('[rfb/search] Erro:', err.message);
-    res.status(500).json({ error: err.message || 'Erro interno na busca' });
+    const timedOut = err?.code === '57014' || /statement timeout|canceling statement/i.test(err?.message || '');
+    res.status(timedOut ? 504 : 500).json({
+      error: timedOut ? 'A busca excedeu o tempo limite. Refine os filtros e tente novamente.' : (err.message || 'Erro interno na busca'),
+    });
   }
 });
 
@@ -14965,8 +16929,8 @@ const registerBackgroundSchedules = () => {
       return;
     }
     try {
-      const result = await runPncpContratosAtasSync();
-      console.log('[contratos-sync] daily ok:', JSON.stringify(result));
+      const result = startPncpOutcomeSync({ reason: 'daily' });
+      console.log('[contratos-sync] daily:', JSON.stringify(result));
     } catch (error) {
       console.error('[contratos-sync] daily error:', error);
     }
@@ -14983,6 +16947,22 @@ const registerBackgroundSchedules = () => {
       console.error('[watchlist-notifications] error:', error);
     }
   });
+
+  // Digest de prazos do pipeline → inbox + push (dedupe diário por tipo).
+  cron.schedule('15 8,14 * * 1-5', async () => {
+    if (!dataLayerReady) return;
+    try {
+      const result = await emitDeadlineDigest(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        getPrazoStatusSql,
+      });
+      if (result.created > 0 || result.pushed > 0) {
+        console.log('[notifications] deadline digest:', result);
+      }
+    } catch (error) {
+      console.error('[notifications] deadline digest error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
 
   cron.schedule('0 4 1 1 *', async () => {
     try {
@@ -15049,6 +17029,12 @@ const initializeDataLayer = async () => {
       .catch((error) => {
         console.warn('[pca] verificação inicial da base:', error.message);
       });
+  });
+
+  setImmediate(() => {
+    ensurePncpOutcomeBootstrap().catch((error) => {
+      console.warn('[pncp-outcomes] verificação inicial da base:', error.message);
+    });
   });
 
   // Retoma buscas profundas que ficaram órfãs após um restart.

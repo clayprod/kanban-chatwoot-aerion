@@ -17,7 +17,7 @@ COPY backend/ ./
 
 # Stage 3: Final image with Nginx, Node.js and Supervisor
 FROM node:18-alpine
-RUN apk add --no-cache nginx supervisor python3 py3-pip
+RUN apk add --no-cache curl nginx supervisor python3 py3-pip
 
 # Copy built frontend and nginx config
 COPY --from=frontend-builder /app/frontend/build /usr/share/nginx/html

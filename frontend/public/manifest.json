@@ -1,6 +1,7 @@
 {
   "short_name": "Aerion",
   "name": "Aerion Sales Command",
+  "id": "/",
   "icons": [
     {
       "src": "favicon.ico",
@@ -15,16 +16,20 @@
     {
       "src": "logo192.png",
       "type": "image/png",
-      "sizes": "192x192"
+      "sizes": "192x192",
+      "purpose": "any"
     },
     {
       "src": "logo512.png",
       "type": "image/png",
-      "sizes": "512x512"
+      "sizes": "512x512",
+      "purpose": "any"
     }
   ],
-  "start_url": ".",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "theme_color": "#0a0d14",
   "background_color": "#0a0d14"
 }

@@ -22,13 +22,11 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ResponsiveBar } from '@nivo/bar';
 import { ResponsiveLine } from '@nivo/line';
 import {
   ViewColumnsIcon,
   MagnifyingGlassIcon,
   DocumentMagnifyingGlassIcon,
-  ClipboardDocumentListIcon,
   BookOpenIcon,
   ChatBubbleLeftRightIcon,
   UsersIcon,
@@ -57,6 +55,8 @@ import {
   PresentationChartBarIcon,
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import {
   btnPrimary,
@@ -69,7 +69,6 @@ import {
   btnSecondaryXs,
   btnSecondaryLg,
   btnSecondaryControl,
-  btnGhost,
   btnGhostSm,
   btnGhostXs,
   btnDangerGhost,
@@ -98,21 +97,25 @@ import {
   countOperationalLicitacoes,
   getNewEditalSignalsCount,
 } from './navigationBadges';
+import NotificationsView from './NotificationsView';
+import { registerPushServiceWorker } from './pushClient';
+import { typeLabel } from './notificationCatalog';
 import './App.css';
 
 // Configurar axios para enviar cookies em todas as requisições
 axios.defaults.withCredentials = true;
 
-const viewTabs = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
 const VIEW_LABELS = {
   Overview: 'Gestão de Leads',
   Board: 'Funil',
   Metas: 'Metas e Resultados',
   'Definir Metas': 'Definir Metas',
   'Busca Lead B2B': 'Busca de leads',
+  'Radar Trends': 'Radar Trends',
   Licitações: 'Licitações',
   Processo: 'Processo',
   'Disparo WhatsApp': 'Disparo WhatsApp',
+  Notificações: 'Notificações',
   Usuários: 'Usuários',
 };
 const viewLabel = (view) => VIEW_LABELS[view] || view;
@@ -191,98 +194,9 @@ const LIC_SUB_LABELS = {
   board: 'Pipeline',
   resultados: 'Contratos/Resultados',
   pca: 'PCA — Contratações anuais',
-  sinais: 'PCA — Watchlists',
+  sinais: 'PCA — Buscas monitoradas',
 };
 const licSubLabel = (sub) => LIC_SUB_LABELS[sub] || 'Resumo';
-
-const PNCP_OUTCOME_FILTER_DEFAULTS = Object.freeze({
-  q: '',
-  fornecedor: '',
-  fornecedor_ni: '',
-  orgao_cnpj: '',
-  uf: '',
-  tipo: 'todos',
-});
-
-const toBooleanFlag = (value, fallback = false) => {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value > 0;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'sim', 'yes'].includes(normalized)) return true;
-    if (['false', '0', 'nao', 'não', 'no', ''].includes(normalized)) return false;
-  }
-  return fallback;
-};
-
-const asPncpOutcomeArray = (value) => {
-  if (Array.isArray(value)) return value;
-  if (Array.isArray(value?.data)) return value.data;
-  return [];
-};
-
-const safePncpExternalUrl = (value) => {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw, 'https://pncp.gov.br');
-    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null;
-  } catch {
-    return null;
-  }
-};
-
-const formatPncpOutcomeDate = (value, { includeTime = false } = {}) => {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toLocaleString('pt-BR', includeTime
-    ? { dateStyle: 'short', timeStyle: 'short' }
-    : { dateStyle: 'short' });
-};
-
-const normalizePncpOutcomeStatus = (payload) => {
-  const root = payload && typeof payload === 'object' ? payload : {};
-  const nested = root.state && typeof root.state === 'object' ? root.state : {};
-  const source = { ...root, ...nested };
-  const cache = {
-    ...(root.cache && typeof root.cache === 'object' ? root.cache : {}),
-    ...(nested.cache && typeof nested.cache === 'object' ? nested.cache : {}),
-  };
-  const progress = source.progress && typeof source.progress === 'object' ? source.progress : {};
-  const status = String(source.status || (source.running ? 'running' : root.started ? 'running' : 'idle')).toLowerCase();
-  const running = toBooleanFlag(source.running, ['queued', 'starting', 'running', 'processing'].includes(status));
-  const processed = Number(source.processed ?? progress.processed ?? progress.current ?? 0);
-  const total = Number(source.total ?? progress.total ?? progress.maximum ?? 0);
-  const numericProgress = Number(typeof source.progress === 'number' ? source.progress : progress.percent);
-  const percent = Number.isFinite(numericProgress)
-    ? Math.max(0, Math.min(100, numericProgress <= 1 ? numericProgress * 100 : numericProgress))
-    : (Number.isFinite(processed) && Number.isFinite(total) && total > 0
-      ? Math.max(0, Math.min(100, (processed / total) * 100))
-      : null);
-  const cacheTotalRaw = cache.total ?? cache.count ?? source.cache_total ?? source.cached_total
-    ?? source.quantidade ?? source.quantity ?? source.count ?? null;
-  const cacheTotal = cacheTotalRaw === null || cacheTotalRaw === undefined || cacheTotalRaw === ''
-    ? null
-    : Number(cacheTotalRaw);
-
-  return {
-    ...source,
-    cache,
-    status,
-    running,
-    phase: source.phase || progress.phase || null,
-    processed: Number.isFinite(processed) ? processed : 0,
-    total: Number.isFinite(total) ? total : 0,
-    percent,
-    error: source.error || source.last_error || null,
-    startedAt: source.started_at || source.startedAt || null,
-    finishedAt: source.finished_at || source.finishedAt || null,
-    cacheTotal: Number.isFinite(cacheTotal) ? cacheTotal : null,
-    lastRefreshed: cache.last_refreshed || cache.last_updated || cache.updated_at
-      || source.last_refreshed || source.last_updated || null,
-  };
-};
 
 // DDDs brasileiros com região, para o seletor de público do Disparo.
 const DDD_REGIONS = [
@@ -308,19 +222,6 @@ const DDD_REGIONS = [
   ['92', 'Manaus – AM'], ['97', 'Coari – AM'],
   ['95', 'Boa Vista – RR'], ['96', 'Macapá – AP'],
   ['98', 'São Luís – MA'], ['99', 'Imperatriz – MA'],
-];
-
-// Brazil tile-grid (statebins) — [uf, col, row] 0-indexed on a 6×8 grid, geographic-ish
-// silhouette matching the design prototype's buildSegments().
-const BR_STATE_BINS = [
-  ['RR', 2, 0], ['AP', 3, 0],
-  ['AM', 1, 1], ['PA', 2, 1], ['MA', 3, 1], ['CE', 4, 1], ['RN', 5, 1],
-  ['AC', 0, 2], ['RO', 1, 2], ['TO', 2, 2], ['PI', 3, 2], ['PE', 4, 2], ['PB', 5, 2],
-  ['MT', 1, 3], ['GO', 2, 3], ['BA', 3, 3], ['AL', 4, 3], ['SE', 5, 3],
-  ['MS', 1, 4], ['DF', 2, 4], ['MG', 3, 4], ['ES', 4, 4],
-  ['PR', 2, 5], ['SP', 3, 5], ['RJ', 4, 5],
-  ['SC', 2, 6],
-  ['RS', 2, 7],
 ];
 
 const BR_STATE_COORDS = {
@@ -589,8 +490,14 @@ const processBlueprint = {
     {
       group: 'Prospecção',
       tab: 'Busca de leads',
-      use: 'Prospecção B2B na base RFB/CNPJ com filtros (CNAE, UF, porte, capital, idade) e Radar Trends (correlatos de drones/enterprise no BR via pytrends; cache 1×/dia; IA sugere buscas RFB).',
-      routine: '1×/dia: abrir Radar Trends → aplicar sugestão → importar leads para o Funil (Inbox).'
+      use: 'Prospecção B2B na base RFB/CNPJ com filtros por CNAE, UF, porte, capital e tempo de abertura.',
+      routine: 'Buscar empresas por perfil, revisar os dados e importar leads aderentes para o Funil (Inbox).'
+    },
+    {
+      group: 'Prospecção',
+      tab: 'Radar Trends',
+      use: 'Sinais de mercado, notícias setoriais e perfis de busca sugeridos por IA, com geração e cache diário.',
+      routine: 'Abrir uma vez ao dia → revisar sinais → buscar empresas com o perfil sugerido.'
     },
     {
       group: 'Prospecção',
@@ -1113,7 +1020,7 @@ const processBlueprint = {
       conversionLabel: 'atividade', role: 'SDR', hat: 'sdr', color: '#5a93ff', isActivity: true,
       hasValue: false,
       stockStages: [2, 3, 4, 5],
-      howCounted: 'Mensagens enviadas no Chatwoot (WhatsApp etc.) + notas privadas na conversa + notas do perfil do contato (aba Notas). Ligação, e-mail e visita: registre em Notas.',
+      howCounted: 'Contatos distintos no período com mensagem enviada ou nota registrada. Mensagens e notas adicionais para a mesma pessoa contam apenas 1×. Ligação, e-mail e visita: registre em Notas.',
     },
 
     {
@@ -1122,7 +1029,7 @@ const processBlueprint = {
       conversionLabel: 'topo de funil', role: 'MRR/SDR', hat: 'mrr', color: '#7c5cff',
       hasValue: false,
       stockStages: [1, 2, 3, 4, 5],
-      howCounted: 'Card movido para Inbox / etapa 1 do funil.',
+      howCounted: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período).',
     },
     {
       key: 'sql', stage: 'SQL', short: 'Qualificado BANT+U',
@@ -1157,15 +1064,6 @@ const processBlueprint = {
       stockStages: [13],
       howCounted: 'Card movido para 13. Fechado-Ganho (1× por contato). Em R$: Valor_Oportunidade das vendas.',
     },
-  ],
-  glossary: [
-    { term: 'SDR', full: 'Sales Development Representative', meaning: 'Prospecção outbound: contatos e qualificação até SQL.' },
-    { term: 'MRR', full: 'Market Response Rep', meaning: 'Inbound SDR — atende leads de marketing com SLA rápido.' },
-    { term: 'AE', full: 'Account Executive', meaning: 'Closer: demo, proposta e fechamento.' },
-    { term: 'SQL', full: 'Sales Qualified Lead', meaning: 'Lead com BANT+U mínimo, dor e próximo passo claros.' },
-    { term: 'MQL', full: 'Marketing Qualified Lead', meaning: 'Lead que entrou pelo marketing/inbound com fit inicial.' },
-    { term: 'BANT+U', full: 'Budget, Authority, Need, Timeline + Use Case', meaning: 'Critérios de qualificação antes de virar SQL.' },
-    { term: 'ICP', full: 'Ideal Customer Profile', meaning: 'Perfil de cliente ideal (verticais Autel).' },
   ],
 };
 
@@ -1345,16 +1243,15 @@ const PaceDetailsPanel = ({
               </span>
               <div className="h-7 flex-1 overflow-hidden rounded-lg bg-bg">
                 <div
-                  className="flex h-full items-center justify-end rounded-lg px-2"
+                  className="h-full rounded-lg"
                   style={{
                     width: `${Math.max((bar.meta / maxValueMeta) * 100, 8)}%`,
                     background: bar.color,
                   }}
-                >
-                  <span className="font-mono text-[10px] font-bold text-bg">
-                    {formatCompactCurrency(bar.meta) || 'R$ 0'}
-                  </span>
-                </div>
+                />
+              </div>
+              <div className="w-[4.75rem] shrink-0 text-right font-mono text-[10px] font-bold text-ink dark:text-white">
+                {formatCompactCurrency(bar.meta) || 'R$ 0'}
               </div>
             </div>
           ))}
@@ -1457,10 +1354,10 @@ const PaceDetailsPanel = ({
                           {how}
                           {actual.breakdown && (
                             <span className="mt-1 block font-mono text-[10px]">
-                              Hoje — canal {actual.breakdown.messages ?? 0}
-                              {' · '}notas chat {actual.breakdown.private_notes ?? 0}
-                              {' · '}notas contato {actual.breakdown.contact_notes ?? 0}
-                              {' · '}notas total {actual.breakdown.notes ?? 0}
+                              Hoje — via mensagem {actual.breakdown.messages ?? 0}
+                              {' · '}via nota no chat {actual.breakdown.private_notes ?? 0}
+                              {' · '}via nota do contato {actual.breakdown.contact_notes ?? 0}
+                              {' · '}com alguma nota {actual.breakdown.notes ?? 0}
                             </span>
                           )}
                         </td>
@@ -1708,7 +1605,7 @@ const TeamPaceCard = ({
 
       <div className="mb-1.5 grid grid-cols-[1fr_auto] gap-x-2 px-2 font-mono text-[10px] uppercase tracking-wide text-muted">
         <span>Etapa</span>
-        <span className="text-right">{isValue ? 'mês: feito / meta · faltam' : 'hoje: feito / meta · faltam'}</span>
+        <span className="text-right">{isValue ? 'mês · faltam' : 'hoje: feito / meta · faltam'}</span>
       </div>
 
       <div className="space-y-1.5">
@@ -1723,18 +1620,34 @@ const TeamPaceCard = ({
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: step.color }} />
               <span className="truncate text-[12.5px] font-medium text-ink dark:text-white">{step.stage}</span>
             </div>
-            <div className="flex shrink-0 flex-col items-end gap-0.5 font-mono text-[11px] sm:text-[12px]">
-              <div className="flex items-baseline gap-1.5">
+            {isValue ? (
+              <span className={`font-mono text-[11px] font-semibold ${remaining === 0 ? 'text-green' : 'text-amber'}`}>
+                {fmtRemain(remaining)}
+              </span>
+            ) : (
+              <div className="flex shrink-0 items-baseline gap-1.5 font-mono text-[11px] sm:text-[12px]">
                 <span className="font-bold text-ink dark:text-white">{fmt(done)}</span>
                 <span className="text-muted">/{fmt(target)}</span>
                 <span className={`min-w-[3.5rem] text-right text-[11px] font-semibold ${remaining === 0 ? 'text-green' : 'text-amber'}`}>
                   {fmtRemain(remaining)}
                 </span>
               </div>
-              {isValue && doneToday != null && (
-                <span className="text-[10px] text-muted">hoje {fmt(doneToday)}</span>
-              )}
-            </div>
+            )}
+            {isValue && (
+              <div className="col-span-2 grid grid-cols-2 gap-3 pl-4 font-mono">
+                <div className="min-w-0">
+                  <span className="block text-[9px] uppercase tracking-wide text-muted">Feito</span>
+                  <span className="block truncate text-[11px] font-bold text-ink dark:text-white">{fmt(done)}</span>
+                  {doneToday != null && (
+                    <span className="block truncate text-[9px] text-muted">Hoje {fmt(doneToday)}</span>
+                  )}
+                </div>
+                <div className="min-w-0 text-right">
+                  <span className="block text-[9px] uppercase tracking-wide text-muted">Meta</span>
+                  <span className="block truncate text-[11px] font-semibold text-ink dark:text-white">{fmt(target)}</span>
+                </div>
+              </div>
+            )}
             <div className="col-span-2 h-1 overflow-hidden rounded-full bg-bg2">
               <div className="h-full rounded-full" style={{ width: `${Math.max(pct, done > 0 ? 4 : 0)}%`, background: step.color }} />
             </div>
@@ -1982,6 +1895,24 @@ const formatCurrency = (value) => {
   }).format(numeric);
 };
 
+const formatPncpDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('pt-BR');
+};
+
+const getSafeExternalUrl = (...values) => {
+  for (const value of values) {
+    if (!value || typeof value !== 'string') continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'https:' || url.protocol === 'http:') return url.href;
+    } catch {}
+  }
+  return null;
+};
+
 const getBestEstimatedValue = (item) => {
   const values = [item?.valor_itens_pertinentes, item?.valor_total_estimado, item?.valor_global, item?.valor_total_homologado]
     .map(value => Number(value))
@@ -2227,12 +2158,25 @@ const formatCompactCurrency = (value) => {
   }).format(Number(value));
 };
 
-const truncateAxisLabel = (value, maxLength = 24) => {
-  const text = String(value ?? '');
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return `${text.slice(0, Math.max(1, maxLength - 3))}...`;
+/** Moeda em cards estreitos: compacta a partir de 1M para não estourar layout. */
+const formatPncpCardCurrency = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1_000_000) return formatCompactCurrency(n);
+  return formatCurrency(n);
+};
+
+const getPncpCardCurrencyClass = (value, { primary = false } = {}) => {
+  const n = Number(value) || 0;
+  // Quanto maior o número, menor a fonte — cabe na coluna lateral do card.
+  const size = n >= 100_000_000
+    ? 'text-xs'
+    : n >= 1_000_000
+      ? 'text-[13px] leading-snug'
+      : n >= 100_000
+        ? 'text-sm'
+        : (primary ? 'text-base' : 'text-xs');
+  return `${size} font-mono font-bold tabular-nums tracking-tight break-words`;
 };
 
 const getStageLabel = (stage) => {
@@ -2556,21 +2500,6 @@ const contactRoleOptions = [
   'Decisor',
   'Outro',
 ];
-
-const getCookieValue = (name) => {
-  const parts = String(document.cookie || '').split('; ').filter(Boolean);
-  const match = parts.find(item => item.startsWith(`${name}=`));
-  if (!match) {
-    return null;
-  }
-  return decodeURIComponent(match.split('=').slice(1).join('='));
-};
-
-const setCookieValue = (name, value, days) => {
-  const maxAge = Number.isFinite(days) ? days * 86400 : 31536000;
-  const encoded = encodeURIComponent(value);
-  document.cookie = `${name}=${encoded}; max-age=${maxAge}; path=/; samesite=lax`;
-};
 
 const createEmptyOpportunityForm = () => ({
   titulo: '',
@@ -3128,6 +3057,349 @@ const VerticalScrollArrows = memo(function VerticalScrollArrows({
             <ChevronDownIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
           </button>
         </div>
+      )}
+    </div>
+  );
+});
+
+const DualRange = memo(function DualRange({
+  min = 0,
+  max,
+  step = 1,
+  value,
+  onChange,
+  formatValue,
+  minLabel = 'Mínimo',
+  maxLabel = 'Máximo',
+}) {
+  const storedMin = Number(value?.[0]) || 0;
+  const storedMax = Number(value?.[1]) || 0;
+  const effectiveMax = storedMax > 0 ? Math.min(storedMax, max) : max;
+  const effectiveMin = Math.max(min, Math.min(storedMin, effectiveMax));
+  const span = Math.max(max - min, 1);
+  const minPercent = ((effectiveMin - min) / span) * 100;
+  const maxPercent = ((effectiveMax - min) / span) * 100;
+  const describeMin = effectiveMin > min ? formatValue(effectiveMin) : 'Sem mínimo';
+  const describeMax = storedMax > 0 ? formatValue(effectiveMax) : 'Sem máximo';
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="min-w-0">
+          <span className="block text-muted2">{minLabel}</span>
+          <span className="mt-0.5 block truncate font-medium tabular-nums text-ink">{describeMin}</span>
+        </div>
+        <div className="min-w-0 text-right">
+          <span className="block text-muted2">{maxLabel}</span>
+          <span className="mt-0.5 block truncate font-medium tabular-nums text-ink">{describeMax}</span>
+        </div>
+      </div>
+      <div className="dual-range relative h-5" style={{ '--range-start': `${minPercent}%`, '--range-end': `${maxPercent}%` }}>
+        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-line" aria-hidden />
+        <div
+          className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-primary"
+          style={{ left: `${minPercent}%`, right: `${100 - maxPercent}%` }}
+          aria-hidden
+        />
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={effectiveMin}
+          onChange={(event) => onChange([Math.min(Number(event.target.value), effectiveMax), storedMax])}
+          className={`dual-range__input ${effectiveMin >= effectiveMax ? 'z-30' : 'z-20'}`}
+          aria-label={minLabel}
+          aria-valuetext={describeMin}
+        />
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={effectiveMax}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            const nextStoredMax = next >= max ? 0 : next;
+            onChange([Math.min(effectiveMin, next), nextStoredMax]);
+          }}
+          className="dual-range__input z-10"
+          aria-label={maxLabel}
+          aria-valuetext={describeMax}
+        />
+      </div>
+    </div>
+  );
+});
+
+const RadarTrendsPage = memo(function RadarTrendsPage({
+  trendsIntel,
+  loading,
+  refreshing,
+  error,
+  onReload,
+  onSearchProfile,
+}) {
+  const trends = trendsIntel?.trends || [];
+  const suggestions = trendsIntel?.intel?.suggestions || [];
+  const trendsSource = String(trendsIntel?.meta?.source || '');
+  const isNewsMode = /news_sector|google_news|rss/i.test(trendsSource);
+  const isRelatedMode = /pytrends|related/i.test(trendsSource);
+  const itemLink = (item) => {
+    const fromNews = (item.news || []).find((news) => news?.url)?.url;
+    return fromNews || item.url || item.link || null;
+  };
+  const itemSource = (item) => {
+    const fromNews = (item.news || []).find((news) => news?.source)?.source;
+    return fromNews || item.source || '';
+  };
+  const itemImage = (item) => {
+    const fromNews = (item.news || []).find((news) => news?.picture || news?.image || news?.thumbnail);
+    return item.picture || item.image || item.thumbnail || fromNews?.picture || fromNews?.image || fromNews?.thumbnail || null;
+  };
+  const cleanTitle = (item) => {
+    let title = String(item.title || '').trim();
+    const source = itemSource(item);
+    if (source && title.toLowerCase().endsWith(` - ${source.toLowerCase()}`)) {
+      title = title.slice(0, title.length - source.length - 3).trim();
+    }
+    return title;
+  };
+  const formatNewsDate = (value) => {
+    if (!value) return '';
+    try {
+      return new Date(value).toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  };
+  const prioritizedTrends = [...trends].sort((a, b) => Number(Boolean(itemImage(b))) - Number(Boolean(itemImage(a))));
+  const showNewsCards = isNewsMode || prioritizedTrends.some((item) => itemImage(item));
+
+  return (
+    <div className="mt-5 space-y-4">
+      <header className="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-ink">Radar Trends</h2>
+            <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] font-semibold text-muted">
+              BR · drones enterprise
+            </span>
+            {trendsIntel?.day && <span className="font-mono text-[10px] text-muted">{trendsIntel.day}</span>}
+            {trendsIntel?.cached && (
+              <span className="rounded-full bg-status-success/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-status-success">
+                cache do dia
+              </span>
+            )}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted">
+            Sinais do mercado brasileiro e perfis de prospecção gerados uma vez por dia para orientar buscas na base RFB.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={refreshing || loading}
+          onClick={onReload}
+          className={`${btnSecondary} w-full shrink-0 sm:w-auto`}
+          title="Recarrega o resultado cacheado do dia"
+        >
+          <ArrowPathIcon className={`h-4 w-4 ${refreshing || loading ? 'animate-spin' : ''}`} />
+          {refreshing || loading ? 'Carregando…' : 'Recarregar'}
+        </button>
+      </header>
+
+      {error && (
+        <div className="rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger" role="alert">
+          {error}
+        </div>
+      )}
+
+      {loading && !trendsIntel ? (
+        <div className="space-y-4" aria-label="Carregando Radar Trends">
+          <div className="h-20 animate-pulse rounded-[12px] bg-bg2" />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {[1, 2, 3].map((item) => <div key={item} className="h-56 animate-pulse rounded-[12px] bg-bg2" />)}
+          </div>
+        </div>
+      ) : (
+        <>
+          {(trendsIntel?.intel?.opportunity_day || trendsIntel?.intel?.summary) && (
+            <section className="rounded-[12px] border border-primary/25 bg-primary/[0.05] px-4 py-3">
+              <h3 className="text-sm font-semibold text-ink">Leitura do dia</h3>
+              <p className="mt-1 max-w-4xl text-xs leading-relaxed text-muted">
+                {trendsIntel?.intel?.opportunity_day || trendsIntel?.intel?.summary}
+              </p>
+            </section>
+          )}
+
+          {prioritizedTrends.length > 0 && (
+            <section>
+              <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">
+                    {isRelatedMode ? 'Correlatos do setor' : 'Notícias e sinais do mercado'}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-muted">
+                    {showNewsCards ? 'Conteúdos com imagem aparecem primeiro.' : 'Termos relacionados às principais frentes comerciais.'}
+                  </p>
+                </div>
+                <span className="font-mono text-[10px] text-muted2">{prioritizedTrends.length} sinais</span>
+              </div>
+
+              {showNewsCards ? (
+                <div className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {prioritizedTrends.slice(0, 12).map((item, index) => {
+                    const href = itemLink(item);
+                    const source = itemSource(item);
+                    const picture = itemImage(item);
+                    const title = cleanTitle(item);
+                    const content = (
+                      <>
+                        {picture && (
+                          <div className="aspect-[16/9] overflow-hidden bg-bg2">
+                            <img
+                              src={picture}
+                              alt=""
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                              onError={(event) => { event.currentTarget.parentElement.style.display = 'none'; }}
+                            />
+                          </div>
+                        )}
+                        <div className="flex min-h-0 flex-1 flex-col p-3">
+                          <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted2">
+                            <span className="truncate">{source || `Sinal ${String(index + 1).padStart(2, '0')}`}</span>
+                            {item.pubDate && <span className="shrink-0">{formatNewsDate(item.pubDate)}</span>}
+                          </div>
+                          <h4 className="mt-1.5 line-clamp-3 text-sm font-semibold leading-snug text-ink group-hover:text-primary">
+                            {title}
+                          </h4>
+                          <span className="mt-auto pt-3 text-[11px] font-semibold text-primary">Ir para a matéria ↗</span>
+                        </div>
+                      </>
+                    );
+                    return href ? (
+                      <a
+                        key={`${item.title}-${index}`}
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2 transition-colors hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                        aria-label={`${title}. Abrir matéria em nova aba`}
+                      >
+                        {content}
+                      </a>
+                    ) : (
+                      <article key={`${item.title}-${index}`} className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2">
+                        {content}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {prioritizedTrends.slice(0, 18).map((item) => {
+                    const href = itemLink(item);
+                    const body = (
+                      <>
+                        {item.kind === 'rising' && <span className="font-mono text-[9px] font-semibold text-status-success">↑</span>}
+                        <span className="font-medium">{item.title}</span>
+                        {item.traffic && item.traffic !== 'news' && <span className="font-mono text-[10px] text-muted">{item.traffic}</span>}
+                        {href && <span className="font-mono text-[9px] text-primary/70">↗</span>}
+                      </>
+                    );
+                    const chipClass = 'inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 px-2.5 py-1 text-[11px] text-ink transition-colors hover:border-primary/40 hover:text-primary';
+                    return href ? (
+                      <a key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} href={href} target="_blank" rel="noopener noreferrer" className={chipClass}>
+                        {body}
+                      </a>
+                    ) : (
+                      <span key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} className={chipClass}>{body}</span>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
+
+          <section>
+            <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-ink">Perfis sugeridos para prospecção</h3>
+                <p className="mt-0.5 text-[11px] text-muted">A busca abre com os critérios aplicados e os resultados carregados.</p>
+              </div>
+              {suggestions.length > 0 && <span className="font-mono text-[10px] text-muted2">{suggestions.length} perfis</span>}
+            </div>
+            {suggestions.length === 0 ? (
+              <div className="rounded-[12px] border border-dashed border-line px-4 py-8 text-center text-xs text-muted">
+                {trendsIntel?.intel?.summary || 'Nenhum perfil sugerido para hoje.'}
+              </div>
+            ) : (
+              <div className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {suggestions.map((suggestion, index) => {
+                  const filters = suggestion.filters || {};
+                  const porteLabel = filters.porte === '01' ? 'ME' : filters.porte === '03' ? 'EPP' : filters.porte === '05' ? 'Demais' : filters.porte;
+                  const priorityClass = suggestion.priority === 'alta'
+                    ? 'bg-status-success/15 text-status-success'
+                    : suggestion.priority === 'baixa'
+                      ? 'border border-line bg-bg2 text-muted'
+                      : 'bg-primary/12 text-primary';
+                  return (
+                    <article key={`${suggestion.title}-${index}`} className="flex h-full flex-col rounded-[12px] border border-line bg-surf p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-ink">{suggestion.title}</h4>
+                        {suggestion.priority && (
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${priorityClass}`}>
+                            {suggestion.priority}
+                          </span>
+                        )}
+                      </div>
+                      {(suggestion.company_profile || suggestion.product_fit) && (
+                        <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                          {[suggestion.company_profile, suggestion.product_fit].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <span className="rounded-md bg-bg2 px-1.5 py-0.5 font-mono text-[10px] text-primary">{filters.uf ? `UF ${filters.uf}` : 'Nacional'}</span>
+                        {porteLabel && <span className="rounded-md bg-bg2 px-1.5 py-0.5 font-mono text-[10px] text-muted">Porte {porteLabel}</span>}
+                        {(filters.capital_min > 0 || filters.capital_max > 0) && (
+                          <span className="rounded-md bg-bg2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                            Capital {filters.capital_min > 0 ? `≥${Number(filters.capital_min).toLocaleString('pt-BR')}` : ''}{filters.capital_max > 0 ? ` ≤${Number(filters.capital_max).toLocaleString('pt-BR')}` : ''}
+                          </span>
+                        )}
+                        {(filters.cnae_labels || []).slice(0, 3).map((cnae) => (
+                          <span key={cnae.codigo} className="rounded-md bg-bg2 px-1.5 py-0.5 font-mono text-[10px] text-muted" title={cnae.descricao}>{cnae.codigo}</span>
+                        ))}
+                      </div>
+                      {suggestion.rationale && <p className="mt-2 line-clamp-3 text-[11px] leading-relaxed text-muted">{suggestion.rationale}</p>}
+                      <div className="mt-auto pt-3">
+                        <button type="button" className={`${btnPrimary} w-full`} onClick={() => onSearchProfile(suggestion)}>
+                          <MagnifyingGlassIcon className="h-4 w-4" />
+                          Buscar empresas com este perfil
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {(trendsIntel?.meta?.ai?.provider || trendsIntel?.cache) && (
+            <p className="border-t border-line pt-2 font-mono text-[10px] text-muted2">
+              {trendsIntel?.meta?.ai?.provider && (
+                <span>IA: {trendsIntel.meta.ai.provider}{trendsIntel.meta.ai.model ? ` · ${trendsIntel.meta.ai.model}` : ''}{trendsIntel.meta.ai.fallback ? ' · fallback' : ''}</span>
+              )}
+              {trendsIntel?.cache && trendsIntel.cache !== 'fresh' && <span>{trendsIntel?.meta?.ai?.provider ? ' · ' : ''}cache: {trendsIntel.cache}</span>}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -3768,12 +4040,14 @@ const PcaChips = ({ items, onRemove, accent }) => (
         }`}
       >
         {t}
-        <button
-          type="button"
-          className="normal-case opacity-70 hover:opacity-100"
-          onClick={() => onRemove(i)}
-          aria-label={`remover ${t}`}
-        >×</button>
+        {onRemove && (
+          <button
+            type="button"
+            className="normal-case opacity-70 hover:opacity-100"
+            onClick={() => onRemove(i)}
+            aria-label={`remover ${t}`}
+          >×</button>
+        )}
       </span>
     ))}
   </div>
@@ -3818,12 +4092,24 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   const [saveName, setSaveName] = useState('');
   const [saveWhatsappEnabled, setSaveWhatsappEnabled] = useState(false);
   const [saveWhatsappNumber, setSaveWhatsappNumber] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveNotice, setSaveNotice] = useState(null);
   const [selecionados, setSelecionados] = useState({});
   const [lastPromoted, setLastPromoted] = useState(null);
   const [bootstrapStatus, setBootstrapStatus] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
 
   const filtrosAtivos = Object.entries(filtros).filter(([k, v]) => v && !(k === 'ano_pca' && v === String(new Date().getFullYear()))).length;
+  const watchlistTerms = useMemo(() => {
+    const source = positivos.length ? positivos : (q.trim() ? [q.trim()] : []);
+    const seen = new Set();
+    return source.map(term => String(term || '').trim()).filter(term => {
+      const key = term.toLocaleLowerCase('pt-BR');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [positivos, q]);
 
   // Auto-dismiss do toast de promoção
   useEffect(() => {
@@ -3831,6 +4117,12 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
     const id = setTimeout(() => setLastPromoted(null), 8000);
     return () => clearTimeout(id);
   }, [lastPromoted]);
+
+  useEffect(() => {
+    if (!saveNotice) return undefined;
+    const id = setTimeout(() => setSaveNotice(null), 7000);
+    return () => clearTimeout(id);
+  }, [saveNotice]);
 
   const fetchBootstrapStatus = useCallback(async () => {
     try {
@@ -3957,10 +4249,19 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   };
 
   const salvarWatchlist = async () => {
+    if (!watchlistTerms.length) {
+      setSaveNotice({ tone: 'error', message: 'Adicione ao menos um termo antes de salvar.' });
+      return;
+    }
+    if (saveWhatsappEnabled && !String(saveWhatsappNumber || '').replace(/\D/g, '')) {
+      setSaveNotice({ tone: 'error', message: 'Informe o número do WhatsApp com DDD.' });
+      return;
+    }
+    setSaveBusy(true);
     try {
       await axios.post('/api/licitacoes/pca/watchlist', {
-        nome: saveName || q,
-        palavras_chave: q ? [q] : positivos.slice(0, 1),
+        nome: saveName || q.trim() || watchlistTerms[0],
+        palavras_chave: watchlistTerms,
         termos_negativos: negativos,
         usar_ia: usarIa,
         valor_minimo: filtros.valor_min ? Number(filtros.valor_min) : null,
@@ -3972,9 +4273,14 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       setSaveName('');
       setSaveWhatsappEnabled(false);
       setSaveWhatsappNumber('');
-      alert('Watchlist salva. A busca por oportunidades começou em segundo plano.');
+      setSaveNotice({
+        tone: 'success',
+        message: `Busca salva como assinatura (${watchlistTerms.length} termo${watchlistTerms.length === 1 ? '' : 's'}).${saveWhatsappEnabled ? ' Alertas WhatsApp ligados para novidades.' : ' Você pode ligar o WhatsApp no card da assinatura.'}`,
+      });
     } catch (e) {
-      alert(`Erro: ${e.response?.data?.error || e.message}`);
+      setSaveNotice({ tone: 'error', message: e.response?.data?.error || e.message || 'Não foi possível salvar a watchlist.' });
+    } finally {
+      setSaveBusy(false);
     }
   };
 
@@ -4079,7 +4385,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               </span>
             )}
             <button type="button" onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()} className={`${btnSecondarySm}`}>
-              Watchlists / sinais
+              Buscas monitoradas
             </button>
           </div>
         </div>
@@ -4137,13 +4443,21 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             onClick={() => setSaveDialog(true)}
             disabled={!q.trim() && !positivos.length}
             className={`${btnSecondaryControl} w-full sm:col-span-2 lg:col-span-1 lg:w-auto`}
+            title="Salva esta busca como assinatura monitorada (sinais + WhatsApp opcional)"
           >
-            Salvar watchlist
+            Salvar e monitorar
           </button>
         </div>
 
         {(positivos.length > 0 || negativos.length > 0) && (
           <div className="space-y-2 border-t border-line pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted">
+                <span className="font-semibold text-ink">Termos ativos nesta busca.</span>{' '}
+                O PCA procura qualquer um deles; “Salvar e monitorar” transforma este conjunto na sua assinatura.
+              </p>
+              <span className={metaChip}>{watchlistTerms.length} na assinatura</span>
+            </div>
             <div className="flex items-start gap-2 text-xs">
               <span className="mt-0.5 shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted2">+ {positivos.length}</span>
               <PcaChips items={positivos} onRemove={(i) => setPositivos(positivos.filter((_, idx) => idx !== i))} accent="pos" />
@@ -4157,7 +4471,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
               {fonteIa && <span className="text-muted">via {fonteIa}</span>}
               <button type="button" onClick={() => setEditTerms(v => !v)} className="font-semibold text-primary hover:underline">
-                {editTerms ? 'Fechar edição' : 'Editar termos'}
+                {editTerms ? 'Fechar edição' : 'Adicionar termos'}
               </button>
               <button type="button" onClick={refazerComEditados} className="font-semibold text-primary hover:underline">
                 Refazer busca
@@ -4489,22 +4803,38 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       )}
 
       {saveDialog && (
-        <div className={modalOverlay}>
-          <div className={`${modalPanel} max-w-md space-y-3`}>
-            <h3 className="text-base font-semibold text-ink">Salvar watchlist</h3>
+        <div className={modalOverlay} onClick={() => { if (!saveBusy) setSaveDialog(false); }} role="presentation">
+          <div
+            className={`${modalPanel} max-w-md space-y-4`}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pca-save-watchlist-title"
+          >
+            <div>
+              <h3 id="pca-save-watchlist-title" className="text-base font-semibold text-ink">Salvar e monitorar esta busca</h3>
+              <p className={`${subtle} mt-1`}>
+                Esta busca vira uma <strong className="text-ink">assinatura</strong>: o sistema continua batendo nos PCAs
+                e gera sinais novos. WhatsApp opcional só para o que ainda não tinha sido visto.
+              </p>
+            </div>
             <input
               className={`${input} w-full`}
               placeholder="Nome (ex: Drones / RPA)"
               value={saveName}
               onChange={e => setSaveName(e.target.value)}
             />
-            <label className="flex items-center gap-2 text-xs text-muted">
+            <label className="flex cursor-pointer items-start gap-2 text-xs text-muted">
               <input
                 type="checkbox"
+                className="mt-0.5"
                 checked={saveWhatsappEnabled}
                 onChange={e => setSaveWhatsappEnabled(e.target.checked)}
               />
-              Enviar novas oportunidades por WhatsApp
+              <span>
+                <span className="block font-semibold text-ink">Avisar pelo WhatsApp</span>
+                <span className="mt-0.5 block text-muted">Só oportunidades novas — não reenvia o histórico.</span>
+              </span>
             </label>
             {saveWhatsappEnabled && (
               <input
@@ -4514,16 +4844,57 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                 onChange={e => setSaveWhatsappNumber(e.target.value)}
               />
             )}
-            <div className="text-xs text-muted">
-              Termos: <strong>{(q ? [q] : positivos.slice(0, 1)).join(', ') || '—'}</strong>
-              {negativos.length > 0 && <> · negativos: {negativos.slice(0, 4).join(', ')}{negativos.length > 4 ? '…' : ''}</>}
+            <div className="space-y-2 rounded-[12px] bg-bg2/60 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-ink">Termos da assinatura</span>
+                <span className={metaChip}>{watchlistTerms.length}</span>
+              </div>
+              <PcaChips items={watchlistTerms} accent="pos" />
+              {negativos.length > 0 && (
+                <>
+                  <span className="block pt-1 text-xs font-semibold text-ink">Termos excluídos</span>
+                  <PcaChips items={negativos} accent="neg" />
+                </>
+              )}
+              {usarIa && (
+                <p className={subtle}>A IA poderá atualizar a expansão sem remover os termos que você selecionou.</p>
+              )}
             </div>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setSaveDialog(false)} className={btnSecondary}>Cancelar</button>
-              <button type="button" onClick={salvarWatchlist} className={btnPrimary}>Salvar</button>
+              <button type="button" disabled={saveBusy} onClick={() => setSaveDialog(false)} className={btnSecondary}>Cancelar</button>
+              <button
+                type="button"
+                disabled={saveBusy || !watchlistTerms.length || (saveWhatsappEnabled && !String(saveWhatsappNumber || '').replace(/\D/g, ''))}
+                onClick={salvarWatchlist}
+                className={btnPrimary}
+              >
+                {saveBusy ? 'Salvando…' : 'Ativar monitoramento'}
+              </button>
             </div>
           </div>
         </div>
+      )}
+
+      {saveNotice && createPortal(
+        <div className="fixed bottom-5 right-5 z-[70] w-[min(26rem,calc(100vw-2rem))]" role="status" aria-live="polite">
+          <div className={`rounded-[14px] border px-4 py-3 ${saveNotice.tone === 'success'
+            ? 'border-status-success/35 bg-card text-ink'
+            : 'border-status-danger/35 bg-card text-status-danger'}`}>
+            <div className="flex items-start gap-3">
+              {saveNotice.tone === 'success'
+                ? <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0 text-status-success" />
+                : <ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-status-danger" />}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">{saveNotice.tone === 'success' ? 'Watchlist configurada' : 'Não foi possível salvar'}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted">{saveNotice.message}</p>
+              </div>
+              <button type="button" onClick={() => setSaveNotice(null)} className={iconBtn} aria-label="Fechar aviso">
+                <XMarkIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -4701,6 +5072,173 @@ function WatchlistWhatsappDialog({
             className={btnPrimary}
           >
             {saving ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+/** Confirma a criação de uma watchlist sem recorrer aos diálogos nativos do navegador. */
+function CreateEditalWatchlistDialog({
+  open,
+  defaultName = '',
+  contextLabel = '',
+  saving = false,
+  initialWhatsappEnabled = false,
+  initialWhatsappNumber = '',
+  alreadySubscribed = false,
+  onClose,
+  onSave,
+}) {
+  const [name, setName] = useState('');
+  const [whatsappEnabled, setWhatsappEnabled] = useState(false);
+  const [whatsappNumber, setWhatsappNumber] = useState('');
+  const nameInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(String(defaultName || ''));
+    setWhatsappEnabled(Boolean(initialWhatsappEnabled));
+    setWhatsappNumber(String(initialWhatsappNumber || ''));
+  }, [open, defaultName, initialWhatsappEnabled, initialWhatsappNumber]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }, 40);
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !saving) onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, saving, onClose]);
+
+  if (!open) return null;
+
+  const cleanName = String(name || '').trim();
+  const cleanNumber = String(whatsappNumber || '').trim();
+  const numberIsValid = !whatsappEnabled || cleanNumber.replace(/\D/g, '').length >= 10;
+  const canSave = Boolean(cleanName) && numberIsValid && !saving;
+  const handleSave = () => {
+    if (!canSave) return;
+    onSave?.({
+      nome: cleanName,
+      whatsapp_enabled: whatsappEnabled,
+      whatsapp_number: whatsappEnabled ? cleanNumber : null,
+    });
+  };
+
+  return createPortal(
+    <div
+      className={`${modalOverlay} z-[80]`}
+      onClick={() => { if (!saving) onClose?.(); }}
+      role="presentation"
+    >
+      <div
+        className={`${modalPanel} max-w-md flex flex-col gap-4`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-edital-watchlist-title"
+        aria-describedby="create-edital-watchlist-description"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <BellIcon className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 id="create-edital-watchlist-title" className="font-display text-base font-semibold text-ink">
+              {alreadySubscribed ? 'Alertas desta busca' : 'Esta busca vira assinatura'}
+            </h3>
+            <p id="create-edital-watchlist-description" className="mt-1 text-sm text-muted">
+              O card continua coletando. Opcionalmente avisamos no WhatsApp só quando aparecer
+              <strong className="text-ink"> edital novo</strong> (não reenvia o acervo já na lista).
+            </p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className={iconBtn} aria-label="Fechar">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div>
+          <label htmlFor="create-edital-watchlist-name" className="mb-1.5 block text-xs font-medium text-muted">
+            Nome da assinatura
+          </label>
+          <input
+            id="create-edital-watchlist-name"
+            ref={nameInputRef}
+            className={`${input} w-full`}
+            value={name}
+            maxLength={200}
+            disabled={saving}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !whatsappEnabled) {
+                event.preventDefault();
+                handleSave();
+              }
+            }}
+          />
+          {contextLabel && <p className={`${subtle} mt-1.5 truncate`}>Busca: {contextLabel}</p>}
+        </div>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-[12px] border border-line bg-bg2/50 px-3 py-2.5">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={whatsappEnabled}
+            disabled={saving}
+            onChange={(event) => setWhatsappEnabled(event.target.checked)}
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-ink">Avisar pelo WhatsApp</span>
+            <span className={`${subtle} mt-0.5 block`}>
+              Matcher diário (~08h) + fila a cada 5 min. Só oportunidades que ainda não tinham sido vistas.
+            </span>
+          </span>
+        </label>
+
+        {whatsappEnabled && (
+          <div>
+            <label htmlFor="create-edital-watchlist-whatsapp" className="mb-1.5 block text-xs font-medium text-muted">
+              Número com DDD
+            </label>
+            <input
+              id="create-edital-watchlist-whatsapp"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              className={`${input} w-full`}
+              placeholder="Ex.: 48 99999-9999"
+              value={whatsappNumber}
+              disabled={saving}
+              onChange={(event) => setWhatsappNumber(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleSave();
+                }
+              }}
+            />
+            {!numberIsValid && (
+              <p className="mt-1.5 text-xs text-status-danger">Informe um número válido com DDD.</p>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col-reverse gap-2 border-t border-line pt-3 sm:flex-row sm:justify-end">
+          <button type="button" disabled={saving} onClick={onClose} className={btnSecondary}>
+            Cancelar
+          </button>
+          <button type="button" disabled={!canSave} onClick={handleSave} className={btnPrimary}>
+            {saving ? 'Salvando…' : (alreadySubscribed ? 'Salvar alertas' : 'Ativar assinatura')}
           </button>
         </div>
       </div>
@@ -5025,7 +5563,7 @@ function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onCh
       ) : error && signals.length === 0 ? null : signals.length === 0 ? (
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
           <p className="text-sm font-semibold text-ink">Nenhum sinal {statusFilterLabel(statusFilter).toLowerCase()}</p>
-          <p className={`${subtle} mt-1`}>Os sinais aparecem após o sync das watchlists ativas.</p>
+          <p className={`${subtle} mt-1`}>Os sinais aparecem após o sync das buscas monitoradas ativas.</p>
         </div>
       ) : flatMode ? (
         <div className="space-y-2.5">
@@ -5095,7 +5633,7 @@ function PcaWatchlistsPanel({ onPromoted }) {
     } catch (e) {
       setError(e.response?.status === 504
         ? 'A atualização demorou mais que o esperado. Vamos tentar novamente automaticamente.'
-        : (e.response?.data?.error || 'Não foi possível carregar as watchlists agora.'));
+        : (e.response?.data?.error || 'Não foi possível carregar as buscas monitoradas agora.'));
     } finally {
       if (!background) setLoading(false);
     }
@@ -5188,7 +5726,10 @@ function PcaWatchlistsPanel({ onPromoted }) {
   return (
     <div className="mt-4 space-y-3">
       <div className="toolbar-meta">
-        <p className={subtle}>Clique no card para ver os sinais no popup. Regras são verificadas automaticamente e ao voltar para esta tela.</p>
+        <p className={subtle}>
+          Cada card é uma <strong className="text-ink">busca salva</strong> (assinatura). Clique para ver os sinais.
+          Matcher roda no sync do PCA; WhatsApp só para novidades.
+        </p>
         <span className="justify-self-start text-[11px] text-muted sm:justify-self-end">Atualização automática</span>
       </div>
 
@@ -5200,11 +5741,13 @@ function PcaWatchlistsPanel({ onPromoted }) {
       )}
 
       {loading ? (
-        <div className={`${subtle} py-8 text-center`}>Carregando watchlists…</div>
+        <div className={`${subtle} py-8 text-center`}>Carregando assinaturas…</div>
       ) : error && watchlists.length === 0 ? null : watchlists.length === 0 ? (
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
-          <p className="text-sm font-semibold text-ink">Nenhuma watchlist PCA</p>
-          <p className={`${subtle} mt-1 mx-auto max-w-md`}>Salve uma busca na aba PCA para monitorar termos e receber sinais.</p>
+          <p className="text-sm font-semibold text-ink">Nenhuma busca monitorada</p>
+          <p className={`${subtle} mt-1 mx-auto max-w-md`}>
+            Na aba PCA, busque e use <strong>Salvar e monitorar</strong> — a própria busca vira o card de assinatura.
+          </p>
         </div>
       ) : (
         <div className="grid items-stretch gap-3 md:grid-cols-2">
@@ -5225,9 +5768,13 @@ function PcaWatchlistsPanel({ onPromoted }) {
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    <span className={metaChip}>
-                      WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
-                    </span>
+                    {w.whatsapp_enabled && w.whatsapp_number ? (
+                      <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}>
+                        Alertas · {w.whatsapp_number}
+                      </span>
+                    ) : (
+                      <span className={metaChip}>Alertas off</span>
+                    )}
                     <span className={metaChip}>
                       Sinais: {totalSinais.toLocaleString('pt-BR')}
                       {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
@@ -5260,8 +5807,14 @@ function PcaWatchlistsPanel({ onPromoted }) {
                   <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={btnSecondaryXs}>
                     {w.ativo ? 'Desativar' : 'Ativar'}
                   </button>
-                  <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => setWhatsappTarget(w)} className={btnSecondaryXs}>
-                    WhatsApp
+                  <button
+                    type="button"
+                    disabled={busy[`wa:${w.id}`]}
+                    onClick={() => setWhatsappTarget(w)}
+                    className={btnSecondaryXs}
+                    title="Alertas WhatsApp desta busca salva"
+                  >
+                    {w.whatsapp_enabled && w.whatsapp_number ? 'Alertas ✓' : 'Alertas'}
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -5290,7 +5843,7 @@ function PcaWatchlistsPanel({ onPromoted }) {
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
-            aria-label={`Sinais da watchlist ${resultsWatchlist.nome}`}
+            aria-label={`Sinais da busca ${resultsWatchlist.nome}`}
           >
             <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
               <div className="min-w-0">
@@ -5331,10 +5884,12 @@ function PcaWatchlistPage({ onPromoted }) {
     <div className="mt-6 space-y-5">
       <section className="rounded-[16px] border border-line bg-surf p-4 md:p-5">
         <div className="mb-1 max-w-3xl">
-          <h3 className={`${sectionTitle} text-base`}>Watchlists PCA</h3>
+          <h3 className={`${sectionTitle} text-base`}>Buscas monitoradas (PCA)</h3>
           <p className={`${subtle} mt-1.5 leading-relaxed`}>
-            Regras de monitoramento do <strong className="font-semibold text-ink">Plano de Contratações Anuais</strong> do governo.
-            Cada watchlist acompanha termos no PCA e gera sinais quando aparecem itens relevantes — clique no card para ver os resultados no popup.
+            Cada card é uma <strong className="font-semibold text-ink">busca salva</strong> no
+            {' '}<strong className="font-semibold text-ink">Plano de Contratações Anuais</strong>.
+            Termos + filtros da busca viram a assinatura; sinais aparecem quando o PCA tem itens novos.
+            Crie na aba PCA com “Salvar e monitorar”.
           </p>
         </div>
         <PcaWatchlistsPanel onPromoted={onPromoted} />
@@ -5443,11 +5998,11 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
       </div>
       {error && <div className="rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2.5 text-sm text-status-danger">{error}</div>}
       {loading ? (
-        <div className={`${subtle} py-8 text-center`}>Carregando watchlists…</div>
+        <div className={`${subtle} py-8 text-center`}>Carregando assinaturas…</div>
       ) : watchlists.length === 0 ? (
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
-          <p className="text-sm font-semibold text-ink">Nenhuma watchlist de editais</p>
-          <p className={`${subtle} mt-1 mx-auto max-w-md`}>Na Busca Editais, abra um job e use “Virar watchlist” para monitorar termos no PNCP.</p>
+          <p className="text-sm font-semibold text-ink">Nenhuma assinatura de editais</p>
+          <p className={`${subtle} mt-1 mx-auto max-w-md`}>Na Busca Editais, use <strong>Assinar</strong> no card do job — a busca vira assinatura (WhatsApp opcional para novidades).</p>
         </div>
       ) : (
         <div className="grid items-stretch gap-3 md:grid-cols-2">
@@ -5468,9 +6023,13 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    <span className={metaChip}>
-                      WhatsApp: {w.whatsapp_enabled && w.whatsapp_number ? w.whatsapp_number : 'off'}
-                    </span>
+                    {w.whatsapp_enabled && w.whatsapp_number ? (
+                      <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}>
+                        Alertas · {w.whatsapp_number}
+                      </span>
+                    ) : (
+                      <span className={metaChip}>Alertas off</span>
+                    )}
                     <span className={metaChip}>
                       Resultados: {totalSinais.toLocaleString('pt-BR')}
                       {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
@@ -5503,8 +6062,14 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                   <button type="button" disabled={busy[w.id]} onClick={() => toggleAtivo(w)} className={btnSecondaryXs}>
                     {w.ativo ? 'Desativar' : 'Ativar'}
                   </button>
-                  <button type="button" disabled={busy[`wa:${w.id}`]} onClick={() => setWhatsappTarget(w)} className={btnSecondaryXs}>
-                    WhatsApp
+                  <button
+                    type="button"
+                    disabled={busy[`wa:${w.id}`]}
+                    onClick={() => setWhatsappTarget(w)}
+                    className={btnSecondaryXs}
+                    title="Alertas WhatsApp"
+                  >
+                    {w.whatsapp_enabled && w.whatsapp_number ? 'Alertas ✓' : 'Alertas'}
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -5997,9 +6562,12 @@ function App() {
   // Confirmação de exclusão de job (substitui window.confirm nativo).
   const [pncpDeleteJobConfirm, setPncpDeleteJobConfirm] = useState(null); // { id, nome, total, terms, status, live }
   const [pncpDeleteJobBusy, setPncpDeleteJobBusy] = useState(false);
+  const [pncpWatchlistDialog, setPncpWatchlistDialog] = useState(null); // { source: 'job'|'search', jobId?, defaultName, contextLabel }
+  const [pncpWatchlistSaving, setPncpWatchlistSaving] = useState(false);
   const [pncpResultLocalQuery, setPncpResultLocalQuery] = useState('');
   const [pncpResultScope, setPncpResultScope] = useState('all');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
+  const [pncpJobResultsPageSize, setPncpJobResultsPageSize] = useState(25);
   const [pncpDebugControlId, setPncpDebugControlId] = useState('');
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
@@ -6017,12 +6585,29 @@ function App() {
     orgao_cnpj: '',
     uf: '',
     tipo: 'todos',
+    ordenacao: 'data_desc',
   });
-  const [pncpOutcomeResults, setPncpOutcomeResults] = useState({ items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
+  const [pncpOutcomeResults, setPncpOutcomeResults] = useState({
+    items: [],
+    total: 0,
+    pagina: 1,
+    totalPaginas: 1,
+    tamanhoPagina: 20,
+    summary: null,
+    requires_query: true,
+    complete: false,
+  });
   const [pncpOutcomeLoading, setPncpOutcomeLoading] = useState(false);
   const [pncpOutcomeError, setPncpOutcomeError] = useState('');
+  const [pncpOutcomePhase, setPncpOutcomePhase] = useState(null); // {stage: 'searching'|'enriching'|'done', label}
+  const pncpOutcomeSearchTokenRef = useRef(0);
+  // Snapshot dos filtros da busca ativa — ao voltar na aba, não re-dispara o PNCP.
+  const pncpOutcomeActiveQueryRef = useRef(null);
   const [pncpOutcomeDossier, setPncpOutcomeDossier] = useState(null);
+  const [pncpOutcomeDossierTarget, setPncpOutcomeDossierTarget] = useState(null);
   const [pncpOutcomeDossierLoading, setPncpOutcomeDossierLoading] = useState(false);
+  const [pncpOutcomeDossierError, setPncpOutcomeDossierError] = useState('');
+  const pncpOutcomeFiltersRef = useRef(pncpOutcomeFilters);
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
@@ -6055,6 +6640,7 @@ function App() {
   const [rfbPageSize, setRfbPageSize] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.pageSize || 10; } catch { return 10; } });
   const [rfbOrderBy, setRfbOrderBy] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.orderBy || 'razao_social'; } catch { return 'razao_social'; } });
   const [rfbLoading, setRfbLoading] = useState(false);
+  const [rfbHasSearched, setRfbHasSearched] = useState(false);
   const [rfbError, setRfbError] = useState(null);
   const rfbCacheRef = useRef({ results: [], total: 0, key: null });
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
@@ -6075,6 +6661,7 @@ function App() {
   const [trendsIntelError, setTrendsIntelError] = useState('');
   const [trendsPanelOpen, setTrendsPanelOpen] = useState(false);
   const [trendsRefreshing, setTrendsRefreshing] = useState(false);
+  const trendsRequestInFlightRef = useRef(null);
   const [leadExistingCNPJs, setLeadExistingCNPJs] = useState({});
   const [leadImportSettings, setLeadImportSettings] = useState({ defaultStage: '1. Inbox (Novos)', overwriteDuplicates: false });
   const [leadImportStatus, setLeadImportStatus] = useState(null);
@@ -6153,6 +6740,8 @@ function App() {
   const [notifPos, setNotifPos] = useState(null);
   const notifBtnRef = useRef(null);
   const notifPanelRef = useRef(null);
+  const [inboxNotifications, setInboxNotifications] = useState([]);
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Cross-filter da segmentação do Overview: cada dimensão selecionada filtra as outras.
   const [segFilter, setSegFilter] = useState({ uf: null, channel: null, label: null });
@@ -6238,6 +6827,63 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  const loadInboxNotifications = useCallback(() => {
+    if (!authStatus.authenticated) return Promise.resolve();
+    return Promise.all([
+      axios.get('/api/notifications', { params: { limit: 20 } }).then((r) => {
+        setInboxNotifications(Array.isArray(r.data?.items) ? r.data.items : []);
+      }).catch(() => {
+        setInboxNotifications([]);
+      }),
+      axios.get('/api/notifications/unread-count').then((r) => {
+        setInboxUnreadCount(Number(r.data?.count) || 0);
+      }).catch(() => {
+        setInboxUnreadCount(0);
+      }),
+    ]);
+  }, [authStatus.authenticated]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated) {
+      setInboxNotifications([]);
+      setInboxUnreadCount(0);
+      return undefined;
+    }
+    loadInboxNotifications();
+    const timer = setInterval(loadInboxNotifications, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadInboxNotifications();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    registerPushServiceWorker().catch(() => {});
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authStatus.authenticated, loadInboxNotifications]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || !('serviceWorker' in navigator)) return undefined;
+    const onMessage = (event) => {
+      const data = event?.data;
+      if (!data || data.type !== 'aerion-notification-click') return;
+      if (data.view) {
+        setActiveView(data.view);
+        if (data.sub) setLicitacaoSubview(data.sub);
+      }
+      if (data.job_id) {
+        try {
+          localStorage.setItem('pncp_active_search_job_id', String(data.job_id));
+        } catch {
+          /* ignore */
+        }
+      }
+      loadInboxNotifications();
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [authStatus.authenticated, loadInboxNotifications]);
 
   const loadUsers = useCallback(() => {
     setUsersLoading(true);
@@ -6616,22 +7262,168 @@ function App() {
 
   // Cache diário: 1ª abertura do dia gera no backend; reexpandir no mesmo dia só reutiliza.
   // force=true só com ?force=1 no backend (admin) — a UI normal nunca força regeneração.
-  const loadTrendsIntel = useCallback(async ({ force = false } = {}) => {
-    if (force) setTrendsRefreshing(true);
-    else setTrendsIntelLoading(true);
-    setTrendsIntelError('');
-    try {
-      const r = force
-        ? await axios.get('/api/trends/intel', { params: { force: 1 } })
-        : await axios.get('/api/trends/intel');
-      setTrendsIntel(r.data || null);
-    } catch (e) {
-      setTrendsIntelError(e.response?.data?.error || e.message || 'Falha ao carregar trends');
-    } finally {
-      setTrendsIntelLoading(false);
-      setTrendsRefreshing(false);
-    }
+  const loadTrendsIntel = useCallback(({ force = false } = {}) => {
+    if (trendsRequestInFlightRef.current && !force) return trendsRequestInFlightRef.current;
+
+    const request = (async () => {
+      if (force) setTrendsRefreshing(true);
+      else setTrendsIntelLoading(true);
+      setTrendsIntelError('');
+      try {
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          try {
+            const response = await axios.get('/api/trends/intel', {
+              params: { async: 1, ...(force ? { force: 1 } : {}) },
+            });
+            if (response.status !== 202 && response.data?.status !== 'processing') {
+              setTrendsIntel(response.data || null);
+              return response.data || null;
+            }
+            const retryAfter = Number(response.data?.retry_after_ms) || 2500;
+            await new Promise((resolve) => setTimeout(resolve, retryAfter));
+          } catch (error) {
+            const transientNetworkFailure = !error.response && attempt < 4;
+            if (!transientNetworkFailure) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+        }
+        throw new Error('A geração do Radar excedeu o tempo esperado. Tente recarregar.');
+      } catch (error) {
+        const networkMessage = !error.response
+          ? 'Não foi possível conectar ao serviço do Radar. Verifique se o backend está ativo e tente novamente.'
+          : null;
+        setTrendsIntelError(error.response?.data?.error || networkMessage || error.message || 'Falha ao carregar o Radar');
+        return null;
+      } finally {
+        setTrendsIntelLoading(false);
+        setTrendsRefreshing(false);
+      }
+    })();
+
+    trendsRequestInFlightRef.current = request;
+    request.finally(() => {
+      if (trendsRequestInFlightRef.current === request) trendsRequestInFlightRef.current = null;
+    });
+    return request;
   }, []);
+
+  // A página substitui o antigo accordion: entrar nela dispara a geração do dia
+  // e o backend devolve o mesmo cache nas próximas visitas.
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Radar Trends') return;
+    const today = brDayKeyClient();
+    if (trendsIntel?.day === today || trendsIntelLoading || trendsRefreshing) return;
+    loadTrendsIntel({ force: false });
+  }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const searchCompaniesFromTrendProfile = useCallback(async (suggestion) => {
+    const suggested = suggestion?.filters || {};
+    const nextFilters = {
+      cnpj: '',
+      nome: suggested.nome || '',
+      socio: '',
+      uf: suggested.uf || '',
+      municipio: '',
+      cnae: Array.isArray(suggested.cnae) ? suggested.cnae : [],
+      cnaeNot: [],
+      situacao: Array.isArray(suggested.situacao) && suggested.situacao.length ? suggested.situacao : ['2'],
+      porte: suggested.porte || '',
+      natureza: [],
+    };
+    const capitalRange = [Number(suggested.capital_min) || 0, Number(suggested.capital_max) || 0];
+    const aberturaRange = [Number(suggested.abertura_min_anos) || 0, Number(suggested.abertura_max_anos) || 0];
+    const onlyMatriz = suggested.only_matriz !== false;
+    const mei = suggested.mei || '';
+    const simples = suggested.simples || '';
+    const nextOps = { nome: 'contains', socio: 'contains' };
+
+    setRfbFilters(nextFilters);
+    setRfbOps(nextOps);
+    setRfbCapitalRange(capitalRange);
+    setRfbAberturaRange(aberturaRange);
+    setRfbOnlyMatriz(onlyMatriz);
+    setRfbMei(mei);
+    setRfbSimples(simples);
+    setRfbEndereco('');
+    setRfbEndereco2('');
+    setRfbNome2('');
+    setRfbSocio2('');
+    setRfbMunicipioInput('');
+    setRfbShowFilters(true);
+    setRfbPage(1);
+    setRfbError(null);
+    setActiveView('Busca Lead B2B');
+    setMobileNavOpen(false);
+
+    if ((suggested.cnae_labels || []).length) {
+      setRfbCnaes((previous) => {
+        const byCode = new Map(previous.map((cnae) => [cnae.codigo, cnae]));
+        suggested.cnae_labels.forEach((cnae) => {
+          if (cnae?.codigo && !byCode.has(cnae.codigo)) {
+            byCode.set(cnae.codigo, { codigo: cnae.codigo, descricao: cnae.descricao || cnae.codigo });
+          }
+        });
+        return Array.from(byCode.values());
+      });
+    }
+
+    const params = new URLSearchParams();
+    if (nextFilters.nome.trim()) {
+      params.set('nome', nextFilters.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim());
+      params.set('nome_op', 'contains');
+    }
+    if (nextFilters.uf) params.set('uf', nextFilters.uf);
+    if (nextFilters.cnae.length) params.set('cnae', nextFilters.cnae.join(','));
+    if (nextFilters.situacao.length) params.set('situacao', nextFilters.situacao.join(','));
+    if (nextFilters.porte) params.set('porte', nextFilters.porte);
+    if (capitalRange[0] > 0) params.set('capital_min', capitalRange[0]);
+    if (capitalRange[1] > 0) params.set('capital_max', capitalRange[1]);
+    if (aberturaRange[0] > 0) params.set('abertura_min_anos', aberturaRange[0]);
+    if (aberturaRange[1] > 0) params.set('abertura_max_anos', aberturaRange[1]);
+    if (!onlyMatriz) params.set('only_matriz', 'false');
+    if (mei) params.set('mei', mei);
+    if (simples) params.set('simples', simples);
+    params.set('page', 1);
+    params.set('page_size', 100);
+    params.set('order_by', rfbOrderBy);
+
+    setRfbShowFilters(false);
+    setRfbHasSearched(true);
+    setRfbLoading(true);
+    try {
+      const response = await axios.get(`/api/rfb/search?${params}`);
+      const results = response.data?.results || [];
+      const total = response.data?.total || 0;
+      rfbCacheRef.current = { results, total, key: null };
+      setRfbResults(results.slice(0, rfbPageSize));
+      setRfbTotal(total);
+      try {
+        localStorage.setItem('rfb_search', JSON.stringify({
+          filters: nextFilters,
+          ops: nextOps,
+          orderBy: rfbOrderBy,
+          pageSize: rfbPageSize,
+          capitalRange,
+          aberturaRange,
+          endereco: '',
+          enderecoOp: 'contains',
+          simples,
+          mei,
+          onlyMatriz,
+          cnaeOnlyPrincipal: false,
+        }));
+      } catch {}
+    } catch (requestError) {
+      const status = requestError.response?.status;
+      const message = requestError.response?.data?.error || requestError.message || 'Erro na busca.';
+      setRfbError(status === 504 ? 'Tempo limite excedido — refine o perfil e tente novamente.' : message);
+      setRfbResults([]);
+      setRfbTotal(0);
+      rfbCacheRef.current = { results: [], total: 0, key: null };
+    } finally {
+      setRfbLoading(false);
+    }
+  }, [rfbOrderBy, rfbPageSize]);
 
   useEffect(() => {
     if (activeView !== 'Busca Lead B2B' || !authStatus.authenticated) return;
@@ -7396,12 +8188,23 @@ function App() {
   }, [pncpSearchResults.items, getPncpResultVisibility]);
 
   const pncpVisibilityCounts = useMemo(() => {
-    return pncpResultsWithVisibility.reduce((acc, item) => {
+    // Ocultos = localStorage; pipeline = já no board — calculados na página carregada.
+    // "Todos" / total do job vêm do backend (tabela completa), senão o chip
+    // mostrava só o tamanho da página (25) com Classificados 36+.
+    const pageCounts = pncpResultsWithVisibility.reduce((acc, item) => {
       acc[item.__visibility] = (acc[item.__visibility] || 0) + 1;
       acc.all += 1;
       return acc;
     }, { all: 0, visible: 0, hidden: 0, pipeline: 0 });
-  }, [pncpResultsWithVisibility]);
+    const serverAll = Number(pncpSearchResults?.visibility_counts?.all || pncpSearchResults?.total || 0);
+    const jobTotal = Math.max(serverAll, Number(pncpSearchResults?.total || 0), pageCounts.all);
+    return {
+      all: jobTotal,
+      visible: Math.max(0, jobTotal - pageCounts.hidden - pageCounts.pipeline),
+      hidden: pageCounts.hidden,
+      pipeline: pageCounts.pipeline,
+    };
+  }, [pncpResultsWithVisibility, pncpSearchResults?.visibility_counts, pncpSearchResults?.total]);
 
   const visiblePncpResults = useMemo(() => {
     let list = pncpResultScope === 'all'
@@ -7431,7 +8234,18 @@ function App() {
 
   const pncpSearchSummary = useMemo(() => {
     const backendSummary = pncpSearchResults.summary || pncpSearchResults.pageSummary;
-    return backendSummary || createPncpUiSummary(pncpSearchResults.items || []);
+    const fromPage = createPncpUiSummary(pncpSearchResults.items || []);
+    if (!backendSummary) return fromPage;
+    // Backend deve trazer total_value da lista inteira (SUM no banco).
+    // Se ainda vier 0 (snapshot antigo) e a página já tem valores, não mostre R$ 0 enganoso —
+    // usa ao menos a soma da página até o próximo poll com SUM correto.
+    const backendValue = Number(backendSummary.total_value || 0);
+    const pageValue = Number(fromPage.total_value || 0);
+    return {
+      ...backendSummary,
+      count: Number(backendSummary.count || pncpSearchResults.total || fromPage.count || 0),
+      total_value: backendValue > 0 ? backendValue : pageValue,
+    };
   }, [pncpSearchResults]);
 
   const visiblePncpSummary = useMemo(() => createPncpUiSummary(visiblePncpResults), [visiblePncpResults]);
@@ -7457,6 +8271,166 @@ function App() {
       totalCollected: Number(progress.items_collected || activePncpSearchJob?.total || 0),
     };
   }, [activePncpSearchJob]);
+
+  /** Funil da coleta: universo PNCP → lidos brutos → classificados no job. */
+  const getPncpJobCollectionFunnel = useCallback((job, classifiedTotal = 0, extraTermRuns = null) => {
+    const termRuns = Array.isArray(extraTermRuns) && extraTermRuns.length
+      ? extraTermRuns
+      : (Array.isArray(job?.term_runs) && job.term_runs.length
+        ? job.term_runs
+        : (Array.isArray(job?.query_plan?.term_runs) ? job.query_plan.term_runs : []));
+    const searchRuns = termRuns.filter(r => r?.source !== 'pncp_consulta_complement');
+    // Por termo: usa a última execução (retomadas sobrescrevem o progresso).
+    const latestByTerm = new Map();
+    searchRuns.forEach((run) => {
+      const key = normalizeText(run?.term || '');
+      if (!key) return;
+      latestByTerm.set(key, run);
+    });
+    const latestRuns = [...latestByTerm.values()];
+    let universeApi = 0;
+    let brutosLidosSum = 0;
+    let uniqueNewSum = 0;
+    let duplicatesSum = 0;
+    let pagesDone = 0;
+    let pagesReq = 0;
+    latestRuns.forEach((run) => {
+      universeApi = Math.max(universeApi, Number(run.total_reported || 0));
+      brutosLidosSum += Number(run.items_collected || 0);
+      uniqueNewSum += Number(run.unique_new || 0);
+      duplicatesSum += Number(run.duplicates_skipped || 0);
+      pagesDone += Number(run.pages_completed || 0);
+      pagesReq += Number(run.pages_requested || 0);
+    });
+    // Termo principal = maior universo; também expomos o termo *atual* do job.
+    const mainRun = latestRuns.reduce((best, run) => (
+      Number(run.total_reported || 0) > Number(best?.total_reported || 0) ? run : best
+    ), null);
+    const currentTermName = job?.progress?.current_term || '';
+    const currentRun = currentTermName
+      ? latestRuns.find((r) => normalizeText(r.term) === normalizeText(currentTermName))
+      : null;
+    const mainRead = Number(mainRun?.items_collected || 0);
+    const mainUniverse = Number(mainRun?.total_reported || 0);
+    const mainPagesDone = Number(mainRun?.pages_completed || 0);
+    const mainPageSize = Number(mainRun?.observed_page_size || 0) || (mainRead && mainPagesDone ? Math.round(mainRead / mainPagesDone) : 0);
+    const mainPagesEst = mainUniverse > 0 && mainPageSize > 0
+      ? Math.ceil(mainUniverse / mainPageSize)
+      : null;
+    // Brutos “efetivos”: prefere unique_new (dedupe entre termos); fallback soma de lidos.
+    const sessionUnique = Number(job?.progress?.items_collected || job?.query_plan?.raw_unique_collected || 0);
+    const brutosLidos = sessionUnique > 0
+      ? sessionUnique
+      : (uniqueNewSum > 0 ? uniqueNewSum : (mainRead || brutosLidosSum));
+    const classified = Number(classifiedTotal || job?.total || 0);
+    const statusFilter = String(job?.filters?.status || 'recebendo_proposta');
+    const isOpenOnly = normalizeText(statusFilter) === 'recebendo_proposta';
+    const gate = job?.progress?.gate || null;
+    return {
+      universeApi: mainUniverse || universeApi,
+      brutosLidos,
+      brutosLidosSum,
+      uniqueNewSum,
+      duplicatesSum,
+      classified,
+      pagesDone: mainPagesDone || pagesDone,
+      pagesReq,
+      pagesEst: mainPagesEst,
+      pageSize: mainPageSize,
+      mainTerm: mainRun?.term || job?.filters?.q || job?.nome || '',
+      mainStop: mainRun?.stop_reason || null,
+      currentTerm: currentTermName || null,
+      currentRead: currentRun ? Number(currentRun.items_collected || 0) : null,
+      currentUniverse: currentRun ? Number(currentRun.total_reported || 0) : null,
+      currentUnique: currentRun ? Number(currentRun.unique_new || 0) : Number(job?.progress?.current_term_unique_new || 0) || null,
+      currentDuplicates: currentRun ? Number(currentRun.duplicates_skipped || 0) : Number(job?.progress?.current_term_duplicates || 0) || null,
+      isOpenOnly,
+      statusFilter,
+      resumePage: job?.progress?.resume_from_page || null,
+      resumeInMs: Number(job?.progress?.resume_in_ms || 0) || null,
+      checkpoint: Boolean(job?.progress?.checkpoint || job?.progress?.checkpoint_mode || job?.progress?.resumed),
+      gate,
+      coveragePct: mainUniverse > 0
+        ? Math.min(100, Math.round((mainRead / mainUniverse) * 100))
+        : null,
+      classifyPct: brutosLidos > 0
+        ? Math.min(100, Math.round((classified / brutosLidos) * 100))
+        : null,
+    };
+  }, []);
+
+  const formatPncpStopReason = (reason) => {
+    const map = {
+      rate_limited: 'Limite PNCP (pausou)',
+      total_reached: 'Varreu o universo da API',
+      short_page: 'Última página (menor que o tamanho)',
+      empty_page: 'Página vazia',
+      page_error: 'Erro na página',
+      page_error_partial: 'Erro com coleta parcial',
+      max_pages: 'Teto de páginas',
+      target_reached: 'Meta de itens',
+      cancelled: 'Cancelado',
+      slice_yield: 'Cedeu a vez (rodízio)',
+    };
+    const key = String(reason || '');
+    return map[key] || (key ? key.replace(/_/g, ' ') : '—');
+  };
+
+  /** Traduz erros técnicos do PNCP/curl para texto humano (tooltip guarda o original). */
+  const formatPncpRunError = (raw) => {
+    const text = String(raw || '').trim();
+    if (!text) return '—';
+    const lower = text.toLowerCase();
+    if (/curl exit 56|recv failure|econnreset|connection reset|socket hang/.test(lower)) {
+      return 'PNCP cortou a conexão (throttle) — pausa e retoma sem recomeçar';
+    }
+    if (/curl exit 28|etimedout|timed out|timeout/.test(lower)) {
+      return 'PNCP demorou demais (timeout) — retoma depois';
+    }
+    if (/curl exit 52|empty reply/.test(lower)) {
+      return 'PNCP respondeu vazio — possível freio de cota';
+    }
+    if (/429|rate.?limit|too many/.test(lower)) {
+      return 'PNCP recusou por limite de requisições';
+    }
+    // Mantém legível: corta stderr longo
+    return text.length > 90 ? `${text.slice(0, 87)}…` : text;
+  };
+
+  const formatPncpResumeCountdown = (resumeInMs, updatedAt) => {
+    const base = Number(resumeInMs) || 0;
+    if (base <= 0) return null;
+    const updatedTs = updatedAt
+      ? (typeof updatedAt === 'number' ? updatedAt : Date.parse(updatedAt))
+      : Date.now();
+    const elapsed = Number.isFinite(updatedTs) ? Math.max(0, Date.now() - updatedTs) : 0;
+    const left = Math.max(0, base - elapsed);
+    if (left <= 0) return 'retomando em instantes';
+    const mins = Math.floor(left / 60000);
+    const secs = Math.floor((left % 60000) / 1000);
+    if (mins >= 1) return `retoma em ~${mins} min ${secs > 0 ? `${secs}s` : ''}`.trim();
+    return `retoma em ~${secs}s`;
+  };
+
+  const formatPncpGateLabel = (gate) => {
+    if (!gate || typeof gate !== 'object') return null;
+    const paused = Number(gate.paused_for_ms || 0) > 0 || (gate.paused_until && Date.parse(gate.paused_until) > Date.now());
+    const gap = Number(gate.gap_ms || 0);
+    const budget = Number(gate.budget_tokens || 0);
+    const cap = Number(gate.budget_capacity || 0);
+    if (paused) return { label: 'Gate pausado', tone: 'amber' };
+    if (gap >= 4000 || Number(gate.fail_streak || 0) >= 2) return { label: `Gate freando · gap ${gap}ms`, tone: 'amber' };
+    if (cap > 0 && budget < cap * 0.3) return { label: `Orçamento baixo · ${budget}/${cap}`, tone: 'amber' };
+    return { label: `Gate ok · gap ${gap || '—'}ms`, tone: 'emerald' };
+  };
+
+  const formatPncpStatusFilterLabel = (status) => {
+    const s = normalizeText(status || '');
+    if (s === 'recebendo_proposta') return 'Só recebendo proposta (filtro local)';
+    if (s === 'todos' || !s) return 'Todos os status';
+    if (s === 'suspensa' || s === 'suspenso') return 'Suspensas';
+    return String(status || 'n/d');
+  };
 
   const getPncpJobStatusMeta = (status) => {
     const normalized = String(status || 'queued');
@@ -8092,57 +9066,77 @@ function App() {
   };
 
   // Buscar editais/licitações no PNCP
-  const applyPncpJobSnapshot = (job) => {
+  // resetScope: só ao abrir o job (poll ao vivo não deve resetar filtro/escopo do usuário).
+  const applyPncpJobSnapshot = (job, { resetScope = false } = {}) => {
     if (!job) return;
-    setPncpSearchResults({
-      items: Array.isArray(job.items) ? job.items : (pncpSearchResults.items || []),
-      total: Number(job.total || job.items?.length || pncpSearchResults.total || 0),
-      pagina: pncpSearchResults.pagina || 1,
-      tamanhoPagina: pncpSearchResults.tamanhoPagina || 25,
-      totalPaginas: pncpSearchResults.totalPaginas || 1,
-      termosUsados: job.terms || [],
-      termosNegativos: job.negative_terms || [],
-      fonteIA: job.suggested_positive_terms?.length ? 'IA + termos aceitos' : null,
-      summary: job.summary || null,
-      query_plan: job.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
-      diagnostics: {
-        aiRequested: true,
-        aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
-        jobStatus: job.status,
-      },
+    setPncpSearchResults(prev => {
+      const nextTotal = Number(job.total || 0) || Number(prev.total || 0) || 0;
+      return {
+        ...prev,
+        // Não zera a lista quando o job está em 'queued' entre retomadas (items=[]).
+        // A lista canônica vem de loadPncpJobResults; aqui só preservamos se ainda não houver página.
+        items: (Array.isArray(prev.items) && prev.items.length)
+          ? prev.items
+          : (Array.isArray(job.items) ? job.items : []),
+        total: nextTotal || (Array.isArray(job.items) ? job.items.length : 0) || Number(prev.total || 0),
+        pagina: prev.pagina || 1,
+        tamanhoPagina: prev.tamanhoPagina || 25,
+        totalPaginas: prev.totalPaginas || Math.max(1, Math.ceil((nextTotal || 1) / 25)),
+        termosUsados: job.terms || prev.termosUsados || [],
+        termosNegativos: job.negative_terms || prev.termosNegativos || [],
+        fonteIA: job.suggested_positive_terms?.length ? 'IA + termos aceitos' : (prev.fonteIA || null),
+        summary: job.summary || prev.summary || null,
+        query_plan: job.query_plan || prev.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
+        diagnostics: {
+          aiRequested: true,
+          aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
+          jobStatus: job.status,
+        },
+      };
     });
-    setPncpResultScope('all');
-    setShowPncpHidden(false);
+    if (resetScope) {
+      setPncpResultScope('all');
+      setShowPncpHidden(false);
+    }
   };
 
   const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
     if (!jobId) return null;
     const effectivePage = Math.max(1, Number(page) || 1);
     const effectiveScope = overrides.scope || (pncpResultScope === 'hidden' || pncpResultScope === 'pipeline' ? 'all' : pncpResultScope);
+    const effectiveTam = Math.max(5, Math.min(100, Number(overrides.tam || pncpJobResultsPageSize || 25) || 25));
     const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}/results`, {
       params: {
         pagina: effectivePage,
-        tam: 25,
+        tam: effectiveTam,
         ordenacao: overrides.ordenacao || pncpSearchFilters.ordenacao,
         scope: effectiveScope,
       },
     });
     const payload = response.data || {};
     const total = Number(payload.total || 0);
+    const visCounts = payload.visibility_counts || null;
     setPncpJobResultsPage(effectivePage);
+    if (Number(payload.tamanhoPagina || effectiveTam) !== pncpJobResultsPageSize) {
+      setPncpJobResultsPageSize(Number(payload.tamanhoPagina || effectiveTam));
+    }
     setPncpSearchResults(prev => ({
       ...prev,
-      items: Array.isArray(payload.items) ? payload.items : [],
-      total,
+      items: Array.isArray(payload.items) ? payload.items : (prev.items || []),
+      total: total || Number(visCounts?.all || prev.total || 0),
       pagina: Number(payload.pagina || effectivePage),
-      tamanhoPagina: Number(payload.tamanhoPagina || 25),
+      tamanhoPagina: Number(payload.tamanhoPagina || effectiveTam),
       totalPaginas: Number(payload.totalPaginas || 1),
       summary: payload.summary || prev.summary || null,
+      // Contagens canônicas do banco (não da página de 25 itens).
+      visibility_counts: visCounts || prev.visibility_counts || null,
+      collection: payload.collection || prev.collection || null,
     }));
     // Mantém o card alinhado ao total real da tabela de resultados (mesma fonte do popup).
-    if (jobId && Number.isFinite(total)) {
+    const canonicalTotal = total || Number(visCounts?.all || 0);
+    if (jobId && Number.isFinite(canonicalTotal) && canonicalTotal > 0) {
       setPncpSearchJobs(prev => prev.map(job => (
-        String(job.id) === String(jobId) ? { ...job, total } : job
+        String(job.id) === String(jobId) ? { ...job, total: canonicalTotal } : job
       )));
     }
     return payload;
@@ -8170,7 +9164,7 @@ function App() {
       setPncpJobModalTab('resultados');
       setPncpJobFiltersEditing(false);
       seedPncpJobFilterDraft(response.data?.filters || {});
-      applyPncpJobSnapshot(response.data);
+      applyPncpJobSnapshot(response.data, { resetScope: true });
       setPncpSearchJobs(prev => {
         const next = {
           id: jobId,
@@ -8196,8 +9190,10 @@ function App() {
         if (!exists) return [next, ...prev].slice(0, 20);
         return prev.map(j => String(j.id) === String(jobId) ? { ...j, ...next } : j);
       });
-      await loadPncpJobResults(jobId, 1);
+      // Abre o popup imediatamente com o snapshot do job; a paginação do banco
+      // (que pode esperar o gate do PNCP para enriquecer valores) atualiza depois.
       if (openModal) setPncpJobModalOpen(true);
+      await loadPncpJobResults(jobId, 1).catch(err => console.warn('Erro ao paginar resultados do job:', err?.message));
       try {
         localStorage.setItem('pncp_active_search_job_id', jobId);
       } catch {}
@@ -8320,16 +9316,67 @@ function App() {
   // Alias usado pelos botões do card/modal (abre o diálogo, não exclui direto).
   const deletePncpSearchJob = requestDeletePncpSearchJob;
 
-  const convertPncpSearchJobToWatchlist = async (jobId) => {
+  const convertPncpSearchJobToWatchlist = (jobId) => {
     if (!jobId) return;
-    const name = window.prompt('Nome da watchlist:', pncpSearchFilters.q || 'Watchlist PNCP');
-    if (name === null) return;
+    const job = pncpSearchJobs.find(item => String(item.id) === String(jobId))
+      || (String(activePncpSearchJobId) === String(jobId) ? activePncpSearchJob : null);
+    const contextLabel = job?.filters?.q || pncpSearchFilters.q || 'Busca PNCP';
+    setPncpWatchlistDialog({
+      source: 'job',
+      jobId,
+      defaultName: job?.nome || contextLabel || 'Busca PNCP',
+      contextLabel,
+      alreadySubscribed: Boolean(job?.watchlist_id),
+      initialWhatsappEnabled: Boolean(job?.whatsapp_enabled || job?.alerts_enabled),
+      initialWhatsappNumber: job?.whatsapp_number || '',
+    });
+  };
+
+  const closePncpWatchlistDialog = () => {
+    if (!pncpWatchlistSaving) setPncpWatchlistDialog(null);
+  };
+
+  const confirmPncpWatchlist = async (values) => {
+    const draft = pncpWatchlistDialog;
+    if (!draft) return;
+    setPncpWatchlistSaving(true);
     try {
-      await axios.post(`/api/licitacoes/pncp/search/deep/${jobId}/watchlist`, { nome: name });
-      await loadPncpSearchJobs();
-      setLicitacaoSubview('editais_watchlist');
+      if (draft.source === 'job') {
+        await axios.post(`/api/licitacoes/pncp/search/deep/${draft.jobId}/watchlist`, values);
+        setPncpWatchlistDialog(null);
+        await loadPncpSearchJobs();
+        // Mantém na aba de buscas — o card *é* a assinatura; não força ir para watchlists.
+        if (String(activePncpSearchJobId) === String(draft.jobId)) {
+          await openPncpSearchJob(draft.jobId, { refreshJobs: false, openModal: pncpJobModalOpen });
+        }
+      } else {
+        const term = String(pncpSearchFilters.q || '').trim();
+        await axios.post('/api/licitacoes/editais/watchlist', {
+          ...values,
+          palavras_chave: Array.from(new Set([term, ...pncpAcceptedPositiveTerms])).filter(Boolean),
+          termos_negativos: Array.from(new Set([...(splitTermsInput(pncpSearchFilters.negative_terms || '')), ...pncpAcceptedNegativeTerms])).filter(Boolean),
+          usar_ia: pncpSearchFilters.usar_ia,
+          filtros: {
+            tipos_documento: pncpSearchFilters.tipos_documento,
+            status: pncpSearchFilters.status,
+            modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id,
+            tipo_id: pncpSearchFilters.tipo_id,
+            modo_disputa_id: pncpSearchFilters.modo_disputa_id,
+            uf: pncpSearchFilters.uf,
+            esfera_id: pncpSearchFilters.esfera_id,
+            orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
+            unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
+            ordenacao: pncpSearchFilters.ordenacao,
+          },
+        });
+        setPncpWatchlistDialog(null);
+        await loadPncpSearchJobs();
+        setLicitacaoSubview('editais_watchlist');
+      }
     } catch (error) {
       alert(`Erro: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setPncpWatchlistSaving(false);
     }
   };
 
@@ -8493,51 +9540,698 @@ function App() {
     }
   };
 
-  const runPncpOutcomeSearch = async (page = 1, overrides = {}) => {
-    setPncpOutcomeLoading(true);
-    setPncpOutcomeError('');
-    const effectiveFilters = { ...pncpOutcomeFilters, ...overrides };
-    try {
-      const response = await axios.get('/api/licitacoes/pncp/resultados/search', {
-        params: {
-          q: effectiveFilters.q || undefined,
-          fornecedor: effectiveFilters.fornecedor || undefined,
-          fornecedor_ni: effectiveFilters.fornecedor_ni || undefined,
-          orgao_cnpj: effectiveFilters.orgao_cnpj || undefined,
-          uf: effectiveFilters.uf || undefined,
-          tipo: effectiveFilters.tipo || 'todos',
-          pagina: page,
-          tam: 20,
-          refresh: page === 1 ? 'true' : undefined,
-        },
+  useEffect(() => {
+    pncpOutcomeFiltersRef.current = pncpOutcomeFilters;
+  }, [pncpOutcomeFilters]);
+
+  const sortPncpOutcomeItems = (items, ordenacao) => {
+    const value = (item) => Number(item.valor_homologado || item.valor_estimado || 0);
+    const date = (item) => new Date(item.data_publicacao || item.data_assinatura || item.data_resultado || 0).getTime();
+    const arr = [...items];
+    if (ordenacao === 'valor_desc') arr.sort((a, b) => value(b) - value(a));
+    else if (ordenacao === 'valor_asc') arr.sort((a, b) => value(a) - value(b));
+    else if (ordenacao === 'data_asc') arr.sort((a, b) => date(a) - date(b));
+    else if (ordenacao !== 'relevancia') arr.sort((a, b) => date(b) - date(a));
+    return arr;
+  };
+
+  const mergePncpOutcomeItems = (items) => {
+    const merged = new Map();
+    items.forEach((item, index) => {
+      const purchaseKey = item.orgao_cnpj && item.ano && item.sequencial
+        ? `${String(item.orgao_cnpj).replace(/\D/g, '')}/${item.ano}/${Number(item.sequencial)}`
+        : null;
+      const key = purchaseKey || item.pncp_key || item.url || `row-${index}`;
+      const current = merged.get(key);
+      if (!current) {
+        merged.set(key, item);
+        return;
+      }
+      const fornecedores = [...(current.fornecedores || []), ...(item.fornecedores || [])]
+        .filter((row, supplierIndex, rows) => rows.findIndex(candidate => (
+          (row?.ni && candidate?.ni === row.ni) || (!row?.ni && row?.nome && candidate?.nome === row.nome)
+        )) === supplierIndex);
+      merged.set(key, {
+        ...current,
+        ...item,
+        has_result: current.has_result === true || item.has_result === true,
+        has_contract: current.has_contract === true || item.has_contract === true,
+        has_ata: current.has_ata === true || item.has_ata === true,
+        fornecedores,
       });
-      setPncpOutcomeResults(response.data || { items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
-    } catch (error) {
-      console.error('Error searching PNCP outcomes:', error);
-      setPncpOutcomeError(error.response?.data?.error || error.message || 'Erro ao buscar resultados/contratos PNCP.');
-      setPncpOutcomeResults({ items: [], total: 0, pagina: 1, totalPaginas: 1, summary: null });
-    } finally {
-      setPncpOutcomeLoading(false);
+    });
+    return [...merged.values()];
+  };
+
+  const summarizePncpOutcomeItems = (items) => items.reduce((acc, item) => {
+    const value = Number(item.valor_homologado || item.valor_estimado || 0);
+    acc.total_value += Number.isFinite(value) ? value : 0;
+    return acc;
+  }, { count: items.length, total_value: 0 });
+
+  const pncpOutcomeItemKey = (item) => (item.doc_ids
+    ? `${item.doc_ids.cnpj}/${item.doc_ids.ano}/${Number(item.doc_ids.sequencial)}`
+    : item.pncp_key || item.numero_controle_pncp || null);
+
+  const PNCP_OUTCOME_FETCH_TAM = 50; // máximo do backend; menos idas ao PNCP
+  const PNCP_OUTCOME_VIEW_TAM = 20; // paginação só no cliente (sem re-fetch)
+  const PNCP_OUTCOME_MAX_PAGES_PER_TIPO = 100; // teto de segurança (~5k docs)
+  const PNCP_OUTCOME_STORAGE_KEY = 'pncp_outcome_search_v1';
+  // Retomadas de rate-limit (como o job de editais): não desiste até o total
+  // prometido ou cancelamento do usuário (Limpar / nova Busca).
+  const PNCP_OUTCOME_MAX_THROTTLE_PAUSES = 40;
+
+  const readPncpOutcomeCheckpoint = () => {
+    try {
+      const raw = sessionStorage.getItem(PNCP_OUTCOME_STORAGE_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') return null;
+      return data;
+    } catch {
+      return null;
     }
   };
 
-  const openPncpOutcomeDossier = async (item) => {
+  const writePncpOutcomeCheckpoint = (snapshot) => {
+    try {
+      if (!snapshot) {
+        sessionStorage.removeItem(PNCP_OUTCOME_STORAGE_KEY);
+        return;
+      }
+      // Cap de itens no storage para não estourar a cota (~5MB).
+      const items = Array.isArray(snapshot.items) ? snapshot.items.slice(0, 2500) : [];
+      sessionStorage.setItem(PNCP_OUTCOME_STORAGE_KEY, JSON.stringify({
+        ...snapshot,
+        items,
+        updatedAt: Date.now(),
+      }));
+    } catch (err) {
+      // quota / private mode — segue só em memória
+      console.warn('[resultados] checkpoint não persistiu:', err?.message || err);
+    }
+  };
+
+  const clearPncpOutcomeCheckpoint = () => {
+    try { sessionStorage.removeItem(PNCP_OUTCOME_STORAGE_KEY); } catch {}
+  };
+
+  const publishPncpOutcomeResults = (merged, {
+    total,
+    pagina,
+    complete = false,
+    keepPage = false,
+    status = null,
+  } = {}) => {
+    const viewTam = PNCP_OUTCOME_VIEW_TAM;
+    const totalPaginas = Math.max(1, Math.ceil(merged.length / viewTam));
+    setPncpOutcomeResults(prev => {
+      const desired = keepPage
+        ? (prev.pagina || 1)
+        : Math.max(1, Number(pagina) || 1);
+      const clampedPage = Math.min(desired, totalPaginas);
+      return {
+        items: merged,
+        total: Number(total) || merged.length,
+        pagina: clampedPage,
+        tamanhoPagina: viewTam,
+        totalPaginas,
+        summary: summarizePncpOutcomeItems(merged),
+        requires_query: false,
+        complete: Boolean(complete),
+        status: status || prev.status || (complete ? 'done' : 'running'),
+      };
+    });
+  };
+
+  // Paginação local: não chama o PNCP de novo.
+  const setPncpOutcomeClientPage = useCallback((page) => {
+    setPncpOutcomeResults(prev => {
+      const viewTam = prev.tamanhoPagina || PNCP_OUTCOME_VIEW_TAM;
+      const totalPaginas = Math.max(1, Math.ceil((prev.items || []).length / viewTam));
+      const next = Math.max(1, Math.min(totalPaginas, Number(page) || 1));
+      if (next === prev.pagina) return prev;
+      return { ...prev, pagina: next, totalPaginas };
+    });
+  }, []);
+
+  // Busca completa e progressiva, com o mesmo espírito dos jobs de editais:
+  //  - puxa TODAS as páginas (priority interactive no gate)
+  //  - em 429/reset: pausa, mantém o parcial, retoma a MESMA página
+  //  - checkpoint em sessionStorage (sobrevive refresh / troca de aba)
+  //  - só marca complete quando o total prometido foi coberto (ou PNCP esgotou)
+  const runPncpOutcomeSearch = useCallback(async (overrides = {}, options = {}) => {
+    const resume = Boolean(options.resume);
+    const token = ++pncpOutcomeSearchTokenRef.current;
+    const checkpoint = resume ? readPncpOutcomeCheckpoint() : null;
+    const effectiveFilters = resume && checkpoint?.filters
+      ? { ...checkpoint.filters, ...overrides }
+      : { ...pncpOutcomeFiltersRef.current, ...overrides };
+    const tipo = effectiveFilters.tipo || 'todos';
+    const ordenacao = effectiveFilters.ordenacao || 'data_desc';
+    setPncpOutcomeError('');
+    const hasCriteria = Boolean(
+      String(effectiveFilters.q || '').trim()
+      || String(effectiveFilters.fornecedor || '').trim()
+      || String(effectiveFilters.fornecedor_ni || '').trim()
+      || String(effectiveFilters.orgao_cnpj || '').trim()
+      || String(effectiveFilters.uf || '').trim()
+      || (tipo && tipo !== 'todos')
+    );
+    if (!hasCriteria) {
+      pncpOutcomeActiveQueryRef.current = null;
+      clearPncpOutcomeCheckpoint();
+      setPncpOutcomeLoading(false);
+      setPncpOutcomePhase(null);
+      setPncpOutcomeResults({
+        items: [],
+        total: 0,
+        pagina: 1,
+        totalPaginas: 1,
+        tamanhoPagina: PNCP_OUTCOME_VIEW_TAM,
+        summary: null,
+        requires_query: true,
+        complete: false,
+        status: null,
+      });
+      return;
+    }
+
+    const filtersSnapshot = {
+      q: String(effectiveFilters.q || '').trim(),
+      fornecedor: String(effectiveFilters.fornecedor || '').trim(),
+      fornecedor_ni: String(effectiveFilters.fornecedor_ni || '').trim(),
+      orgao_cnpj: String(effectiveFilters.orgao_cnpj || '').trim(),
+      uf: String(effectiveFilters.uf || '').trim(),
+      tipo,
+      ordenacao,
+    };
+    pncpOutcomeActiveQueryRef.current = filtersSnapshot;
+    // Restaura filtros na UI ao retomar de um checkpoint.
+    if (resume && checkpoint?.filters) {
+      setPncpOutcomeFilters(prev => ({ ...prev, ...filtersSnapshot }));
+      pncpOutcomeFiltersRef.current = { ...pncpOutcomeFiltersRef.current, ...filtersSnapshot };
+    }
+    // Busca nova (não-resume): descarta checkpoint antigo para não misturar cursores.
+    if (!resume) clearPncpOutcomeCheckpoint();
+
+    const tipos = tipo === 'todos' ? ['contrato', 'ata', 'resultado'] : [tipo];
+    let merged = resume && Array.isArray(checkpoint?.items)
+      ? mergePncpOutcomeItems(checkpoint.items)
+      : [];
+    let reportedTotal = resume ? Number(checkpoint?.reportedTotal || 0) : 0;
+    let lastGateGapMs = Number(checkpoint?.gateGapMs || 950);
+    // Em resume, mantém o contador de pausas; em busca nova, zera.
+    let throttlePauses = resume ? Number(checkpoint?.throttlePauses || 0) : 0;
+    // Cursor por tipo: nextPage / total prometido / done.
+    const cursors = {};
+    tipos.forEach(t => {
+      const saved = checkpoint?.cursors?.[t];
+      cursors[t] = {
+        nextPage: Math.max(1, Number(saved?.nextPage) || 1),
+        total: Math.max(0, Number(saved?.total) || 0),
+        totalPages: Math.max(0, Number(saved?.totalPages) || 0),
+        itemsSeen: Math.max(0, Number(saved?.itemsSeen) || 0),
+        done: Boolean(saved?.done),
+      };
+    });
+    const attempted = new Set(
+      Array.isArray(checkpoint?.attemptedKeys) ? checkpoint.attemptedKeys : []
+    );
+
+    setPncpOutcomeLoading(true);
+    if (!resume || !merged.length) {
+      setPncpOutcomeResults({
+        items: merged,
+        total: reportedTotal,
+        pagina: 1,
+        totalPaginas: Math.max(1, Math.ceil(merged.length / PNCP_OUTCOME_VIEW_TAM)),
+        tamanhoPagina: PNCP_OUTCOME_VIEW_TAM,
+        summary: merged.length ? summarizePncpOutcomeItems(merged) : null,
+        requires_query: false,
+        complete: false,
+        status: 'running',
+      });
+    } else {
+      publishPncpOutcomeResults(merged, {
+        total: Math.max(reportedTotal, merged.length),
+        keepPage: true,
+        complete: false,
+        status: 'running',
+      });
+    }
+
+    const persistCheckpoint = (status = 'running') => {
+      writePncpOutcomeCheckpoint({
+        filters: filtersSnapshot,
+        items: merged,
+        cursors,
+        reportedTotal,
+        gateGapMs: lastGateGapMs,
+        throttlePauses,
+        attemptedKeys: [...attempted].slice(-2000),
+        complete: status === 'done',
+        status,
+      });
+    };
+
+    const pushState = (opts = {}) => {
+      const sorted = sortPncpOutcomeItems(merged, pncpOutcomeFiltersRef.current.ordenacao || ordenacao);
+      merged = sorted;
+      publishPncpOutcomeResults(merged, {
+        total: Math.max(reportedTotal, merged.length),
+        pagina: opts.pagina || 1,
+        complete: Boolean(opts.complete),
+        keepPage: opts.keepPage !== false && !opts.resetPage,
+        status: opts.status || (opts.complete ? 'done' : 'running'),
+      });
+      persistCheckpoint(opts.complete ? 'done' : (opts.status || 'running'));
+    };
+
+    const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const waitWhileCancelled = async (ms, label) => {
+      const until = Date.now() + Math.max(0, ms);
+      while (Date.now() < until) {
+        if (pncpOutcomeSearchTokenRef.current !== token) return false;
+        const left = until - Date.now();
+        if (label) {
+          setPncpOutcomePhase({
+            stage: 'paused_rate_limit',
+            label,
+            loaded: merged.length,
+            total: reportedTotal || undefined,
+            resumeInMs: left,
+          });
+        }
+        await sleepMs(Math.min(1000, Math.max(200, left)));
+      }
+      return pncpOutcomeSearchTokenRef.current === token;
+    };
+
+    // Uma página do PNCP com retry/backoff no mesmo espírito do deep job.
+    const fetchOutcomePage = async (tipoDoc, page) => {
+      let attempt = 0;
+      for (;;) {
+        if (pncpOutcomeSearchTokenRef.current !== token) return null;
+        try {
+          const response = await axios.get('/api/licitacoes/pncp/resultados/search', {
+            params: {
+              q: effectiveFilters.q || undefined,
+              fornecedor: effectiveFilters.fornecedor || undefined,
+              fornecedor_ni: effectiveFilters.fornecedor_ni || undefined,
+              orgao_cnpj: effectiveFilters.orgao_cnpj || undefined,
+              uf: effectiveFilters.uf || undefined,
+              tipo: tipoDoc,
+              ordenacao,
+              pagina: page,
+              tam: PNCP_OUTCOME_FETCH_TAM,
+              enrich: 'false',
+              live_only: tipoDoc === 'resultado' ? undefined : 'true',
+            },
+            // 503 de rate-limit é esperado; não joga no interceptor genérico.
+            validateStatus: (s) => (s >= 200 && s < 300) || s === 503 || s === 502,
+          });
+          const data = response.data || {};
+          if (data.gate?.gap_ms) lastGateGapMs = Number(data.gate.gap_ms) || lastGateGapMs;
+
+          if (response.status === 503 || data.rate_limited) {
+            throttlePauses += 1;
+            if (throttlePauses > PNCP_OUTCOME_MAX_THROTTLE_PAUSES) {
+              throw new Error(data.error || 'PNCP limitou as requisições por tempo demais');
+            }
+            const retryAfter = Math.min(
+              6 * 60 * 1000,
+              Math.max(
+                15_000,
+                Number(data.retry_after_ms)
+                  || Number(data.gate?.paused_for_ms)
+                  || Math.round(lastGateGapMs * 20)
+                  || 45_000
+              )
+            );
+            const mins = Math.max(1, Math.ceil(retryAfter / 60000));
+            pushState({ keepPage: true, status: 'paused_rate_limit' });
+            setPncpOutcomeError('');
+            const ok = await waitWhileCancelled(
+              retryAfter,
+              `PNCP limitou as requisições — pausado ~${mins} min, retoma sozinho (parcial salvo)`
+            );
+            if (!ok) return null;
+            attempt += 1;
+            continue; // mesma página
+          }
+
+          if (response.status >= 400) {
+            // Erro transitório (rede/502): backoff e tenta de novo a mesma página.
+            attempt += 1;
+            if (attempt > 6) {
+              throw new Error(data.error || data.details || `HTTP ${response.status}`);
+            }
+            const backoff = Math.min(60_000, 2000 * (2 ** Math.min(attempt, 4)));
+            pushState({ keepPage: true, status: 'paused_rate_limit' });
+            const ok = await waitWhileCancelled(
+              backoff,
+              `Falha temporária no PNCP — nova tentativa em ${Math.ceil(backoff / 1000)}s (parcial salvo)`
+            );
+            if (!ok) return null;
+            continue;
+          }
+
+          return data;
+        } catch (error) {
+          if (pncpOutcomeSearchTokenRef.current !== token) return null;
+          const payload = error?.response?.data || {};
+          const isThrottle = payload.rate_limited
+            || error?.response?.status === 503
+            || /429|rate.?limit|reset|econnreset|timed?\s*out/i.test(String(error?.message || payload.details || ''));
+          attempt += 1;
+          throttlePauses += isThrottle ? 1 : 0;
+          if (throttlePauses > PNCP_OUTCOME_MAX_THROTTLE_PAUSES || attempt > 8) {
+            throw error;
+          }
+          const retryAfter = Math.min(
+            6 * 60 * 1000,
+            Math.max(
+              isThrottle ? 20_000 : 3_000,
+              Number(payload.retry_after_ms)
+                || Number(payload.gate?.paused_for_ms)
+                || (isThrottle ? 45_000 : 2000 * (2 ** Math.min(attempt, 4)))
+            )
+          );
+          pushState({ keepPage: true, status: 'paused_rate_limit' });
+          setPncpOutcomeError('');
+          const ok = await waitWhileCancelled(
+            retryAfter,
+            isThrottle
+              ? `PNCP limitou as requisições — pausado ~${Math.max(1, Math.ceil(retryAfter / 60000))} min, retoma sozinho`
+              : `Erro de rede — nova tentativa em ${Math.ceil(retryAfter / 1000)}s (parcial salvo)`
+          );
+          if (!ok) return null;
+        }
+      }
+    };
+
+    const enrichPending = async ({ maxRounds = 12, phaseLabel = true } = {}) => {
+      const listPending = () => merged.filter(item => item.doc_type === 'contrato' && item.doc_ids
+        && !item.fornecedor_nome && !attempted.has(pncpOutcomeItemKey(item)));
+      let pendingItems = listPending();
+      let rounds = 0;
+      const totalToEnrich = pendingItems.length;
+      while (pendingItems.length && rounds < maxRounds && pncpOutcomeSearchTokenRef.current === token) {
+        if (phaseLabel) {
+          setPncpOutcomePhase({
+            stage: 'enriching',
+            label: `Completando fornecedores e valores… ${totalToEnrich - pendingItems.length}/${Math.max(totalToEnrich, pendingItems.length)}`,
+            loaded: merged.length,
+            total: reportedTotal || undefined,
+          });
+        }
+        const batch = pendingItems.slice(0, 8);
+        let payload = null;
+        try {
+          const response = await axios.post('/api/licitacoes/pncp/resultados/enrich', {
+            contratos: batch.map(item => ({
+              ...item.doc_ids,
+              pncp_key: item.pncp_key,
+              titulo: item.titulo,
+              descricao: item.descricao,
+              uf: item.uf,
+              orgao_nome: item.orgao_nome,
+              modalidade: item.modalidade,
+              data_publicacao: item.data_publicacao,
+            })),
+          });
+          payload = response.data || {};
+        } catch {
+          // Enrich é best-effort: se o gate falhar, tenta de novo mais tarde.
+          const ok = await waitWhileCancelled(5000, 'Aguardando gate do PNCP para enriquecer…');
+          if (!ok) return;
+          rounds += 1;
+          continue;
+        }
+        if (pncpOutcomeSearchTokenRef.current !== token) return;
+        if (payload.gate?.gap_ms) lastGateGapMs = Number(payload.gate.gap_ms) || lastGateGapMs;
+        const enriched = payload.enriched || {};
+        Object.keys(enriched).forEach(key => attempted.add(key));
+        merged = merged.map(item => {
+          const key = pncpOutcomeItemKey(item);
+          return key && enriched[key] ? { ...item, ...enriched[key] } : item;
+        });
+        pushState({ keepPage: true, status: 'running' });
+        pendingItems = listPending();
+        rounds += 1;
+        if (!Object.keys(enriched).length) {
+          const pauseMs = Number(payload.gate_paused_ms || payload.gate?.paused_for_ms || 0);
+          if (pauseMs > 0) {
+            // Como o job de editais: espera o gate em vez de desistir.
+            const ok = await waitWhileCancelled(
+              Math.min(6 * 60 * 1000, Math.max(pauseMs + 2000, 8000)),
+              `PNCP em pausa — enriquecimento retoma em ~${Math.max(1, Math.ceil(pauseMs / 60000))} min`
+            );
+            if (!ok) return;
+          } else {
+            await sleepMs(1500);
+          }
+        }
+      }
+    };
+
+    try {
+      for (const tipoDoc of tipos) {
+        if (pncpOutcomeSearchTokenRef.current !== token) return;
+        const cursor = cursors[tipoDoc];
+        if (cursor.done) continue;
+
+        while (
+          cursor.nextPage <= PNCP_OUTCOME_MAX_PAGES_PER_TIPO
+          && (!cursor.totalPages || cursor.nextPage <= cursor.totalPages)
+          && pncpOutcomeSearchTokenRef.current === token
+        ) {
+          // Cobre o total prometido: se já vimos tudo que o índice anunciou, para.
+          if (cursor.total > 0 && cursor.itemsSeen >= cursor.total) {
+            cursor.done = true;
+            break;
+          }
+
+          setPncpOutcomePhase({
+            stage: 'searching',
+            label: tipoDoc === 'contrato' ? 'Consultando contratos no PNCP…'
+              : tipoDoc === 'ata' ? 'Consultando atas no PNCP…'
+                : 'Consultando resultados homologados…',
+            loaded: merged.length,
+            total: reportedTotal || undefined,
+            detail: cursor.total
+              ? `${Math.min(cursor.itemsSeen + PNCP_OUTCOME_FETCH_TAM, cursor.total)}/${cursor.total}`
+              : `pág. ${cursor.nextPage}`,
+          });
+
+          const data = await fetchOutcomePage(tipoDoc, cursor.nextPage);
+          if (pncpOutcomeSearchTokenRef.current !== token) return;
+          if (!data) return; // cancelado durante wait
+
+          const pageItems = Array.isArray(data.items) ? data.items : [];
+          const pageTotal = Number(data.total) || 0;
+          if (pageTotal > 0) {
+            // Total prometido pelo índice: nunca encolhe sob o usuário (pode oscilar).
+            cursor.total = Math.max(cursor.total, pageTotal);
+            reportedTotal = tipos.reduce((acc, t) => acc + (Number(cursors[t]?.total) || 0), 0);
+            cursor.totalPages = Math.max(
+              1,
+              Math.min(
+                PNCP_OUTCOME_MAX_PAGES_PER_TIPO,
+                Number(data.totalPaginas) || Math.ceil(cursor.total / PNCP_OUTCOME_FETCH_TAM) || 1
+              )
+            );
+          }
+
+          if (!pageItems.length) {
+            cursor.done = true;
+            break;
+          }
+
+          cursor.itemsSeen += pageItems.length;
+          merged = mergePncpOutcomeItems([...merged, ...pageItems]);
+          cursor.nextPage += 1;
+          pushState({
+            keepPage: true,
+            resetPage: merged.length === pageItems.length,
+            status: 'running',
+          });
+
+          // Página curta = fim da coleção nesse tipo.
+          if (pageItems.length < PNCP_OUTCOME_FETCH_TAM) {
+            cursor.done = true;
+            break;
+          }
+          if (cursor.total > 0 && cursor.itemsSeen >= cursor.total) {
+            cursor.done = true;
+            break;
+          }
+
+          // Folga entre páginas (além do gap do gate) — igual deep job de editais.
+          const pagePause = Math.min(1500, Math.max(250, Math.round(lastGateGapMs * 0.4)));
+          if (pagePause > 0 && pncpOutcomeSearchTokenRef.current === token) {
+            await sleepMs(pagePause);
+          }
+        }
+        // Só marca done se não foi cancelado no meio (Limpar / nova busca).
+        if (pncpOutcomeSearchTokenRef.current === token && !cursor.done) {
+          // Saiu por teto de páginas: considera coberto o que deu.
+          cursor.done = true;
+        }
+        if (pncpOutcomeSearchTokenRef.current !== token) return;
+        persistCheckpoint('running');
+      }
+
+      if (pncpOutcomeSearchTokenRef.current !== token) return;
+      // Enriquecimento só depois das páginas (não disputa o gate durante a varredura).
+      await enrichPending({ maxRounds: 100, phaseLabel: true });
+      if (pncpOutcomeSearchTokenRef.current !== token) return;
+
+      const allDone = tipos.every(t => cursors[t]?.done);
+      pushState({ complete: allDone, keepPage: true, status: allDone ? 'done' : 'running' });
+      if (allDone) {
+        writePncpOutcomeCheckpoint({
+          filters: filtersSnapshot,
+          items: merged,
+          cursors,
+          reportedTotal: Math.max(reportedTotal, merged.length),
+          gateGapMs: lastGateGapMs,
+          throttlePauses,
+          attemptedKeys: [...attempted].slice(-2000),
+          complete: true,
+          status: 'done',
+        });
+        setPncpOutcomePhase({
+          stage: 'done',
+          label: `Busca concluída · ${merged.length.toLocaleString('pt-BR')} de ${Math.max(reportedTotal, merged.length).toLocaleString('pt-BR')} item(ns)`,
+        });
+        setPncpOutcomeError('');
+      }
+    } catch (error) {
+      if (pncpOutcomeSearchTokenRef.current !== token) return;
+      console.error('Error searching PNCP outcomes:', error);
+      // Nunca joga fora o parcial — grava checkpoint para retomar.
+      persistCheckpoint('paused_rate_limit');
+      pushState({ complete: false, keepPage: true, status: 'paused_rate_limit' });
+      setPncpOutcomeError(
+        error?.response?.data?.error
+          || error.message
+          || 'Erro ao buscar resultados/contratos PNCP.'
+      );
+      setPncpOutcomePhase({
+        stage: 'paused_rate_limit',
+        label: merged.length
+          ? `Pausado com ${merged.length.toLocaleString('pt-BR')} item(ns) salvos — clique em Buscar para retomar`
+          : 'Falha ao consultar o PNCP — tente de novo em instantes',
+        loaded: merged.length,
+        total: reportedTotal || undefined,
+      });
+    } finally {
+      if (pncpOutcomeSearchTokenRef.current === token) setPncpOutcomeLoading(false);
+    }
+  }, []);
+
+  const openPncpOutcomeDossier = useCallback(async (item) => {
+    setPncpOutcomeDossierTarget(item || null);
+    setPncpOutcomeDossier(null);
+    setPncpOutcomeDossierError('');
     const cnpj = String(item?.orgao_cnpj || '').replace(/\D/g, '');
     const ano = String(item?.ano || '').trim();
     const sequencial = String(item?.sequencial || '').trim();
-    if (!cnpj || !ano || !sequencial) return;
+    if (!cnpj || !ano || !sequencial) {
+      setPncpOutcomeDossierError('Este registro não contém os identificadores necessários para abrir o dossiê no PNCP.');
+      return;
+    }
     setPncpOutcomeDossierLoading(true);
     try {
       const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/dossier`, {
-        params: { q: pncpOutcomeFilters.q || undefined },
+        params: { q: pncpOutcomeFiltersRef.current.q || undefined },
       });
       setPncpOutcomeDossier(response.data);
     } catch (error) {
       console.error('Error loading PNCP dossier:', error);
+      setPncpOutcomeDossierError(error.response?.data?.error || error.message || 'Não foi possível carregar o dossiê PNCP.');
     } finally {
       setPncpOutcomeDossierLoading(false);
     }
-  };
+  }, []);
+
+  const closePncpOutcomeDossier = useCallback(() => {
+    setPncpOutcomeDossierTarget(null);
+    setPncpOutcomeDossier(null);
+    setPncpOutcomeDossierError('');
+    setPncpOutcomeDossierLoading(false);
+  }, []);
+
+  // Ao abrir a aba: restaura checkpoint (parcial + total prometido) e retoma
+  // sozinho se a busca ainda não cobriu tudo — igual o job de editais.
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Licitações' || licitacaoSubview !== 'resultados') return;
+    // Já tem estado vivo nesta sessão (ex.: usuário só trocou de sub-aba).
+    if (pncpOutcomeLoading || (pncpOutcomeResults.items?.length && !pncpOutcomeResults.requires_query)) {
+      // Se ficou pausado/incompleto e não está rodando, retoma.
+      if (
+        !pncpOutcomeLoading
+        && pncpOutcomeResults.items?.length
+        && !pncpOutcomeResults.complete
+        && pncpOutcomeResults.status !== 'done'
+      ) {
+        runPncpOutcomeSearch({}, { resume: true });
+      }
+      return;
+    }
+    const checkpoint = readPncpOutcomeCheckpoint();
+    if (checkpoint?.items?.length || (checkpoint && checkpoint.complete === false && checkpoint.filters)) {
+      if (checkpoint.filters) {
+        setPncpOutcomeFilters(prev => ({ ...prev, ...checkpoint.filters }));
+        pncpOutcomeFiltersRef.current = { ...pncpOutcomeFiltersRef.current, ...checkpoint.filters };
+        pncpOutcomeActiveQueryRef.current = checkpoint.filters;
+      }
+      const items = Array.isArray(checkpoint.items) ? checkpoint.items : [];
+      setPncpOutcomeResults({
+        items,
+        total: Math.max(Number(checkpoint.reportedTotal) || 0, items.length),
+        pagina: 1,
+        totalPaginas: Math.max(1, Math.ceil(items.length / 20)),
+        tamanhoPagina: 20,
+        summary: items.length ? summarizePncpOutcomeItems(items) : null,
+        requires_query: false,
+        complete: Boolean(checkpoint.complete),
+        status: checkpoint.status || (checkpoint.complete ? 'done' : 'paused_rate_limit'),
+      });
+      if (!checkpoint.complete) {
+        setPncpOutcomePhase({
+          stage: 'paused_rate_limit',
+          label: 'Retomando busca salva…',
+          loaded: items.length,
+          total: Number(checkpoint.reportedTotal) || undefined,
+        });
+        runPncpOutcomeSearch({}, { resume: true });
+      } else {
+        setPncpOutcomePhase({
+          stage: 'done',
+          label: `Busca concluída · ${items.length.toLocaleString('pt-BR')} item(ns)`,
+        });
+      }
+      return;
+    }
+    setPncpOutcomeResults(prev => {
+      if (prev.items?.length || prev.requires_query === false || pncpOutcomeActiveQueryRef.current) return prev;
+      return {
+        items: [],
+        total: 0,
+        pagina: 1,
+        totalPaginas: 1,
+        tamanhoPagina: 20,
+        summary: null,
+        requires_query: true,
+        complete: false,
+        status: null,
+      };
+    });
+  }, [authStatus.authenticated, activeView, licitacaoSubview]);
 
   useEffect(() => {
     if (!authStatus.authenticated || activeView !== 'Licitações') return;
@@ -8665,42 +10359,13 @@ function App() {
     };
   }, [activePncpSearchJobId, pncpJobModalOpen]);
 
-  const savePncpWatchlist = async () => {
+  const savePncpWatchlist = () => {
     const term = String(pncpSearchFilters.q || '').trim();
     if (!term) {
       alert('Informe um termo de busca antes de salvar a watchlist.');
       return;
     }
-    const name = window.prompt('Nome da watchlist de editais:', term);
-    if (name === null) return;
-    const whatsappNumber = window.prompt('WhatsApp para alertas (opcional):', '');
-    if (whatsappNumber === null) return;
-    try {
-      await axios.post('/api/licitacoes/editais/watchlist', {
-        nome: name.trim() || term,
-        palavras_chave: Array.from(new Set([term, ...pncpAcceptedPositiveTerms])).filter(Boolean),
-        termos_negativos: Array.from(new Set([...(splitTermsInput(pncpSearchFilters.negative_terms || '')), ...pncpAcceptedNegativeTerms])).filter(Boolean),
-        usar_ia: pncpSearchFilters.usar_ia,
-        filtros: {
-          tipos_documento: pncpSearchFilters.tipos_documento,
-          status: pncpSearchFilters.status,
-          modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id,
-          tipo_id: pncpSearchFilters.tipo_id,
-          modo_disputa_id: pncpSearchFilters.modo_disputa_id,
-          uf: pncpSearchFilters.uf,
-          esfera_id: pncpSearchFilters.esfera_id,
-          orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
-          unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
-          ordenacao: pncpSearchFilters.ordenacao,
-        },
-        whatsapp_enabled: Boolean(whatsappNumber.trim()),
-        whatsapp_number: whatsappNumber.trim() || null,
-      });
-      alert('Watchlist de editais salva. Ela será processada no próximo sync.');
-      setLicitacaoSubview('editais_watchlist');
-    } catch (error) {
-      alert(`Erro: ${error.response?.data?.error || error.message}`);
-    }
+    setPncpWatchlistDialog({ source: 'search', defaultName: term, contextLabel: term });
   };
 
   // Ocultar item da busca PNCP
@@ -8843,6 +10508,8 @@ function App() {
 
       setNewOpportunityForm(prev => ({
         ...prev,
+        // Importação PNCP entra em Monitoramento de Edital (não PCA).
+        fase: '6. Monitoramento de Edital',
         status: statusFromPncp,
         titulo: item.titulo || `${item.tipo?.nome || 'Edital'} - ${item.orgao?.nome || 'Órgão'}`,
         orgao_nome: item.orgao?.nome || '',
@@ -10475,6 +12142,7 @@ function App() {
         { name: 'Gestão de Leads', view: 'Overview', icon: QueueListIcon },
         { name: 'Funil', view: 'Board', icon: ViewColumnsIcon, badge: openFunnelLeadCount, badgeLabel: 'leads nas etapas abertas (1–12)' },
         { name: 'Metas e Resultados', view: 'Metas', icon: PresentationChartBarIcon, adminOnly: true },
+        { name: 'Notificações', view: 'Notificações', icon: BellIcon, badge: inboxUnreadCount > 0 ? inboxUnreadCount : null, badgeLabel: 'não lidas' },
         { name: 'Processo', view: 'Processo', icon: BookOpenIcon },
       ],
     },
@@ -10482,6 +12150,7 @@ function App() {
       label: 'Prospecção',
       items: [
         { name: 'Busca de leads', view: 'Busca Lead B2B', icon: MagnifyingGlassIcon },
+        { name: 'Radar Trends', view: 'Radar Trends', icon: ChartBarIcon, accessView: 'Busca Lead B2B' },
         { name: 'Disparo WhatsApp', view: 'Disparo WhatsApp', icon: ChatBubbleLeftRightIcon },
       ],
     },
@@ -10503,7 +12172,7 @@ function App() {
         { name: 'Definir Metas', view: 'Definir Metas', icon: PresentationChartBarIcon, adminOnly: true },
       ],
     },
-  ]), [openFunnelLeadCount, editalNewSignalsCount, operationalLicitacaoCount]);
+  ]), [openFunnelLeadCount, editalNewSignalsCount, operationalLicitacaoCount, inboxUnreadCount]);
 
   const navigateApp = useCallback((view, sub) => {
     setActiveView(view);
@@ -10746,9 +12415,11 @@ function App() {
                   const groupItems = group.items.filter(item => {
                     if (item.adminOnly) return authStatus.role === 'admin';
                     if (authStatus.role === 'admin') return true;
+                    // Preferências de push/inbox são pessoais — sempre visíveis.
+                    if (item.view === 'Notificações') return true;
                     const av = authStatus.allowedViews;
                     if (!av || av.length === 0) return true;
-                    return av.includes(item.view);
+                    return av.includes(item.accessView || item.view);
                   });
                   if (!groupItems.length) return null;
                   return (
@@ -11045,10 +12716,8 @@ function App() {
                       )}
                   </div>
                   {(() => {
-                    const overdue = Number(licSummary?.overdue_count) || 0;
-                    const due48 = Number(licSummary?.due_48h) || 0;
-                    const doneJobs = pncpSearchJobs.filter(j => j.status === 'completed').slice(0, 3);
-                    const notifCount = (overdue ? 1 : 0) + (due48 ? 1 : 0) + doneJobs.length;
+                    const notifCount = inboxNotifications.length;
+                    const unread = inboxUnreadCount;
                     return (
                       <>
                         <button
@@ -11058,6 +12727,7 @@ function App() {
                             setMobileNavOpen(false);
                             setGlobalSearchOpen(false);
                             setShowNotifications(v => !v);
+                            if (!showNotifications) loadInboxNotifications();
                           }}
                           className={`${iconBtn} relative h-10 w-10 shrink-0 border border-line bg-bg2 ${showNotifications ? 'text-ink ring-2 ring-primary/25' : ''}`}
                           aria-label="Notificações"
@@ -11065,7 +12735,7 @@ function App() {
                           aria-controls="notifications-panel"
                         >
                           <BellIcon className="h-[18px] w-[18px]" />
-                          {(overdue > 0 || due48 > 0) && (
+                          {unread > 0 && (
                             <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red ring-2 ring-bg2" />
                           )}
                         </button>
@@ -11087,55 +12757,84 @@ function App() {
                               }}
                               className="flex flex-col overflow-hidden rounded-[15px] border border-line bg-surf p-2 shadow-[0_18px_48px_rgba(0,0,0,.55),0_0_0_1px_rgba(255,255,255,.04)]"
                             >
-                              <p className="shrink-0 px-2 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
-                                Notificações
-                              </p>
+                              <div className="flex shrink-0 items-center justify-between gap-2 px-2 py-1.5">
+                                <p className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
+                                  Notificações
+                                </p>
+                                <button
+                                  type="button"
+                                  className="text-[11px] font-semibold text-primary hover:underline"
+                                  onClick={() => {
+                                    setShowNotifications(false);
+                                    setActiveView('Notificações');
+                                  }}
+                                >
+                                  Configurar
+                                </button>
+                              </div>
                               <VerticalScrollArrows
                                 className="min-h-0 flex-1"
-                                remeasureKey={notifCount}
-                                style={{ maxHeight: Math.max(100, (notifPos.maxHeight || 280) - 40) }}
+                                remeasureKey={notifCount + unread}
+                                style={{ maxHeight: Math.max(100, (notifPos.maxHeight || 280) - 56) }}
                               >
                                 {notifCount === 0 && (
-                                  <p className="px-2 pb-2 text-xs text-muted">Nada urgente por aqui.</p>
+                                  <p className="px-2 pb-2 text-xs text-muted">Nada por aqui ainda.</p>
                                 )}
-                                {overdue > 0 && (
+                                {inboxNotifications.map((item) => (
                                   <button
+                                    key={item.id}
                                     type="button"
                                     role="menuitem"
-                                    onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
-                                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
+                                    onClick={async () => {
+                                      setShowNotifications(false);
+                                      if (!item.read_at) {
+                                        try {
+                                          await axios.post('/api/notifications/read', { ids: [item.id] });
+                                          setInboxUnreadCount((c) => Math.max(0, c - 1));
+                                          setInboxNotifications((prev) => prev.map((n) => (
+                                            n.id === item.id ? { ...n, read_at: new Date().toISOString() } : n
+                                          )));
+                                        } catch {
+                                          /* ignore */
+                                        }
+                                      }
+                                      const view = item.data?.view;
+                                      const sub = item.data?.sub;
+                                      if (view) {
+                                        setActiveView(view);
+                                        if (sub) setLicitacaoSubview(sub);
+                                      } else {
+                                        setActiveView('Notificações');
+                                      }
+                                      if (item.data?.job_id && typeof openPncpSearchJob === 'function') {
+                                        openPncpSearchJob(item.data.job_id);
+                                      }
+                                    }}
+                                    className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] hover:bg-surf2 ${item.read_at ? 'text-muted' : 'text-ink'}`}
                                   >
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-red/15 font-mono text-xs font-bold text-red">{overdue}</span>
-                                    <span className="min-w-0 flex-1 leading-snug">licitações atrasadas exigem ação</span>
-                                  </button>
-                                )}
-                                {due48 > 0 && (
-                                  <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('overview'); }}
-                                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
-                                  >
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber/15 font-mono text-xs font-bold text-amber">{due48}</span>
-                                    <span className="min-w-0 flex-1 leading-snug">vencendo nas próximas 48h</span>
-                                  </button>
-                                )}
-                                {doneJobs.map(job => (
-                                  <button
-                                    key={job.id}
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() => { setShowNotifications(false); setActiveView('Licitações'); setLicitacaoSubview('editais'); openPncpSearchJob(job.id); }}
-                                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-ink hover:bg-surf2"
-                                  >
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green/15 font-mono text-[10px] font-bold text-green">✓</span>
-                                    <span className="min-w-0 flex-1 truncate">
-                                      Busca <span className="font-display font-semibold uppercase tracking-wide">"{job.nome || job.filters?.q || 'PNCP'}"</span>
-                                      {' '}concluída · {Number(job.total || 0).toLocaleString('pt-BR')} resultados
+                                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${item.read_at ? 'bg-line' : 'bg-primary'}`} />
+                                    <span className="min-w-0 flex-1 leading-snug">
+                                      <span className="block font-medium">{item.title}</span>
+                                      {item.body && (
+                                        <span className="mt-0.5 block text-[11px] text-muted line-clamp-2">{item.body}</span>
+                                      )}
+                                      <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-wider text-muted2">
+                                        {typeLabel(item.type)}
+                                      </span>
                                     </span>
                                   </button>
                                 ))}
                               </VerticalScrollArrows>
+                              <button
+                                type="button"
+                                className="mt-1 shrink-0 rounded-lg px-2 py-2 text-center text-[12px] font-semibold text-primary hover:bg-surf2"
+                                onClick={() => {
+                                  setShowNotifications(false);
+                                  setActiveView('Notificações');
+                                }}
+                              >
+                                Ver todas e preferências
+                              </button>
                             </div>,
                             document.body
                           )}
@@ -11277,7 +12976,7 @@ function App() {
                 </div>
               )}
 
-              {activeView === 'Licitações' && (
+              {activeView === 'Licitações' && licitacaoSubview === 'board' && (
                 <div className="toolbar-row toolbar-row--search-action mt-3 sm:mt-4 min-w-0 pb-3">
                   <div className="relative min-w-0 w-full">
                     <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-muted">
@@ -12060,14 +13759,28 @@ function App() {
                                 </span>
                                 {live && <span className={metaChip}>{pct}%</span>}
                                 {job.watchlist_id ? (
-                                  <span className={metaChip}>Watchlist: sim</span>
+                                  <span
+                                    className={metaChip}
+                                    title="Esta busca é uma assinatura: recoleta + matcher de novidades (não arquiva em 15 dias)."
+                                  >
+                                    Assinatura
+                                  </span>
                                 ) : (
-                                  <span className={metaChip}>Watchlist: off</span>
+                                  <span className={metaChip} title="Ative assinatura/alertas para não arquivar em 15 dias.">
+                                    Temporária
+                                  </span>
+                                )}
+                                {job.whatsapp_enabled || job.alerts_enabled ? (
+                                  <span className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`} title="WhatsApp ligado para editais *novos*">
+                                    Alertas · {job.whatsapp_number || 'on'}
+                                  </span>
+                                ) : (
+                                  <span className={metaChip}>Alertas off</span>
                                 )}
                                 {archiveMeta && (
                                   <span
                                     className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
-                                    title="Buscas sem watchlist são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo."
+                                    title="Buscas sem assinatura são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo."
                                   >
                                     {archiveMeta.label}
                                   </span>
@@ -12133,10 +13846,14 @@ function App() {
                               <button
                                 type="button"
                                 onClick={() => convertPncpSearchJobToWatchlist(job.id)}
-                                disabled={Boolean(job.watchlist_id)}
+                                title={job.watchlist_id ? 'Editar assinatura e alertas WhatsApp' : 'Esta busca vira assinatura; opcional WhatsApp para novos editais'}
                                 className={btnSecondaryXs}
                               >
-                                {job.watchlist_id ? 'Watchlist ✓' : 'Watchlist'}
+                                {job.whatsapp_enabled || job.alerts_enabled
+                                  ? 'Alertas ✓'
+                                  : job.watchlist_id
+                                    ? 'Alertas'
+                                    : 'Assinar'}
                               </button>
                               <button
                                 type="button"
@@ -12156,6 +13873,18 @@ function App() {
               </div>
 
               {/* Confirmação de exclusão de busca — substitui o confirm nativo do browser */}
+              <CreateEditalWatchlistDialog
+                open={Boolean(pncpWatchlistDialog)}
+                defaultName={pncpWatchlistDialog?.defaultName}
+                contextLabel={pncpWatchlistDialog?.contextLabel}
+                saving={pncpWatchlistSaving}
+                alreadySubscribed={Boolean(pncpWatchlistDialog?.alreadySubscribed)}
+                initialWhatsappEnabled={Boolean(pncpWatchlistDialog?.initialWhatsappEnabled)}
+                initialWhatsappNumber={pncpWatchlistDialog?.initialWhatsappNumber || ''}
+                onClose={closePncpWatchlistDialog}
+                onSave={confirmPncpWatchlist}
+              />
+
               {pncpDeleteJobConfirm && createPortal(
                 <div
                   className={`${modalOverlay} z-[80]`}
@@ -12283,26 +14012,26 @@ function App() {
                       const title = job?.nome || job?.filters?.q || 'Pesquisa PNCP';
                       return (
                         <>
-                          <div className="shrink-0 border-b border-line px-4 py-3.5 sm:px-5">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h3 className="truncate font-display text-base font-semibold uppercase tracking-wide text-ink">{title}</h3>
-                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <h3 className="truncate font-display text-sm font-semibold uppercase tracking-wide text-ink sm:text-base">{title}</h3>
+                                  <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
                                     {meta.live && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
                                     {meta.label}
                                   </span>
                                   {archiveMeta && (
                                     <span
-                                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
+                                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
                                       title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
                                     >
                                       {archiveMeta.label}
                                     </span>
                                   )}
                                 </div>
-                                <p className="mt-1 font-mono text-[11px] text-muted">
-                                  {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} resultado(s)
+                                <p className="mt-0.5 font-mono text-[10px] leading-tight text-muted sm:text-[11px]">
+                                  {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} na lista
                                   {' · '}
                                   {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
                                   {live ? (
@@ -12314,10 +14043,24 @@ function App() {
                                     </>
                                   ) : null}
                                   {!job?.watchlist_id && !live ? ' · recoleta diária ativa' : ''}
-                                  {job?.error ? ` · ${job.error}` : ''}
                                 </p>
+                                {job?.status === 'paused_rate_limit' && (() => {
+                                  const countdown = formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at);
+                                  const resumePage = job?.progress?.resume_from_page;
+                                  return (
+                                    <p className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] leading-snug text-amber-800 dark:text-amber-200 sm:text-[11px]">
+                                      <strong>Lista preservada</strong>
+                                      {countdown ? <> · {countdown}</> : ' · retoma sozinho'}
+                                      {resumePage ? <> · continua na pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
+                                      {' '}— não recomeça do zero nem apaga o que já entrou.
+                                    </p>
+                                  );
+                                })()}
+                                {job?.error ? (
+                                  <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-amber-700 dark:text-amber-300 sm:text-[11px]" title={job.error}>{job.error}</p>
+                                ) : null}
                               </div>
-                              <div className="flex flex-wrap items-center gap-1.5">
+                              <div className="flex flex-wrap items-center gap-1">
                                 {live && (
                                   <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm}`}>
                                     <StopIcon className="h-3.5 w-3.5" /> Parar
@@ -12333,8 +14076,17 @@ function App() {
                                     <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
                                   </button>
                                 )}
-                                <button type="button" onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)} disabled={Boolean(job?.watchlist_id)} className={`${btnSecondarySm}`}>
-                                  {job?.watchlist_id ? 'Watchlist ✓' : 'Virar watchlist'}
+                                <button
+                                  type="button"
+                                  onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)}
+                                  title={job?.watchlist_id ? 'Editar assinatura e alertas' : 'Assinar esta busca e opcionalmente receber WhatsApp de novos editais'}
+                                  className={`${btnSecondarySm}`}
+                                >
+                                  {job?.whatsapp_enabled || job?.alerts_enabled
+                                    ? 'Alertas ✓'
+                                    : job?.watchlist_id
+                                      ? 'Alertas'
+                                      : 'Assinar'}
                                 </button>
                                 <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} text-status-danger`}>
                                   <TrashIcon className="h-3.5 w-3.5" /> Excluir
@@ -12345,33 +14097,77 @@ function App() {
                               </div>
                             </div>
 
-                            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-bg2">
+                            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-bg2">
                               <div
                                 className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
                                 style={{ width: `${activePncpJobProgress.pct}%` }}
                               />
                             </div>
 
-                            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                              <div className="rounded-lg border border-line bg-bg2 px-2.5 py-2">
-                                <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Classificados</p>
-                                <p className="mt-0.5 font-mono text-sm font-bold text-ink">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
-                              </div>
-                              <div className="rounded-lg border border-line bg-bg2 px-2.5 py-2">
-                                <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Valor total</p>
-                                <p className="mt-0.5 font-mono text-sm font-bold text-ink">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
-                              </div>
-                              <div className="rounded-lg border border-line bg-bg2 px-2.5 py-2">
-                                <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Ocultos</p>
-                                <p className="mt-0.5 font-mono text-sm font-bold text-ink">{Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}</p>
-                              </div>
-                              <div className="rounded-lg border border-line bg-bg2 px-2.5 py-2">
-                                <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">No pipeline</p>
-                                <p className="mt-0.5 font-mono text-sm font-bold text-ink">{Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}</p>
-                              </div>
-                            </div>
+                            {(() => {
+                              const funnelRuns = job?.term_runs || pncpSearchResults.query_plan?.term_runs || [];
+                              const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), funnelRuns);
+                              return (
+                                <>
+                                  <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
+                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Na lista</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
+                                      <p className="text-[9px] leading-tight text-muted">passaram no filtro</p>
+                                    </div>
+                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Itens brutos já baixados da API do PNCP (inclui encerrados). Não é o total da lista.">
+                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink">
+                                        {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
+                                        {funnel.universeApi > 0 ? (
+                                          <span className="text-[11px] font-semibold text-muted">/{funnel.universeApi.toLocaleString('pt-BR')}</span>
+                                        ) : null}
+                                      </p>
+                                      <p className="text-[9px] leading-tight text-muted">
+                                        {funnel.coveragePct != null ? `${funnel.coveragePct}% do universo` : 'universo da API'}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Soma dos valores dos editais classificados na lista.">
+                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Valor na lista</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
+                                      <p className="text-[9px] leading-tight text-muted">só classificados</p>
+                                    </div>
+                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Você ocultou · já no board">
+                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink">
+                                        {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
+                                        <span className="text-muted"> · </span>
+                                        {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
+                                      </p>
+                                      <p className="text-[9px] leading-tight text-muted">você ocultou · já no board</p>
+                                    </div>
+                                  </div>
+                                  {funnel.universeApi > 0 && (
+                                    <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-muted sm:text-[11px]" title={
+                                      `O PNCP tem ${funnel.universeApi.toLocaleString('pt-BR')} resultados para “${funnel.mainTerm || '…'}”${funnel.isOpenOnly ? ' (todas as situações)' : ''}. Já lemos ${funnel.brutosLidos.toLocaleString('pt-BR')} brutos${funnel.duplicatesSum > 0 ? ` (${funnel.duplicatesSum.toLocaleString('pt-BR')} repetidos entre termos)` : ''}; só ${funnel.classified.toLocaleString('pt-BR')} entraram na lista${funnel.isOpenOnly ? ' (filtro: recebendo proposta)' : ''}.`
+                                    }>
+                                      O PNCP tem <strong className="text-ink">{funnel.universeApi.toLocaleString('pt-BR')}</strong> resultados para “{funnel.mainTerm || '…'}”
+                                      {funnel.isOpenOnly ? ' (todas as situações)' : ''}.
+                                      {' '}Já lemos <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> brutos
+                                      {funnel.duplicatesSum > 0 ? <> ({funnel.duplicatesSum.toLocaleString('pt-BR')} repetidos entre termos)</> : null}
+                                      ; só <strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> entraram na lista
+                                      {funnel.isOpenOnly ? ' (filtro: recebendo proposta)' : ''}.
+                                      {funnel.coveragePct != null && funnel.coveragePct < 100 ? (
+                                        <> Cobertura “{funnel.mainTerm}”: <strong className="text-ink">{funnel.coveragePct}%</strong>.</>
+                                      ) : null}
+                                      {funnel.currentTerm && funnel.currentTerm !== funnel.mainTerm ? (
+                                        <> Agora em “{funnel.currentTerm}”
+                                          {funnel.currentUnique != null ? <> · {funnel.currentUnique.toLocaleString('pt-BR')} únicos novos</> : null}
+                                          {funnel.currentDuplicates > 0 ? <> · {funnel.currentDuplicates.toLocaleString('pt-BR')} já vistos</> : null}.
+                                        </>
+                                      ) : null}
+                                    </p>
+                                  )}
+                                </>
+                              );
+                            })()}
 
-                            <div className="mt-3 flex flex-wrap gap-1">
+                            <div className="mt-1.5 flex flex-wrap gap-1">
                               {[
                                 ['resultados', 'Resultados'],
                                 ['termos', 'Termos e filtros'],
@@ -12381,7 +14177,7 @@ function App() {
                                   key={key}
                                   type="button"
                                   onClick={() => setPncpJobModalTab(key)}
-                                  className={`h-8 rounded-lg px-3 text-xs font-semibold transition ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
+                                  className={`h-7 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
                                 >
                                   {label}
                                 </button>
@@ -12389,7 +14185,7 @@ function App() {
                             </div>
                           </div>
 
-                          <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-4 py-4 sm:px-5">
+                          <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-3 py-2.5 sm:px-4 sm:py-3">
                             {pncpJobModalTab === 'termos' && (() => {
                               const partidaChips = getPncpPartidaFilterChips(job?.filters || {}, {
                                 modalidades: modalidadeOptions,
@@ -12666,20 +14462,82 @@ function App() {
                               );
                               const pendingTerms = plannedTerms.filter(t => !executedTerms.has(normalizeText(t)));
                               const currentTerm = job?.progress?.current_term || activePncpJobProgress.currentTerm || '';
+                              const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), termRuns);
+                              const filterStatusLabel = formatPncpStatusFilterLabel(job?.filters?.status);
+                              const orgaoLabel = job?.filters?.orgao_cnpj || pncpSearchResults.query_plan?.local_filters?.orgao || 'qualquer';
+                              const uasgLabel = job?.filters?.unidade_codigo || pncpSearchResults.query_plan?.local_filters?.unidade || 'qualquer';
                               return (
                               <div className="space-y-3">
-                                <div className="rounded-[12px] border border-line bg-bg2/40 p-3 text-xs text-muted">
-                                  <p className="font-semibold text-ink">Auditoria da coleta</p>
-                                  <p className="mt-1">
-                                    Coleta <strong className="text-ink">sequencial</strong>: um termo por vez (não em paralelo).
-                                    {' '}A tabela só lista frentes já executadas — termos anexados no meio da corrida entram na fila e aparecem aqui quando chegarem a vez.
+                                {/* Funil em linguagem humana */}
+                                <div className="rounded-[12px] border border-line bg-bg2/40 p-3">
+                                  <p className="text-xs font-semibold text-ink">O que cada número significa</p>
+                                  <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+                                    <div className="rounded-lg border border-line bg-surf px-2.5 py-2">
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">1 · Universo no PNCP</p>
+                                      <p className="mt-0.5 font-mono text-lg font-bold text-ink">
+                                        {funnel.universeApi > 0 ? funnel.universeApi.toLocaleString('pt-BR') : '—'}
+                                      </p>
+                                      <p className="mt-1 text-[11px] leading-snug text-muted">
+                                        Quantos resultados o PNCP diz que existem para o termo
+                                        {funnel.mainTerm ? <> “<span className="text-ink">{funnel.mainTerm}</span>”</> : null}
+                                        — <strong className="text-ink">todas as situações</strong> (abertos, encerrados, homologados…).
+                                        Não é o tamanho da sua lista.
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-2">
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-primary/80">2 · Já lidos (brutos)</p>
+                                      <p className="mt-0.5 font-mono text-lg font-bold text-ink">
+                                        {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
+                                        {funnel.universeApi > 0 ? (
+                                          <span className="text-sm font-semibold text-muted"> / {funnel.universeApi.toLocaleString('pt-BR')}</span>
+                                        ) : null}
+                                      </p>
+                                      <p className="mt-1 text-[11px] leading-snug text-muted">
+                                        Linhas que o job <strong className="text-ink">já baixou</strong> página a página.
+                                        Ex.: <strong className="text-ink">110</strong> = leu ~110 editais brutos
+                                        {funnel.pagesDone ? <> em {funnel.pagesDone} página(s)</> : null}
+                                        {funnel.pagesEst ? <> de ~{funnel.pagesEst} estimadas</> : null}.
+                                        A maioria ainda pode estar encerrada e ser descartada no passo 3.
+                                      </p>
+                                      {funnel.coveragePct != null && (
+                                        <div className="mt-2">
+                                          <div className="h-1.5 overflow-hidden rounded-full bg-bg2">
+                                            <div className="h-full rounded-full bg-primary/70" style={{ width: `${funnel.coveragePct}%` }} />
+                                          </div>
+                                          <p className="mt-0.5 font-mono text-[10px] text-muted">{funnel.coveragePct}% do universo lido</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2">
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">3 · Na sua lista</p>
+                                      <p className="mt-0.5 font-mono text-lg font-bold text-ink">
+                                        {funnel.classified.toLocaleString('pt-BR')}
+                                      </p>
+                                      <p className="mt-1 text-[11px] leading-snug text-muted">
+                                        Desses brutos, quantos <strong className="text-ink">passaram no filtro</strong> do job
+                                        ({filterStatusLabel}) e aparecem na aba Resultados.
+                                        {funnel.isOpenOnly ? ' Por isso costuma ser bem menor que o universo.' : ''}
+                                      </p>
+                                      {funnel.classifyPct != null && funnel.brutosLidos > 0 && (
+                                        <p className="mt-1.5 font-mono text-[10px] text-muted">
+                                          {funnel.classifyPct}% dos lidos viraram linha na lista
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <p className="mt-2.5 text-[11px] leading-relaxed text-muted">
+                                    Fluxo: o job varre o <strong className="text-ink">universo</strong> → conta como <strong className="text-ink">lidos</strong>
+                                    {' '}cada item devolvido pela API → aplica filtro → grava só os que entram <strong className="text-ink">na lista</strong>.
+                                    Coleta em <strong className="text-ink">rodízio</strong>: cada termo faz uma fatia de páginas e cede a vez
+                                    (UAV/RPA não ficam eternamente atrás de um termo com milhares de resultados).
+                                    Se o PNCP limitar, pausa e retoma priorizando quem tem menos páginas lidas.
                                   </p>
-                                  <p className="mt-1">
-                                    Planejados: <strong className="text-ink">{plannedTerms.length}</strong>
-                                    {' · '}Executados: <strong className="text-ink">{executedTerms.size}</strong>
-                                    {pendingTerms.length > 0 ? <> · Na fila: <strong className="text-amber-600 dark:text-amber-300">{pendingTerms.length}</strong></> : null}
-                                    {currentTerm ? <> · Agora: <span className="font-display font-semibold uppercase tracking-wide text-ink">{currentTerm}</span></> : null}
-                                    {pncpSearchResults.query_plan?.cache_hit ? ' · cache' : ''}
+                                  <p className="mt-1.5 text-[11px] text-muted">
+                                    Termos: <strong className="text-ink">{plannedTerms.length}</strong> planejados
+                                    {' · '}<strong className="text-ink">{executedTerms.size}</strong> executados
+                                    {pendingTerms.length > 0 ? <> · <strong className="text-amber-600 dark:text-amber-300">{pendingTerms.length}</strong> na fila</> : null}
+                                    {currentTerm ? <> · agora: <span className="font-display font-semibold uppercase tracking-wide text-ink">{currentTerm}</span></> : null}
+                                    {funnel.resumePage ? <> · retoma pág. <strong className="text-ink">{funnel.resumePage}</strong></> : null}
                                   </p>
                                   {pendingTerms.length > 0 && (
                                     <div className="mt-2 flex flex-wrap gap-1">
@@ -12692,12 +14550,13 @@ function App() {
                                     </div>
                                   )}
                                 </div>
+
                                 <div className="grid gap-2 md:grid-cols-3">
                                   <div className="rounded-lg border border-line bg-surf p-2.5 text-xs text-muted">
-                                    <p className="font-semibold text-ink">Filtros locais</p>
-                                    <p className="mt-1">Recebendo proposta: {pncpSearchResults.query_plan?.local_filters?.receiving_proposal ? 'sim' : 'não'}</p>
-                                    <p>Órgão: {pncpSearchResults.query_plan?.local_filters?.orgao || 'n/d'}</p>
-                                    <p>Unidade: {pncpSearchResults.query_plan?.local_filters?.unidade || 'n/d'}</p>
+                                    <p className="font-semibold text-ink">Filtro que decide a lista</p>
+                                    <p className="mt-1"><span className="text-muted2">Status:</span> {filterStatusLabel}</p>
+                                    <p><span className="text-muted2">Órgão:</span> {orgaoLabel}</p>
+                                    <p><span className="text-muted2">UASG:</span> {uasgLabel}</p>
                                   </div>
                                   <div className="rounded-lg border border-line bg-surf p-2.5 text-xs text-muted md:col-span-2">
                                     <p className="font-semibold text-ink">Checar edital específico nesta busca</p>
@@ -12711,69 +14570,145 @@ function App() {
                                       <p className="mt-2">
                                         {pncpDebugLookup.found
                                           ? `Encontrado: ${pncpDebugLookup.status === 'visible' ? 'visível' : pncpDebugLookup.status === 'pipeline' ? 'já no pipeline' : 'oculto'}`
-                                          : 'Não retornou nesta página/escopo atual.'}
+                                          : 'Não está na lista atual (ainda não lido, ou descartado pelo filtro).'}
                                       </p>
                                     )}
                                   </div>
                                 </div>
-                                <div className="max-h-72 overflow-auto rounded-lg border border-line scrollbar-theme">
-                                  <table className="w-full text-left text-[11px]">
-                                    <thead className="sticky top-0 bg-bg2 text-muted">
-                                      <tr>
-                                        <th className="px-2 py-1.5">Termo</th>
-                                        <th className="px-2 py-1.5">Fonte</th>
-                                        <th className="px-2 py-1.5">Pág.</th>
-                                        <th className="px-2 py-1.5">Coletados</th>
-                                        <th className="px-2 py-1.5">Total API</th>
-                                        <th className="px-2 py-1.5">Parada</th>
-                                        <th className="px-2 py-1.5">Erro</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {termRuns.map((run, index) => (
-                                        <tr key={`${run.term}-${index}`} className="border-t border-line">
-                                          <td className="px-2 py-1.5 font-medium text-ink">{run.term || 'vazio'}</td>
-                                          <td className="px-2 py-1.5 text-muted">{run.source}</td>
-                                          <td className="px-2 py-1.5 text-muted">{run.pages_completed}/{run.pages_requested}</td>
-                                          <td className="px-2 py-1.5 text-muted">{Number(run.items_collected || 0).toLocaleString('pt-BR')}</td>
-                                          <td className="px-2 py-1.5 text-muted">{Number(run.total_reported || 0).toLocaleString('pt-BR')}</td>
-                                          <td className="px-2 py-1.5 text-muted">{String(run.stop_reason || 'n/d').replace(/_/g, ' ')}</td>
-                                          <td className="px-2 py-1.5 text-status-danger">{Array.isArray(run.errors) && run.errors.length ? run.errors.join('; ') : '—'}</td>
-                                        </tr>
-                                      ))}
-                                      {pendingTerms.map(term => (
-                                        <tr key={`queue-${term}`} className="border-t border-line bg-amber-500/5">
-                                          <td className="px-2 py-1.5 font-medium text-ink">{term}</td>
-                                          <td className="px-2 py-1.5 text-muted">fila</td>
-                                          <td className="px-2 py-1.5 text-muted">—</td>
-                                          <td className="px-2 py-1.5 text-muted">—</td>
-                                          <td className="px-2 py-1.5 text-muted">—</td>
-                                          <td className="px-2 py-1.5 text-amber-700 dark:text-amber-300">aguardando vez</td>
-                                          <td className="px-2 py-1.5 text-muted">—</td>
-                                        </tr>
-                                      ))}
-                                      {!termRuns.length && !pendingTerms.length && (
+
+                                {(() => {
+                                  const gateMeta = formatPncpGateLabel(job?.progress?.gate || funnel.gate);
+                                  return gateMeta ? (
+                                    <div className={`rounded-lg border px-2.5 py-2 text-[11px] ${
+                                      gateMeta.tone === 'amber'
+                                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                                        : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-800 dark:text-emerald-200'
+                                    }`}>
+                                      <strong>{gateMeta.label}</strong>
+                                      {' · '}jobs bulk esperam quando o gate freia (a UI interativa tem prioridade).
+                                      {funnel.checkpoint ? ' · checkpoint ativo: páginas já lidas não são pedidas de novo.' : null}
+                                    </div>
+                                  ) : null;
+                                })()}
+
+                                <div>
+                                  <p className="mb-1.5 text-xs font-semibold text-ink">Frentes de coleta (por termo)</p>
+                                  <p className={`${subtle} mb-2`}>
+                                    Cada linha é um termo no rodízio. “Cedeu a vez” = fatia ok, outros termos rodaram, este volta depois.
+                                    {' '}<strong className="text-ink">Lidos</strong> e <strong className="text-ink">Universo</strong> são da API bruta — não o tamanho da lista.
+                                    {' '}<strong className="text-ink">Únicos</strong> = novos de verdade; <strong className="text-ink">Já vistos</strong> = overlap com outros termos (por isso a lista pode não subir).
+                                  </p>
+                                  <div className="max-h-72 overflow-auto rounded-lg border border-line scrollbar-theme">
+                                    <table className="w-full text-left text-[11px]">
+                                      <thead className="sticky top-0 bg-bg2 text-muted">
                                         <tr>
-                                          <td colSpan={7} className="px-2 py-6 text-center text-muted">Sem runs de auditoria ainda — a coleta pode estar na fila.</td>
+                                          <th className="px-2 py-1.5">Termo</th>
+                                          <th className="px-2 py-1.5" title="Páginas concluídas / tentadas">Páginas</th>
+                                          <th className="px-2 py-1.5" title="Itens brutos já baixados da API">Lidos</th>
+                                          <th className="px-2 py-1.5" title="Itens novos (chave nunca vista neste job)">Únicos</th>
+                                          <th className="px-2 py-1.5" title="Já apareceram em outro termo">Já vistos</th>
+                                          <th className="px-2 py-1.5" title="Passaram no filtro e entraram na lista (estimativa da fatia)">Na lista</th>
+                                          <th className="px-2 py-1.5" title="Total que o PNCP reporta para o termo">Universo</th>
+                                          <th className="px-2 py-1.5">Cob.</th>
+                                          <th className="px-2 py-1.5">Parada</th>
+                                          <th className="px-2 py-1.5">Erro</th>
                                         </tr>
-                                      )}
-                                    </tbody>
-                                  </table>
+                                      </thead>
+                                      <tbody>
+                                        {termRuns.map((run, index) => {
+                                          const read = Number(run.items_collected || 0);
+                                          const uni = Number(run.total_reported || 0);
+                                          const uniqueNew = Number(run.unique_new || 0);
+                                          const dups = Number(run.duplicates_skipped || 0);
+                                          const classifiedAdded = Number(run.classified_added || 0);
+                                          const cov = uni > 0 ? Math.min(100, Math.round((read / uni) * 100)) : null;
+                                          const errRaw = Array.isArray(run.errors) && run.errors.length ? run.errors.join('; ') : '';
+                                          return (
+                                          <tr key={`${run.term}-${index}`} className="border-t border-line">
+                                            <td className="px-2 py-1.5 font-medium text-ink">
+                                              {run.term || 'vazio'}
+                                              {run.resumed_from_page ? (
+                                                <span className="ml-1 text-[10px] font-normal text-primary">↺ pág.{run.resumed_from_page}</span>
+                                              ) : null}
+                                              {run.next_page && run.stop_reason === 'rate_limited' ? (
+                                                <span className="ml-1 text-[10px] font-normal text-amber-600 dark:text-amber-300">→ pág.{run.next_page}</span>
+                                              ) : null}
+                                              {run.resumed_skip ? (
+                                                <span className="ml-1 text-[10px] font-normal text-muted">já completo</span>
+                                              ) : null}
+                                              {run.source === 'pncp_consulta_complement' ? (
+                                                <span className="ml-1 text-[10px] font-normal text-muted">complemento</span>
+                                              ) : null}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-muted">{run.pages_completed || 0}/{run.pages_requested || 0}</td>
+                                            <td className="px-2 py-1.5 font-mono text-ink" title="Itens brutos baixados (abertos + encerrados)">
+                                              {read.toLocaleString('pt-BR')}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-primary" title="Chaves novas neste job">
+                                              {uniqueNew > 0 ? uniqueNew.toLocaleString('pt-BR') : (read > 0 ? '0' : '—')}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-muted" title="Duplicados de outros termos">
+                                              {dups > 0 ? dups.toLocaleString('pt-BR') : (read > 0 ? '0' : '—')}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-emerald-700 dark:text-emerald-300" title="Entraram na lista a partir deste termo (fatias classificadas)">
+                                              {classifiedAdded > 0 ? classifiedAdded.toLocaleString('pt-BR') : (read > 0 ? '0' : '—')}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-muted" title="Total declarado pelo PNCP para este termo">
+                                              {uni > 0 ? uni.toLocaleString('pt-BR') : '—'}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-muted">
+                                              {cov != null ? `${cov}%` : '—'}
+                                            </td>
+                                            <td className="px-2 py-1.5 text-muted">{formatPncpStopReason(run.stop_reason)}</td>
+                                            <td className="max-w-[11rem] truncate px-2 py-1.5 text-status-danger" title={errRaw || ''}>
+                                              {errRaw ? formatPncpRunError(errRaw) : '—'}
+                                            </td>
+                                          </tr>
+                                          );
+                                        })}
+                                        {pendingTerms.map(term => (
+                                          <tr key={`queue-${term}`} className="border-t border-line bg-amber-500/5">
+                                            <td className="px-2 py-1.5 font-medium text-ink">{term}</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                            <td className="px-2 py-1.5 text-amber-700 dark:text-amber-300">aguardando vez</td>
+                                            <td className="px-2 py-1.5 text-muted">—</td>
+                                          </tr>
+                                        ))}
+                                        {!termRuns.length && !pendingTerms.length && (
+                                          <tr>
+                                            <td colSpan={10} className="px-2 py-6 text-center text-muted">Sem runs de auditoria ainda — a coleta pode estar na fila.</td>
+                                          </tr>
+                                        )}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                  <p className={`${subtle} mt-2`}>
+                                    Se o termo mudou e a lista não cresceu: (a) job pausado por limite PNCP, (b) editais já vistos em outro termo, ou (c) fora do filtro ({filterStatusLabel}).
+                                    A coleta continua até cobrir o universo possível — o que já entrou na lista permanece.
+                                  </p>
                                 </div>
                               </div>
                               );
                             })()}
 
                             {pncpJobModalTab === 'resultados' && (
-                              <div className="space-y-3">
-                                <div className="rounded-[12px] border border-line bg-bg2/40 p-3">
-                                  <div>
-                                    <p className="text-xs font-semibold text-ink">Aprofundar nos resultados obtidos</p>
-                                    <p className={`${subtle} mt-0.5`}>Filtra o que já foi coletado neste job — não relança a busca no PNCP.</p>
+                              <div className="space-y-2">
+                                <div className="rounded-[10px] border border-line bg-bg2/40 px-2.5 py-2">
+                                  <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                                    <p className="text-[11px] font-semibold text-ink sm:text-xs">Lista classificada deste job</p>
+                                    <p className={`${subtle} text-[10px] leading-snug sm:text-[11px]`}>
+                                      Só o que passou no filtro. Universo bruto fica na Auditoria.
+                                    </p>
                                   </div>
-                                  <div className="mt-2.5 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,13rem)] sm:items-center">
+                                  <div className="mt-1.5 grid min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,11rem)_minmax(0,8.5rem)] sm:items-center">
                                     <input
-                                      className={`${input} h-8 w-full min-w-0 text-xs`}
+                                      className={`${input} h-7 w-full min-w-0 text-xs`}
                                       placeholder="Filtrar nesta lista (título, órgão, UF…)"
                                       value={pncpResultLocalQuery}
                                       onChange={(event) => setPncpResultLocalQuery(event.target.value)}
@@ -12785,7 +14720,7 @@ function App() {
                                         setPncpSearchFilters(prev => ({ ...prev, ordenacao }));
                                         if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { ordenacao });
                                       }}
-                                      className={`${select} filter-select h-8 text-xs`}
+                                      className={`${select} filter-select h-7 text-xs`}
                                     >
                                       <option value="relevancia_desc">Maior aderência</option>
                                       <option value="valor_desc_data_desc">Maior valor</option>
@@ -12793,10 +14728,27 @@ function App() {
                                       <option value="data_desc">Mais recentes</option>
                                       <option value="data_asc">Mais antigos</option>
                                     </select>
+                                    <select
+                                      value={pncpJobResultsPageSize}
+                                      onChange={(event) => {
+                                        const tam = Math.max(5, Math.min(100, Number(event.target.value) || 25));
+                                        setPncpJobResultsPageSize(tam);
+                                        if (activePncpSearchJobId) {
+                                          loadPncpJobResults(activePncpSearchJobId, 1, { tam });
+                                        }
+                                      }}
+                                      className={`${select} filter-select h-7 text-xs`}
+                                      title="Quantidade de itens por página"
+                                      aria-label="Itens por página"
+                                    >
+                                      {[10, 25, 50, 100].map((n) => (
+                                        <option key={n} value={n}>{n} por página</option>
+                                      ))}
+                                    </select>
                                   </div>
-                                  <div className="mt-2 flex flex-wrap gap-1.5">
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
                                     {[
-                                      ['all', 'Todos', pncpVisibilityCounts.all],
+                                      ['all', 'Na lista', pncpVisibilityCounts.all],
                                       ['hidden', 'Ocultos', pncpVisibilityCounts.hidden],
                                       ['pipeline', 'Já no pipeline', pncpVisibilityCounts.pipeline],
                                     ].map(([scope, label, count]) => (
@@ -12818,96 +14770,152 @@ function App() {
                                         Restaurar ocultos
                                       </button>
                                     )}
+                                    {Number(pncpSearchResults.total || 0) > 0 && (
+                                      <span className="ml-auto font-mono text-[10px] text-muted2">
+                                        pág. {Number(pncpSearchResults.pagina || 1).toLocaleString('pt-BR')}
+                                        /{Number(pncpSearchResults.totalPaginas || 1).toLocaleString('pt-BR')}
+                                        {' · '}
+                                        {Number(pncpSearchResults.tamanhoPagina || pncpJobResultsPageSize || 25)}/pág
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
                                 {live && (
-                                  <div className="rounded-[12px] border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-muted">
-                                    <strong className="text-ink">Job em coleta.</strong> Novos resultados entram aqui conforme as frentes terminam.
+                                  <div className={`rounded-[10px] border px-2.5 py-1.5 text-[11px] leading-snug text-muted sm:text-xs ${
+                                    job?.status === 'paused_rate_limit'
+                                      ? 'border-amber-500/30 bg-amber-500/10'
+                                      : 'border-primary/25 bg-primary/5'
+                                  }`}>
+                                    <strong className="text-ink">
+                                      {job?.status === 'paused_rate_limit'
+                                        ? 'Pausado: PNCP limitou — lista preservada.'
+                                        : 'Coletando no PNCP…'}
+                                    </strong>
+                                    {' '}
+                                    {(() => {
+                                      const funnelRuns = job?.term_runs || pncpSearchResults.query_plan?.term_runs || [];
+                                      const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), funnelRuns);
+                                      const prog = job?.progress || {};
+                                      const term = prog.current_term || funnel.mainTerm || activePncpJobProgress.currentTerm || '';
+                                      const page = prog.resume_from_page || prog.current_page;
+                                      const bits = [];
+                                      if (term) bits.push(`termo “${term}”`);
+                                      if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                      if (funnel.brutosLidos > 0 && funnel.universeApi > 0) {
+                                        bits.push(`${funnel.brutosLidos.toLocaleString('pt-BR')}/${funnel.universeApi.toLocaleString('pt-BR')} brutos`);
+                                      } else if (funnel.brutosLidos > 0) {
+                                        bits.push(`${funnel.brutosLidos.toLocaleString('pt-BR')} brutos`);
+                                      }
+                                      if (funnel.duplicatesSum > 0) {
+                                        bits.push(`${funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos`);
+                                      }
+                                      bits.push(`${funnel.classified.toLocaleString('pt-BR')} na lista`);
+                                      if (job?.status === 'paused_rate_limit') {
+                                        const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
+                                        if (cd) bits.push(cd);
+                                      }
+                                      return bits.join(' · ');
+                                    })()}
+                                    {job?.status === 'paused_rate_limit' && (
+                                      <span className="mt-0.5 block text-[10px] text-amber-800 dark:text-amber-200 sm:text-[11px]">
+                                        Retoma sozinho na próxima página — não re-pede o lido nem apaga a lista.
+                                      </span>
+                                    )}
+                                    {job?.status === 'running' && Number(job?.progress?.current_term_duplicates || 0) > 0 && Number(job?.progress?.new_unique_last_page || 0) === 0 && (
+                                      <span className="mt-0.5 block text-[10px] sm:text-[11px]">
+                                        Termo atual devolve sobretudo já vistos ou fora do filtro — lista pode ficar estável sem estar travada.
+                                      </span>
+                                    )}
                                   </div>
                                 )}
 
                                 {visiblePncpResults.length > 0 ? (
-                                  <div className="space-y-2.5">
+                                  <div className="space-y-2">
                                     {visiblePncpResults.map((item) => (
-                                      <div key={item.id} className="rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40">
-                                        <div className="grid gap-3 lg:grid-cols-[1fr_150px]">
-                                          <div className="min-w-0">
+                                      <div key={item.id} className="overflow-hidden rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40">
+                                        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7.5rem,9.5rem)]">
+                                          <div className="min-w-0 overflow-hidden">
                                             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                                              <span className={`inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${getPncpScoreClass(item.score)}`}>
+                                              <span className={`inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${getPncpScoreClass(item.score)}`}>
                                                 {Number(item.score || 0)} · {item.score_label || 'Aderência'}
                                               </span>
-                                              <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
+                                              <span className={`inline-flex max-w-full items-center truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
                                                 {item.prazo_info?.label || 'Prazo n/d'}
                                               </span>
-                                              <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                                              <span className="inline-flex max-w-[12rem] items-center truncate rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary" title={item.modalidade?.nome || ''}>
                                                 {item.modalidade?.nome || 'Modalidade n/d'}
                                               </span>
                                               {item.srp === true && (
-                                                <span title="Sistema de Registro de Preços (Lei 14.133/2021)" className="inline-flex items-center rounded-md bg-green/10 px-2 py-0.5 text-[11px] font-semibold text-green">
+                                                <span title="Sistema de Registro de Preços (Lei 14.133/2021)" className="inline-flex shrink-0 items-center rounded-md bg-green/10 px-2 py-0.5 text-[11px] font-semibold text-green">
                                                   SRP
                                                 </span>
                                               )}
                                               {item.modo_disputa?.nome && (
-                                                <span title="Modo de disputa" className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                                <span title="Modo de disputa" className="inline-flex max-w-[8rem] items-center truncate rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
                                                   {item.modo_disputa.nome}
                                                 </span>
                                               )}
                                               {item.amparo_legal?.nome && (
-                                                <span title={item.amparo_legal.descricao || item.amparo_legal.nome} className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                                <span title={item.amparo_legal.descricao || item.amparo_legal.nome} className="inline-flex max-w-[7rem] items-center truncate rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
                                                   {String(item.amparo_legal.nome).replace(/^Lei\s*14\.?133\/?(?:2021)?,?\s*/i, '') || item.amparo_legal.nome}
                                                 </span>
                                               )}
-                                              <span className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
+                                              <span className="inline-flex shrink-0 items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
                                                 {item.esfera?.nome ? `${item.esfera.nome} · ` : ''}{item.uf || 'BR'}
                                               </span>
                                               {item.__visibility !== 'visible' && (
-                                                <span className="inline-flex items-center rounded-md bg-amber/15 px-2 py-0.5 text-[11px] font-semibold text-amber">
+                                                <span className="inline-flex shrink-0 items-center rounded-md bg-amber/15 px-2 py-0.5 text-[11px] font-semibold text-amber">
                                                   {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Oculto'}
                                                 </span>
                                               )}
                                             </div>
-                                            <h4 className="truncate text-sm font-semibold text-ink">
+                                            <h4 className="truncate text-sm font-semibold text-ink" title={item.titulo || ''}>
                                               {item.url ? (
                                                 <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{item.titulo}</a>
                                               ) : item.titulo}
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
-                                            <p className="mt-2 text-xs text-muted">
+                                            <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
                                               {item.orgao?.nome || 'n/d'}
                                               {item.criterio_julgamento ? <> · {item.criterio_julgamento}</> : null}
                                             </p>
                                           </div>
-                                          <div className="flex flex-col gap-1.5 lg:border-l lg:border-line lg:pl-3">
+                                          <div className="flex min-w-0 flex-col gap-1.5 lg:border-l lg:border-line lg:pl-3">
                                             {(() => {
                                               const itemValue = getPncpItemMatchedValue(item);
                                               const totalValue = getPncpLicitacaoTotalValue(item);
                                               const itemCount = Number(item?.itens_pertinentes_count || 0);
+                                              const itemFull = itemValue ? formatCurrency(itemValue) : null;
+                                              const totalFull = totalValue ? formatCurrency(totalValue) : null;
                                               return (
-                                                <div className="space-y-1.5">
-                                                  <div>
+                                                <div className="min-w-0 space-y-1.5">
+                                                  <div className="min-w-0">
                                                     <p className="font-mono text-[9px] uppercase tracking-wide text-primary/80">
                                                       Valor do item{itemCount > 1 ? `s (${itemCount})` : ''}
                                                     </p>
                                                     <p
-                                                      className="mt-0.5 font-mono text-base font-bold text-primary"
-                                                      title={itemCount > 1
-                                                        ? 'Soma dos itens da compra que batem com o termo da busca'
-                                                        : 'Valor do item pertinente ao termo da busca'}
+                                                      className={`mt-0.5 min-w-0 text-primary ${getPncpCardCurrencyClass(itemValue, { primary: true })}`}
+                                                      title={[
+                                                        itemFull || 'n/d',
+                                                        itemCount > 1
+                                                          ? 'Soma dos itens da compra que batem com o termo da busca'
+                                                          : 'Valor do item pertinente ao termo da busca',
+                                                      ].join(' — ')}
                                                     >
-                                                      {itemValue ? formatCurrency(itemValue) : 'n/d'}
+                                                      {itemValue ? formatPncpCardCurrency(itemValue) : 'n/d'}
                                                     </p>
                                                   </div>
-                                                  <div className="border-t border-line/70 pt-1.5">
+                                                  <div className="min-w-0 border-t border-line/70 pt-1.5">
                                                     <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">
                                                       Total da licitação
                                                     </p>
                                                     <p
-                                                      className="mt-0.5 font-mono text-xs font-semibold text-muted"
-                                                      title="Valor total estimado da compra no PNCP"
+                                                      className={`mt-0.5 min-w-0 text-muted ${getPncpCardCurrencyClass(totalValue)}`}
+                                                      title={totalFull ? `${totalFull} — Valor total estimado da compra no PNCP` : 'Valor total estimado da compra no PNCP'}
                                                     >
-                                                      {totalValue ? formatCurrency(totalValue) : 'n/d'}
+                                                      {totalValue ? formatPncpCardCurrency(totalValue) : 'n/d'}
                                                     </p>
                                                   </div>
                                                 </div>
@@ -12917,21 +14925,21 @@ function App() {
                                               type="button"
                                               onClick={() => importPncpLicitacao(item)}
                                               disabled={pncpImportingId === item.id || item.__visibility === 'pipeline'}
-                                              className="h-8 rounded-[10px] bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] px-3 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60"
+                                              className="h-8 w-full shrink-0 rounded-[10px] bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] px-2 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60"
                                             >
                                               {pncpImportingId === item.id ? 'Importando…' : 'Importar'}
                                             </button>
                                             {item.url && (
-                                              <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex h-8 items-center justify-center rounded-[10px] border border-line bg-bg2 text-xs font-semibold hover:bg-surf2">
+                                              <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex h-8 w-full shrink-0 items-center justify-center rounded-[10px] border border-line bg-bg2 text-xs font-semibold hover:bg-surf2">
                                                 PNCP ↗
                                               </a>
                                             )}
                                             {item.__visibility === 'hidden' ? (
-                                              <button type="button" onClick={() => restorePncpItem(item.id)} className="h-8 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
+                                              <button type="button" onClick={() => restorePncpItem(item.id)} className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
                                                 Restaurar
                                               </button>
                                             ) : (
-                                              <button type="button" onClick={() => hidePncpItem(item.id)} className="h-8 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
+                                              <button type="button" onClick={() => hidePncpItem(item.id)} className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
                                                 Ocultar
                                               </button>
                                             )}
@@ -12956,7 +14964,7 @@ function App() {
                                 )}
 
                                 {pncpSearchResults.totalPaginas > 1 && (
-                                  <div className="flex items-center justify-center gap-2 pt-1">
+                                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                                     <button
                                       type="button"
                                       onClick={() => loadPncpJobResults(activePncpSearchJobId, pncpSearchResults.pagina - 1)}
@@ -12967,6 +14975,8 @@ function App() {
                                     </button>
                                     <span className="font-mono text-xs text-muted">
                                       {pncpSearchResults.pagina} / {pncpSearchResults.totalPaginas}
+                                      {' · '}
+                                      {Number(pncpSearchResults.tamanhoPagina || pncpJobResultsPageSize || 25)} por página
                                     </span>
                                     <button
                                       type="button"
@@ -13338,11 +15348,32 @@ function App() {
                                   <input className={`${input} h-8 w-full text-xs`} inputMode="decimal" placeholder="Total" value={toPtBrInputSafe(item.custo_total_item)} onChange={(event) => updateDraftItem(item.id, { custo_total_item: event.target.value.replace(/\./g, ',') })} />
                                 </div>
                                 <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-12">
-                                  <button type="button" className={`${iconBtn} h-8 w-8 sm:col-span-1`} onClick={() => setExpandedDraftChecklist(prev => ({ ...prev, [item.id]: !prev[item.id] }))} title="Checklist técnico">
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                  <button
+                                    type="button"
+                                    className={`${iconBtn} relative h-8 w-8 sm:col-span-1 ${totalCount > 0 ? 'border-primary/40 text-primary' : ''}`}
+                                    onClick={() => setExpandedDraftChecklist(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+                                    title={totalCount > 0
+                                      ? `Checklist técnico: ${totalCount} requisito${totalCount === 1 ? '' : 's'} (${okCount} OK)`
+                                      : 'Checklist técnico — nenhum requisito ainda'}
+                                    aria-label={totalCount > 0
+                                      ? `Abrir checklist, ${totalCount} requisitos`
+                                      : 'Abrir checklist técnico'}
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
                                       <path d="M9 12l2 2 4-4" />
                                       <path d="M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
                                     </svg>
+                                    {totalCount > 0 && (
+                                      <span
+                                        className={`absolute -right-1.5 -top-1.5 flex h-[1.05rem] min-w-[1.05rem] items-center justify-center rounded-full px-1 font-mono text-[9px] font-bold leading-none text-white shadow-sm ${
+                                          pending
+                                            ? 'bg-amber-500'
+                                            : 'bg-emerald-500'
+                                        }`}
+                                      >
+                                        {totalCount > 99 ? '99+' : totalCount}
+                                      </span>
+                                    )}
                                   </button>
                                   <input className={`${input} h-8 w-full text-xs sm:col-span-4`} placeholder="Requisito técnico" value={reqForm.requisito || ''} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, requisito: event.target.value } }))} />
                                   <select className={`${select} h-8 w-full text-xs sm:col-span-2`} value={reqForm.status || 'verificar'} onChange={(event) => setNewOpportunityItemRequirementForm(prev => ({ ...prev, [item.id]: { ...reqForm, status: event.target.value } }))}>
@@ -14104,7 +16135,20 @@ function App() {
 
               {licitacaoSubview === 'resultados' && (
                 <div className="mt-6 space-y-5">
-                  <div className="rounded-[16px] border border-line bg-surf p-4 md:p-5 space-y-4">
+                  <form
+                    className="space-y-4 rounded-[16px] border border-line bg-surf p-4 md:p-5"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      // Mesmos filtros + incompleto → retoma do checkpoint (não joga fora o parcial).
+                      // Filtros novos → busca do zero.
+                      const cp = readPncpOutcomeCheckpoint();
+                      const f = pncpOutcomeFiltersRef.current || {};
+                      const sameFilters = cp?.filters && ['q', 'fornecedor', 'fornecedor_ni', 'orgao_cnpj', 'uf', 'tipo']
+                        .every(key => String(cp.filters[key] || '').trim() === String(f[key] || '').trim());
+                      const shouldResume = Boolean(cp && !cp.complete && sameFilters && (cp.items?.length || cp.cursors));
+                      runPncpOutcomeSearch({}, { resume: shouldResume });
+                    }}
+                  >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
                         <h2 className={`${sectionTitle} text-base`}>Contratos e resultados</h2>
@@ -14112,16 +16156,32 @@ function App() {
                           Vencedores, valores homologados, contratos e atas — por produto, fornecedor ou órgão.
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => runPncpOutcomeSearch(1)}
-                        disabled={pncpOutcomeLoading}
-                        className={`${btnPrimary} shrink-0`}
-                      >
-                        <MagnifyingGlassIcon className="h-4 w-4" />
-                        {pncpOutcomeLoading ? 'Buscando…' : 'Buscar'}
-                      </button>
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cleared = { q: '', fornecedor: '', fornecedor_ni: '', orgao_cnpj: '', uf: '', tipo: 'todos', ordenacao: 'data_desc' };
+                            setPncpOutcomeFilters(cleared);
+                            pncpOutcomeFiltersRef.current = cleared;
+                            clearPncpOutcomeCheckpoint();
+                            runPncpOutcomeSearch(cleared);
+                          }}
+                          disabled={pncpOutcomeLoading && pncpOutcomePhase?.stage === 'searching'}
+                          className={btnSecondary}
+                        >
+                          Limpar
+                        </button>
+                        <button type="submit" disabled={pncpOutcomeLoading && pncpOutcomePhase?.stage !== 'paused_rate_limit'} className={btnPrimary}>
+                          <MagnifyingGlassIcon className="h-4 w-4" />
+                          {pncpOutcomeLoading
+                            ? (pncpOutcomePhase?.stage === 'paused_rate_limit' ? 'Aguardando PNCP…' : 'Carregando tudo…')
+                            : (pncpOutcomeResults.status === 'paused_rate_limit' && !pncpOutcomeResults.complete
+                              ? 'Retomar'
+                              : 'Buscar')}
+                        </button>
+                      </div>
                     </div>
+
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                       <div className="min-w-0 md:col-span-2 xl:col-span-1">
                         <label className="mb-1.5 block text-xs font-medium text-muted">Produto / descrição</label>
@@ -14130,7 +16190,6 @@ function App() {
                           placeholder="Produto, item ou descrição"
                           value={pncpOutcomeFilters.q}
                           onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, q: event.target.value }))}
-                          onKeyDown={(event) => { if (event.key === 'Enter') runPncpOutcomeSearch(1); }}
                         />
                       </div>
                       <div className="min-w-0">
@@ -14186,44 +16245,158 @@ function App() {
                           ))}
                         </select>
                       </div>
+                      <div className="min-w-0">
+                        <label className="mb-1.5 block text-xs font-medium text-muted">Ordenar por</label>
+                        <select
+                          className={`${select} filter-select text-xs`}
+                          value={pncpOutcomeFilters.ordenacao || 'data_desc'}
+                          onChange={(event) => {
+                            const ordenacao = event.target.value;
+                            setPncpOutcomeFilters(prev => ({ ...prev, ordenacao }));
+                            pncpOutcomeFiltersRef.current = { ...pncpOutcomeFiltersRef.current, ordenacao };
+                            // Só reordena o que já está em memória — não reconsulta o PNCP.
+                            if (!pncpOutcomeResults.requires_query && (pncpOutcomeResults.items || []).length) {
+                              setPncpOutcomeResults(prev => {
+                                const items = sortPncpOutcomeItems(prev.items || [], ordenacao);
+                                return {
+                                  ...prev,
+                                  items,
+                                  summary: summarizePncpOutcomeItems(items),
+                                  pagina: 1,
+                                };
+                              });
+                            }
+                          }}
+                        >
+                          <option value="data_desc">Mais recentes</option>
+                          <option value="data_asc">Mais antigas</option>
+                          <option value="valor_desc">Maior valor</option>
+                          <option value="valor_asc">Menor valor</option>
+                          <option value="relevancia">Relevância</option>
+                        </select>
+                      </div>
                     </div>
                     {pncpOutcomeError && (
                       <div className="rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2.5 text-xs text-status-danger">
                         {pncpOutcomeError}
                       </div>
                     )}
-                  </div>
+                  </form>
+
+                  {pncpOutcomePhase && pncpOutcomePhase.stage !== 'done' && (
+                    <div className={`flex flex-wrap items-center gap-2 rounded-[12px] border px-3.5 py-2.5 text-xs ${
+                      pncpOutcomePhase.stage === 'paused_rate_limit'
+                        ? 'border-amber-500/30 bg-amber-500/10'
+                        : 'border-line bg-surf'
+                    }`}>
+                      <ArrowPathIcon className={`h-3.5 w-3.5 ${
+                        pncpOutcomePhase.stage === 'paused_rate_limit' ? 'text-amber-600 dark:text-amber-300' : 'animate-spin text-primary'
+                      }`} />
+                      <span className={`font-semibold ${
+                        pncpOutcomePhase.stage === 'paused_rate_limit'
+                          ? 'text-amber-800 dark:text-amber-200'
+                          : 'text-ink'
+                      }`}
+                      >
+                        {pncpOutcomePhase.label}
+                      </span>
+                      {pncpOutcomeResults.items.length > 0 ? (
+                        <span className="font-mono text-muted">
+                          · {pncpOutcomeResults.items.length.toLocaleString('pt-BR')} salvos
+                          {Number(pncpOutcomeResults.total || 0) > 0
+                            ? ` de ${Number(pncpOutcomeResults.total || 0).toLocaleString('pt-BR')} prometidos`
+                            : ''}
+                          {pncpOutcomePhase.detail ? ` · ${pncpOutcomePhase.detail}` : ''}
+                        </span>
+                      ) : pncpOutcomePhase.stage === 'searching' ? (
+                        <span className="font-mono text-muted">· nada encontrado ainda</span>
+                      ) : null}
+                    </div>
+                  )}
+                  {pncpOutcomePhase?.stage === 'done' && pncpOutcomeResults.complete && pncpOutcomeResults.items.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-status-success/25 bg-status-success/5 px-3.5 py-2 text-xs text-muted">
+                      <span className="font-semibold text-status-success">{pncpOutcomePhase.label}</span>
+                      <span className="font-mono">· permanece até Limpar ou nova busca</span>
+                    </div>
+                  )}
 
                   {pncpOutcomeResults.items.length > 0 && (
                     <div className="grid gap-2.5 sm:grid-cols-3">
                       <div className="rounded-[12px] border border-line bg-surf px-3 py-2.5">
-                        <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Exibidos</p>
-                        <p className="mt-0.5 font-mono text-lg font-bold text-ink">{pncpOutcomeResults.summary?.count || pncpOutcomeResults.items.length}</p>
+                        <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">
+                          {pncpOutcomeLoading ? 'Carregados' : 'Na página'}
+                        </p>
+                        <p className="mt-0.5 font-mono text-lg font-bold text-ink">
+                          {pncpOutcomeLoading
+                            ? (pncpOutcomeResults.summary?.count || pncpOutcomeResults.items.length)
+                            : Math.min(
+                              pncpOutcomeResults.tamanhoPagina || 20,
+                              Math.max(0, (pncpOutcomeResults.items || []).length - ((pncpOutcomeResults.pagina || 1) - 1) * (pncpOutcomeResults.tamanhoPagina || 20))
+                            )}
+                          {!pncpOutcomeLoading && (
+                            <span className="ml-1 text-xs font-normal text-muted">
+                              / {pncpOutcomeResults.items.length.toLocaleString('pt-BR')}
+                            </span>
+                          )}
+                        </p>
                       </div>
                       <div className="rounded-[12px] border border-line bg-surf px-3 py-2.5">
                         <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Valor encontrado</p>
                         <p className="mt-0.5 font-mono text-lg font-bold text-ink">{formatCurrency(pncpOutcomeResults.summary?.total_value) || 'R$ 0,00'}</p>
                       </div>
                       <div className="rounded-[12px] border border-line bg-surf px-3 py-2.5">
-                        <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Total cache/busca</p>
+                        <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">Total encontrado</p>
                         <p className="mt-0.5 font-mono text-lg font-bold text-ink">{Number(pncpOutcomeResults.total || 0).toLocaleString('pt-BR')}</p>
                       </div>
                     </div>
                   )}
 
                   <div className="space-y-2.5">
-                    {(pncpOutcomeResults.items || []).map(item => {
+                    {(pncpOutcomeResults.items || [])
+                      .slice(
+                        ((pncpOutcomeResults.pagina || 1) - 1) * (pncpOutcomeResults.tamanhoPagina || 20),
+                        (pncpOutcomeResults.pagina || 1) * (pncpOutcomeResults.tamanhoPagina || 20)
+                      )
+                      .map(item => {
+                      const fornecedores = Array.isArray(item.fornecedores) && item.fornecedores.length
+                        ? item.fornecedores
+                        : (item.fornecedor_nome || item.fornecedor_ni
+                          ? [{ nome: item.fornecedor_nome, ni: item.fornecedor_ni }]
+                          : []);
+                      const fornecedorLabels = fornecedores
+                        .map(row => row?.nome || row?.razao_social || row?.ni || row?.documento)
+                        .filter(Boolean);
+                      const hasResult = item.has_result === true || (item.has_result == null && item.etapa_comercial === 'resulted');
+                      const hasContract = item.has_contract === true || (item.has_contract == null && item.etapa_comercial === 'contracted');
+                      const hasAta = item.has_ata === true || (item.has_ata == null && item.etapa_comercial === 'ata_available');
                       const stageLabel = item.etapa_comercial === 'contracted' ? 'Contratada'
                         : item.etapa_comercial === 'ata_available' ? 'Ata disponível'
                         : item.etapa_comercial === 'resulted' ? 'Com resultado'
                         : item.etapa_comercial === 'direct_authorized' ? 'Contratação direta'
                         : 'Sem etapa';
+                      const pncpUrl = getSafeExternalUrl(item.url);
+                      const fmtOutcomeDate = (value) => {
+                        if (!value) return null;
+                        const parsed = new Date(value);
+                        return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleDateString('pt-BR');
+                      };
+                      const dateChips = [
+                        ['Publicação no PNCP', 'pub', fmtOutcomeDate(item.data_publicacao)],
+                        ['Assinatura do contrato', 'ass', fmtOutcomeDate(item.data_assinatura)],
+                        ['Data do resultado', 'res', fmtOutcomeDate(item.data_resultado)],
+                        ['Fim da vigência', 'vig. até', fmtOutcomeDate(item.data_fim_vigencia)],
+                      ].filter(entry => entry[2]);
                       return (
-                        <div key={item.pncp_key} className="rounded-[14px] border border-line bg-surf p-3.5 transition hover:border-primary/40">
+                        <div key={item.pncp_key || `${item.orgao_cnpj}-${item.ano}-${item.sequencial}`} className="rounded-[14px] border border-line bg-surf p-3.5 transition hover:border-primary/40">
                           <div className="grid gap-3 lg:grid-cols-[1fr_140px]">
                             <div className="min-w-0">
                               <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                                <span className="rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">{stageLabel}</span>
+                                {hasResult && <span className="rounded-md bg-status-success/10 px-2 py-0.5 text-[11px] font-semibold text-status-success">Resultado</span>}
+                                {hasContract && <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">Contrato</span>}
+                                {hasAta && <span className="rounded-md bg-secondary/10 px-2 py-0.5 text-[11px] font-semibold text-secondary">Ata</span>}
+                                {!hasResult && !hasContract && !hasAta && (
+                                  <span className="rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] font-semibold text-muted">{stageLabel}</span>
+                                )}
                                 {item.uf && <span className="rounded-md border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] text-muted">{item.uf}</span>}
                                 {item.modalidade && <span className="rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">{item.modalidade}</span>}
                                 {item.srp === true && (
@@ -14234,26 +16407,38 @@ function App() {
                                     {String(item.amparo_legal).replace(/^Lei\s*14\.?133\/?(?:2021)?,?\s*/i, '') || item.amparo_legal}
                                   </span>
                                 )}
+                                {dateChips.map(([title, label, value]) => (
+                                  <span key={label} title={title} className="rounded-md border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] text-muted">
+                                    {label} {value}
+                                  </span>
+                                ))}
                               </div>
                               <h3 className="text-sm font-semibold text-ink">{item.titulo || item.descricao || item.pncp_key}</h3>
                               {item.descricao && item.titulo && <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>}
                               <div className="mt-2.5 grid gap-1.5 text-xs text-muted sm:grid-cols-2">
                                 <p><span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span> {item.orgao_nome || item.orgao_cnpj || 'n/d'}</p>
-                                <p><span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Fornecedor</span> {item.fornecedor_nome || item.fornecedor_ni || 'n/d'}</p>
+                                <p title={fornecedorLabels.join(' · ')}>
+                                  <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Fornecedores</span>{' '}
+                                  {fornecedorLabels.length
+                                    ? `${fornecedorLabels.slice(0, 2).join(' · ')}${fornecedorLabels.length > 2 ? ` +${fornecedorLabels.length - 2}` : ''}`
+                                    : 'n/d'}
+                                </p>
                                 <p><span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Estimado</span> <span className="font-mono text-ink">{formatCurrency(item.valor_estimado) || 'n/d'}</span></p>
                                 <p><span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Homologado</span> <span className="font-mono font-semibold text-ink">{formatCurrency(item.valor_homologado) || 'n/d'}</span></p>
                               </div>
                             </div>
                             <div className="flex flex-row gap-1.5 lg:flex-col lg:border-l lg:border-line lg:pl-3">
-                              <button
-                                type="button"
-                                onClick={() => openPncpOutcomeDossier(item)}
-                                className={`${btnPrimarySm}`}
-                              >
-                                Dossiê
-                              </button>
-                              {item.url && (
-                                <a href={item.url} target="_blank" rel="noopener noreferrer" className={`${btnSecondarySm}`}>
+                              {Boolean(item.orgao_cnpj && item.ano && item.sequencial) && (
+                                <button
+                                  type="button"
+                                  onClick={() => openPncpOutcomeDossier(item)}
+                                  className={`${btnPrimarySm}`}
+                                >
+                                  Dossiê
+                                </button>
+                              )}
+                              {pncpUrl && (
+                                <a href={pncpUrl} target="_blank" rel="noopener noreferrer" className={`${btnSecondarySm}`}>
                                   PNCP ↗
                                 </a>
                               )}
@@ -14262,27 +16447,75 @@ function App() {
                         </div>
                       );
                     })}
-                    {!pncpOutcomeLoading && pncpOutcomeResults.items.length === 0 && (
+                    {!pncpOutcomeLoading && (!pncpOutcomePhase || pncpOutcomePhase.stage === 'done') && pncpOutcomeResults.items.length === 0 && pncpOutcomeResults.requires_query && (
                       <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
-                        <p className="text-sm font-semibold text-ink">Nenhum resultado ainda</p>
-                        <p className={`${subtle} mt-1 mx-auto max-w-md`}>Busque por produto, fornecedor ou órgão para consultar contratos e resultados no PNCP.</p>
+                        <p className="text-sm font-semibold text-ink">Busque licitações finalizadas no PNCP</p>
+                        <p className={`${subtle} mx-auto mt-1 max-w-md`}>
+                          Contratos, atas e resultados de todo o Brasil — por fornecedor, produto/descrição, órgão ou UF. Preencha ao menos um filtro e clique em Buscar.
+                        </p>
                       </div>
                     )}
-                    {pncpOutcomeLoading && (
-                      <div className={`${subtle} py-8 text-center`}>Buscando no PNCP…</div>
+                    {!pncpOutcomeLoading && (!pncpOutcomePhase || pncpOutcomePhase.stage === 'done') && pncpOutcomeResults.items.length === 0 && !pncpOutcomeResults.requires_query && (
+                      <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
+                        <p className="text-sm font-semibold text-ink">Nenhuma correspondência encontrada</p>
+                        <p className={`${subtle} mx-auto mt-1 max-w-md`}>
+                          Tente outros termos (nome do fornecedor, produto ou objeto) ou afrouxe os filtros de tipo, UF e órgão.
+                        </p>
+                      </div>
+                    )}
+                    {pncpOutcomeLoading && pncpOutcomeResults.items.length === 0 && (
+                      <div className="space-y-2.5" aria-label="Carregando contratos e resultados" aria-busy="true">
+                        {[0, 1, 2].map(index => (
+                          <div key={index} className="animate-pulse rounded-[14px] bg-surf p-4">
+                            <div className="flex gap-2">
+                              <span className="h-5 w-20 rounded-md bg-bg2" />
+                              <span className="h-5 w-14 rounded-md bg-bg2" />
+                            </div>
+                            <div className="mt-3 h-4 w-3/5 rounded bg-bg2" />
+                            <div className="mt-2 h-3 w-full max-w-2xl rounded bg-bg2" />
+                            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                              <span className="h-3 w-4/5 rounded bg-bg2" />
+                              <span className="h-3 w-3/5 rounded bg-bg2" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
 
-                  {pncpOutcomeResults.totalPaginas > 1 && (
-                    <div className="flex items-center justify-center gap-2">
-                      <button type="button" className={`${btnSecondarySm}`} disabled={pncpOutcomeResults.pagina <= 1 || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina - 1)}>Anterior</button>
-                      <span className="font-mono text-xs text-muted">{pncpOutcomeResults.pagina} / {pncpOutcomeResults.totalPaginas}</span>
-                      <button type="button" className={`${btnSecondarySm}`} disabled={pncpOutcomeResults.pagina >= pncpOutcomeResults.totalPaginas || pncpOutcomeLoading} onClick={() => runPncpOutcomeSearch(pncpOutcomeResults.pagina + 1)}>Próxima</button>
+                  {(pncpOutcomeResults.items || []).length > (pncpOutcomeResults.tamanhoPagina || 20) && (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className={`${btnSecondarySm}`}
+                          disabled={pncpOutcomeResults.pagina <= 1}
+                          onClick={() => setPncpOutcomeClientPage(pncpOutcomeResults.pagina - 1)}
+                        >
+                          Anterior
+                        </button>
+                        <span className="font-mono text-xs text-muted">
+                          {pncpOutcomeResults.pagina} / {Math.max(1, Math.ceil((pncpOutcomeResults.items || []).length / (pncpOutcomeResults.tamanhoPagina || 20)))}
+                        </span>
+                        <button
+                          type="button"
+                          className={`${btnSecondarySm}`}
+                          disabled={pncpOutcomeResults.pagina >= Math.ceil((pncpOutcomeResults.items || []).length / (pncpOutcomeResults.tamanhoPagina || 20))}
+                          onClick={() => setPncpOutcomeClientPage(pncpOutcomeResults.pagina + 1)}
+                        >
+                          Próxima
+                        </button>
+                      </div>
+                      {pncpOutcomeLoading && (
+                        <span className="font-mono text-[11px] text-muted">
+                          paginação local · ainda carregando o restante do PNCP…
+                        </span>
+                      )}
                     </div>
                   )}
 
-                  {pncpOutcomeDossier && (
-                    <div className={modalOverlay} onClick={() => setPncpOutcomeDossier(null)} role="presentation">
+                  {pncpOutcomeDossierTarget && (
+                    <div className={modalOverlay} onClick={closePncpOutcomeDossier} role="presentation">
                       <div
                         className="flex w-full max-w-5xl max-h-[90vh] flex-col overflow-hidden rounded-[16px] border border-border bg-card shadow-lift dark:bg-[#111827] dark:border-[#1f2937]"
                         onClick={(event) => event.stopPropagation()}
@@ -14292,16 +16525,40 @@ function App() {
                         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
                           <div className="min-w-0">
                             <h3 className={`${sectionTitle} text-base`}>Dossiê PNCP</h3>
-                            <p className={`${subtle} mt-0.5 truncate`}>{pncpOutcomeDossier.normalized_item?.titulo || pncpOutcomeDossier.compra?.objetoCompra || 'Compra PNCP'}</p>
+                            <p className={`${subtle} mt-0.5 truncate`}>
+                              {pncpOutcomeDossier?.normalized_item?.titulo
+                                || pncpOutcomeDossier?.compra?.objetoCompra
+                                || pncpOutcomeDossierTarget?.titulo
+                                || pncpOutcomeDossierTarget?.descricao
+                                || 'Compra PNCP'}
+                            </p>
                           </div>
-                          <button type="button" className={iconBtn} aria-label="Fechar" onClick={() => setPncpOutcomeDossier(null)}>
+                          <button type="button" className={iconBtn} aria-label="Fechar" onClick={closePncpOutcomeDossier}>
                             <XMarkIcon className="h-5 w-5" />
                           </button>
                         </div>
                         <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-4 py-4 sm:px-5">
                           {pncpOutcomeDossierLoading ? (
-                            <div className={`${subtle} py-8 text-center`}>Carregando dossiê…</div>
-                          ) : (
+                            <div className="grid animate-pulse gap-3 lg:grid-cols-2" aria-label="Carregando dossiê" aria-busy="true">
+                              {[0, 1, 2, 3].map(index => (
+                                <div key={index} className={`rounded-[12px] bg-bg2/70 p-4 ${index > 1 ? 'lg:col-span-2' : ''}`}>
+                                  <div className="h-3 w-28 rounded bg-line" />
+                                  <div className="mt-3 h-3 w-full rounded bg-line" />
+                                  <div className="mt-2 h-3 w-4/5 rounded bg-line" />
+                                  <div className="mt-2 h-3 w-3/5 rounded bg-line" />
+                                </div>
+                              ))}
+                            </div>
+                          ) : pncpOutcomeDossierError ? (
+                            <div className="rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-4 py-6 text-center">
+                              <p className="text-sm font-semibold text-status-danger">Não foi possível carregar o dossiê</p>
+                              <p className="mx-auto mt-1 max-w-lg text-xs text-muted">{pncpOutcomeDossierError}</p>
+                              <button type="button" className={`${btnSecondarySm} mt-4`} onClick={() => openPncpOutcomeDossier(pncpOutcomeDossierTarget)}>
+                                <ArrowPathIcon className="h-4 w-4" />
+                                Tentar novamente
+                              </button>
+                            </div>
+                          ) : pncpOutcomeDossier ? (
                             <div className="grid gap-3 lg:grid-cols-2">
                               <div className="rounded-[12px] border border-line bg-bg2/40 p-3">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Totais</h4>
@@ -14319,11 +16576,81 @@ function App() {
                                     <div key={`${row.numeroItem || index}-${row.niFornecedor || index}`} className="rounded-lg border border-line bg-surf px-2.5 py-1.5 text-xs">
                                       <p className="font-semibold text-ink">{row.nomeRazaoSocialFornecedor || row.niFornecedor || 'Fornecedor n/d'}</p>
                                       <p className="text-muted">Item {row.numeroItem || 'n/d'} · <span className="font-mono">{formatCurrency(row.valorTotalHomologado) || 'n/d'}</span></p>
+                                      {row.descricaoItem && <p className="mt-1 line-clamp-2 text-muted">{row.descricaoItem}</p>}
                                     </div>
                                   ))}
                                   {(pncpOutcomeDossier.resultados || []).length === 0 && <p className="text-xs text-muted">Nenhum resultado retornado.</p>}
                                 </VerticalScrollArrows>
                               </div>
+
+                              <div className="rounded-[12px] border border-line bg-bg2/40 p-3">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Contratos ({(pncpOutcomeDossier.contratos || []).length})</h4>
+                                <VerticalScrollArrows className="mt-2 max-h-64" contentClassName="space-y-1.5">
+                                  {(pncpOutcomeDossier.contratos || []).slice(0, 50).map((row, index) => {
+                                    const contractUrl = getSafeExternalUrl(row.url, row.urlContrato, row.uri, row.link, row.urlCipi);
+                                    return (
+                                      <div key={row.numeroControlePNCP || row.numeroContratoEmpenho || index} className="rounded-lg border border-line bg-surf px-2.5 py-2 text-xs">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <p className="font-semibold text-ink">{row.numeroContratoEmpenho || row.numeroControlePNCP || `Contrato ${index + 1}`}</p>
+                                          {contractUrl && <a href={contractUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 font-medium text-primary hover:underline">Abrir ↗</a>}
+                                        </div>
+                                        <p className="mt-0.5 text-muted">{row.nomeRazaoSocialFornecedor || row.niFornecedor || 'Fornecedor n/d'}</p>
+                                        {row.objetoContrato && <p className="mt-1 line-clamp-2 text-muted">{row.objetoContrato}</p>}
+                                        <p className="mt-1 text-muted">
+                                          <span className="font-mono text-ink">{formatCurrency(row.valorInicial ?? row.valorGlobal ?? row.valorTotal) || 'n/d'}</span>
+                                          {formatPncpDate(row.dataAssinatura) ? ` · assinado em ${formatPncpDate(row.dataAssinatura)}` : ''}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                  {(pncpOutcomeDossier.contratos || []).length === 0 && <p className="text-xs text-muted">Nenhum contrato retornado.</p>}
+                                </VerticalScrollArrows>
+                              </div>
+
+                              <div className="rounded-[12px] border border-line bg-bg2/40 p-3">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Atas ({(pncpOutcomeDossier.atas || []).length})</h4>
+                                <VerticalScrollArrows className="mt-2 max-h-64" contentClassName="space-y-1.5">
+                                  {(pncpOutcomeDossier.atas || []).slice(0, 50).map((row, index) => {
+                                    const ataUrl = getSafeExternalUrl(row.url, row.urlAta, row.uri, row.link);
+                                    return (
+                                      <div key={row.numeroControlePNCPAta || row.numeroAtaRegistroPreco || index} className="rounded-lg border border-line bg-surf px-2.5 py-2 text-xs">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <p className="font-semibold text-ink">{row.numeroAtaRegistroPreco || row.numeroControlePNCPAta || `Ata ${index + 1}`}</p>
+                                          {ataUrl && <a href={ataUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 font-medium text-primary hover:underline">Abrir ↗</a>}
+                                        </div>
+                                        <p className="mt-1 text-muted">
+                                          <span className="font-mono text-ink">{formatCurrency(row.valorTotal ?? row.valorGlobal) || 'Valor n/d'}</span>
+                                          {formatPncpDate(row.dataAssinatura) ? ` · assinada em ${formatPncpDate(row.dataAssinatura)}` : ''}
+                                        </p>
+                                        {(row.dataVigenciaInicio || row.dataVigenciaFim) && (
+                                          <p className="mt-0.5 text-muted">Vigência: {formatPncpDate(row.dataVigenciaInicio) || 'n/d'} a {formatPncpDate(row.dataVigenciaFim) || 'n/d'}</p>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                  {(pncpOutcomeDossier.atas || []).length === 0 && <p className="text-xs text-muted">Nenhuma ata retornada.</p>}
+                                </VerticalScrollArrows>
+                              </div>
+
+                              <div className="rounded-[12px] border border-line bg-bg2/40 p-3 lg:col-span-2">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Arquivos ({(pncpOutcomeDossier.arquivos || []).length})</h4>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {(pncpOutcomeDossier.arquivos || []).slice(0, 80).map((row, index) => {
+                                    const fileUrl = getSafeExternalUrl(row.url, row.urlDownload, row.uri, row.link, row.urlArquivo);
+                                    const label = row.titulo || row.nome || row.tipoDocumentoNome || row.nomeArquivo || `Arquivo ${index + 1}`;
+                                    return fileUrl ? (
+                                      <a key={`${fileUrl}-${index}`} href={fileUrl} target="_blank" rel="noopener noreferrer" className={btnSecondaryXs} title={label}>
+                                        <DocumentTextIcon className="h-3.5 w-3.5" />
+                                        <span className="max-w-[16rem] truncate">{label}</span>
+                                      </a>
+                                    ) : null;
+                                  })}
+                                  {(pncpOutcomeDossier.arquivos || []).filter(row => getSafeExternalUrl(row.url, row.urlDownload, row.uri, row.link, row.urlArquivo)).length === 0 && (
+                                    <p className="text-xs text-muted">Nenhum arquivo com link público seguro foi retornado.</p>
+                                  )}
+                                </div>
+                              </div>
+
                               <div className="rounded-[12px] border border-line bg-bg2/40 p-3 lg:col-span-2">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Itens</h4>
                                 <VerticalScrollArrows className="mt-2 max-h-72" contentClassName="divide-y divide-line">
@@ -14333,10 +16660,11 @@ function App() {
                                       <p className="text-muted">Qtd. {row.quantidade || 'n/d'} · <span className="font-mono">{formatCurrency(row.valorTotal) || 'n/d'}</span> · {row.materialOuServicoNome || ''}</p>
                                     </div>
                                   ))}
+                                  {(pncpOutcomeDossier.itens || []).length === 0 && <p className="py-2 text-xs text-muted">Nenhum item retornado.</p>}
                                 </VerticalScrollArrows>
                               </div>
                             </div>
-                          )}
+                          ) : null}
                         </VerticalScrollArrows>
                       </div>
                     </div>
@@ -14394,24 +16722,80 @@ function App() {
               {(overviewData.summary || !overviewLoading) && (
                 <>
                   <div className="grid gap-2.5 sm:gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 mb-4 sm:mb-6">
-                    {[
-                      { label: 'Leads totais', value: formatCompactNumber(overviewData.summary?.leads_count ?? 0) || (overviewData.summary?.leads_count ?? 0), icon: UsersIcon, glow: 'rgba(124,92,255,.5)' },
-                      { label: 'Clientes ativos', value: overviewData.summary?.customers_count ?? 0, icon: CheckBadgeIcon, glow: 'rgba(54,211,154,.45)' },
-                      { label: 'Pipeline aberto', value: formatCompactCurrency(overviewData.summary?.total_value) || 'R$ 0', icon: BanknotesIcon, glow: 'rgba(255,178,77,.4)' },
-                      { label: 'Em negociação', value: stageGroupData.filter(g => ['Meio', 'Fundo'].includes(g.group)).reduce((s, g) => s + (g.count || 0), 0), icon: ChartBarIcon, glow: 'rgba(56,214,230,.4)' },
-                    ].map((kpi, i) => {
-                      const Icon = kpi.icon;
-                      return (
-                        <div key={i} className={`${card} relative overflow-hidden p-3.5 sm:p-[18px] transition hover:border-primary/30 min-w-0`}>
-                          <div className="pointer-events-none absolute -right-8 -top-8 h-[90px] w-[90px] rounded-full blur-[26px] opacity-50" style={{ background: kpi.glow }} />
-                          <div className="relative flex items-center justify-between">
-                            <Icon className="h-[18px] w-[18px] text-ink/90" />
+                    {(() => {
+                      const fmt = (n) => formatCompactNumber(n) || n;
+                      const sum = overviewData.summary || {};
+                      const negTotal = stageGroupData
+                        .filter(g => ['Meio', 'Fundo'].includes(g.group))
+                        .reduce((s, g) => s + (g.count || 0), 0);
+                      const kpis = [
+                        {
+                          month: sum.leads_month_count ?? 0,
+                          total: sum.leads_count ?? 0,
+                          labelMonth: 'Leads no mês',
+                          labelTotal: 'totais',
+                          icon: UsersIcon,
+                          glow: 'rgba(124,92,255,.5)',
+                        },
+                        {
+                          month: null,
+                          total: negTotal,
+                          labelMonth: null,
+                          labelTotal: 'Em negociação',
+                          icon: ChartBarIcon,
+                          glow: 'rgba(56,214,230,.4)',
+                        },
+                        {
+                          month: sum.opportunities_month_count ?? 0,
+                          total: sum.opportunities_count ?? 0,
+                          labelMonth: 'Oportunidades no mês',
+                          labelTotal: 'totais',
+                          icon: BanknotesIcon,
+                          glow: 'rgba(255,178,77,.4)',
+                        },
+                        {
+                          month: sum.active_customers_month_count ?? 0,
+                          total: sum.customers_count ?? 0,
+                          labelMonth: 'Clientes ativos no mês',
+                          labelTotal: 'totais',
+                          icon: CheckBadgeIcon,
+                          glow: 'rgba(54,211,154,.45)',
+                        },
+                      ];
+                      return kpis.map((kpi, i) => {
+                        const Icon = kpi.icon;
+                        const hasMonth = kpi.month != null;
+                        return (
+                          <div key={i} className={`${card} relative overflow-hidden p-3.5 sm:p-[18px] transition hover:border-primary/30 min-w-0`}>
+                            <div className="pointer-events-none absolute -right-8 -top-8 h-[90px] w-[90px] rounded-full blur-[26px] opacity-50" style={{ background: kpi.glow }} />
+                            <div className="relative flex items-center justify-between">
+                              <Icon className="h-[18px] w-[18px] text-ink/90" />
+                            </div>
+                            {hasMonth ? (
+                              <>
+                                <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">
+                                  <span>{fmt(kpi.month)}</span>
+                                  <span className="text-muted/50 font-semibold mx-1.5">/</span>
+                                  <span className="text-[22px] text-ink/75 dark:text-white/75">{fmt(kpi.total)}</span>
+                                </p>
+                                <p className="text-[12.5px] text-muted mt-1.5 truncate">
+                                  {kpi.labelMonth}
+                                  <span className="text-muted/50"> / </span>
+                                  {kpi.labelTotal}
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">
+                                  {fmt(kpi.total)}
+                                </p>
+                                <p className="text-[12.5px] text-muted mt-1.5">{kpi.labelTotal}</p>
+                              </>
+                            )}
                           </div>
-                          <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">{kpi.value}</p>
-                          <p className="text-[12.5px] text-muted mt-1.5">{kpi.label}</p>
-                        </div>
-                      );
-                    })}
+                        );
+                      });
+                    })()}
                   </div>
 
                   {/* Linha 1: Ritmo (esquerda) + Evolução do funil (direita) */}
@@ -16885,6 +19269,20 @@ function App() {
             </div>
           )}
 
+          {activeView === 'Notificações' && (
+            <div className="mt-4 min-w-0 px-1 sm:px-0">
+              <NotificationsView
+                onNavigate={(view, sub) => {
+                  setActiveView(view);
+                  if (sub) setLicitacaoSubview(sub);
+                  if (view !== 'Notificações') {
+                    loadInboxNotifications();
+                  }
+                }}
+              />
+            </div>
+          )}
+
           {activeView === 'Usuários' && authStatus.role === 'admin' && (
             <div className="mt-6">
               <div className="toolbar-meta mb-6">
@@ -16899,7 +19297,7 @@ function App() {
               ) : (
                 <div className={`${card} divide-y divide-line`}>
                   {usersList.map(u => {
-                    const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Processo'];
+                    const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo'];
                     const isAdminUser = u.role === 'admin';
                     const current = Array.isArray(u.allowed_views) && u.allowed_views.length ? u.allowed_views : (isAdminUser ? allViews : []);
                     const isSeller = Boolean(u.is_seller);
@@ -16999,6 +19397,17 @@ function App() {
                 </div>
               )}
             </div>
+          )}
+
+          {activeView === 'Radar Trends' && (
+            <RadarTrendsPage
+              trendsIntel={trendsIntel}
+              loading={trendsIntelLoading}
+              refreshing={trendsRefreshing}
+              error={trendsIntelError}
+              onReload={() => loadTrendsIntel({ force: false })}
+              onSearchProfile={searchCompaniesFromTrendProfile}
+            />
           )}
 
           {activeView === 'Busca Lead B2B' && (() => { // eslint-disable-line no-extra-parens
@@ -17146,7 +19555,7 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            const RFB_CACHE_SIZE = 500;
+            const RFB_CACHE_SIZE = 100;
             const sortRfbResults = (arr, ob) => {
               const r = [...arr];
               const cap = v => parseFloat(String(v || 0).replace(/\./g, '').replace(',', '.')) || 0;
@@ -17214,12 +19623,17 @@ function App() {
               const pg = pageOverride     != null ? pageOverride     : rfbPage;
               const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
               const ob = orderByOverride  != null ? orderByOverride  : rfbOrderBy;
-              if (pg === 1) setRfbExpanded(null);
+              if (pg === 1) {
+                setRfbExpanded(null);
+                setRfbShowFilters(false);
+              }
 
               const fp = buildFilterParams(filterSnap);
               const filterKey = fp.toString();
               const cache = rfbCacheRef.current;
               const start = (pg - 1) * ps;
+              setRfbHasSearched(true);
+              setRfbError(null);
 
               // Serve from cache when filters unchanged and page is within cached batch
               if (cache.key === filterKey && cache.results.length > 0 && start < cache.results.length) {
@@ -17231,7 +19645,6 @@ function App() {
               }
 
               setRfbLoading(true);
-              setRfbError(null);
               try {
                 const params = new URLSearchParams(fp);
                 if (cache.key === filterKey && start >= cache.results.length) {
@@ -17361,6 +19774,7 @@ function App() {
               setRfbPage(1);
               setRfbError(null);
               setLeadImportStatus(null);
+              setRfbHasSearched(false);
               rfbCacheRef.current = { results: [], total: 0, key: null };
               try { localStorage.removeItem('rfb_search'); } catch {}
             };
@@ -17385,6 +19799,37 @@ function App() {
             const munLabel = rfbFilters.municipio
               ? (rfbMunicipios.find(m => m.codigo === rfbFilters.municipio)?.descricao || rfbFilters.municipio)
               : null;
+
+            const activeRfbFilters = [];
+            const addActiveRfbFilter = (key, label, active = true) => {
+              if (active) activeRfbFilters.push({ key, label });
+            };
+            addActiveRfbFilter('cnpj', `CNPJ: ${rfbFilters.cnpj}`, !!rfbFilters.cnpj?.trim());
+            addActiveRfbFilter('nome', `Empresa: ${rfbFilters.nome}`, !!rfbFilters.nome?.trim());
+            addActiveRfbFilter('nome2', `Empresa: ${rfbNome2}`, !!rfbNome2?.trim());
+            addActiveRfbFilter('socio', `Sócio: ${rfbFilters.socio}`, !!rfbFilters.socio?.trim());
+            addActiveRfbFilter('socio2', `Sócio: ${rfbSocio2}`, !!rfbSocio2?.trim());
+            addActiveRfbFilter('uf', `UF: ${rfbFilters.uf}`, !!rfbFilters.uf);
+            addActiveRfbFilter('municipio', `Município: ${munLabel}`, !!munLabel);
+            addActiveRfbFilter('endereco', `Endereço: ${rfbEndereco}`, !!rfbEndereco?.trim());
+            addActiveRfbFilter('endereco2', `Endereço: ${rfbEndereco2}`, !!rfbEndereco2?.trim());
+            addActiveRfbFilter('cnae', `${rfbFilters.cnae.length} CNAE${rfbFilters.cnae.length !== 1 ? 's' : ''}`, rfbFilters.cnae.length > 0);
+            addActiveRfbFilter('cnaeNot', `${rfbFilters.cnaeNot.length} CNAE${rfbFilters.cnaeNot.length !== 1 ? 's' : ''} excluído${rfbFilters.cnaeNot.length !== 1 ? 's' : ''}`, rfbFilters.cnaeNot.length > 0);
+            const hasDefaultSituacao = rfbFilters.situacao.length === 1 && rfbFilters.situacao[0] === '2';
+            addActiveRfbFilter(
+              'situacao',
+              rfbFilters.situacao.length > 0 ? `Situação: ${rfbFilters.situacao.map(situacaoLabel).join(', ')}` : 'Todas as situações',
+              !hasDefaultSituacao
+            );
+            addActiveRfbFilter('porte', `Porte: ${{ '01': 'ME', '03': 'EPP', '05': 'Demais' }[rfbFilters.porte] || rfbFilters.porte}`, !!rfbFilters.porte);
+            addActiveRfbFilter('natureza', `${rfbFilters.natureza.length} natureza${rfbFilters.natureza.length !== 1 ? 's' : ''}`, rfbFilters.natureza.length > 0);
+            addActiveRfbFilter('capital', `Capital: ${rfbCapitalRange[0] > 0 ? fmtCapital(rfbCapitalRange[0]) : 'mín.'} – ${rfbCapitalRange[1] > 0 ? fmtCapital(rfbCapitalRange[1]) : 'máx.'}`, rfbCapitalRange.some(v => v > 0));
+            addActiveRfbFilter('abertura', `Abertura: ${rfbAberturaRange[0] || 'mín.'} – ${rfbAberturaRange[1] || 'máx.'} anos`, rfbAberturaRange.some(v => v > 0));
+            addActiveRfbFilter('simples', `Simples: ${rfbSimples === 'S' ? 'sim' : 'não'}`, !!rfbSimples);
+            addActiveRfbFilter('mei', `MEI: ${rfbMei === 'S' ? 'sim' : 'não'}`, !!rfbMei);
+            addActiveRfbFilter('matriz', 'Matrizes e filiais', !rfbOnlyMatriz);
+            addActiveRfbFilter('principal', 'Somente CNAE principal', rfbCnaeOnlyPrincipal && (rfbFilters.cnae.length > 0 || rfbFilters.cnaeNot.length > 0));
+            const activeRfbFilterCount = activeRfbFilters.length;
 
             // ── Loading state ────────────────────────────────────────────
             if (rfbStatus === null) return (
@@ -17780,8 +20225,8 @@ function App() {
                 {/* Filtros no topo: faixa compacta sempre visível + painel completo expansível */}
                 <div className="flex flex-col gap-4">
 
-                  {/* Google Trends → sugestões IA de prospecção */}
-                  <div className={`${card} overflow-hidden`}>
+                  {/* O Radar agora vive em uma página própria no menu de Prospecção. */}
+                  <div className="hidden" aria-hidden="true">
                     <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
                       <button
                         type="button"
@@ -18108,9 +20553,9 @@ function App() {
                     )}
                   </div>
 
-                  <div className="grid items-center gap-2.5 rounded-[16px] border border-line bg-surf p-3 shadow-card sm:grid-cols-2 lg:grid-cols-[minmax(260px,1fr)_150px_auto_auto_auto]">
-                    {!rfbShowFilters && (
-                      <>
+                  {!rfbShowFilters && (
+                    <div className="overflow-hidden rounded-[16px] border border-line bg-surf shadow-card">
+                      <div className="grid items-center gap-2.5 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(260px,1fr)_150px_auto_auto_auto]">
                         <div className="relative flex h-9 min-w-0 items-center rounded-[11px] border border-line bg-bg2 sm:col-span-2 lg:col-span-1">
                           <MagnifyingGlassIcon className="absolute left-3 h-4 w-4 text-muted" />
                           <input
@@ -18137,31 +20582,105 @@ function App() {
                         >
                           {rfbLoading ? 'Buscando…' : 'Buscar'}
                         </button>
-                      </>
-                    )}
-                    <button
-                      onClick={() => setRfbShowFilters(p => !p)}
-                      className={`${btnSecondary} w-full px-3.5 lg:w-auto ${rfbShowFilters ? 'lg:ml-auto' : ''}`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 12h10M10 20h4"/></svg>
-                      {rfbShowFilters ? 'Recolher filtros' : 'Todos os filtros'}
-                    </button>
-                    {rfbResults.length > 0 && (
-                      <span className="font-mono text-xs text-muted lg:justify-self-end">
-                        {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                  </div>
+                        <button
+                          onClick={() => setRfbShowFilters(true)}
+                          className={`${btnSecondary} w-full px-3.5 lg:w-auto`}
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 12h10M10 20h4"/></svg>
+                          Todos os filtros
+                          {activeRfbFilterCount > 0 && (
+                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 font-mono text-[10px] font-bold text-white">
+                              {activeRfbFilterCount}
+                            </span>
+                          )}
+                        </button>
+                        {rfbResults.length > 0 && (
+                          <span className="font-mono text-xs text-muted lg:justify-self-end">
+                            {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                      {rfbHasSearched && activeRfbFilterCount > 0 && (
+                        <div className="border-t border-primary/15 bg-primary/[0.055] px-4 py-3 sm:px-5">
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-primary">Filtros selecionados</p>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${rfbLoading ? 'bg-primary/15 text-primary' : rfbError ? 'bg-status-danger/10 text-status-danger' : 'bg-status-success/10 text-status-success'}`}>
+                              {rfbLoading ? 'Buscando…' : rfbError ? 'Busca com erro' : 'Resultados prontos'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {activeRfbFilters.map(filter => (
+                              <span key={filter.key} className="rounded-full border border-primary/20 bg-surf px-2.5 py-1 text-[11px] font-medium text-ink shadow-sm">
+                                {filter.label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* ── Painel completo de filtros (expansível, seções em grade) ── */}
-                  <div className={`${rfbShowFilters ? 'flex' : 'hidden'} w-full flex-col gap-5 rounded-[18px] border border-line bg-surf p-4 shadow-card sm:p-5`}>
-                    <div className="flex flex-wrap items-end justify-between gap-2">
+                  {rfbShowFilters && (
+                  <div className="w-full overflow-hidden rounded-[16px] border border-line bg-surf shadow-card">
+                    <div className="flex flex-col gap-3 border-b border-line bg-bg2/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.13em] text-muted">Filtros de busca</p>
-                        <p className="mt-1 text-xs text-muted">Refine antes de importar para manter o CRM limpo.</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-semibold text-ink">Filtros de busca</h3>
+                          {rfbResults.length > 0 && (
+                            <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-primary">
+                              {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted">Combine critérios para encontrar empresas com mais precisão.</p>
+                      </div>
+                      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleRfbSearch(1)}
+                          disabled={rfbLoading}
+                          className={`${btnPrimary} min-w-[108px] flex-1 px-5 sm:flex-none`}
+                        >
+                          {rfbLoading ? 'Buscando…' : 'Buscar'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClear}
+                          className={`${btnSecondary} flex-1 px-4 sm:flex-none`}
+                        >
+                          Limpar filtros
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRfbShowFilters(false)}
+                          className={`${btnSecondary} w-full shrink-0 px-3.5 sm:w-auto`}
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4h18M7 12h10M10 20h4"/></svg>
+                          Recolher filtros
+                        </button>
                       </div>
                     </div>
 
+                    {rfbHasSearched && activeRfbFilterCount > 0 && (
+                      <div className="border-b border-primary/15 bg-primary/[0.055] px-4 py-3 sm:px-5">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-primary">Filtros selecionados</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${rfbLoading ? 'bg-primary/15 text-primary' : rfbError ? 'bg-status-danger/10 text-status-danger' : 'bg-status-success/10 text-status-success'}`}>
+                            {rfbLoading ? 'Buscando…' : rfbError ? 'Busca com erro' : 'Resultados prontos'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {activeRfbFilters.map(filter => (
+                            <span key={filter.key} className="rounded-full border border-primary/20 bg-surf px-2.5 py-1 text-[11px] font-medium text-ink shadow-sm">
+                              {filter.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col gap-5 p-4 sm:p-5">
                     {(() => {
                       const OP_LIST = [['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']];
                       const OP_TITLES = { contains:'Contém', not_contains:'Não contém', starts:'Começa com', ends:'Termina com', exact:'Igual a' };
@@ -18614,83 +21133,54 @@ function App() {
                             <h4 className={sectionHead}>Faixas</h4>
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                               <div className="min-w-0 rounded-[14px] border border-line bg-bg2/50 p-3">
-                                <label className={fieldLabel}>Capital social</label>
-                                <div className="space-y-1.5">
-                                  <div className="flex justify-between text-xs text-muted">
-                                    <span>{rfbCapitalRange[0] > 0 ? `R$ ${(rfbCapitalRange[0]/1000).toFixed(0)}k` : 'Mín'}</span>
-                                    <span>{rfbCapitalRange[1] > 0 ? `R$ ${rfbCapitalRange[1] >= 1000000 ? (rfbCapitalRange[1]/1000000).toFixed(1)+'M' : (rfbCapitalRange[1]/1000).toFixed(0)+'k'}` : 'Máx'}</span>
-                                  </div>
-                                  <input type="range" min="0" max="5000000" step="50000"
-                                    className="h-1 w-full accent-primary"
-                                    value={rfbCapitalRange[0]}
-                                    onChange={e => setRfbCapitalRange(p => [Math.min(Number(e.target.value), p[1] || 5000000), p[1]])}
-                                  />
-                                  <input type="range" min="0" max="5000000" step="50000"
-                                    className="h-1 w-full accent-primary"
-                                    value={rfbCapitalRange[1] || 5000000}
-                                    onChange={e => setRfbCapitalRange(p => [p[0], Math.max(Number(e.target.value), p[0])])}
-                                  />
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <label className={fieldLabel}>Capital social</label>
                                   {(rfbCapitalRange[0] > 0 || rfbCapitalRange[1] > 0) && (
-                                    <button type="button" onClick={() => setRfbCapitalRange([0, 0])} className="text-xs text-muted hover:text-status-danger">× limpar</button>
+                                    <button type="button" onClick={() => setRfbCapitalRange([0, 0])} className="text-[11px] text-muted hover:text-status-danger">Limpar</button>
                                   )}
                                 </div>
+                                <DualRange
+                                  max={5000000}
+                                  step={50000}
+                                  value={rfbCapitalRange}
+                                  onChange={setRfbCapitalRange}
+                                  formatValue={value => formatCompactCurrency(value)}
+                                  minLabel="Capital mínimo"
+                                  maxLabel="Capital máximo"
+                                />
                               </div>
 
                               <div className="min-w-0 rounded-[14px] border border-line bg-bg2/50 p-3">
-                                <label className={fieldLabel}>Tempo de abertura</label>
-                                <div className="space-y-1.5">
-                                  <div className="flex justify-between text-xs text-muted">
-                                    <span>{rfbAberturaRange[0] > 0 ? `${rfbAberturaRange[0]} anos` : 'Mín'}</span>
-                                    <span>{rfbAberturaRange[1] > 0 ? `${rfbAberturaRange[1]} anos` : 'Máx'}</span>
-                                  </div>
-                                  <input type="range" min="0" max="50" step="1"
-                                    className="h-1 w-full accent-primary"
-                                    value={rfbAberturaRange[0]}
-                                    onChange={e => setRfbAberturaRange(p => [Math.min(Number(e.target.value), p[1] || 50), p[1]])}
-                                  />
-                                  <input type="range" min="0" max="50" step="1"
-                                    className="h-1 w-full accent-primary"
-                                    value={rfbAberturaRange[1] || 50}
-                                    onChange={e => setRfbAberturaRange(p => [p[0], Math.max(Number(e.target.value), p[0])])}
-                                  />
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <label className={fieldLabel}>Tempo de abertura</label>
                                   {(rfbAberturaRange[0] > 0 || rfbAberturaRange[1] > 0) && (
-                                    <button type="button" onClick={() => setRfbAberturaRange([0, 0])} className="text-xs text-muted hover:text-status-danger">× limpar</button>
+                                    <button type="button" onClick={() => setRfbAberturaRange([0, 0])} className="text-[11px] text-muted hover:text-status-danger">Limpar</button>
                                   )}
                                 </div>
+                                <DualRange
+                                  max={50}
+                                  step={1}
+                                  value={rfbAberturaRange}
+                                  onChange={setRfbAberturaRange}
+                                  formatValue={value => `${value} ${value === 1 ? 'ano' : 'anos'}`}
+                                  minLabel="Tempo mínimo"
+                                  maxLabel="Tempo máximo"
+                                />
                               </div>
                             </div>
                           </section>
 
-                          {/* Ações + import */}
+                          {/* Configuração de importação */}
                           <section className="border-t border-line pt-5">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-                              <div className="min-w-0 sm:w-52">
-                                <label className={fieldLabel}>Estágio padrão (import)</label>
-                                <select
-                                  className={fieldSelect}
-                                  value={leadImportSettings.defaultStage}
-                                  onChange={e => setLeadImportSettings(p => ({ ...p, defaultStage: e.target.value }))}
-                                >
-                                  {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
-                                </select>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleRfbSearch(1)}
-                                  disabled={rfbLoading}
-                                  className={`${btnPrimary} px-8`}
-                                >
-                                  {rfbLoading ? 'Buscando…' : 'Buscar'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleClear}
-                                  className={`${btnSecondary} px-4`}
-                                >
-                                  Limpar filtros
-                                </button>
-                              </div>
+                            <div className="min-w-0 sm:w-52">
+                              <label className={fieldLabel}>Estágio padrão (import)</label>
+                              <select
+                                className={fieldSelect}
+                                value={leadImportSettings.defaultStage}
+                                onChange={e => setLeadImportSettings(p => ({ ...p, defaultStage: e.target.value }))}
+                              >
+                                {leadColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                              </select>
                             </div>
                           </section>
 
@@ -18741,7 +21231,9 @@ function App() {
                         </>
                       );
                     })()}
+                    </div>
                   </div>
+                  )}
 
                   {/* ── Painel de resultados ───────────────────────────── */}
                   <div className="min-w-0 space-y-3">
@@ -19075,37 +21567,13 @@ function App() {
           })()}
 
           {activeView === 'Processo' && (
-            <div className="mt-5 space-y-4">
-              <header className={`${card} px-4 py-3.5 lg:px-5`}>
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-semibold text-ink">Playbook comercial</h2>
-                      <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-                        Referência
-                      </span>
-                    </div>
-                    <p className="mt-1 max-w-2xl text-xs text-muted">
-                      Processo, critérios e scripts — consulta livre, sem onboarding sequencial.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {processBlueprint.stats.map((stat) => (
-                      <div key={stat.label} className="min-w-[88px] rounded-[11px] border border-line bg-bg2 px-2.5 py-1.5 text-center dark:bg-[#0e1220]">
-                        <p className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted">{stat.label}</p>
-                        <p className="text-sm font-semibold tabular-nums text-ink">{stat.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </header>
-
+            <div className="mt-5">
               <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
-                <aside className={`${card} flex max-h-[min(70vh,36rem)] flex-col overflow-hidden p-2.5 lg:sticky lg:top-3 lg:max-h-[calc(100vh-7.5rem)]`}>
-                  <p className="shrink-0 px-2 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted2">
+                <aside className={`${card} flex flex-col p-2.5 lg:sticky lg:top-3`}>
+                  <p className="px-2 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted2">
                     Índice
                   </p>
-                  <div className="shrink-0 px-1 pb-2">
+                  <div className="px-1 pb-2">
                     <input
                       type="search"
                       value={processQuery}
@@ -19115,35 +21583,29 @@ function App() {
                       aria-label="Filtrar seções do processo"
                     />
                   </div>
-                  <VerticalScrollArrows
-                    className="min-h-0 flex-1"
-                    contentClassName="flex flex-col gap-0.5"
-                    remeasureKey={`${processNavItems.length}:${processQuery}`}
-                  >
-                    <nav className="flex flex-col gap-0.5" aria-label="Navegação do playbook">
-                      {processNavItems.length === 0 && (
-                        <p className="px-2 py-2 text-xs text-muted">Nenhuma seção.</p>
-                      )}
-                      {processNavItems.map((item) => {
-                        const isActive = processActiveSection === item.id;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => scrollToProcessSection(item.id)}
-                            className={`w-full rounded-[10px] px-2.5 py-1.5 text-left text-[12.5px] font-medium transition ${
-                              isActive
-                                ? 'bg-primary/12 text-primary'
-                                : 'text-muted hover:bg-surf2 hover:text-ink'
-                            }`}
-                          >
-                            {item.title}
-                          </button>
-                        );
-                      })}
-                    </nav>
-                  </VerticalScrollArrows>
-                  <div className="mt-2 shrink-0 border-t border-line px-2 pt-2">
+                  <nav className="flex flex-col gap-0.5" aria-label="Navegação do playbook">
+                    {processNavItems.length === 0 && (
+                      <p className="px-2 py-2 text-xs text-muted">Nenhuma seção.</p>
+                    )}
+                    {processNavItems.map((item) => {
+                      const isActive = processActiveSection === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => scrollToProcessSection(item.id)}
+                          className={`w-full rounded-[10px] px-2.5 py-1.5 text-left text-[12.5px] font-medium transition ${
+                            isActive
+                              ? 'bg-primary/12 text-primary'
+                              : 'text-muted hover:bg-surf2 hover:text-ink'
+                          }`}
+                        >
+                          {item.title}
+                        </button>
+                      );
+                    })}
+                  </nav>
+                  <div className="mt-2 border-t border-line px-2 pt-2">
                     <a
                       href="https://chatwoot.tenryu.com.br/app/accounts/2"
                       target="_blank"
