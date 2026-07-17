@@ -7274,12 +7274,51 @@ const getPncpDeadlineInfo = (item) => {
   return { days, label: `Vence em ${days} dia(s)`, urgency: 'ok' };
 };
 
-const isPncpReceivingProposalOpen = (item) => {
-  const stage = classifyPncpCommercialStage(item);
-  if (stage.id !== 'open_for_proposal') {
-    return false;
+/** Prazo de proposta a partir dos campos que a search/consulta/detalhe expõem. */
+const getPncpProposalDeadlineRaw = (item) => (
+  item?.data_fim_vigencia
+  || item?.data_encerramento_proposta
+  || item?.dataEncerramentoProposta
+  || item?.dataEncerramentoPropostas
+  || item?.dataFimProposta
+  || item?.dataFimPropostas
+  || item?.dataFimVigencia
+  || item?.deadline_at
+  || null
+);
+
+/** Código de situação da contratação no PNCP (1 divulgada, 2 revogada, 3 anulada, 4 suspensa). */
+const getPncpSituacaoCompraId = (item) => {
+  const raw = item?.situacao?.id
+    ?? item?.situacao_id
+    ?? item?.situacaoCompraId
+    ?? item?.situacaoId
+    ?? null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** Situações terminais oficiais (manual PNCP 5.5) — evidência forte para tirar da lista. */
+const isPncpSituacaoTerminalId = (sitId) => [2, 3, 4].includes(Number(sitId));
+
+/**
+ * Veredito para filtro "recebendo proposta" / retenção na lista.
+ * - open: prazo futuro e sem sinal terminal
+ * - closed: cancelado, situacao 2/3/4, texto terminal ou prazo vencido (com data válida)
+ * - unknown: dados insuficientes (ex.: sem prazo ainda) — NÃO excluir; esperar enrich/detalhe
+ *
+ * Regra de produto: ausência de informação ≠ fechado. Só tira da lista com evidência.
+ */
+const getPncpReceivingProposalVerdict = (item = {}) => {
+  if (item?.cancelado === true) {
+    return { verdict: 'closed', reason: 'cancelado' };
   }
-  if (item?.cancelado) return false;
+
+  const sitId = getPncpSituacaoCompraId(item);
+  if (isPncpSituacaoTerminalId(sitId)) {
+    return { verdict: 'closed', reason: `situacao_id_${sitId}` };
+  }
+
   const statusText = normalizeSearchText([
     item?.situacao?.nome,
     item?.situacao_nome,
@@ -7288,32 +7327,53 @@ const isPncpReceivingProposalOpen = (item) => {
   ].filter(Boolean).join(' '));
   const terminalHints = [
     'contratad', 'homolog', 'adjudic', 'encerrad', 'finalizad', 'concluid',
-    'revogad', 'anulad', 'fracassad', 'desert', 'suspens'
+    'revogad', 'anulad', 'fracassad', 'desert', 'suspens',
   ];
-  if (terminalHints.some(hint => statusText.includes(hint))) {
-    return false;
+  if (statusText && terminalHints.some((hint) => statusText.includes(hint))) {
+    return { verdict: 'closed', reason: 'situacao_texto_terminal' };
   }
 
-  const deadlineRaw = item?.data_fim_vigencia
-    || item?.data_encerramento_proposta
-    || item?.dataEncerramentoProposta
-    || item?.dataEncerramentoPropostas
-    || item?.dataFimProposta
-    || item?.dataFimPropostas
-    || item?.dataFimVigencia
-    || null;
+  // Resultado/contrato homologado sem precisar de prazo.
+  if (item?.tem_resultado === true || item?.temResultado === true) {
+    return { verdict: 'closed', reason: 'tem_resultado' };
+  }
+  if (Number(item?.valor_total_homologado || item?.valorTotalHomologado || 0) > 0) {
+    return { verdict: 'closed', reason: 'valor_homologado' };
+  }
 
+  const deadlineRaw = getPncpProposalDeadlineRaw(item);
   if (deadlineRaw) {
     const deadlineDate = new Date(deadlineRaw);
     if (Number.isNaN(deadlineDate.getTime())) {
-      return false;
+      // Data presente mas ilegível: tratar como insuficiente, não como fechado.
+      return { verdict: 'unknown', reason: 'deadline_unparseable' };
     }
     deadlineDate.setHours(23, 59, 59, 999);
-    return deadlineDate.getTime() >= Date.now();
+    if (deadlineDate.getTime() < Date.now()) {
+      return { verdict: 'closed', reason: 'deadline_expired' };
+    }
+    return { verdict: 'open', reason: 'deadline_future' };
   }
 
-  return false;
+  // Sem prazo: ainda pode estar aberto — enrich/detalhe preenchem depois.
+  return { verdict: 'unknown', reason: 'missing_deadline' };
 };
+
+/** Mantém na lista de abertos: open ou unknown (só tira se closed com evidência). */
+const isPncpReceivingProposalOpen = (item) => {
+  const { verdict } = getPncpReceivingProposalVerdict(item);
+  return verdict !== 'closed';
+};
+
+/** Fechado com evidência — único caso seguro para demote/stale_status. */
+const isPncpReceivingProposalDefinitelyClosed = (item) => (
+  getPncpReceivingProposalVerdict(item).verdict === 'closed'
+);
+
+/** Aberto com prazo futuro confirmado (não inclui unknown). */
+const isPncpReceivingProposalDefinitelyOpen = (item) => (
+  getPncpReceivingProposalVerdict(item).verdict === 'open'
+);
 
 const classifyPncpCommercialStage = (item, dossier = {}) => {
   const text = normalizeSearchText([
@@ -7360,14 +7420,16 @@ const classifyPncpCommercialStage = (item, dossier = {}) => {
   if (deadline.days !== null && deadline.days >= 0) {
     return { id: 'open_for_proposal', label: 'Aberta', tone: 'success', open: true };
   }
-  // Sem prazo futuro confiavel, nao tratamos como aberta no filtro de oportunidades.
+  // Sem prazo: estágio "desconhecido" — o filtro de lista NÃO exclui só por isso
+  // (isPncpReceivingProposalOpen trata missing_deadline como unknown e mantém o item
+  // até enrich/detalhe preencher a data ou situação terminal).
   if (text.includes('homolog') || text.includes('adjudic') || text.includes('contratad') || text.includes('encerrad') || text.includes('finalizad')) {
     return { id: 'expired_or_closed', label: 'Encerrada', tone: 'neutral', open: false };
   }
   if (text.includes('aviso de contratacao direta')) {
     return { id: 'unknown_published', label: 'Aviso publicado', tone: 'warning', open: false };
   }
-  return { id: 'unknown_published', label: 'Sem prazo confiável', tone: 'warning', open: false };
+  return { id: 'unknown_published', label: 'Sem prazo (aguardando dados)', tone: 'warning', open: false };
 };
 
 const classifyPncpLegalStage = (item) => {
@@ -9371,8 +9433,461 @@ const runDailyPncpExpiredResultsPurge = async () => {
   return result;
 };
 
-/** Conta resultados do job. Por padrão exclui descartados (visibility=hidden). */
-const countPncpJobResults = async (jobId, accountId = null, { includeHidden = false } = {}) => {
+// Cap de detalhes/job no reconcile diário de situação (suspensão pós-captura).
+const PNCP_STATUS_RECONCILE_PER_JOB = Math.max(
+  5,
+  Math.min(80, Number(process.env.PNCP_STATUS_RECONCILE_PER_JOB) || 30)
+);
+// Fatias de /v1/contratacoes/proposta no refresh diário (reabertura sem reler search).
+const PNCP_DEEP_PROPOSTA_INCREMENTAL_SLICES = Math.max(
+  1,
+  Math.min(12, Number(process.env.PNCP_DEEP_PROPOSTA_INCREMENTAL_SLICES) || 4)
+);
+// Quantos itens "duplicata" no probe atualizam situacao/datas (sem request extra).
+const PNCP_DEEP_DUP_REFRESH_CAP = Math.max(
+  20,
+  Math.min(400, Number(process.env.PNCP_DEEP_DUP_REFRESH_CAP) || 120)
+);
+
+/**
+ * Marca resultados ainda na lista ativa como fora do open (suspenso/revogado/etc.).
+ * Não mexe em pipeline/hidden do usuário.
+ */
+const markPncpJobResultsStaleStatus = async (jobId, accountId, resultKeys = [], { reason = 'status_not_open' } = {}) => {
+  const keys = [...new Set((resultKeys || []).map((k) => String(k || '').trim()).filter(Boolean))];
+  if (!jobId || !keys.length) return 0;
+  let updated = 0;
+  for (let start = 0; start < keys.length; start += 200) {
+    const chunk = keys.slice(start, start + 200);
+    const result = await pool.query(
+      `
+        UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+           SET visibility = 'stale_status',
+               payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object(
+                 'status_lifecycle', $4::text,
+                 'status_checked_at', $5::text
+               ),
+               updated_at = NOW()
+         WHERE job_id = $1
+           AND account_id = $2
+           AND result_key = ANY($3::text[])
+           AND visibility = 'visible'
+      `,
+      [jobId, accountId, chunk, reason, new Date().toISOString()]
+    ).catch((err) => {
+      console.warn('[PNCP] mark stale_status falhou:', err.message);
+      return { rowCount: 0 };
+    });
+    updated += Number(result.rowCount || 0);
+  }
+  return updated;
+};
+
+/** Reabertura: devolve à lista itens que estavam stale_status e voltaram a open. */
+const restorePncpJobResultsFromStale = async (jobId, accountId, resultKeys = []) => {
+  const keys = [...new Set((resultKeys || []).map((k) => String(k || '').trim()).filter(Boolean))];
+  if (!jobId || !keys.length) return 0;
+  let updated = 0;
+  const nowIso = new Date().toISOString();
+  for (let start = 0; start < keys.length; start += 200) {
+    const chunk = keys.slice(start, start + 200);
+    const result = await pool.query(
+      `
+        UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+           SET visibility = 'visible',
+               payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object(
+                 'status_lifecycle', 'reopened',
+                 'status_checked_at', $4::text
+               ),
+               updated_at = NOW()
+         WHERE job_id = $1
+           AND account_id = $2
+           AND result_key = ANY($3::text[])
+           AND visibility = 'stale_status'
+      `,
+      [jobId, accountId, chunk, nowIso]
+    ).catch((err) => {
+      console.warn('[PNCP] restore from stale_status falhou:', err.message);
+      return { rowCount: 0 };
+    });
+    updated += Number(result.rowCount || 0);
+  }
+  return updated;
+};
+
+/**
+ * Após probe: merge de situacao/datas em itens já vistos (sem request extra).
+ * Demote só com evidência forte (closed); missing deadline NÃO tira da lista.
+ */
+const applyPncpDuplicateStatusRefresh = async (job, rawDupItems = [], {
+  qText = '',
+  terms = [],
+  negativeTerms = [],
+  filters = {},
+  mappedStatus = null,
+  shouldApplyReceivingProposalLocally = false,
+} = {}) => {
+  if (!job?.id || !Array.isArray(rawDupItems) || !rawDupItems.length) {
+    return { refreshed: 0, stale: 0, reopened: 0, unknown: 0 };
+  }
+  const capped = rawDupItems.slice(0, PNCP_DEEP_DUP_REFRESH_CAP);
+  const snapshot = await buildDeepSearchItemsSnapshot({
+    rawItems: capped,
+    qText,
+    terms,
+    negativeTerms,
+    filters,
+    mappedStatus,
+    // Não filtrar: precisamos persistir também os que fecharam para rebaixar.
+    shouldApplyReceivingProposalLocally: false,
+    enrichValues: false,
+  });
+  const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+  if (!items.length) return { refreshed: 0, stale: 0, reopened: 0, unknown: 0 };
+
+  const nowIso = new Date().toISOString();
+  const stamped = items.map((item) => {
+    const v = getPncpReceivingProposalVerdict(item);
+    return {
+      ...item,
+      status_checked_at: nowIso,
+      status_lifecycle: 'probe_refresh',
+      proposal_verdict: v.verdict,
+      proposal_verdict_reason: v.reason,
+    };
+  });
+  await persistPncpJobResults(job, stamped);
+
+  let stale = 0;
+  let reopened = 0;
+  let unknown = 0;
+  if (shouldApplyReceivingProposalLocally || normalizeSearchText(mappedStatus) === 'recebendo_proposta') {
+    const closedKeys = [];
+    const keepKeys = [];
+    for (const item of stamped) {
+      const key = getPncpSearchResultKey(item);
+      if (!key) continue;
+      const v = getPncpReceivingProposalVerdict(item);
+      if (v.verdict === 'closed') closedKeys.push(key);
+      else {
+        keepKeys.push(key);
+        if (v.verdict === 'unknown') unknown += 1;
+      }
+    }
+    // Só demote com evidência (situacao terminal, prazo vencido, etc.) — nunca por falta de prazo.
+    if (closedKeys.length) {
+      stale = await markPncpJobResultsStaleStatus(job.id, job.account_id, closedKeys, {
+        reason: 'probe_definitely_closed',
+      });
+    }
+    if (keepKeys.length) {
+      reopened = await restorePncpJobResultsFromStale(job.id, job.account_id, keepKeys);
+    }
+  }
+  return { refreshed: stamped.length, stale, reopened, unknown };
+};
+
+/**
+ * Reconsulta detalhe PNCP de um subconjunto do acervo local (visíveis) para
+ * detectar suspensão/revogação sem reler o universo do índice.
+ */
+const reconcilePncpJobResultStatuses = async (job, { limit = PNCP_STATUS_RECONCILE_PER_JOB } = {}) => {
+  if (!job?.id || !job?.account_id) return { checked: 0, stale: 0, open: 0, skipped: 0 };
+  const jobStatus = normalizeSearchText(job?.filters?.status || '');
+  // Só rebaixa da lista quando a busca é de abertos (recebendo proposta).
+  const demoteWhenClosed = !jobStatus || jobStatus === 'recebendo_proposta' || jobStatus === 'recebendo proposta';
+  const cap = Math.max(1, Math.min(80, Number(limit) || PNCP_STATUS_RECONCILE_PER_JOB));
+  // Prioriza: nunca checado → score alto → prazo mais próximo.
+  const { rows } = await pool.query(
+    `
+      SELECT result_key, payload, score, deadline_at,
+             COALESCE(payload->>'status_checked_at', '') AS status_checked_at
+        FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+       WHERE job_id = $1
+         AND account_id = $2
+         AND visibility = 'visible'
+       ORDER BY
+         CASE WHEN COALESCE(payload->>'status_checked_at', '') = '' THEN 0 ELSE 1 END ASC,
+         score DESC NULLS LAST,
+         deadline_at ASC NULLS LAST,
+         updated_at ASC
+       LIMIT $3
+    `,
+    [job.id, job.account_id, cap]
+  ).catch((err) => {
+    console.warn('[PNCP] load results for status reconcile falhou:', err.message);
+    return { rows: [] };
+  });
+
+  let checked = 0;
+  let stale = 0;
+  let open = 0;
+  let skipped = 0;
+  const openItems = [];
+  const staleKeys = [];
+  const nowIso = new Date().toISOString();
+
+  for (const row of rows) {
+    if (PNCP_DEEP_SEARCH_CANCELLED.has(job.id)) break;
+    if (!canRunPncpPriority('bulk') || Date.now() < PNCP_GATE.pausedUntil) {
+      skipped += rows.length - checked - skipped;
+      break;
+    }
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    const ids = extractPncpCompraIdentifiers(payload);
+    if (!ids.cnpj || !ids.ano || !ids.sequencial) {
+      skipped += 1;
+      continue;
+    }
+    const detail = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk' });
+    if (!detail) {
+      skipped += 1;
+      continue;
+    }
+    checked += 1;
+    const merged = {
+      ...payload,
+      situacao_id: detail.situacao_id ?? payload.situacao_id,
+      situacao_nome: detail.situacao_nome || payload.situacao_nome,
+      situacao: {
+        ...(payload.situacao || {}),
+        id: detail.situacao_id ?? payload.situacao?.id,
+        nome: detail.situacao_nome || payload.situacao?.nome,
+      },
+      data_publicacao: detail.data_publicacao_pncp || payload.data_publicacao,
+      data_publicacao_pncp: detail.data_publicacao_pncp || payload.data_publicacao_pncp,
+      data_inicio_vigencia: detail.data_abertura_proposta || payload.data_inicio_vigencia,
+      data_fim_vigencia: detail.data_encerramento_proposta || payload.data_fim_vigencia,
+      data_encerramento_proposta: detail.data_encerramento_proposta || payload.data_encerramento_proposta,
+      valor_total_estimado: detail.valor_total_estimado ?? payload.valor_total_estimado,
+      valor_total_homologado: detail.valor_total_homologado ?? payload.valor_total_homologado,
+      srp: typeof detail.srp === 'boolean' ? detail.srp : payload.srp,
+      modo_disputa: {
+        id: detail.modo_disputa_id || payload.modo_disputa?.id || null,
+        nome: detail.modo_disputa_nome || payload.modo_disputa?.nome || null,
+      },
+      status_checked_at: nowIso,
+      status_lifecycle: 'detail_reconcile',
+    };
+    const verdict = getPncpReceivingProposalVerdict(merged);
+    merged.proposal_verdict = verdict.verdict;
+    merged.proposal_verdict_reason = verdict.reason;
+    // Demote só closed com evidência. missing_deadline após detalhe ainda é unknown → fica.
+    if (verdict.verdict === 'closed' && demoteWhenClosed) {
+      staleKeys.push(String(row.result_key || getPncpSearchResultKey(merged) || '').trim());
+    } else if (verdict.verdict === 'open') {
+      open += 1;
+    }
+    openItems.push(merged);
+  }
+
+  if (openItems.length) {
+    await persistPncpJobResults(job, openItems);
+  }
+  if (staleKeys.length && demoteWhenClosed) {
+    stale = await markPncpJobResultsStaleStatus(job.id, job.account_id, staleKeys, {
+      reason: 'detail_definitely_closed',
+    });
+  }
+  // Reabertura: detalhe diz open (ou unknown sem terminal) → volta do stale.
+  const restoreKeys = openItems
+    .filter((item) => getPncpReceivingProposalVerdict(item).verdict !== 'closed')
+    .map((item) => getPncpSearchResultKey(item))
+    .filter(Boolean);
+  if (restoreKeys.length && demoteWhenClosed) {
+    await restorePncpJobResultsFromStale(job.id, job.account_id, restoreKeys);
+  }
+  if (checked > 0 || stale > 0) {
+    await refreshPncpJobSummaryTotals(job);
+    job.progress = {
+      ...(job.progress || {}),
+      status_reconcile: {
+        at: nowIso,
+        checked,
+        stale,
+        open,
+        skipped,
+      },
+    };
+    await persistPncpDeepJob(job).catch(() => null);
+  }
+  return { checked, stale, open, skipped };
+};
+
+/** Daily: reconcile de situação nos jobs ativos (sem full re-scan do PNCP). */
+const runDailyPncpStatusReconcile = async ({ limit = 10 } = {}) => {
+  cleanupPncpDeepJobs();
+  const { rows } = await pool.query(
+    `
+      SELECT *
+        FROM ${PNCP_SEARCH_JOBS_TABLE}
+       WHERE watchlist_id IS NULL
+         AND status IN ('completed', 'failed', 'paused_rate_limit')
+         AND started_at >= NOW() - ($1::int * INTERVAL '1 day')
+       ORDER BY updated_at ASC
+       LIMIT $2
+    `,
+    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, Math.max(1, Math.min(20, Number(limit) || 10))]
+  ).catch(() => ({ rows: [] }));
+
+  let jobs = 0;
+  let checked = 0;
+  let stale = 0;
+  for (const row of rows) {
+    const job = normalizePncpSearchJobRow(row);
+    if (!job?.id) continue;
+    if (isPncpSearchJobArchivable(job)) continue;
+    const live = PNCP_DEEP_SEARCH_JOBS.get(job.id);
+    if (live && ['queued', 'running', 'cancelling'].includes(live.status)) continue;
+    const memJob = live || job;
+    PNCP_DEEP_SEARCH_JOBS.set(memJob.id, memJob);
+    const result = await reconcilePncpJobResultStatuses(memJob, {
+      limit: PNCP_STATUS_RECONCILE_PER_JOB,
+    });
+    jobs += 1;
+    checked += result.checked;
+    stale += result.stale;
+  }
+  return { jobs, checked, stale, candidates: rows.length };
+};
+
+/** Normaliza número de controle PNCP para comparação com o board. */
+const normalizePncpControlId = (value) => String(value || '').trim().toLowerCase();
+
+/** Extrai chave de path do edital PNCP (cnpj/ano/sequencial) a partir da URL. */
+const extractPncpPathKey = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const parsed = new URL(text, 'https://pncp.gov.br');
+    const match = parsed.pathname.match(/\/(?:app\/editais|editais|compras)\/([^/?#]+\/[^/?#]+\/[^/?#]+)/i);
+    return String(match?.[1] || '').toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Índice de editais já no pipeline (oportunidades do account).
+ * Usado para marcar resultados de busca como visibility=pipeline e
+ * tirá-los da lista ativa ("Na lista").
+ */
+const loadAccountPncpPipelineIndex = async (accountId) => {
+  const empty = { controls: new Set(), paths: new Set(), ids: new Set() };
+  if (accountId == null) return empty;
+  const { rows } = await pool.query(
+    `
+      SELECT numero_compra, links_pncp, links, metadados
+        FROM ${LICITACAO_TABLE}
+       WHERE account_id = $1
+    `,
+    [accountId]
+  ).catch(() => ({ rows: [] }));
+  const index = { controls: new Set(), paths: new Set(), ids: new Set() };
+  for (const row of rows) {
+    const metadata = row?.metadados && typeof row.metadados === 'object' ? row.metadados : {};
+    const links = row?.links && typeof row.links === 'object' ? row.links : {};
+    [row?.numero_compra, metadata.pncp_numero_controle, metadata.numero_controle_pncp]
+      .forEach((candidate) => {
+        const normalized = normalizePncpControlId(candidate);
+        if (normalized) index.controls.add(normalized);
+      });
+    const idCandidate = String(metadata.pncp_id || '').trim();
+    if (idCandidate) index.ids.add(idCandidate);
+    [row?.links_pncp, links.pncp].forEach((candidate) => {
+      const pathKey = extractPncpPathKey(candidate);
+      if (pathKey) index.paths.add(pathKey);
+    });
+  }
+  return index;
+};
+
+const isPncpPayloadInPipeline = (payload, index) => {
+  if (!payload || typeof payload !== 'object' || !index) return false;
+  const controlId = normalizePncpControlId(
+    payload.numero_controle_pncp || payload.numeroControlePNCP
+  );
+  if (controlId && index.controls.has(controlId)) return true;
+  const pathKey = extractPncpPathKey(
+    payload.url || payload.item_url || payload.linkSistemaOrigem || payload.links_pncp
+  );
+  if (pathKey && index.paths.has(pathKey)) return true;
+  const itemId = String(payload.id || '').trim();
+  if (itemId && index.ids.has(itemId)) return true;
+  return false;
+};
+
+/**
+ * Alinha visibility dos resultados do job com o board:
+ * - no pipe → visibility='pipeline' (fora da lista ativa)
+ * - saiu do pipe e estava pipeline → volta para 'visible'
+ * Descartados (hidden) não são tocados.
+ */
+const reconcilePncpJobPipelineVisibility = async (jobId, accountId) => {
+  if (!jobId || accountId == null) return { marked: 0, restored: 0 };
+  const index = await loadAccountPncpPipelineIndex(accountId);
+  const { rows } = await pool.query(
+    `
+      SELECT result_key, visibility,
+             payload->>'id' AS payload_id,
+             payload->>'numero_controle_pncp' AS control,
+             payload->>'numeroControlePNCP' AS control_alt,
+             payload->>'url' AS url,
+             payload->>'item_url' AS item_url,
+             payload->>'linkSistemaOrigem' AS link_origem,
+             payload->>'links_pncp' AS links_pncp
+        FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+       WHERE job_id = $1
+         AND account_id = $2
+         AND visibility <> 'hidden'
+    `,
+    [jobId, accountId]
+  ).catch(() => ({ rows: [] }));
+
+  const toPipeline = [];
+  const toVisible = [];
+  for (const row of rows) {
+    const payload = {
+      id: row.payload_id,
+      numero_controle_pncp: row.control || row.control_alt,
+      url: row.url,
+      item_url: row.item_url,
+      linkSistemaOrigem: row.link_origem,
+      links_pncp: row.links_pncp,
+    };
+    const inPipe = isPncpPayloadInPipeline(payload, index);
+    const vis = String(row.visibility || 'visible');
+    if (inPipe && vis !== 'pipeline') toPipeline.push(row.result_key);
+    else if (!inPipe && vis === 'pipeline') toVisible.push(row.result_key);
+  }
+
+  const batchUpdate = async (keys, visibility) => {
+    if (!keys.length) return 0;
+    let updated = 0;
+    for (let start = 0; start < keys.length; start += 500) {
+      const chunk = keys.slice(start, start + 500);
+      const result = await pool.query(
+        `
+          UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+             SET visibility = $1, updated_at = NOW()
+           WHERE job_id = $2
+             AND account_id = $3
+             AND result_key = ANY($4::text[])
+        `,
+        [visibility, jobId, accountId, chunk]
+      ).catch(() => ({ rowCount: 0 }));
+      updated += Number(result.rowCount || 0);
+    }
+    return updated;
+  };
+
+  const marked = await batchUpdate(toPipeline, 'pipeline');
+  const restored = await batchUpdate(toVisible, 'visible');
+  return { marked, restored };
+};
+
+/** Conta resultados do job. Por padrão exclui descartados e já no pipeline. */
+const countPncpJobResults = async (jobId, accountId = null, { includeHidden = false, includePipeline = false } = {}) => {
   if (!jobId) return 0;
   const params = [jobId];
   let sql = `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`;
@@ -9382,6 +9897,11 @@ const countPncpJobResults = async (jobId, accountId = null, { includeHidden = fa
   }
   if (!includeHidden) {
     sql += ` AND visibility <> 'hidden'`;
+    // Suspenso/revogado após captura — fora da lista aberta.
+    sql += ` AND visibility <> 'stale_status'`;
+  }
+  if (!includePipeline) {
+    sql += ` AND visibility <> 'pipeline'`;
   }
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total: 0 }] }));
   return Number(rows[0]?.total || 0);
@@ -9391,9 +9911,9 @@ const countPncpJobResults = async (jobId, accountId = null, { includeHidden = fa
  * Soma canônica do "Valor na lista": SOMENTE itens pertinentes (value_matched).
  * Nunca usa total da licitação (value_estimated / valor_global / homologado) —
  * se faltar valor de item, a linha não entra na soma até o enriquecimento preencher.
- * Descartados (visibility=hidden) não entram no valor da lista ativa.
+ * Descartados e já no pipeline não entram no valor da lista ativa.
  */
-const sumPncpJobResultsValue = async (jobId, accountId = null, { includeHidden = false } = {}) => {
+const sumPncpJobResultsValue = async (jobId, accountId = null, { includeHidden = false, includePipeline = false } = {}) => {
   if (!jobId) return 0;
   const params = [jobId];
   let sql = `
@@ -9412,6 +9932,10 @@ const sumPncpJobResultsValue = async (jobId, accountId = null, { includeHidden =
   }
   if (!includeHidden) {
     sql += ` AND visibility <> 'hidden'`;
+    sql += ` AND visibility <> 'stale_status'`;
+  }
+  if (!includePipeline) {
+    sql += ` AND visibility <> 'pipeline'`;
   }
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total_value: 0 }] }));
   const n = Number(rows[0]?.total_value || 0);
@@ -9432,10 +9956,18 @@ const refreshPncpJobSummaryTotals = async (job) => {
   return job.summary;
 };
 
-/** Contagens por visibility (chips Na lista / Descartados / Pipeline). */
-const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
-  const empty = { all: 0, list: 0, visible: 0, hidden: 0, pipeline: 0 };
+/**
+ * Contagens por visibility (chips Na lista / Descartados / Pipeline).
+ * "Na lista" = só visíveis (disponíveis para importar); pipeline fica no chip próprio.
+ */
+const countPncpJobResultsByVisibility = async (jobId, accountId = null, { reconcile = false } = {}) => {
+  const empty = { all: 0, list: 0, visible: 0, hidden: 0, pipeline: 0, stale_status: 0 };
   if (!jobId) return empty;
+  if (reconcile && accountId != null) {
+    await reconcilePncpJobPipelineVisibility(jobId, accountId).catch((err) => {
+      console.warn('[PNCP] reconcile pipeline visibility falhou:', err.message);
+    });
+  }
   const params = [jobId];
   let sql = `
     SELECT visibility, COUNT(*)::int AS cnt
@@ -9453,11 +9985,12 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
     const n = Number(row.cnt || 0);
     if (vis === 'hidden') counts.hidden = n;
     else if (vis === 'pipeline') counts.pipeline = n;
+    else if (vis === 'stale_status') counts.stale_status = n;
     else counts.visible += n;
     counts.all += n;
   }
-  // "Na lista" = tudo que não foi descartado (visível + pipeline).
-  counts.list = Math.max(0, counts.all - counts.hidden);
+  // "Na lista" = disponíveis (sem descartados, pipeline nem stale por status).
+  counts.list = counts.visible;
   return counts;
 };
 
@@ -9465,9 +9998,9 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
  * Contagem canônica na lista por matched_term (fonte = tabela de resultados).
  * A coluna classified_added do term_run é só incremento de fatia e fica menor
  * que o card após retomadas/preserve.
- * Descartados não entram na lista ativa.
+ * Descartados e já no pipeline não entram na lista ativa.
  */
-const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null, { includeHidden = false } = {}) => {
+const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null, { includeHidden = false, includePipeline = false } = {}) => {
   if (!jobId) return { total: 0, by_term: {} };
   const params = [jobId];
   let sql = `
@@ -9484,6 +10017,9 @@ const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null, { inclu
   }
   if (!includeHidden) {
     sql += ` AND visibility <> 'hidden'`;
+  }
+  if (!includePipeline) {
+    sql += ` AND visibility <> 'pipeline'`;
   }
   sql += ' GROUP BY 1 ORDER BY cnt DESC';
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [] }));
@@ -9650,11 +10186,14 @@ const fetchConsultaComplementItems = async ({
   shouldApplyReceivingProposalLocally,
   seen,
   rawItems,
+  dupRefreshItems = null,
   maxPages = 10,
   startPage = 1,
   pagesThisSlice = null,
   priorRun = null,
   priority = 'sync',
+  // Probe diário: não grava high-water de pages_completed abaixo do prior.
+  preserveHighWaterPages = false,
 }) => {
   const prior = priorRun && priorRun.source === 'pncp_consulta_complement' ? priorRun : null;
   const run = {
@@ -9711,14 +10250,18 @@ const fetchConsultaComplementItems = async ({
   run.resumed_from_page = pageStart > 1 ? pageStart : null;
   let pagina = pageStart;
   let pagesInThisCall = 0;
+  let lastPageRead = pageStart - 1;
   try {
     while (pagina <= hardCap && pagesInThisCall < sliceCap) {
       run.pages_requested += 1;
       const data = await withPncpGate(() => fetchPncpConsulta(endpoint, { ...params, pagina }), { priority });
       run.pages_completed = pagina;
+      lastPageRead = pagina;
       pagesInThisCall += 1;
       const items = asPncpList(data);
       if (pagina === 1 || !run.total_reported) run.total_reported = Number(data?.totalRegistros) || run.total_reported || 0;
+      const apiTotalPages = Number(data?.totalPaginas) || 0;
+      if (apiTotalPages > 0) run.total_pages = Math.max(Number(run.total_pages || 0), apiTotalPages);
       if (!items.length) {
         run.stop_reason = 'empty_page';
         break;
@@ -9735,6 +10278,10 @@ const fetchConsultaComplementItems = async ({
         if (!key) continue;
         if (seen.has(key)) {
           run.duplicates_skipped = Number(run.duplicates_skipped || 0) + 1;
+          // Atualiza situacao/datas de itens já no acervo (payload veio de graça).
+          if (Array.isArray(dupRefreshItems) && dupRefreshItems.length < PNCP_DEEP_DUP_REFRESH_CAP) {
+            dupRefreshItems.push(mapped);
+          }
           continue;
         }
         seen.add(key);
@@ -9764,6 +10311,16 @@ const fetchConsultaComplementItems = async ({
   if (!run.stop_reason) {
     // Fatia parcial (ainda há páginas) vs teto desta chamada.
     run.stop_reason = pagesInThisCall >= sliceCap ? 'slice_yield' : 'max_pages';
+  }
+  // Cursor real da fatia (antes de eventualmente preservar high-water de varredura completa).
+  run.slice_last_page = lastPageRead >= pageStart ? lastPageRead : null;
+  run.slice_next_page = lastPageRead >= pageStart ? lastPageRead + 1 : pageStart;
+  if (preserveHighWaterPages) {
+    const priorHw = Number(prior?.pages_completed || 0);
+    run.pages_completed = Math.max(priorHw, Number(run.pages_completed || 0));
+    if (run.stop_reason === 'slice_yield' || run.stop_reason === 'max_pages') {
+      run.stop_reason = 'incremental_probe_done';
+    }
   }
   run.duration_ms = Number(run.duration_ms || 0) + (Date.now() - startedAt);
   return run;
@@ -9884,6 +10441,8 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
   const maxPagesPerTerm = 1000;
   const seen = new Set();
   const rawItems = [];
+  // Itens já vistos que reapareceram no probe — refresh de situacao sem request extra.
+  const dupRefreshItems = [];
   // Runs anteriores (completos/parciais) — base do checkpoint de retomada.
   const priorTermRuns = Array.isArray(job.term_runs) ? [...job.term_runs] : [];
   // termRuns vira o estado vivo (1 entrada por termo); complementos entram no final.
@@ -10150,6 +10709,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
     // liveComplementRun já seedado acima a partir de priorTermRuns.
     let complementRun = liveComplementRun ? { ...liveComplementRun } : null;
     liveComplementRun = complementRun;
+    const complementHighWater = Number(complementRun?.pages_completed || 0);
     let complementPage = Math.max(
       1,
       Number(complementRun?.pages_completed || 0) + 1,
@@ -10160,6 +10720,59 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       && PNCP_TERM_RUN_DONE_STOPS.has(complementRun.stop_reason)
       && (Number(complementRun.pages_completed || 0) > 0 || complementRun.stop_reason === 'empty_page')
     );
+    // Recoleta diária: feed /proposta em ordem pub antiga→nova (validado na API).
+    // Cursor tail-first (páginas finais = mais recentes) andando para trás.
+    let propostaCursorBackward = false;
+    let propostaTotalPages = Number(job.progress?.proposta_total_pages || complementRun?.total_pages || 0) || 0;
+    if (incrementalRefresh && shouldApplyReceivingProposalLocally) {
+      complementDone = false;
+      propostaCursorBackward = true;
+      const savedCursor = Number(job.progress?.proposta_cursor_page || 0);
+      if (savedCursor > 0) {
+        complementPage = savedCursor;
+      } else if (propostaTotalPages > 0) {
+        complementPage = propostaTotalPages;
+      } else {
+        // Bootstrap: 1 request barata pega totalPaginas e salta para o fim.
+        try {
+          const fmtDate = (d) => d.toISOString().split('T')[0].replace(/-/g, '');
+          const fim = new Date();
+          fim.setDate(fim.getDate() + 180);
+          const probe = await withPncpGate(
+            () => fetchPncpConsulta('/v1/contratacoes/proposta', {
+              dataFinal: fmtDate(fim),
+              pagina: 1,
+              tamanhoPagina: 50,
+              ...(filters.modalidade_licitacao_id
+                ? { codigoModalidadeContratacao: filters.modalidade_licitacao_id }
+                : {}),
+              ...(filters.uf ? { uf: filters.uf } : {}),
+            }),
+            { priority: 'bulk' }
+          );
+          propostaTotalPages = Math.max(1, Number(probe?.totalPaginas) || 1);
+          job.progress.proposta_total_pages = propostaTotalPages;
+          complementPage = propostaTotalPages;
+          console.log(
+            `[PNCP Deep Search] job ${jobId} /proposta bootstrap tail: ` +
+            `totalPaginas=${propostaTotalPages} totalRegistros=${probe?.totalRegistros || '?'}`
+          );
+        } catch (probeErr) {
+          console.warn(`[PNCP Deep Search] job ${jobId} /proposta bootstrap falhou:`, probeErr.message);
+          complementPage = 1;
+          propostaCursorBackward = false;
+        }
+      }
+      if (complementRun) {
+        complementRun = {
+          ...complementRun,
+          stop_reason: null,
+          next_page: complementPage,
+        };
+        liveComplementRun = complementRun;
+      }
+      job.progress.proposta_cursor_direction = propostaCursorBackward ? 'backward' : 'forward';
+    }
     const COMPLEMENT_PAGES_PER_SLICE = Math.max(1, Math.min(4, Number(process.env.PNCP_COMPLEMENT_PAGES_PER_SLICE) || 2));
 
     const runComplementSlice = async (states, reason = 'interleave') => {
@@ -10169,12 +10782,19 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
         if (!filters.modalidade_licitacao_id) return { paused: false, classified: 0 };
       }
       const sessionRawFrom = rawItems.length;
+      const sliceStartPage = complementPage;
+      // Em modo backward: fatia vai de (page - N + 1) .. page, lida em ordem crescente pela API.
+      let fetchStartPage = complementPage;
+      if (incrementalRefresh && propostaCursorBackward) {
+        fetchStartPage = Math.max(1, complementPage - COMPLEMENT_PAGES_PER_SLICE + 1);
+      }
       console.log(
-        `[PNCP Deep Search] job ${jobId} complemento consulta pág.${complementPage}+ ` +
-        `(${reason}, ${COMPLEMENT_PAGES_PER_SLICE} pág/fatia)`
+        `[PNCP Deep Search] job ${jobId} complemento consulta pág.${fetchStartPage}+ ` +
+        `(${reason}, ${COMPLEMENT_PAGES_PER_SLICE} pág/fatia` +
+        `${propostaCursorBackward ? ', tail→head' : ''})`
       );
       job.progress.current_term = '(consulta por data)';
-      job.progress.current_page = complementPage;
+      job.progress.current_page = fetchStartPage;
       const run = await fetchConsultaComplementItems({
         qText,
         terms,
@@ -10183,19 +10803,62 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
         shouldApplyReceivingProposalLocally,
         seen,
         rawItems,
+        dupRefreshItems,
         maxPages: 40,
-        startPage: complementPage,
+        startPage: fetchStartPage,
         pagesThisSlice: COMPLEMENT_PAGES_PER_SLICE,
         priorRun: complementRun,
         priority: 'bulk',
+        preserveHighWaterPages: Boolean(incrementalRefresh),
       });
       complementRun = run;
       liveComplementRun = run;
-      if (PNCP_TERM_RUN_DONE_STOPS.has(run.stop_reason) || run.stop_reason === 'sem_termos' || run.stop_reason === 'publicacao_requer_modalidade') {
+      if (Number(run.total_pages || 0) > 0) {
+        propostaTotalPages = Math.max(propostaTotalPages, Number(run.total_pages));
+        job.progress.proposta_total_pages = propostaTotalPages;
+      }
+      const terminalStops = PNCP_TERM_RUN_DONE_STOPS.has(run.stop_reason)
+        || run.stop_reason === 'sem_termos'
+        || run.stop_reason === 'publicacao_requer_modalidade';
+      if (terminalStops && !incrementalRefresh) {
         complementDone = true;
+      } else if (incrementalRefresh && propostaCursorBackward) {
+        // Andou para trás: próximo cursor fica abaixo do início desta fatia.
+        const nextBack = fetchStartPage - 1;
+        if (nextBack < 1 || run.stop_reason === 'empty_page') {
+          // Ciclo completo (ou buraco no topo): no próximo daily recomeça no tail.
+          const wrapTo = Math.max(1, propostaTotalPages || Number(run.total_pages) || 1);
+          complementPage = wrapTo;
+          run.next_page = wrapTo;
+          job.progress.proposta_cursor_page = wrapTo;
+          complementDone = true;
+        } else {
+          complementPage = nextBack;
+          run.next_page = nextBack;
+          job.progress.proposta_cursor_page = nextBack;
+        }
+      } else if (run.stop_reason === 'total_reached' || run.stop_reason === 'empty_page') {
+        if (incrementalRefresh) {
+          const wrapTo = Math.max(1, propostaTotalPages || 1);
+          complementPage = wrapTo;
+          run.next_page = wrapTo;
+          job.progress.proposta_cursor_page = wrapTo;
+          complementDone = true;
+        } else {
+          complementDone = true;
+        }
       } else {
-        complementPage = Math.max(complementPage, Number(run.pages_completed || 0) + 1);
+        // Forward (varredura completa / early): avança cursor da fatia.
+        const sliceNext = Number(run.slice_next_page || 0);
+        const advancedTo = Number(run.pages_completed || 0);
+        complementPage = Math.max(complementPage, advancedTo + 1, sliceNext || 0);
         run.next_page = complementPage;
+        if (incrementalRefresh) {
+          job.progress.proposta_cursor_page = complementPage;
+        }
+      }
+      if (incrementalRefresh && complementHighWater > 0) {
+        run.pages_completed = Math.max(complementHighWater, Number(run.pages_completed || 0));
       }
       const classified = await persistSliceProgress(states, run, sessionRawFrom);
       if (run.stop_reason === 'rate_limited') {
@@ -10213,6 +10876,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           gate: getPncpGateSnapshot(),
           resume_in_ms: resumeIn,
           resume_from_page: complementPage,
+          proposta_cursor_page: job.progress?.proposta_cursor_page || complementPage,
           current_term: '(consulta por data)',
           classified_total: job.total,
           checkpoint: true,
@@ -10270,24 +10934,39 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
     );
 
     // Fatia inicial de consulta/proposta: enche a lista com abertos cedo.
-    // Em recoleta incremental: só sonda o começo (não continua da pág. 40+).
+    // Em recoleta incremental: várias fatias a partir do cursor rotativo
+    // (/proposta) para achar reaberturas sem reler o search 1..K.
     if (shouldApplyReceivingProposalLocally && !complementDone) {
       if (incrementalRefresh) {
-        complementPage = 1;
-        if (complementRun) {
-          complementRun = { ...complementRun, stop_reason: null, next_page: 1 };
-          liveComplementRun = complementRun;
+        const maxSlices = PNCP_DEEP_PROPOSTA_INCREMENTAL_SLICES;
+        console.log(
+          `[PNCP Deep Search] job ${jobId} delta /proposta: cursor pág.${complementPage}, ` +
+          `até ${maxSlices} fatia(s) × ${COMPLEMENT_PAGES_PER_SLICE} pág`
+        );
+        for (let sliceIdx = 0; sliceIdx < maxSlices && !complementDone; sliceIdx += 1) {
+          if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) break;
+          const early = await runComplementSlice(states, `incremental_${sliceIdx + 1}`);
+          if (early?.paused) return;
+          if (complementDone) break;
+          // Rate-limit / terminal já tratados; slice_yield → próxima fatia.
+          if (
+            complementRun?.stop_reason
+            && !['slice_yield', 'incremental_probe_done', 'max_pages'].includes(complementRun.stop_reason)
+            && complementRun.stop_reason !== 'rate_limited'
+          ) {
+            break;
+          }
         }
-      }
-      const early = await runComplementSlice(states, incrementalRefresh ? 'incremental' : 'early');
-      if (early?.paused) return;
-      if (incrementalRefresh) {
-        // Uma fatia de complemento basta no daily; não esgota o endpoint de data.
         complementDone = true;
         if (complementRun && !PNCP_TERM_RUN_DONE_STOPS.has(complementRun.stop_reason)) {
           complementRun.stop_reason = 'incremental_probe_done';
           liveComplementRun = complementRun;
         }
+        job.progress.proposta_cursor_page = complementPage;
+        job.progress.proposta_slices_ran = PNCP_DEEP_PROPOSTA_INCREMENTAL_SLICES;
+      } else {
+        const early = await runComplementSlice(states, 'early');
+        if (early?.paused) return;
       }
     }
 
@@ -10405,6 +11084,9 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
             if (!key) return;
             if (seen.has(key)) {
               dups += 1;
+              if (dupRefreshItems.length < PNCP_DEEP_DUP_REFRESH_CAP) {
+                dupRefreshItems.push({ ...item, __matched_termo: st.term });
+              }
               return;
             }
             seen.add(key);
@@ -10622,9 +11304,10 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
 
     // Complemento final: esgota páginas restantes da consulta (já intercalado antes).
     // Não recomeça do zero — continua de complementPage / priorRun.
-    // Incremental diário: já sondou uma fatia no early — não esgota o endpoint.
+    // Incremental diário: já rodou fatias no cursor — não esgota o endpoint.
     if (incrementalRefresh) {
       complementDone = true;
+      job.progress.proposta_cursor_page = Number(job.progress?.proposta_cursor_page || complementPage || 1);
     }
     if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && !complementDone) {
       let complementGuard = 0;
@@ -10644,6 +11327,30 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       termRuns.length = 0;
       termRuns.push(...withoutComp, complementRun);
       job.term_runs = termRuns;
+    }
+
+    // Refresh de situacao/datas em itens que reapareceram no probe (já estavam no acervo).
+    if (dupRefreshItems.length && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
+      try {
+        const dupStats = await applyPncpDuplicateStatusRefresh(job, dupRefreshItems, {
+          qText,
+          terms,
+          negativeTerms,
+          filters,
+          mappedStatus,
+          shouldApplyReceivingProposalLocally,
+        });
+        job.progress.dup_status_refresh = dupStats;
+        if (dupStats.stale > 0 || dupStats.reopened > 0) {
+          await refreshPncpJobSummaryTotals(job);
+        }
+        console.log(
+          `[PNCP Deep Search] job ${jobId} dup-refresh: ` +
+          `refreshed=${dupStats.refreshed} stale=${dupStats.stale} reopened=${dupStats.reopened || 0}`
+        );
+      } catch (dupErr) {
+        console.warn(`[PNCP Deep Search] job ${jobId} dup-refresh falhou:`, dupErr.message);
+      }
     }
 
     // Snapshot final só dos itens brutos desta execução (acervo antigo já está no DB).
@@ -10692,6 +11399,10 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       checkpoint: false,
       incremental_refresh: false,
       last_run_incremental: Boolean(incrementalRefresh),
+      // Cursor rotativo de /proposta sobrevive entre dailies (reaberturas).
+      proposta_cursor_page: Number(
+        job.progress?.proposta_cursor_page || (incrementalRefresh ? complementPage : 0) || 0
+      ) || undefined,
       gate: getPncpGateSnapshot(),
     };
     job.query_plan = {
@@ -10709,10 +11420,32 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       raw_unique_collected: seen.size,
       filtered_total: job.total,
       incremental_refresh: Boolean(incrementalRefresh),
+      proposta_cursor_page: job.progress?.proposta_cursor_page || null,
+      dup_status_refresh: job.progress?.dup_status_refresh || null,
     };
     job.preserve_results = true;
     job.error = null;
     job.updated_at = Date.now();
+
+    // No daily: amostra o acervo local para pegar suspensões que o probe não viu.
+    if (incrementalRefresh && shouldApplyReceivingProposalLocally && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
+      try {
+        const rec = await reconcilePncpJobResultStatuses(job, {
+          limit: Math.min(PNCP_STATUS_RECONCILE_PER_JOB, 20),
+        });
+        job.progress = { ...(job.progress || {}), status_reconcile: rec };
+        if (rec.stale > 0) {
+          await refreshPncpJobSummaryTotals(job);
+        }
+        console.log(
+          `[PNCP Deep Search] job ${jobId} status-reconcile: ` +
+          `checked=${rec.checked} stale=${rec.stale} open=${rec.open}`
+        );
+      } catch (recErr) {
+        console.warn(`[PNCP Deep Search] job ${jobId} status-reconcile falhou:`, recErr.message);
+      }
+    }
+
     await persistPncpDeepJob(job);
     const jobLabel = job.nome || job.filters?.q || 'PNCP';
     const totalResults = Number(job.total || 0);
@@ -10873,17 +11606,17 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   }
   const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
   const accountId = getAccountId(req);
-  // Total canônico da lista ativa (sem descartados) + contagem por termo.
+  // Total canônico da lista ativa (sem descartados e sem já no pipeline) + contagem por termo.
   let listTotal = Number(job.total || 0);
   let listByTerm = {};
   let visibilityCounts = null;
   try {
-    const [vis, byTerm] = await Promise.all([
-      countPncpJobResultsByVisibility(job.id, accountId || job.account_id || null),
-      countPncpJobResultsByMatchedTerm(job.id, accountId || job.account_id || null, { includeHidden: false }),
-    ]);
+    const aid = accountId || job.account_id || null;
+    // Reconcile com o board antes de contar (marca visibility=pipeline).
+    const vis = await countPncpJobResultsByVisibility(job.id, aid, { reconcile: true });
+    const byTerm = await countPncpJobResultsByMatchedTerm(job.id, aid, { includeHidden: false, includePipeline: false });
     visibilityCounts = vis;
-    // "Na lista" / total do card = ativos (list), não inclui descartados.
+    // "Na lista" / total do card = disponíveis (sem descartados / sem pipeline).
     listTotal = Number(vis.list ?? byTerm.total ?? listTotal ?? 0);
     listByTerm = byTerm.by_term || {};
   } catch (err) {
@@ -10957,7 +11690,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
     const tam = Math.max(5, Math.min(100, Number(req.query.tam || 25) || 25));
     const offset = (pagina - 1) * tam;
     const ordenacao = String(req.query.ordenacao || job.filters?.ordenacao || 'relevancia_desc');
-    // list (default) = ativos (não descartados); hidden = só descartados; all = tudo no DB.
+    // list (default) = disponíveis (sem descartados e sem já no pipeline);
+    // pipeline = já no board; hidden = só descartados; everything = tudo no DB.
     const scope = String(req.query.scope || 'list').toLowerCase();
     const orderSql = ordenacao === 'valor_desc_data_desc'
       ? 'COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC'
@@ -10968,19 +11702,18 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           : ordenacao === 'data_asc'
             ? 'deadline_at ASC NULLS LAST, updated_at DESC'
             : 'score DESC NULLS LAST, COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC';
-    // list/all(legado UI)/active: sem descartados; hidden/descartados: só hidden;
-    // visible/pipeline: filtro fino; everything: inclui descartados (debug).
+    // Reconcile board → visibility=pipeline antes de paginar/contar.
+    const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId, { reconcile: true });
+    // list/all/active/visible: só visibility=visible; pipeline: já no board;
+    // hidden/descartados: só hidden; everything: inclui tudo (debug).
     const visibilityClause = (scope === 'hidden' || scope === 'descartados' || scope === 'discarded')
       ? ` AND visibility = 'hidden'`
       : scope === 'pipeline'
         ? ` AND visibility = 'pipeline'`
-        : scope === 'visible'
-          ? ` AND visibility = 'visible'`
-          : (scope === 'everything' || scope === 'with_hidden')
-            ? ''
-            : ` AND visibility <> 'hidden'`; // list | all | active | default
+        : (scope === 'everything' || scope === 'with_hidden')
+          ? ''
+          : ` AND visibility = 'visible'`; // list | all | active | visible | default
 
-    const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId);
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1 AND account_id = $2${visibilityClause}`,
       [job.id, accountId]
@@ -11072,10 +11805,11 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
         list_by_term: listByTerm.by_term || {},
         list_total: Number(listByTerm.total || listTotalCanonical || 0),
         // Progresso da coleta (auditoria/UI): brutos da API ≠ classificados no filtro.
-        // classified = lista ativa (sem descartados).
+        // classified = lista ativa (sem descartados e sem já no pipeline).
         collection: {
           classified: listTotalCanonical,
           discarded: Number(visibilityCounts.hidden || 0),
+          pipeline: Number(visibilityCounts.pipeline || 0),
           current_term: job.progress?.current_term || null,
           current_page: job.progress?.current_page || null,
           resume_from_page: job.progress?.resume_from_page || null,
@@ -13813,6 +14547,28 @@ const matchPcaItens = async ({
   if (filtros.orgao_cnpj) { params.push(String(filtros.orgao_cnpj).replace(/\D/g, '')); where += ` AND p.orgao_cnpj = $${params.length}`; }
   if (filtros.unidade_codigo) { params.push(String(filtros.unidade_codigo)); where += ` AND p.codigo_unidade = $${params.length}`; }
 
+  // accountId entra no WHERE (exclui já no pipe) e nos subselects de status.
+  const accountIdNum = toIntOrNull(accountId) || -1;
+  params.push(accountIdNum);
+  const accountSignalParam = params.length;
+
+  // Itens já promovidos ao pipeline (signal ou opportunity com pca_item_ids) não entram na busca.
+  where += `
+    AND NOT EXISTS (
+      SELECT 1
+        FROM ${PCA_SIGNALS_TABLE} s_pipe
+       WHERE s_pipe.account_id = $${accountSignalParam}
+         AND s_pipe.item_id = i.id
+         AND s_pipe.status = 'promovido'
+         AND s_pipe.promovido_para_opportunity_id IS NOT NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM ${LICITACAO_TABLE} o_pipe
+       WHERE o_pipe.account_id = $${accountSignalParam}
+         AND o_pipe.metadados->'pca_item_ids' @> to_jsonb(i.id)
+    )`;
+
   const limitIdx = params.length + 1;
   const offsetIdx = params.length + 2;
   const offset = Math.max(0, (toIntOrNull(pagina) || 1) - 1) * (toIntOrNull(tam) || 50);
@@ -13824,8 +14580,6 @@ const matchPcaItens = async ({
     : '0';
   if (termoOriginal) params.push(`%${termoOriginal}%`);
 
-  const accountSignalParam = params.length + 1;
-
   const sql = `
     SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
            i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
@@ -13834,24 +14588,8 @@ const matchPcaItens = async ({
            p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
            p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
            p.data_atualizacao, p.responsaveis, p.contatos,
-           EXISTS (
-             SELECT 1
-             FROM ${PCA_SIGNALS_TABLE} s2
-             WHERE s2.account_id = $${accountSignalParam}
-               AND s2.item_id = i.id
-               AND s2.status = 'promovido'
-               AND s2.promovido_para_opportunity_id IS NOT NULL
-           ) AS ja_promovido,
-           (
-             SELECT s2.promovido_para_opportunity_id
-             FROM ${PCA_SIGNALS_TABLE} s2
-             WHERE s2.account_id = $${accountSignalParam}
-               AND s2.item_id = i.id
-               AND s2.status = 'promovido'
-               AND s2.promovido_para_opportunity_id IS NOT NULL
-             ORDER BY s2.criado_em DESC
-             LIMIT 1
-           ) AS promovido_para_opportunity_id,
+           FALSE AS ja_promovido,
+           NULL::bigint AS promovido_para_opportunity_id,
            (
              SELECT s2.status
              FROM ${PCA_SIGNALS_TABLE} s2
@@ -13871,16 +14609,18 @@ const matchPcaItens = async ({
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `;
 
+  // countParams: tsPos, tsNeg, filtros opcionais, accountId (sem limit/offset/boost ILIKE).
+  const countParams = params.slice(0, accountSignalParam);
+
   const countSql = `
     SELECT COUNT(*)::int AS total
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
     WHERE ${where}
   `;
-  const countParams = params.slice(0, params.length - (termoOriginal ? 3 : 2));
 
   const [rowsResult, countResult] = await Promise.all([
-    pool.query(sql, [...params, toIntOrNull(accountId) || -1]),
+    pool.query(sql, params),
     pool.query(countSql, countParams),
   ]);
 
@@ -14249,7 +14989,14 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
     if (watch.valor_maximo) filtros.valor_max = watch.valor_maximo;
 
     const { items } = await matchPcaItens({
-      positivos, negativos, filtros, pagina: 1, tam: 500, termoOriginal: positivos[0] || '',
+      positivos,
+      negativos,
+      filtros,
+      pagina: 1,
+      tam: 500,
+      termoOriginal: positivos[0] || '',
+      // Exclui itens já no pipeline desta conta (não gera sinal novo de promovido).
+      accountId: watch.account_id,
     });
     for (const item of items) {
       const r = await pool.query(
@@ -18717,6 +19464,21 @@ const registerBackgroundSchedules = () => {
       console.log('[pncp-search-jobs] daily refresh ok:', result);
     } catch (error) {
       console.error('[pncp-search-jobs] daily refresh error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Reconcilia situação do acervo local (suspensão pós-captura) sem reler o índice.
+  // Roda após o refresh (08:20) com orçamento por job — bulk, não rouba a UI.
+  cron.schedule('50 8 * * *', async () => {
+    if (!dataLayerReady) {
+      console.log('[pncp-search-jobs] status reconcile adiado: camada de dados ainda não inicializada');
+      return;
+    }
+    try {
+      const result = await runDailyPncpStatusReconcile({ limit: 10 });
+      console.log('[pncp-search-jobs] status reconcile ok:', result);
+    } catch (error) {
+      console.error('[pncp-search-jobs] status reconcile error:', error);
     }
   }, { timezone: 'America/Sao_Paulo' });
 
