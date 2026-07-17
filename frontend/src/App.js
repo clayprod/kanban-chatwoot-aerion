@@ -38,6 +38,7 @@ import {
   PlusIcon,
   ChartBarIcon,
   BellIcon,
+  BellAlertIcon,
   ViewfinderCircleIcon,
   ScaleIcon,
   ChevronLeftIcon,
@@ -5264,6 +5265,35 @@ function formatWhatsappAlertLabel(value, numbersProp = null, minScore = null) {
   return base;
 }
 
+/**
+ * Botão da barra do card: "Assinar" ou só o sino.
+ * Sino verde = WhatsApp ligado — não repetir chip "Alertas · …" no corpo do card.
+ */
+function WhatsappAlertActionContent({ subscribed, alertsOn }) {
+  if (!subscribed) return 'Assinar';
+  if (alertsOn) {
+    return <BellAlertIcon className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300 bell-ring" aria-hidden />;
+  }
+  return <BellIcon className="h-3.5 w-3.5" aria-hidden />;
+}
+
+function whatsappAlertActionTitle({ subscribed, alertsOn, number, numbers, minScore }) {
+  if (!subscribed) return 'Esta busca vira assinatura; opcional WhatsApp para novos editais';
+  if (alertsOn) {
+    const label = formatWhatsappAlertLabel(number, numbers, minScore);
+    return label
+      ? `WhatsApp em ${label} — editar números e faixas de score`
+      : 'WhatsApp ligado — editar números e faixas de score';
+  }
+  return 'Assinatura ativa — ligar ou editar avisos WhatsApp';
+}
+
+function whatsappAlertActionAria({ subscribed, alertsOn }) {
+  if (!subscribed) return 'Assinar busca';
+  if (alertsOn) return 'Editar alertas WhatsApp';
+  return 'Configurar alertas WhatsApp';
+}
+
 /** Faixas iguais à UI de score: vermelho <38, amarelo >=38, verde >=68. */
 const WHATSAPP_SCORE_BANDS = [
   {
@@ -6247,16 +6277,6 @@ function PcaWatchlistsPanel({ onPromoted }) {
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? (
-                      <span
-                        className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
-                        title={parseWhatsappNumbers(w.whatsapp_numbers, w.whatsapp_number).join(', ')}
-                      >
-                        Alertas · {formatWhatsappAlertLabel(w.whatsapp_number, w.whatsapp_numbers, w.whatsapp_min_score)}
-                      </span>
-                    ) : (
-                      <span className={metaChip}>Alertas off</span>
-                    )}
                     <span className={metaChip}>
                       Sinais: {totalSinais.toLocaleString('pt-BR')}
                       {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
@@ -6293,10 +6313,23 @@ function PcaWatchlistsPanel({ onPromoted }) {
                     type="button"
                     disabled={busy[`wa:${w.id}`]}
                     onClick={() => setWhatsappTarget(w)}
-                    className={btnSecondaryXs}
-                    title="Alertas WhatsApp desta busca salva"
+                    className={`${btnSecondaryXs} min-w-[2rem] px-2`}
+                    title={whatsappAlertActionTitle({
+                      subscribed: true,
+                      alertsOn: Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length)),
+                      number: w.whatsapp_number,
+                      numbers: w.whatsapp_numbers,
+                      minScore: w.whatsapp_min_score,
+                    })}
+                    aria-label={whatsappAlertActionAria({
+                      subscribed: true,
+                      alertsOn: Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length)),
+                    })}
                   >
-                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? 'Alertas ✓' : 'Alertas'}
+                    <WhatsappAlertActionContent
+                      subscribed
+                      alertsOn={Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length))}
+                    />
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -6511,16 +6544,6 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                   </div>
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                     <span className={metaChip}>IA: {w.usar_ia ? 'sim' : 'não'}</span>
-                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? (
-                      <span
-                        className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
-                        title={parseWhatsappNumbers(w.whatsapp_numbers, w.whatsapp_number).join(', ')}
-                      >
-                        Alertas · {formatWhatsappAlertLabel(w.whatsapp_number, w.whatsapp_numbers, w.whatsapp_min_score)}
-                      </span>
-                    ) : (
-                      <span className={metaChip}>Alertas off</span>
-                    )}
                     <span className={metaChip}>
                       Resultados: {totalSinais.toLocaleString('pt-BR')}
                       {novos > 0 ? ` · ${novos} novo${novos === 1 ? '' : 's'}` : ''}
@@ -6557,10 +6580,23 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                     type="button"
                     disabled={busy[`wa:${w.id}`]}
                     onClick={() => setWhatsappTarget(w)}
-                    className={btnSecondaryXs}
-                    title="Alertas WhatsApp"
+                    className={`${btnSecondaryXs} min-w-[2rem] px-2`}
+                    title={whatsappAlertActionTitle({
+                      subscribed: true,
+                      alertsOn: Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length)),
+                      number: w.whatsapp_number,
+                      numbers: w.whatsapp_numbers,
+                      minScore: w.whatsapp_min_score,
+                    })}
+                    aria-label={whatsappAlertActionAria({
+                      subscribed: true,
+                      alertsOn: Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length)),
+                    })}
                   >
-                    {w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length) ? 'Alertas ✓' : 'Alertas'}
+                    <WhatsappAlertActionContent
+                      subscribed
+                      alertsOn={Boolean(w.whatsapp_enabled && (w.whatsapp_number || w.whatsapp_numbers?.length))}
+                    />
                   </button>
                   <button type="button" disabled={busy[w.id]} onClick={() => removeWatchlist(w)} className={`${btnDangerGhost} ml-auto`}>
                     Excluir
@@ -14478,6 +14514,9 @@ function App() {
                         const title = job.nome || job.filters?.q || 'Pesquisa PNCP';
                         const age = formatPncpJobAge(job.updated_at || job.completed_at || job.created_at);
                         const negativeTerms = job.negative_terms || [];
+                        const jobTotalValue = Number(job.summary?.total_value || 0);
+                        const alertsOn = Boolean(job.whatsapp_enabled || job.alerts_enabled);
+                        const isSubscribed = Boolean(job.watchlist_id);
                         return (
                           <div
                             key={job.id}
@@ -14489,7 +14528,7 @@ function App() {
                                   <p className="truncate font-display text-[13px] font-semibold uppercase tracking-wide text-ink group-hover:text-primary">{title}</p>
                                   <p className="mt-0.5 font-mono text-[10px] text-muted2">
                                     {age ? `atualizado ${age}` : 'criada agora'}
-                                    {!job.watchlist_id && finished ? ' · recoleta diária' : ''}
+                                    {!isSubscribed && finished ? ' · recoleta diária' : ''}
                                   </p>
                                 </div>
                                 <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
@@ -14499,34 +14538,28 @@ function App() {
                               </div>
 
                               <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                                <span className={metaChip}>
+                                <span
+                                  className={metaChip}
+                                  title={jobTotalValue > 0
+                                    ? `Quantidade na lista e valor dos itens pertinentes (soma). Total: ${formatCurrency(jobTotalValue) || formatCompactCurrency(jobTotalValue)}`
+                                    : 'Quantidade de resultados na lista'}
+                                >
                                   Resultados: {Number(job.total || 0).toLocaleString('pt-BR')}
+                                  {jobTotalValue > 0 ? (
+                                    <span className="ml-1 font-mono font-semibold tabular-nums text-ink">
+                                      · {formatCompactCurrency(jobTotalValue)}
+                                    </span>
+                                  ) : null}
                                 </span>
                                 <span className={metaChip}>
                                   Termos: {done}/{termsTotal}
                                 </span>
                                 {live && <span className={metaChip}>{pct}%</span>}
-                                {job.watchlist_id ? (
-                                  <span
-                                    className={metaChip}
-                                    title="Esta busca é uma assinatura: recoleta + matcher de novidades (não arquiva em 15 dias)."
-                                  >
-                                    Assinatura
-                                  </span>
-                                ) : (
-                                  <span className={metaChip} title="Ative assinatura/alertas para não arquivar em 15 dias.">
+                                {/* Assinatura/alertas: só o sino no botão — sem chips “Assinatura” / “Alertas · …” */}
+                                {!isSubscribed && (
+                                  <span className={metaChip} title="Busca temporária: 15 dias de recoleta diária, depois arquiva (a menos que vire assinatura).">
                                     Temporária
                                   </span>
-                                )}
-                                {job.whatsapp_enabled || job.alerts_enabled ? (
-                                  <span
-                                    className={`${metaChip} border-emerald-500/30 text-emerald-700 dark:text-emerald-300`}
-                                    title={parseWhatsappNumbers(job.whatsapp_numbers, job.whatsapp_number).join(', ') || 'WhatsApp ligado para editais novos'}
-                                  >
-                                    Alertas · {formatWhatsappAlertLabel(job.whatsapp_number, job.whatsapp_numbers, job.whatsapp_min_score) || 'on'}
-                                  </span>
-                                ) : (
-                                  <span className={metaChip}>Alertas off</span>
                                 )}
                                 {archiveMeta && (
                                   <span
@@ -14597,14 +14630,17 @@ function App() {
                               <button
                                 type="button"
                                 onClick={() => convertPncpSearchJobToWatchlist(job.id)}
-                                title={job.watchlist_id ? 'Editar assinatura e alertas WhatsApp' : 'Esta busca vira assinatura; opcional WhatsApp para novos editais'}
-                                className={btnSecondaryXs}
+                                title={whatsappAlertActionTitle({
+                                  subscribed: isSubscribed,
+                                  alertsOn,
+                                  number: job.whatsapp_number,
+                                  numbers: job.whatsapp_numbers,
+                                  minScore: job.whatsapp_min_score,
+                                })}
+                                aria-label={whatsappAlertActionAria({ subscribed: isSubscribed, alertsOn })}
+                                className={`${btnSecondaryXs} ${isSubscribed ? 'min-w-[2rem] px-2' : ''}`}
                               >
-                                {job.whatsapp_enabled || job.alerts_enabled
-                                  ? 'Alertas ✓'
-                                  : job.watchlist_id
-                                    ? 'Alertas'
-                                    : 'Assinar'}
+                                <WhatsappAlertActionContent subscribed={isSubscribed} alertsOn={alertsOn} />
                               </button>
                               <button
                                 type="button"
@@ -14842,14 +14878,23 @@ function App() {
                                 <button
                                   type="button"
                                   onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)}
-                                  title={job?.watchlist_id ? 'Editar assinatura e alertas' : 'Assinar esta busca e opcionalmente receber WhatsApp de novos editais'}
-                                  className={`${btnSecondarySm} justify-center`}
+                                  title={whatsappAlertActionTitle({
+                                    subscribed: Boolean(job?.watchlist_id),
+                                    alertsOn: Boolean(job?.whatsapp_enabled || job?.alerts_enabled),
+                                    number: job?.whatsapp_number,
+                                    numbers: job?.whatsapp_numbers,
+                                    minScore: job?.whatsapp_min_score,
+                                  })}
+                                  aria-label={whatsappAlertActionAria({
+                                    subscribed: Boolean(job?.watchlist_id),
+                                    alertsOn: Boolean(job?.whatsapp_enabled || job?.alerts_enabled),
+                                  })}
+                                  className={`${btnSecondarySm} justify-center ${job?.watchlist_id ? 'min-w-[2.5rem] px-2' : ''}`}
                                 >
-                                  {job?.whatsapp_enabled || job?.alerts_enabled
-                                    ? 'Alertas ✓'
-                                    : job?.watchlist_id
-                                      ? 'Alertas'
-                                      : 'Assinar'}
+                                  <WhatsappAlertActionContent
+                                    subscribed={Boolean(job?.watchlist_id)}
+                                    alertsOn={Boolean(job?.whatsapp_enabled || job?.alerts_enabled)}
+                                  />
                                 </button>
                                 <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} justify-center text-status-danger`}>
                                   <TrashIcon className="h-3.5 w-3.5" /> Excluir
