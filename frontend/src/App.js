@@ -14970,10 +14970,19 @@ function App() {
 
                                 <div>
                                   <p className="mb-1.5 text-xs font-semibold text-ink">Frentes de coleta (por termo)</p>
+                                  <div className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-muted">
+                                    <strong className="text-ink">Overlap entre termos:</strong>
+                                    {' '}o resultado de um termo <strong className="text-ink">pode estar contido</strong> no de outro
+                                    (ex.: editais de “uav”/“rpa” que já vieram em “drone”). Por isso a coluna
+                                    {' '}<strong className="text-ink">Já vistos</strong> sobe e a lista pode não crescer.
+                                    {' '}O <strong className="text-ink">universo somado</strong> do card soma os totais da API por termo
+                                    e <strong className="text-ink">também conta esse overlap</strong> — não é união disjunta.
+                                  </div>
                                   <p className={`${subtle} mb-2`}>
                                     Cada linha é um termo no rodízio. “Cedeu a vez” = fatia ok, outros termos rodaram, este volta depois.
-                                    {' '}<strong className="text-ink">Lidos</strong> e <strong className="text-ink">Universo</strong> são da API bruta — não o tamanho da lista.
-                                    {' '}<strong className="text-ink">Únicos</strong> = novos de verdade; <strong className="text-ink">Já vistos</strong> = overlap com outros termos (por isso a lista pode não subir).
+                                    {' '}<strong className="text-ink">Lidos</strong> / <strong className="text-ink">Universo</strong> por linha = API daquele termo.
+                                    {' '}<strong className="text-ink">Únicos</strong> = chave nova neste job;
+                                    {' '}<strong className="text-ink">Já vistos</strong> = já apareceu em outra frente.
                                   </p>
                                   <div className="max-h-72 overflow-auto rounded-lg border border-line scrollbar-theme">
                                     <table className="w-full text-left text-[11px]">
