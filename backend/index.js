@@ -8841,6 +8841,141 @@ const clearPncpJobResults = async (jobId) => {
   await pool.query(`DELETE FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`, [jobId]).catch(() => {});
 };
 
+/**
+ * Remove da lista classificada itens cujo prazo de proposta já venceu.
+ * Critério alinhado a isPncpReceivingProposalOpen: dia civil em America/Sao_Paulo
+ * estritamente anterior a hoje → fora.
+ * Não apaga o job; só linhas em pncp_search_job_results. Atualiza total/summary.
+ */
+const purgeExpiredPncpJobResults = async ({ jobId = null, accountId = null } = {}) => {
+  const params = [];
+  let scopeSql = '';
+  if (jobId) {
+    params.push(jobId);
+    scopeSql += ` AND r.job_id = $${params.length}::uuid`;
+  }
+  if (accountId != null) {
+    params.push(accountId);
+    scopeSql += ` AND r.account_id = $${params.length}`;
+  }
+
+  // Data de prazo efetiva: coluna indexada ou campos do payload.
+  const effectiveDeadlineSql = `
+    COALESCE(
+      r.deadline_at,
+      NULLIF(r.payload->>'data_fim_vigencia', '')::timestamptz,
+      NULLIF(r.payload->>'data_encerramento_proposta', '')::timestamptz,
+      NULLIF(r.payload->>'dataEncerramentoProposta', '')::timestamptz,
+      NULLIF(r.payload->>'data_envio_proposta_limite', '')::timestamptz
+    )
+  `;
+
+  const sql = `
+    WITH expired AS (
+      SELECT r.ctid, r.job_id, r.account_id
+        FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
+       WHERE true
+         ${scopeSql}
+         AND (
+           -- Prazo (data civil America/Sao_Paulo) já passou
+           (
+             ${effectiveDeadlineSql} IS NOT NULL
+             AND (timezone('America/Sao_Paulo', ${effectiveDeadlineSql}))::date
+                 < (timezone('America/Sao_Paulo', NOW()))::date
+           )
+           -- Última decoração já marcou o item como prazo vencido
+           OR COALESCE(r.payload->'prazo_info'->>'urgency', '') = 'expired'
+         )
+    ),
+    deleted AS (
+      DELETE FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
+       USING expired e
+       WHERE r.ctid = e.ctid
+      RETURNING r.job_id, r.account_id
+    )
+    SELECT job_id, account_id, COUNT(*)::int AS removed
+      FROM deleted
+     GROUP BY job_id, account_id
+  `;
+
+  let rows = [];
+  try {
+    const result = await pool.query(sql, params);
+    rows = result.rows || [];
+  } catch (error) {
+    // Fallback mais simples se cast de data no payload falhar em alguma linha.
+    console.warn('[PNCP Job Results] purge expired (sql rico) falhou, fallback:', error.message);
+    const fallback = await pool.query(
+      `
+        WITH deleted AS (
+          DELETE FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
+           WHERE true
+             ${scopeSql}
+             AND r.deadline_at IS NOT NULL
+             AND (timezone('America/Sao_Paulo', r.deadline_at))::date
+                 < (timezone('America/Sao_Paulo', NOW()))::date
+          RETURNING r.job_id, r.account_id
+        )
+        SELECT job_id, account_id, COUNT(*)::int AS removed
+          FROM deleted
+         GROUP BY job_id, account_id
+      `,
+      params
+    ).catch((err) => {
+      console.warn('[PNCP Job Results] purge expired fallback falhou:', err.message);
+      return { rows: [] };
+    });
+    rows = fallback.rows || [];
+  }
+
+  let totalRemoved = 0;
+  for (const row of rows) {
+    const removed = Number(row.removed || 0);
+    totalRemoved += removed;
+    if (!removed || !row.job_id) continue;
+    const mem = PNCP_DEEP_SEARCH_JOBS.get(row.job_id);
+    let job = mem || null;
+    if (!job) {
+      try {
+        job = await loadPncpDeepJob(row.job_id, row.account_id || accountId || null);
+      } catch (_) {
+        job = null;
+      }
+    }
+    if (!job) continue;
+    await refreshPncpJobSummaryTotals(job);
+    job.progress = {
+      ...(job.progress || {}),
+      expired_purged_at: new Date().toISOString(),
+      expired_purged_last: removed,
+    };
+    job.updated_at = Date.now();
+    if (mem) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+    await persistPncpDeepJob(job).catch(() => null);
+  }
+
+  return {
+    removed: totalRemoved,
+    jobs_touched: rows.length,
+    by_job: rows.map((r) => ({
+      job_id: r.job_id,
+      account_id: r.account_id,
+      removed: Number(r.removed || 0),
+    })),
+  };
+};
+
+/** Varredura diária: limpa vencidos de todos os jobs ainda no prazo de arquivo. */
+const runDailyPncpExpiredResultsPurge = async () => {
+  const started = Date.now();
+  const result = await purgeExpiredPncpJobResults({});
+  console.log(
+    `[pncp-search-jobs] purge prazos vencidos: removed=${result.removed} ` +
+    `jobs=${result.jobs_touched} in ${Date.now() - started}ms`
+  );
+  return result;
+};
+
 const countPncpJobResults = async (jobId, accountId = null) => {
   if (!jobId) return 0;
   const params = [jobId];
@@ -10190,8 +10325,18 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
 app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    const job = await loadPncpDeepJob(req.params.jobId, accountId);
+    let job = await loadPncpDeepJob(req.params.jobId, accountId);
     if (!job) return res.status(404).json({ error: 'Busca profunda nao encontrada' });
+
+    // Garante lista sem prazos vencidos mesmo antes do cron diário.
+    try {
+      const purged = await purgeExpiredPncpJobResults({ jobId: job.id, accountId });
+      if (purged.removed > 0) {
+        job = PNCP_DEEP_SEARCH_JOBS.get(job.id) || await loadPncpDeepJob(job.id, accountId) || job;
+      }
+    } catch (purgeErr) {
+      console.warn('[PNCP Job Results] purge on read falhou:', purgeErr.message);
+    }
 
     const pagina = Math.max(1, Number(req.query.pagina || 1) || 1);
     const tam = Math.max(5, Math.min(100, Number(req.query.tam || 25) || 25));
@@ -17670,6 +17815,20 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Remove da lista classificada itens com prazo de proposta vencido (todos os jobs).
+  // Roda cedo: a recoleta das 08:20 não reintroduz vencidos (filtro recebendo_proposta).
+  cron.schedule('5 5 * * *', async () => {
+    if (!dataLayerReady) {
+      console.log('[pncp-search-jobs] purge vencidos adiado: camada de dados ainda não inicializada');
+      return;
+    }
+    try {
+      await runDailyPncpExpiredResultsPurge();
+    } catch (error) {
+      console.error('[pncp-search-jobs] purge vencidos error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Buscas de editais ainda ativas (sem watchlist, < 7 dias): recoleta diária mantendo o acervo.
   cron.schedule('20 8 * * *', async () => {
     if (!dataLayerReady) {
@@ -17677,6 +17836,10 @@ const registerBackgroundSchedules = () => {
       return;
     }
     try {
+      // Segunda passagem: prazos que viraram no dia após o purge das 05:05.
+      await runDailyPncpExpiredResultsPurge().catch((err) => {
+        console.warn('[pncp-search-jobs] purge pré-refresh falhou:', err.message);
+      });
       const result = await runDailyPncpSearchJobRefresh({ limit: 10 });
       console.log('[pncp-search-jobs] daily refresh ok:', result);
     } catch (error) {
@@ -17796,6 +17959,12 @@ const initializeDataLayer = async () => {
   await seedHistorySnapshot();
   await resumePausedPncpSearchJobs();
   await pollStageChanges();
+  // Limpa prazos vencidos que acumularam com o backend offline / antes do cron.
+  setImmediate(() => {
+    runDailyPncpExpiredResultsPurge().catch((err) => {
+      console.warn('[pncp-search-jobs] purge vencidos no startup falhou:', err.message);
+    });
+  });
 
   // Retoma buscas profundas ANTES do catch-up PCA — senão o heavy slot fica
   // com o PCA e os jobs de editais ficam "Na fila" sem coletar.
