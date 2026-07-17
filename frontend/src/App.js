@@ -4396,10 +4396,22 @@ const LicitacaoCardBody = memo(function LicitacaoCardBody({ opportunity, onEdit 
   const technicalNonCompliantCount = Number(opportunity.technical_non_compliant_count || 0);
   const technicalItemsWithoutChecklistCount = Number(opportunity.technical_items_without_checklist_count || 0);
   const technicalBadge = technicalNonCompliantCount > 0
-    ? { label: 'Não atende', className: 'border border-status-danger/30 bg-status-danger/10 text-status-danger' }
+    ? {
+        label: 'Checklist: revisar',
+        title: `${technicalNonCompliantCount} requisito${technicalNonCompliantCount === 1 ? '' : 's'} marcado${technicalNonCompliantCount === 1 ? '' : 's'} como não conforme. A oportunidade continua nesta fase até ser movida manualmente.`,
+        className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning',
+      }
     : (itemCount === 0 || technicalRequirementsCount === 0 || technicalPendingCount > 0 || technicalItemsWithoutChecklistCount > 0)
-      ? { label: 'Pendência Téc.', className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning' }
-      : { label: 'Atende', className: 'border border-status-success/30 bg-status-success/10 text-status-success' };
+      ? {
+          label: 'Checklist pendente',
+          title: 'Ainda há requisitos para verificar ou itens sem checklist.',
+          className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning',
+        }
+      : {
+          label: 'Checklist OK',
+          title: 'Todos os requisitos técnicos cadastrados estão conformes.',
+          className: 'border border-status-success/30 bg-status-success/10 text-status-success',
+        };
   // Prazo vencido fica no funil até confirmação (modal); badge "Prazo vencido" quando atrasado.
   const prazoClass = opportunity.prazo_status === 'atrasado'
     ? 'border border-status-danger/40 bg-status-danger/15 text-status-danger'
@@ -4486,7 +4498,12 @@ const LicitacaoCardBody = memo(function LicitacaoCardBody({ opportunity, onEdit 
         <span className="font-mono font-semibold text-ink">{formattedValue || 'R$ 0,00'}</span>
       </div>
       <div className="mt-1 flex items-center justify-between gap-2 text-[10px]">
-        <span className={`px-2 py-0.5 rounded-full font-semibold leading-tight ${technicalBadge.className}`}>{technicalBadge.label}</span>
+        <span
+          className={`px-2 py-0.5 rounded-full font-semibold leading-tight ${technicalBadge.className}`}
+          title={technicalBadge.title}
+        >
+          {technicalBadge.label}
+        </span>
         <span className="text-muted truncate">
           {technicalRequirementsCount > 0 ? `${technicalRequirementsCount} requisitos` : 'Checklist não criado'}
         </span>
