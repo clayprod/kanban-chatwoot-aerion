@@ -9533,6 +9533,8 @@ function App() {
         fonteIA: job.suggested_positive_terms?.length ? 'IA + termos aceitos' : (prev.fonteIA || null),
         summary: job.summary || prev.summary || null,
         query_plan: nextPlan,
+        list_by_term: job.list_by_term || job.query_plan?.list_by_term || prev.list_by_term || null,
+        list_total: Number(job.list_total ?? job.query_plan?.list_total ?? prev.list_total ?? nextTotal) || nextTotal,
         diagnostics: {
           aiRequested: true,
           aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
@@ -9577,6 +9579,14 @@ function App() {
       // Contagens canônicas do banco (não da página de 25 itens).
       visibility_counts: visCounts || prev.visibility_counts || null,
       collection: payload.collection || prev.collection || null,
+      list_by_term: payload.list_by_term || payload.collection?.list_by_term || prev.list_by_term || null,
+      list_total: Number(
+        payload.list_total
+        ?? payload.collection?.list_total
+        ?? total
+        ?? prev.list_total
+        ?? 0
+      ),
     }));
     // Mantém o card alinhado ao total real da tabela de resultados (mesma fonte do popup).
     const canonicalTotal = total || Number(visCounts?.all || 0);
@@ -10799,7 +10809,11 @@ function App() {
               ...(jobRow.query_plan || {}),
               ...(response.data?.query_plan || {}),
               term_runs: nextRuns,
+              list_by_term: response.data?.list_by_term || response.data?.query_plan?.list_by_term || jobRow.query_plan?.list_by_term,
+              list_total: response.data?.list_total ?? response.data?.query_plan?.list_total ?? jobRow.query_plan?.list_total,
             },
+            list_by_term: response.data?.list_by_term || response.data?.query_plan?.list_by_term || jobRow.list_by_term,
+            list_total: response.data?.list_total ?? response.data?.total ?? jobRow.list_total,
           };
         }));
         const status = response.data?.status;
@@ -15056,7 +15070,7 @@ function App() {
                                           <th className="px-2 py-1.5" title="Itens brutos já baixados da API">Lidos</th>
                                           <th className="px-2 py-1.5" title="Itens novos (chave nunca vista neste job)">Únicos</th>
                                           <th className="px-2 py-1.5" title="Já apareceram em outro termo">Já vistos</th>
-                                          <th className="px-2 py-1.5" title="Passaram no filtro e entraram na lista (estimativa da fatia)">Na lista</th>
+                                          <th className="px-2 py-1.5" title="Itens deste termo que estão na lista (contagem real na tabela — mesma fonte do card)">Na lista</th>
                                           <th className="px-2 py-1.5" title="Total que o PNCP reporta para o termo">Universo</th>
                                           <th className="px-2 py-1.5">Cob.</th>
                                           <th className="px-2 py-1.5">Parada</th>
@@ -15064,12 +15078,41 @@ function App() {
                                         </tr>
                                       </thead>
                                       <tbody>
-                                        {termRuns.map((run, index) => {
+                                        {(() => {
+                                          const listByTerm = pncpSearchResults.list_by_term
+                                            || pncpSearchResults.collection?.list_by_term
+                                            || job?.list_by_term
+                                            || job?.query_plan?.list_by_term
+                                            || {};
+                                          const listTotalCanon = Number(
+                                            pncpSearchResults.list_total
+                                            ?? pncpSearchResults.total
+                                            ?? job?.list_total
+                                            ?? job?.total
+                                            ?? 0
+                                          );
+                                          const resolveListCount = (termLabel) => {
+                                            if (!listByTerm || typeof listByTerm !== 'object') return null;
+                                            const needle = normalizeText(termLabel || '');
+                                            if (!needle) return null;
+                                            // Match exato ou case-insensitive no matched_term da tabela.
+                                            if (listByTerm[termLabel] != null) return Number(listByTerm[termLabel] || 0);
+                                            const hit = Object.entries(listByTerm).find(([k]) => normalizeText(k) === needle);
+                                            return hit ? Number(hit[1] || 0) : null;
+                                          };
+                                          const rows = termRuns.map((run, index) => {
                                           const read = Number(run.items_collected || 0);
                                           const uni = Number(run.total_reported || 0);
                                           const uniqueNew = Number(run.unique_new || 0);
                                           const dups = Number(run.duplicates_skipped || 0);
-                                          const classifiedAdded = Number(run.classified_added || 0);
+                                          // Contagem canônica na tabela (mesma fonte do card). Fallback: fatia.
+                                          const listFromDb = run.source === 'pncp_consulta_complement'
+                                            ? null
+                                            : resolveListCount(run.term);
+                                          const classifiedAdded = listFromDb != null
+                                            ? listFromDb
+                                            : Number(run.classified_added || 0);
+                                          const fromDb = listFromDb != null;
                                           const cov = uni > 0 ? Math.min(100, Math.round((read / uni) * 100)) : null;
                                           const errRaw = Array.isArray(run.errors) && run.errors.length ? run.errors.join('; ') : '';
                                           return (
@@ -15099,8 +15142,13 @@ function App() {
                                             <td className="px-2 py-1.5 font-mono text-muted" title="Duplicados de outros termos">
                                               {dups > 0 ? dups.toLocaleString('pt-BR') : (read > 0 ? '0' : '—')}
                                             </td>
-                                            <td className="px-2 py-1.5 font-mono text-emerald-700 dark:text-emerald-300" title="Entraram na lista a partir deste termo (fatias classificadas)">
-                                              {classifiedAdded > 0 ? classifiedAdded.toLocaleString('pt-BR') : (read > 0 ? '0' : '—')}
+                                            <td
+                                              className="px-2 py-1.5 font-mono text-emerald-700 dark:text-emerald-300"
+                                              title={fromDb
+                                                ? 'Contagem real na tabela de resultados (igual ao card Na lista)'
+                                                : 'Estimativa de fatia (classified_added) — total canônico no rodapé'}
+                                            >
+                                              {classifiedAdded > 0 ? classifiedAdded.toLocaleString('pt-BR') : (read > 0 || fromDb ? '0' : '—')}
                                             </td>
                                             <td className="px-2 py-1.5 font-mono text-muted" title="Total declarado pelo PNCP para este termo">
                                               {uni > 0 ? uni.toLocaleString('pt-BR') : '—'}
@@ -15114,32 +15162,53 @@ function App() {
                                             </td>
                                           </tr>
                                           );
-                                        })}
-                                        {pendingTerms.map(term => (
-                                          <tr key={`queue-${term}`} className="border-t border-line bg-amber-500/5">
-                                            <td className="px-2 py-1.5 font-medium text-ink">{term}</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                            <td className="px-2 py-1.5 text-amber-700 dark:text-amber-300">aguardando vez</td>
-                                            <td className="px-2 py-1.5 text-muted">—</td>
-                                          </tr>
-                                        ))}
-                                        {!termRuns.length && !pendingTerms.length && (
-                                          <tr>
-                                            <td colSpan={10} className="px-2 py-6 text-center text-muted">Sem runs de auditoria ainda — a coleta pode estar na fila.</td>
-                                          </tr>
-                                        )}
+                                          });
+                                          return (
+                                            <>
+                                              {rows}
+                                              {pendingTerms.map(term => (
+                                                <tr key={`queue-${term}`} className="border-t border-line bg-amber-500/5">
+                                                  <td className="px-2 py-1.5 font-medium text-ink">{term}</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                  <td className="px-2 py-1.5 text-amber-700 dark:text-amber-300">aguardando vez</td>
+                                                  <td className="px-2 py-1.5 text-muted">—</td>
+                                                </tr>
+                                              ))}
+                                              {!termRuns.length && !pendingTerms.length && (
+                                                <tr>
+                                                  <td colSpan={10} className="px-2 py-6 text-center text-muted">Sem runs de auditoria ainda — a coleta pode estar na fila.</td>
+                                                </tr>
+                                              )}
+                                              {(termRuns.length > 0 || listTotalCanon > 0) && (
+                                                <tr className="border-t-2 border-line bg-bg2/80 font-semibold">
+                                                  <td className="px-2 py-1.5 text-ink" colSpan={5}>
+                                                    Total na lista (card / tabela)
+                                                  </td>
+                                                  <td className="px-2 py-1.5 font-mono text-emerald-700 dark:text-emerald-300" title="Mesma fonte do card: COUNT na tabela de resultados">
+                                                    {listTotalCanon.toLocaleString('pt-BR')}
+                                                  </td>
+                                                  <td className="px-2 py-1.5 text-muted" colSpan={4}>
+                                                    {Object.keys(listByTerm).length
+                                                      ? 'por termo = matched_term no banco'
+                                                      : 'atualiza a cada poll'}
+                                                  </td>
+                                                </tr>
+                                              )}
+                                            </>
+                                          );
+                                        })()}
                                       </tbody>
                                     </table>
                                   </div>
                                   <p className={`${subtle} mt-2`}>
-                                    Se o termo mudou e a lista não cresceu: (a) job pausado por limite PNCP, (b) editais já vistos em outro termo, ou (c) fora do filtro ({filterStatusLabel}).
-                                    A coleta continua até cobrir o universo possível — o que já entrou na lista permanece.
+                                    <strong className="text-ink">Na lista</strong> por termo e o total do rodapé usam a <strong className="text-ink">mesma tabela</strong> do card
+                                    (não o contador de fatia). Se o termo mudou e a lista não cresceu: (a) limite PNCP, (b) já vistos em outro termo, ou (c) fora do filtro ({filterStatusLabel}).
                                   </p>
                                 </div>
                               </div>

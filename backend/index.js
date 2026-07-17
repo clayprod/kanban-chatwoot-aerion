@@ -9068,6 +9068,39 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
   return counts;
 };
 
+/**
+ * Contagem canônica na lista por matched_term (fonte = tabela de resultados).
+ * A coluna classified_added do term_run é só incremento de fatia e fica menor
+ * que o card após retomadas/preserve.
+ */
+const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null) => {
+  if (!jobId) return { total: 0, by_term: {} };
+  const params = [jobId];
+  let sql = `
+    SELECT COALESCE(NULLIF(TRIM(matched_term), ''),
+                    NULLIF(TRIM(payload->>'matched_termo'), ''),
+                    NULLIF(TRIM(payload->>'__matched_termo'), ''),
+                    '(sem termo)') AS term,
+           COUNT(*)::int AS cnt
+      FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+     WHERE job_id = $1`;
+  if (accountId != null) {
+    params.push(accountId);
+    sql += ' AND account_id = $2';
+  }
+  sql += ' GROUP BY 1 ORDER BY cnt DESC';
+  const { rows } = await pool.query(sql, params).catch(() => ({ rows: [] }));
+  const byTerm = {};
+  let total = 0;
+  for (const row of rows) {
+    const term = String(row.term || '(sem termo)');
+    const n = Number(row.cnt || 0);
+    byTerm[term] = n;
+    total += n;
+  }
+  return { total, by_term: byTerm };
+};
+
 /** Chaves já persistidas — evita recontar e permite retomada sem reprocessar. */
 const loadPncpJobResultKeys = async (jobId) => {
   if (!jobId) return new Set();
@@ -10258,6 +10291,8 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       rate_limited: false,
       resume_from_page: null,
       checkpoint: false,
+      incremental_refresh: false,
+      last_run_incremental: Boolean(incrementalRefresh),
       gate: getPncpGateSnapshot(),
     };
     job.query_plan = {
@@ -10270,10 +10305,11 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       results_persisted: job.total,
       preserve_results: preserveResults,
       sequential: false,
-      schedule: 'round_robin_slices',
-      pages_per_slice: PNCP_DEEP_PAGES_PER_SLICE,
+      schedule: incrementalRefresh ? 'incremental_daily' : 'round_robin_slices',
+      pages_per_slice: incrementalRefresh ? PNCP_DEEP_INCREMENTAL_PAGES : PNCP_DEEP_PAGES_PER_SLICE,
       raw_unique_collected: seen.size,
       filtered_total: job.total,
+      incremental_refresh: Boolean(incrementalRefresh),
     };
     job.preserve_results = true;
     job.error = null;
@@ -10437,6 +10473,20 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     }
   }
   const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
+  const accountId = getAccountId(req);
+  // Total canônico da lista + contagem por termo (auditoria alinhada ao card).
+  let listTotal = Number(job.total || 0);
+  let listByTerm = {};
+  try {
+    const [vis, byTerm] = await Promise.all([
+      countPncpJobResultsByVisibility(job.id, accountId || job.account_id || null),
+      countPncpJobResultsByMatchedTerm(job.id, accountId || job.account_id || null),
+    ]);
+    listTotal = Number(vis.all || byTerm.total || listTotal || 0);
+    listByTerm = byTerm.by_term || {};
+  } catch (err) {
+    console.warn('[PNCP Search Job] contagem por termo falhou:', err.message);
+  }
   res.json({
     id: job.id,
     status: job.status,
@@ -10448,7 +10498,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     suggested_positive_terms: job.suggested_positive_terms || [],
     suggested_negative_terms: job.suggested_negative_terms || [],
     progress: job.progress,
-    total: job.total,
+    // Preferir contagem da tabela (mesma fonte do card "Na lista").
+    total: listTotal || job.total,
     // Inclui 'queued': entre retomadas o status vira queued por um instante; o UI
     // não deve apagar a lista (itens/total vêm do último snapshot + tabela).
     items: ['queued', 'running', 'completed', 'paused_rate_limit', 'failed', 'cancelled'].includes(job.status)
@@ -10456,6 +10507,9 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
       : [],
     summary: job.summary || null,
     term_runs: job.term_runs || job.query_plan?.term_runs || [],
+    // Contagem real na lista por matched_term (não o classified_added de fatia).
+    list_by_term: listByTerm,
+    list_total: listTotal,
     query_plan: {
       mode: 'deep_background',
       sequential: true,
@@ -10466,6 +10520,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
         .map(r => r.term),
       ...(job.query_plan || {}),
       term_runs: job.term_runs || job.query_plan?.term_runs || [],
+      list_by_term: listByTerm,
+      list_total: listTotal,
     },
     error: job.error || null,
     watchlist_id: job.watchlist_id || null,
@@ -10554,7 +10610,10 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
         if (enriched) pageItems = enriched;
       }
       // Soma de valor da lista completa (não do summary parcial do deep job).
-      const listTotalValue = await sumPncpJobResultsValue(job.id, accountId);
+      const [listTotalValue, listByTerm] = await Promise.all([
+        sumPncpJobResultsValue(job.id, accountId),
+        countPncpJobResultsByMatchedTerm(job.id, accountId),
+      ]);
       const summary = {
         ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
         count: total || visibilityCounts.all,
@@ -10574,6 +10633,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
         summary,
         values_enriched_on_read: enrichOnRead,
         visibility_counts: visibilityCounts,
+        list_by_term: listByTerm.by_term || {},
+        list_total: Number(listByTerm.total || total || visibilityCounts.all || 0),
         // Progresso da coleta (auditoria/UI): brutos da API ≠ classificados no filtro.
         collection: {
           classified: visibilityCounts.all,
@@ -10582,6 +10643,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           resume_from_page: job.progress?.resume_from_page || null,
           term_collected: job.progress?.current_term_collected || null,
           term_total_api: job.progress?.current_term_total_reported || null,
+          list_by_term: listByTerm.by_term || {},
+          list_total: Number(listByTerm.total || total || visibilityCounts.all || 0),
         },
       });
     }
