@@ -15122,18 +15122,13 @@ function App() {
                       const listTotal = Number(pncpSearchResults.total || job?.total || 0);
                       const listValue = Number(pncpSearchSummary.total_value || job?.summary?.total_value || 0);
                       const headerExpanded = pncpJobHeaderExpanded;
-                      const pauseCountdown = job?.status === 'paused_rate_limit'
-                        ? formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at)
-                        : null;
-                      const resumePage = job?.status === 'paused_rate_limit'
-                        ? job?.progress?.resume_from_page
-                        : null;
                       return (
                         <>
                           <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4 sm:py-2.5">
                             {/*
-                              Alturas reservadas de propósito: barra, strip de status e slot de ação
+                              Alturas reservadas de propósito: título e slot de ação
                               NÃO montam/desmontam — só mudam conteúdo. Evita empurrar a lista.
+                              Status de pausa/fila/live: um único banner na aba Resultados.
                             */}
                             <div className="flex min-h-[2.5rem] min-w-0 items-center gap-1.5">
                               <div className="min-w-0 flex-1">
@@ -15253,21 +15248,14 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Strip de status: altura SEMPRE reservada (pausa ou vazio) */}
-                            <div className="mt-1.5 h-[1.625rem] shrink-0">
-                              {job?.status === 'paused_rate_limit' ? (
-                                <p className="h-full truncate rounded-md border border-amber-500/30 bg-amber-500/10 px-2 leading-[1.5rem] text-[11px] text-amber-800 dark:text-amber-200">
-                                  <strong>Lista preservada</strong>
-                                  {pauseCountdown ? <> · {pauseCountdown}</> : ' · retoma sozinho'}
-                                  {resumePage ? <> · pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
-                                  {!headerExpanded ? ' · toque ▾ para mais' : ' — não recomeça do zero'}
-                                </p>
-                              ) : job?.error && !headerExpanded ? (
-                                <p className="h-full truncate rounded-md border border-amber-500/25 bg-amber-500/8 px-2 leading-[1.5rem] text-[11px] text-amber-700 dark:text-amber-300" title={job.error}>
+                            {/* Erro colapsado no header; pausa/fila/live ficam só no banner único da lista */}
+                            {job?.error && !headerExpanded ? (
+                              <div className="mt-1.5 shrink-0">
+                                <p className="h-[1.625rem] truncate rounded-md border border-amber-500/25 bg-amber-500/8 px-2 leading-[1.5rem] text-[11px] text-amber-700 dark:text-amber-300" title={job.error}>
                                   {job.error}
                                 </p>
-                              ) : null}
-                            </div>
+                              </div>
+                            ) : null}
 
                             {/* Detalhes expandidos: blocos com altura mínima fixa */}
                             {headerExpanded && (
@@ -16132,13 +16120,13 @@ function App() {
                                     <strong className="text-ink">
                                       {job?.status === 'paused_rate_limit'
                                         ? (job?.progress?.waiting_gate || job?.progress?.bulk_deferred
-                                          ? 'Pausado: aguardando cota/gate PNCP — lista preservada.'
-                                          : 'Pausado: PNCP limitou — lista preservada.')
+                                          ? 'Pausado: aguardando cota PNCP.'
+                                          : 'Pausado: limite do PNCP.')
                                         : job?.status === 'queued'
                                           ? (job?.progress?.waiting_for_heavy
                                             ? `Na fila do coletor (aguardando ${String(job.progress.waiting_for_heavy).slice(0, 40)})…`
                                             : job?.progress?.waiting_gate
-                                              ? 'Na fila: aguardando cota/gate PNCP…'
+                                              ? 'Na fila: aguardando cota PNCP…'
                                               : 'Na fila do coletor — ainda não está pedindo páginas…')
                                           : live
                                             ? 'Coletando no PNCP…'
@@ -16157,6 +16145,15 @@ function App() {
                                       const term = prog.current_term || funnel.mainTerm || activePncpJobProgress.currentTerm || '';
                                       const page = prog.resume_from_page || prog.current_page;
                                       const bits = [];
+                                      if (job?.status === 'paused_rate_limit') {
+                                        const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
+                                        if (cd) bits.push(cd);
+                                        else bits.push('retoma sozinho');
+                                        if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                        bits.push(`${funnel.classified.toLocaleString('pt-BR')} na lista`);
+                                        bits.push('sem recomeçar o lido');
+                                        return bits.join(' · ');
+                                      }
                                       if (live && term) bits.push(`termo “${term}”`);
                                       if (live && page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
                                       if (funnel.brutosLidos > 0 && funnel.universeApi > 0) {
@@ -16168,13 +16165,7 @@ function App() {
                                         bits.push(`${funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos`);
                                       }
                                       bits.push(`${funnel.classified.toLocaleString('pt-BR')} na lista`);
-                                      if (job?.status === 'paused_rate_limit') {
-                                        const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
-                                        if (cd) bits.push(cd);
-                                      }
-                                      if (job?.status === 'paused_rate_limit') {
-                                        bits.push('retoma sozinho · não re-pede o lido');
-                                      } else if (job?.status === 'queued') {
+                                      if (job?.status === 'queued') {
                                         bits.push('lista permanece até o coletor pegar a vez');
                                       } else if (live && Number(prog.current_term_duplicates || 0) > 0 && Number(prog.new_unique_last_page || 0) === 0) {
                                         bits.push('termo atual devolve sobretudo já vistos');
