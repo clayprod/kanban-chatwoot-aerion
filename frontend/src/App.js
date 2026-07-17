@@ -14871,25 +14871,34 @@ function App() {
                       return (
                         <>
                           <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4 sm:py-2.5">
-                            {/* Linha fixa: título · status · ações compactas · recolher · fechar */}
-                            <div className="flex min-w-0 items-start gap-1.5">
+                            {/*
+                              Alturas reservadas de propósito: barra, strip de status e slot de ação
+                              NÃO montam/desmontam — só mudam conteúdo. Evita empurrar a lista.
+                            */}
+                            <div className="flex min-h-[2.5rem] min-w-0 items-center gap-1.5">
                               <div className="min-w-0 flex-1">
-                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                <div className="flex min-h-[1.25rem] min-w-0 items-center gap-1.5 overflow-hidden">
                                   <h3 className="truncate font-display text-sm font-semibold uppercase tracking-wide text-ink sm:text-base">{title}</h3>
-                                  <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+                                  <span className={`inline-flex max-w-[11rem] shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
                                     {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
                                     <span className="truncate">{meta.label}</span>
                                   </span>
-                                  {archiveMeta && (
-                                    <span
-                                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
-                                      title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
-                                    >
-                                      {archiveMeta.label}
-                                    </span>
-                                  )}
+                                  {/* Slot fixo do chip de arquivo — evita reflow quando aparece/some */}
+                                  <span
+                                    className={`inline-flex min-w-[5.5rem] shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                      archiveMeta
+                                        ? archiveMeta.className
+                                        : 'border-transparent text-transparent'
+                                    }`}
+                                    title={archiveMeta
+                                      ? 'Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo.'
+                                      : undefined}
+                                    aria-hidden={!archiveMeta}
+                                  >
+                                    {archiveMeta?.label || '·'}
+                                  </span>
                                 </div>
-                                <p className="mt-0.5 truncate font-mono text-[11px] leading-snug text-muted">
+                                <p className="mt-0.5 h-4 truncate font-mono text-[11px] leading-4 text-muted">
                                   <span className="font-semibold tabular-nums text-ink">{listTotal.toLocaleString('pt-BR')}</span>
                                   {' na lista'}
                                   {listValue > 0 ? (
@@ -14911,29 +14920,31 @@ function App() {
                                   {!job?.watchlist_id && !live ? ' · recoleta diária' : ''}
                                 </p>
                               </div>
-                              <div className="flex shrink-0 items-center gap-0.5">
-                                {live && (
-                                  <button
-                                    type="button"
-                                    onClick={() => cancelPncpSearchJob(activePncpSearchJobId)}
-                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
-                                    title="Para a coleta e mantém os resultados já salvos"
-                                  >
-                                    <StopIcon className="h-3.5 w-3.5" />
-                                    <span className="hidden sm:inline">Parar</span>
-                                  </button>
-                                )}
-                                {canRerun && (
-                                  <button
-                                    type="button"
-                                    onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
-                                    title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
-                                  >
-                                    <ArrowPathIcon className="h-3.5 w-3.5" />
-                                    <span className="hidden sm:inline">Rodar</span>
-                                  </button>
-                                )}
+                              <div className="flex h-8 shrink-0 items-center gap-0.5">
+                                {/* Slot fixo Parar/Rodar — mesma largura, sem pular sino/excluir */}
+                                <div className="flex h-8 w-[4.75rem] shrink-0 items-center justify-end sm:w-[5.5rem]">
+                                  {live ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => cancelPncpSearchJob(activePncpSearchJobId)}
+                                      className={`${btnSecondaryXs} h-8 gap-1 px-2`}
+                                      title="Para a coleta e mantém os resultados já salvos"
+                                    >
+                                      <StopIcon className="h-3.5 w-3.5" />
+                                      <span className="hidden sm:inline">Parar</span>
+                                    </button>
+                                  ) : canRerun ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
+                                      title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                      className={`${btnSecondaryXs} h-8 gap-1 px-2`}
+                                    >
+                                      <ArrowPathIcon className="h-3.5 w-3.5" />
+                                      <span className="hidden sm:inline">Rodar</span>
+                                    </button>
+                                  ) : null}
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)}
@@ -14982,27 +14993,35 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Pausa: uma linha compacta sempre visível (não some no recolher) */}
-                            {job?.status === 'paused_rate_limit' && (
-                              <p className="mt-1.5 truncate rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
-                                <strong>Lista preservada</strong>
-                                {pauseCountdown ? <> · {pauseCountdown}</> : ' · retoma sozinho'}
-                                {resumePage ? <> · pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
-                                {!headerExpanded ? ' · toque ▾ para mais' : ' — não recomeça do zero'}
-                              </p>
-                            )}
+                            {/* Strip de status: altura SEMPRE reservada (pausa ou vazio) */}
+                            <div className="mt-1.5 h-[1.625rem] shrink-0">
+                              {job?.status === 'paused_rate_limit' ? (
+                                <p className="h-full truncate rounded-md border border-amber-500/30 bg-amber-500/10 px-2 leading-[1.5rem] text-[11px] text-amber-800 dark:text-amber-200">
+                                  <strong>Lista preservada</strong>
+                                  {pauseCountdown ? <> · {pauseCountdown}</> : ' · retoma sozinho'}
+                                  {resumePage ? <> · pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
+                                  {!headerExpanded ? ' · toque ▾ para mais' : ' — não recomeça do zero'}
+                                </p>
+                              ) : job?.error && !headerExpanded ? (
+                                <p className="h-full truncate rounded-md border border-amber-500/25 bg-amber-500/8 px-2 leading-[1.5rem] text-[11px] text-amber-700 dark:text-amber-300" title={job.error}>
+                                  {job.error}
+                                </p>
+                              ) : null}
+                            </div>
 
-                            {/* Detalhes expandidos: erro longo, barra, KPI cards, funil */}
+                            {/* Detalhes expandidos: blocos com altura mínima fixa */}
                             {headerExpanded && (
                               <div className="mt-2 space-y-2">
-                                {job?.error ? (
-                                  <p className="line-clamp-3 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
-                                ) : null}
+                                <div className="min-h-[2.5rem]">
+                                  {job?.error ? (
+                                    <p className="line-clamp-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
+                                  ) : null}
+                                </div>
 
-                                <div className="h-1 overflow-hidden rounded-full bg-bg2">
+                                <div className="h-1 shrink-0 overflow-hidden rounded-full bg-bg2">
                                   <div
-                                    className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
-                                    style={{ width: `${activePncpJobProgress.pct}%` }}
+                                    className={`h-full rounded-full transition-[width] duration-300 ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
+                                    style={{ width: `${Math.max(0, Math.min(100, Number(activePncpJobProgress.pct) || 0))}%` }}
                                   />
                                 </div>
 
@@ -15017,13 +15036,13 @@ function App() {
                                   return (
                                     <>
                                       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
+                                        <div className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
                                           <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Na lista</p>
                                           <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">{listTotal.toLocaleString('pt-BR')}</p>
                                           <p className="text-[10px] leading-tight text-muted">passaram no filtro</p>
                                         </div>
                                         <div
-                                          className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5"
+                                          className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5"
                                           title={
                                             `Lidos = soma da coluna “Lidos” da Auditoria (items_collected por termo). `
                                             + `Universo = soma dos totais da API por termo (overlap possível). `
@@ -15042,57 +15061,66 @@ function App() {
                                               <span className="text-[11px] font-semibold text-muted">/{funnel.universeApi.toLocaleString('pt-BR')}</span>
                                             ) : null}
                                           </p>
-                                          <p className="text-[10px] leading-tight text-muted line-clamp-2">
+                                          <p className="text-[10px] leading-tight text-muted line-clamp-1">
                                             {funnel.coveragePct != null
                                               ? `${funnel.coveragePct}% · iguais à auditoria`
                                               : 'soma por termo (auditoria)'}
                                           </p>
                                         </div>
-                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos itens pertinentes (que batem com o termo) dos editais classificados. Não usa o total da licitação.">
+                                        <div className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos itens pertinentes (que batem com o termo) dos editais classificados. Não usa o total da licitação.">
                                           <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Valor na lista</p>
                                           <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(listValue) || 'R$ 0'}</p>
                                           <p className="text-[10px] leading-tight text-muted">itens pertinentes</p>
                                         </div>
-                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
+                                        <div className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
                                           <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
                                           <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">
                                             {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
                                             <span className="text-muted"> · </span>
                                             {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
                                           </p>
-                                          <p className="text-[10px] leading-tight text-muted line-clamp-2">você ocultou · já no board</p>
+                                          <p className="text-[10px] leading-tight text-muted line-clamp-1">você ocultou · já no board</p>
                                         </div>
                                       </div>
-                                      {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
-                                        <p className="line-clamp-3 text-[11px] leading-snug text-muted sm:line-clamp-2">
-                                          <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
-                                          {' '}(soma auditoria)
-                                          {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
-                                          {funnel.exclusiveLidos > 0 ? (
-                                            <> · {Number(funnel.exclusiveLidos).toLocaleString('pt-BR')} únicos entre termos</>
-                                          ) : null}
-                                          {funnel.duplicatesSum > 0 ? <> · {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos</> : null}
-                                          {' · '}<strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
-                                          {funnel.currentTerm ? <> · agora “{funnel.currentTerm}”</> : null}.
-                                        </p>
-                                      )}
+                                      {/* Funil: altura fixa 2 linhas — não some/aparece */}
+                                      <p className="h-[2.25rem] overflow-hidden text-[11px] leading-snug text-muted sm:h-[1.375rem] sm:line-clamp-1">
+                                        {(funnel.universeApi > 0 || funnel.brutosLidos > 0) ? (
+                                          <>
+                                            <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
+                                            {' '}(soma auditoria)
+                                            {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
+                                            {funnel.exclusiveLidos > 0 ? (
+                                              <> · {Number(funnel.exclusiveLidos).toLocaleString('pt-BR')} únicos entre termos</>
+                                            ) : null}
+                                            {funnel.duplicatesSum > 0 ? <> · {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos</> : null}
+                                            {' · '}<strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
+                                            {funnel.currentTerm ? <> · agora “{funnel.currentTerm}”</> : null}.
+                                          </>
+                                        ) : (
+                                          <span className="text-muted2">Aguardando contadores da coleta…</span>
+                                        )}
+                                      </p>
                                     </>
                                   );
                                 })()}
                               </div>
                             )}
 
-                            {/* Barra fina só no modo compacto (progresso sem roubar altura) */}
-                            {!headerExpanded && live && (
-                              <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-bg2">
+                            {/* Barra SEMPRE presente no compacto — só o fill muda (não monta/desmonta) */}
+                            {!headerExpanded && (
+                              <div className="mt-1.5 h-1 shrink-0 overflow-hidden rounded-full bg-bg2" aria-hidden={!live}>
                                 <div
-                                  className="h-full rounded-full bg-[linear-gradient(90deg,#7c5cff,#38d6e6)] transition-all"
-                                  style={{ width: `${activePncpJobProgress.pct}%` }}
+                                  className={`h-full rounded-full transition-[width] duration-300 ${
+                                    live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/40'
+                                  }`}
+                                  style={{
+                                    width: `${Math.max(0, Math.min(100, Number(activePncpJobProgress.pct) || (live ? 0 : 100)))}%`,
+                                  }}
                                 />
                               </div>
                             )}
 
-                            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                            <div className="mt-1.5 flex h-7 flex-wrap items-center gap-1">
                               {[
                                 ['resultados', 'Resultados'],
                                 ['termos', 'Termos e filtros'],
@@ -15107,15 +15135,13 @@ function App() {
                                   {label}
                                 </button>
                               ))}
-                              {!headerExpanded && (
-                                <button
-                                  type="button"
-                                  onClick={() => setPncpJobHeaderExpanded(true)}
-                                  className="ml-auto h-7 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
-                                >
-                                  Detalhes ▾
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => setPncpJobHeaderExpanded(v => !v)}
+                                className="ml-auto h-7 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
+                              >
+                                {headerExpanded ? 'Recolher ▴' : 'Detalhes ▾'}
+                              </button>
                             </div>
                           </div>
 
@@ -15778,14 +15804,19 @@ function App() {
                                   </div>
                                 </div>
 
-                                {live && (
-                                  <div className={`rounded-[10px] border px-2.5 py-1.5 text-[11px] leading-snug text-muted sm:text-xs ${
+                                {/* Banner de status com altura fixa — live/pausa/fila/concluído não empurram a lista */}
+                                <div
+                                  className={`min-h-[2.75rem] rounded-[10px] border px-2.5 py-1.5 text-[11px] leading-snug text-muted sm:min-h-[2.5rem] sm:text-xs ${
                                     job?.status === 'paused_rate_limit'
                                       ? 'border-amber-500/30 bg-amber-500/10'
                                       : job?.status === 'queued'
                                         ? 'border-sky-500/30 bg-sky-500/10'
-                                        : 'border-primary/25 bg-primary/5'
-                                  }`}>
+                                        : live
+                                          ? 'border-primary/25 bg-primary/5'
+                                          : 'border-line bg-bg2/50'
+                                  }`}
+                                >
+                                  <p className="line-clamp-2">
                                     <strong className="text-ink">
                                       {job?.status === 'paused_rate_limit'
                                         ? (job?.progress?.waiting_gate || job?.progress?.bulk_deferred
@@ -15797,7 +15828,9 @@ function App() {
                                             : job?.progress?.waiting_gate
                                               ? 'Na fila: aguardando cota/gate PNCP…'
                                               : 'Na fila do coletor — ainda não está pedindo páginas…')
-                                          : 'Coletando no PNCP…'}
+                                          : live
+                                            ? 'Coletando no PNCP…'
+                                            : (meta?.label || 'Coleta encerrada')}
                                     </strong>
                                     {' '}
                                     {(() => {
@@ -15812,8 +15845,8 @@ function App() {
                                       const term = prog.current_term || funnel.mainTerm || activePncpJobProgress.currentTerm || '';
                                       const page = prog.resume_from_page || prog.current_page;
                                       const bits = [];
-                                      if (term) bits.push(`termo “${term}”`);
-                                      if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                      if (live && term) bits.push(`termo “${term}”`);
+                                      if (live && page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
                                       if (funnel.brutosLidos > 0 && funnel.universeApi > 0) {
                                         bits.push(`${funnel.brutosLidos.toLocaleString('pt-BR')}/${funnel.universeApi.toLocaleString('pt-BR')} brutos`);
                                       } else if (funnel.brutosLidos > 0) {
@@ -15827,29 +15860,20 @@ function App() {
                                         const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
                                         if (cd) bits.push(cd);
                                       }
-                                      const ageLabel = formatPncpJobAge(job?.updated_at);
-                                      if (ageLabel && ageLabel !== 'agora' && job?.status !== 'running') {
-                                        bits.push(`último avanço ${ageLabel}`);
+                                      if (job?.status === 'paused_rate_limit') {
+                                        bits.push('retoma sozinho · não re-pede o lido');
+                                      } else if (job?.status === 'queued') {
+                                        bits.push('lista permanece até o coletor pegar a vez');
+                                      } else if (live && Number(prog.current_term_duplicates || 0) > 0 && Number(prog.new_unique_last_page || 0) === 0) {
+                                        bits.push('termo atual devolve sobretudo já vistos');
+                                      } else if (!live) {
+                                        const ageLabel = formatPncpJobAge(job?.updated_at || job?.completed_at);
+                                        if (ageLabel) bits.push(`atualizado ${ageLabel}`);
                                       }
                                       return bits.join(' · ');
                                     })()}
-                                    {job?.status === 'paused_rate_limit' && (
-                                      <span className="mt-0.5 block text-[10px] text-amber-800 dark:text-amber-200 sm:text-[11px]">
-                                        Retoma sozinho na próxima página — não re-pede o lido nem apaga a lista.
-                                      </span>
-                                    )}
-                                    {job?.status === 'queued' && (
-                                      <span className="mt-0.5 block text-[10px] text-sky-800 dark:text-sky-200 sm:text-[11px]">
-                                        Lista já coletada permanece. A coleta só avança quando o coletor pega a vez (slot/orçamento).
-                                      </span>
-                                    )}
-                                    {job?.status === 'running' && Number(job?.progress?.current_term_duplicates || 0) > 0 && Number(job?.progress?.new_unique_last_page || 0) === 0 && (
-                                      <span className="mt-0.5 block text-[10px] sm:text-[11px]">
-                                        Termo atual devolve sobretudo já vistos ou fora do filtro — lista pode ficar estável sem estar travada.
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
+                                  </p>
+                                </div>
 
                                 {visiblePncpResults.length > 0 ? (
                                   <div className="space-y-2">
