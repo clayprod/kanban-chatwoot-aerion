@@ -5,6 +5,8 @@ const cron = require('node-cron');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const {
@@ -2148,10 +2150,12 @@ const createLicitacaoTables = async () => {
       valor_referencia NUMERIC(14,2),
       valor_ofertado NUMERIC(14,2),
       ordem INTEGER NOT NULL DEFAULT 0,
+      secao TEXT,
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ADD COLUMN IF NOT EXISTS secao TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${LICITACAO_CONTACTS_TABLE} (
@@ -6990,8 +6994,8 @@ app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements', async (
     const { rows } = await pool.query(
       `
         INSERT INTO ${LICITACAO_ITEM_REQUIREMENTS_TABLE}
-        (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem, secao)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `,
       [
@@ -7002,6 +7006,7 @@ app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements', async (
         toNullableNumber(body.valor_referencia),
         toNullableNumber(body.valor_ofertado),
         toNullableNumber(body.ordem) || 0,
+        toNullableText(body.secao),
       ]
     );
     res.status(201).json(rows[0]);
@@ -7033,8 +7038,9 @@ app.put('/api/licitacoes/opportunities/:id/items/:itemId/requirements/:requireme
           valor_referencia = $4,
           valor_ofertado = $5,
           ordem = $6,
+          secao = $7,
           updated_at = NOW()
-        WHERE id = $7 AND item_id = $8
+        WHERE id = $8 AND item_id = $9
         RETURNING *
       `,
       [
@@ -7044,6 +7050,7 @@ app.put('/api/licitacoes/opportunities/:id/items/:itemId/requirements/:requireme
         body.valor_referencia ?? current.valor_referencia,
         body.valor_ofertado ?? current.valor_ofertado,
         body.ordem ?? current.ordem,
+        body.secao !== undefined ? toNullableText(body.secao) : current.secao,
         requirementId,
         itemId,
       ]
@@ -7062,6 +7069,454 @@ app.delete('/api/licitacoes/opportunities/:id/items/:itemId/requirements/:requir
     res.status(204).send();
   } catch (error) {
     console.error('Error deleting item requirement:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Bulk apply checklist requirements (replace / append / patch) + optional modelo_produto
+app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements/bulk', async (req, res) => {
+  const { id, itemId } = req.params;
+  const body = req.body || {};
+  const mode = String(body.mode || 'replace').toLowerCase();
+  if (!['replace', 'append', 'patch'].includes(mode)) {
+    return res.status(400).json({ error: 'mode invalido (replace|append|patch)' });
+  }
+  const list = Array.isArray(body.requirements) ? body.requirements : null;
+  if (!list) {
+    return res.status(400).json({ error: 'requirements deve ser um array' });
+  }
+  if (list.length > 250) {
+    return res.status(400).json({ error: 'Maximo de 250 requisitos por operacao' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const itemCheck = await client.query(
+      `SELECT id, modelo_produto FROM ${LICITACAO_ITEMS_TABLE} WHERE id = $1 AND opportunity_id = $2`,
+      [itemId, id]
+    );
+    if (!itemCheck.rows.length) {
+      return res.status(404).json({ error: 'Item nao encontrado' });
+    }
+
+    await client.query('BEGIN');
+
+    let requirements = [];
+    if (mode === 'replace') {
+      await client.query(`DELETE FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1`, [itemId]);
+      for (let i = 0; i < list.length; i += 1) {
+        const raw = list[i] || {};
+        const requisito = toNullableText(raw.requisito);
+        if (!requisito) continue;
+        const status = LICITACAO_REQUIREMENT_STATUS.includes(raw.status) ? raw.status : 'verificar';
+        const { rows } = await client.query(
+          `
+            INSERT INTO ${LICITACAO_ITEM_REQUIREMENTS_TABLE}
+            (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem, secao)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING *
+          `,
+          [
+            itemId,
+            requisito,
+            status,
+            toNullableText(raw.observacao),
+            toNullableNumber(raw.valor_referencia),
+            toNullableNumber(raw.valor_ofertado),
+            toNullableNumber(raw.ordem) ?? i,
+            toNullableText(raw.secao),
+          ]
+        );
+        requirements.push(rows[0]);
+      }
+    } else if (mode === 'append') {
+      const maxOrd = await client.query(
+        `SELECT COALESCE(MAX(ordem), -1)::int AS max_ordem FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1`,
+        [itemId]
+      );
+      let nextOrdem = (maxOrd.rows[0]?.max_ordem ?? -1) + 1;
+      const existing = await client.query(
+        `SELECT * FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1 ORDER BY ordem ASC, id ASC`,
+        [itemId]
+      );
+      requirements = [...existing.rows];
+      for (const raw of list) {
+        const requisito = toNullableText(raw?.requisito);
+        if (!requisito) continue;
+        const status = LICITACAO_REQUIREMENT_STATUS.includes(raw.status) ? raw.status : 'verificar';
+        const { rows } = await client.query(
+          `
+            INSERT INTO ${LICITACAO_ITEM_REQUIREMENTS_TABLE}
+            (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem, secao)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING *
+          `,
+          [
+            itemId,
+            requisito,
+            status,
+            toNullableText(raw.observacao),
+            toNullableNumber(raw.valor_referencia),
+            toNullableNumber(raw.valor_ofertado),
+            toNullableNumber(raw.ordem) ?? nextOrdem,
+            toNullableText(raw.secao),
+          ]
+        );
+        nextOrdem += 1;
+        requirements.push(rows[0]);
+      }
+    } else {
+      // patch by id
+      for (const raw of list) {
+        const reqId = toNullableNumber(raw?.id);
+        if (!reqId) continue;
+        const existing = await client.query(
+          `SELECT * FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE id = $1 AND item_id = $2`,
+          [reqId, itemId]
+        );
+        if (!existing.rows.length) continue;
+        const current = existing.rows[0];
+        const status = raw.status !== undefined
+          ? (LICITACAO_REQUIREMENT_STATUS.includes(raw.status) ? raw.status : current.status)
+          : current.status;
+        await client.query(
+          `
+            UPDATE ${LICITACAO_ITEM_REQUIREMENTS_TABLE}
+            SET
+              requisito = $1,
+              status = $2,
+              observacao = $3,
+              valor_referencia = $4,
+              valor_ofertado = $5,
+              ordem = $6,
+              secao = $7,
+              updated_at = NOW()
+            WHERE id = $8 AND item_id = $9
+          `,
+          [
+            raw.requisito !== undefined ? (toNullableText(raw.requisito) || current.requisito) : current.requisito,
+            status,
+            raw.observacao !== undefined ? toNullableText(raw.observacao) : current.observacao,
+            raw.valor_referencia !== undefined ? toNullableNumber(raw.valor_referencia) : current.valor_referencia,
+            raw.valor_ofertado !== undefined ? toNullableNumber(raw.valor_ofertado) : current.valor_ofertado,
+            raw.ordem !== undefined ? (toNullableNumber(raw.ordem) ?? current.ordem) : current.ordem,
+            raw.secao !== undefined ? toNullableText(raw.secao) : current.secao,
+            reqId,
+            itemId,
+          ]
+        );
+      }
+      const { rows } = await client.query(
+        `SELECT * FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1 ORDER BY ordem ASC, id ASC`,
+        [itemId]
+      );
+      requirements = rows;
+    }
+
+    let item = itemCheck.rows[0];
+    if (body.modelo_produto !== undefined) {
+      const modelo = toNullableText(body.modelo_produto);
+      const updated = await client.query(
+        `UPDATE ${LICITACAO_ITEMS_TABLE} SET modelo_produto = $1, updated_at = NOW() WHERE id = $2 AND opportunity_id = $3 RETURNING *`,
+        [modelo, itemId, id]
+      );
+      item = updated.rows[0] || item;
+    }
+
+    await client.query('COMMIT');
+    res.json({ requirements, item, mode });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+    console.error('Error bulk item requirements:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Assistente IA: extrai/avalia requisitos do item (retorna prévia — não grava)
+app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements/ai/chat', async (req, res) => {
+  const { id, itemId } = req.params;
+  const body = req.body || {};
+  try {
+    const itemResult = await pool.query(
+      `SELECT id, opportunity_id, numero_item, descricao, modelo_produto, quantidade, valor_referencia
+       FROM ${LICITACAO_ITEMS_TABLE} WHERE id = $1 AND opportunity_id = $2`,
+      [itemId, id]
+    );
+    if (!itemResult.rows.length) {
+      return res.status(404).json({ error: 'Item nao encontrado' });
+    }
+    const item = itemResult.rows[0];
+    const { rows: currentReqs } = await pool.query(
+      `SELECT id, requisito, status, observacao, valor_ofertado, ordem, secao
+       FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1 ORDER BY ordem ASC, id ASC`,
+      [itemId]
+    );
+
+    const incomingMessages = Array.isArray(body.messages) ? body.messages : [];
+    const cleanedMessages = [];
+    for (const m of incomingMessages.slice(-16)) {
+      if (!m || !m.content) continue;
+      const role = m.role === 'assistant' ? 'assistant' : 'user';
+      let content = String(m.content);
+      if (content.length > 100000) content = content.slice(0, 100000);
+      cleanedMessages.push({ role, content });
+    }
+    if (!cleanedMessages.length) {
+      return res.status(400).json({ error: 'Envie ao menos uma mensagem' });
+    }
+
+    // URLs de qualquer mensagem recente do user (nao so a ultima)
+    const urls = [];
+    const urlSeen = new Set();
+    for (const m of cleanedMessages) {
+      if (m.role !== 'user') continue;
+      for (const u of extractUrlsFromText(m.content, 3)) {
+        if (urlSeen.has(u)) continue;
+        urlSeen.add(u);
+        urls.push(u);
+        if (urls.length >= 3) break;
+      }
+      if (urls.length >= 3) break;
+    }
+    const sources = [];
+    const urlBlocks = [];
+    for (const url of urls) {
+      const fetched = await fetchPublicUrlText(url, { maxChars: 45000, timeoutMs: 25000 });
+      sources.push({
+        url: fetched.url || url,
+        ok: !!fetched.ok,
+        chars: fetched.chars || 0,
+        error: fetched.error || null,
+        notes: fetched.notes || [],
+        accordion_collapsed: !!fetched.accordion_collapsed,
+      });
+      if (fetched.ok && fetched.text) {
+        const noteLine = (fetched.notes || []).length
+          ? `\nNOTAS_FETCH: ${(fetched.notes || []).join(' | ')}`
+          : '';
+        urlBlocks.push(`--- CONTEUDO DA URL ${fetched.url} (${fetched.chars} chars)${noteLine} ---\n${fetched.text}\n--- FIM URL ---`);
+      }
+    }
+
+    const currentProposal = body.proposal && typeof body.proposal === 'object'
+      ? normalizeChecklistAiProposal(body.proposal)
+      : null;
+
+    const intentRaw = String(body.intent || '').toLowerCase();
+    const intent = intentRaw === 'evaluate' || intentRaw === 'avaliar' ? 'evaluate'
+      : intentRaw === 'extract' || intentRaw === 'extrair' ? 'extract'
+      : null;
+    const modeloHint = toNullableText(body.modelo_produto_hint);
+
+    const system = `Você é o assistente de checklist de itens de licitação da Aerion (drones enterprise Autel e acessórios).
+Trabalha DENTRO de um item de participação em um fluxo de 2 passos:
+1) EXTRAIR requisitos do edital (sem avaliar)
+2) AVALIAR conformidade com o produto de referência (modelo / ficha / URL)
+
+${AUTEL_PRODUCT_BRIEF}
+
+## Intenção atual
+${intent === 'extract'
+    ? `MODO EXTRAIR/REVISAR (passo 1): extrair, revisar, adicionar ou remover requisitos.
+- NÃO avalie conformidade de produto (isso é o passo 2).
+- Se NÃO houver checklist/prévia: extraia do texto; status de todos = "verificar"; mode_hint "replace".
+- Se JÁ houver checklist/prévia: atenda o pedido do usuário — reextrair, acrescentar, remover, reordenar, corrigir textos/seções. Mantenha "id" dos requisitos que permanecerem. mode_hint: "replace" se reextrair/reescrever a lista; "append" se só adicionar; "patch" se só editar linhas existentes.
+- Em requisitos novos ou texto reescrito sem julgamento prévio: status "verificar". Pode preservar ok/nao_ok se o requisito (texto) não mudou e o usuário não pediu reavaliar.
+- Mantenha ordem do edital / pedido do usuário.`
+    : intent === 'evaluate'
+      ? `MODO AVALIAR (passo 2): o usuário já tem prévia/checklist. NÃO reextraia o edital. NÃO invente requisitos novos. Mantenha textos, seções e ordem. Preencha status (ok/nao_ok/verificar) e observacao. mode_hint = "patch" se houver ids; senão mantenha a lista e use "replace". Modelo sugerido no item: ${modeloHint || '(não informado no campo)'}.`
+      : 'Intenção não forçada: se a mensagem for edital/especificações ou pedido de revisar/adicionar/remover requisitos → EXTRAIR/REVISAR. Se pedir avaliação/comparação com modelo/ficha/URL e já houver proposal → AVALIAR.'}
+
+## Regras de extração
+- Gere requisitos ATÔMICOS: um critério mensurável por linha (evite parágrafos).
+- Inclua kit/comercial: baterias (qtd), hub, hélices, dongles, mala, cabos, controle, garantia, ANATEL, manuais, etc.
+- Preserve números, unidades, mín/máx, "ou equivalente".
+- NÃO invente requisitos que não estão no texto do edital ou no pedido do usuário.
+- Em MODO EXTRAIR (ou se só colou edital): status de todos = "verificar".
+
+## Seções / subseções (só se existirem no texto)
+- Use "secao" APENAS quando o edital tiver seções/títulos de bloco EXPLÍCITOS no texto colado:
+  - com número (ex.: "4.5.1. Requisitos Mínimos da Aeronave", "4.5.7. Itens Inclusos"); ou
+  - sem número, mas com cabeçalho claro de seção no documento (ex.: linha própria "Câmera Termográfica", "Bateria e Alimentação").
+- PROIBIDO inventar seções temáticas quando o texto for só uma lista plana de bullets/itens.
+  - Sem seções reais → "secao": null em TODOS os requisitos (a UI mostra lista plana).
+- Não “agrupar por tema”, não criar "Aeronave"/"Câmeras" do zero se isso não estiver como seção no edital.
+- Não crie um requisito cujo texto seja só o título da seção — o título vai em "secao", o bullet vira "requisito".
+- Ignore ruído de PDF (hash, "Assinado Digitalmente", "página X/Y").
+
+## Ordem (OBRIGATÓRIO)
+- Mantenha SEMPRE a ordem original das especificações no texto do edital (de cima para baixo).
+- Com seções: ordem das seções como no documento; dentro de cada seção, ordem dos bullets como no documento.
+- Sem seções: a lista de requirements deve espelhar a sequência do edital, sem reordenar por tema, prioridade ou status.
+- "ordem" no JSON deve ser 0, 1, 2… na mesma sequência do edital.
+
+## Regras de avaliação (ok / nao_ok / verificar)
+- Use o campo modelo do item, o que o usuário disser no chat, e o conteúdo de URLs/fichas (incluindo specs extraídas de bundle JS se houver).
+- "ok": evidência clara de atendimento; "nao_ok": evidência clara de NÃO atendimento; "verificar": só quando NÃO houver base suficiente.
+- Em ok/nao_ok, preencha observacao curta (1 linha) citando a fonte (ex.: "site: 42 min voo", "ficha: IP43 < IP54").
+- Em verificar, observacao DEVE dizer o que falta (ex.: "peso decolagem não consta na página").
+- Prioridade: texto/URL colado > specs da URL > modelo informado > resumo Autel (só apoio).
+- NÃO deixe tudo em "verificar" se a página/ficha já dá números claros (ex.: 42 min ≥ 40 min → ok; IP43 vs IP54 mínimo → nao_ok; zoom híbrido 160x ≥ 100x → ok; térmica 640×512 → ok).
+- Em MODO AVALIAR é OBRIGATÓRIO alterar status de todos os requisitos em que houver evidência; proibido devolver a lista intacta com 100% verificar se houver dados de produto.
+- assistant_message deve incluir contagem: "N ok / N nao_ok / N verificar" e se a fonte de URL estava incompleta.
+
+## Prévia (proposal)
+- Você NÃO grava no banco. Só devolve uma prévia para o usuário revisar e clicar em Aplicar.
+- Se já existir proposal na conversa, refine-a (não recomece do zero a menos que peçam reextrair).
+- Se existir checklist atual e o usuário pedir só avaliar, mantenha textos/seções e preencha status/obs (mode_hint "patch" se houver ids, senão "replace").
+- mode_hint: "replace" (parse novo grande), "append" (só adicionar), "patch" (só status/obs de linhas com id).
+
+## Formato de resposta
+Responda SOMENTE JSON válido (sem markdown, sem texto fora do JSON):
+{
+  "assistant_message": "resumo curto em PT-BR do que fez; caminho usual é lista → produto → aplicar, mas pode sugerir aplicar já ou só revisar se fizer sentido",
+  "proposal": {
+    "mode_hint": "replace|append|patch",
+    "modelo_produto": "string ou null (se descobriu/confirmou modelo na avaliação)",
+    "requirements": [
+      {
+        "id": null,
+        "secao": "4.5.1. Requisitos Mínimos da Aeronave",
+        "requisito": "texto do requisito",
+        "status": "ok|nao_ok|verificar",
+        "observacao": ""
+      }
+    ]
+  }
+}
+Máximo 200 requisitos. ids só se reutilizar do checklist atual/proposal.
+Caminho usual: (1) lista do edital (2) comparar produto (3) aplicar prévia. Nem sempre — o usuário pode pular o produto, reaplicar, ou voltar à lista.`;
+
+    const contextParts = [
+      `ITEM #${item.numero_item || item.id}`,
+      `descricao: ${item.descricao || ''}`,
+      `modelo_produto atual: ${item.modelo_produto || '(vazio)'}`,
+      `quantidade: ${item.quantidade ?? ''}`,
+      `valor_referencia: ${item.valor_referencia ?? ''}`,
+      `checklist_atual (${currentReqs.length}): ${JSON.stringify(currentReqs.slice(0, 200))}`,
+    ];
+    if (currentProposal) {
+      contextParts.push(`proposal_em_edicao: ${JSON.stringify(currentProposal)}`);
+    }
+    if (urlBlocks.length) {
+      contextParts.push(urlBlocks.join('\n\n'));
+    } else if (urls.length) {
+      contextParts.push(`URLs detectadas mas sem texto util: ${JSON.stringify(sources)}`);
+    }
+
+    const messagesForAi = [
+      { role: 'user', content: `CONTEXTO DO ITEM E FONTES:\n${contextParts.join('\n\n')}` },
+      ...cleanedMessages,
+    ];
+
+    const reqCountHint = (currentProposal?.requirements?.length
+      || currentReqs.length
+      || 40);
+    const ai = await chatCompletionJson({
+      system,
+      messages: messagesForAi,
+      maxTokens: Math.min(16000, Math.max(8000, reqCountHint * 120)),
+      temperature: 0.1,
+      timeoutMs: 120000,
+    });
+
+    if (!ai.ok) {
+      return res.status(502).json({
+        error: 'Falha na IA',
+        detail: ai.error,
+        sources,
+      });
+    }
+
+    let assistantMessage = toNullableText(ai.data?.assistant_message)
+      || 'Prévia gerada. Revise e clique em Aplicar se estiver ok.';
+    let proposal = normalizeChecklistAiProposal(ai.data?.proposal || ai.data);
+
+    // Se a IA não trouxe requirements mas havia proposal, preserve
+    if (!proposal.requirements.length && currentProposal?.requirements?.length) {
+      proposal.requirements = currentProposal.requirements;
+      proposal.mode_hint = currentProposal.mode_hint || proposal.mode_hint;
+      if (!proposal.modelo_produto && currentProposal.modelo_produto) {
+        proposal.modelo_produto = currentProposal.modelo_produto;
+      }
+    }
+    // Se a IA devolveu lista sem ids mas a proposal atual tem ids, alinha por índice
+    if (proposal.requirements.length && currentProposal?.requirements?.length) {
+      proposal.requirements = proposal.requirements.map((r, i) => {
+        const base = currentProposal.requirements[i];
+        if (!base) return r;
+        return {
+          ...r,
+          id: r.id != null ? r.id : base.id,
+          secao: r.secao || base.secao,
+          requisito: r.requisito || base.requisito,
+          // se status ficou verificar e o item novo não trouxe status útil, mantém o que veio da IA (já normalizado)
+        };
+      });
+    }
+
+    // MODO AVALIAR: se a mensagem diz que avaliou mas status não mudou (bug comum da IA),
+    // faz 2ª passagem só com {i,id,status,observacao} e mescla na prévia.
+    let evalPassMeta = null;
+    if (intent === 'evaluate') {
+      let counts = countProposalStatuses(proposal.requirements);
+      const decided = counts.ok + counts.nao_ok;
+      const needsStatusPass = proposal.requirements.length > 0 && decided < Math.max(3, Math.ceil(proposal.requirements.length * 0.15));
+      if (needsStatusPass) {
+        const baseList = proposal.requirements.length
+          ? proposal.requirements
+          : (currentProposal?.requirements || currentReqs.map((r) => ({
+            id: r.id,
+            secao: r.secao,
+            requisito: r.requisito,
+            status: r.status || 'verificar',
+            observacao: r.observacao || '',
+          })));
+        const productContext = [
+          `modelo_hint: ${modeloHint || item.modelo_produto || ''}`,
+          proposal.modelo_produto ? `modelo_proposta: ${proposal.modelo_produto}` : '',
+        ].filter(Boolean).join('\n');
+        const pass = await evaluateChecklistStatusesPass({
+          requirements: baseList,
+          modelo: proposal.modelo_produto || modeloHint || item.modelo_produto,
+          productContext,
+          urlBlocks: urlBlocks.join('\n\n'),
+        });
+        if (pass.ok) {
+          proposal = {
+            ...proposal,
+            mode_hint: proposal.mode_hint || 'patch',
+            requirements: pass.requirements,
+            modelo_produto: proposal.modelo_produto || modeloHint || item.modelo_produto || null,
+          };
+          evalPassMeta = { provider: pass.provider, model: pass.model };
+          counts = countProposalStatuses(proposal.requirements);
+          assistantMessage = `${assistantMessage}\n\n✓ Avaliação aplicada na prévia (2ª passagem de status): ${counts.ok} OK · ${counts.nao_ok} X · ${counts.verificar} ?.`;
+        } else {
+          assistantMessage = `${assistantMessage}\n\n⚠ A IA descreveu a avaliação no texto, mas não preencheu status na prévia. 2ª passagem falhou: ${pass.error || 'erro'}. Tente de novo ou cole a ficha completa.`;
+        }
+      } else if (proposal.requirements.length) {
+        assistantMessage = `${assistantMessage}\n\nContagem na prévia: ${counts.ok} OK · ${counts.nao_ok} X · ${counts.verificar} ?.`;
+      }
+    }
+
+    const sourceNotes = sources.flatMap((s) => s.notes || []);
+    if (sourceNotes.length) {
+      assistantMessage = `${assistantMessage}\n\nFontes/notas de leitura: ${sourceNotes.join(' | ')}`;
+    }
+
+    res.json({
+      assistant_message: assistantMessage,
+      proposal,
+      sources,
+      provider: evalPassMeta?.provider || ai.provider,
+      model: evalPassMeta?.model || ai.model,
+      evaluation_pass: !!evalPassMeta,
+    });
+  } catch (error) {
+    console.error('Error item checklist AI chat:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -17697,15 +18152,36 @@ const getAiChatProviders = () => {
   return providers;
 };
 
-const chatCompletionJson = async ({ system, user, maxTokens = 2200, temperature = 0.25 }) => {
+const chatCompletionJson = async ({
+  system,
+  user,
+  messages: extraMessages,
+  maxTokens = 2200,
+  temperature = 0.25,
+  timeoutMs = 45000,
+}) => {
   const providers = getAiChatProviders();
   if (!providers.length) {
     return { ok: false, error: 'Nenhuma IA configurada (OPENAI_API_KEY, GROQ_API_KEY ou OPENROUTER_API_KEY).' };
   }
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  if (Array.isArray(extraMessages) && extraMessages.length) {
+    for (const m of extraMessages) {
+      if (!m || !m.content) continue;
+      const role = m.role === 'assistant' ? 'assistant' : 'user';
+      messages.push({ role, content: String(m.content) });
+    }
+  } else if (user) {
+    messages.push({ role: 'user', content: user });
+  }
+  if (!messages.length) {
+    return { ok: false, error: 'Mensagens vazias para a IA' };
+  }
   const errors = [];
   for (const provider of providers) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(provider.url, {
         method: 'POST',
@@ -17716,10 +18192,7 @@ const chatCompletionJson = async ({ system, user, maxTokens = 2200, temperature 
         },
         body: JSON.stringify({
           model: provider.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
+          messages,
           temperature,
           max_tokens: maxTokens,
         }),
@@ -17737,12 +18210,18 @@ const chatCompletionJson = async ({ system, user, maxTokens = 2200, temperature 
         errors.push(`${provider.name}:JSON inválido`);
         continue;
       }
-      return {
-        ok: true,
-        data: JSON.parse(jsonMatch[0]),
-        provider: provider.name,
-        model: provider.model,
-      };
+      try {
+        return {
+          ok: true,
+          data: JSON.parse(jsonMatch[0]),
+          provider: provider.name,
+          model: provider.model,
+          raw: content,
+        };
+      } catch (parseErr) {
+        errors.push(`${provider.name}:JSON parse fail`);
+        continue;
+      }
     } catch (err) {
       errors.push(`${provider.name}:${err.name === 'AbortError' ? 'timeout' : err.message}`);
     } finally {
@@ -17750,6 +18229,573 @@ const chatCompletionJson = async ({ system, user, maxTokens = 2200, temperature 
     }
   }
   return { ok: false, error: errors.join(' | ') || 'Falha em todos os providers de IA' };
+};
+
+// --- Checklist técnico IA: fetch seguro de páginas de produto + helpers ---
+const isPrivateIpAddress = (ip) => {
+  if (!ip || typeof ip !== 'string') return true;
+  const v = ip.trim().toLowerCase();
+  if (v === '::1' || v === '0.0.0.0') return true;
+  if (v.startsWith('127.') || v.startsWith('10.') || v.startsWith('192.168.') || v.startsWith('169.254.')) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(v)) return true;
+  if (v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80')) return true;
+  return false;
+};
+
+const extractUrlsFromText = (text, max = 3) => {
+  const re = /https?:\/\/[^\s<>"')\]]+/gi;
+  const found = [];
+  const seen = new Set();
+  let m;
+  while ((m = re.exec(String(text || ''))) && found.length < max) {
+    let u = m[0].replace(/[.,;:!?]+$/, '');
+    try {
+      const parsed = new URL(u);
+      if (!['http:', 'https:'].includes(parsed.protocol)) continue;
+      const key = parsed.href;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(parsed.href);
+    } catch (_) { /* ignore bad url */ }
+  }
+  return found;
+};
+
+const htmlToPlainText = (html) => {
+  let s = String(html || '');
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  s = s.replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ');
+  s = s.replace(/<!--[\s\S]*?-->/g, ' ');
+  s = s.replace(/<\/(p|div|h[1-6]|li|tr|br|section|article|header|footer)>/gi, '\n');
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/<li[^>]*>/gi, '\n• ');
+  s = s.replace(/<[^>]+>/g, ' ');
+  s = s.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&#(\d+);/g, (_, n) => {
+      try { return String.fromCharCode(Number(n)); } catch { return ' '; }
+    });
+  s = s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ');
+  return s.trim();
+};
+
+/** Extrai objeto JS balanceado a partir de posição (após `{`). */
+const extractBalancedJsObject = (source, openBraceIndex, maxLen = 120000) => {
+  if (!source || source[openBraceIndex] !== '{') return null;
+  let depth = 0;
+  let inStr = false;
+  let quote = '';
+  let escaped = false;
+  const end = Math.min(source.length, openBraceIndex + maxLen);
+  for (let i = openBraceIndex; i < end; i += 1) {
+    const ch = source[i];
+    if (inStr) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === quote) {
+        inStr = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inStr = true;
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openBraceIndex, i + 1);
+    }
+  }
+  return null;
+};
+
+/** Converte trecho JS de technicalData / specs aninhadas em texto legível (folhas string/número). */
+const jsObjectLiteralToText = (raw) => {
+  if (!raw) return '';
+  let s = String(raw);
+  s = s.replace(/`([^`]*)`/g, (_, inner) => JSON.stringify(inner));
+  s = s.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => {
+    try { return JSON.stringify(JSON.parse(`"${inner}"`)); } catch { return JSON.stringify(inner); }
+  });
+  const lines = [];
+  // chaves "quoted" OU identificadores sem aspas (Capacidade:"10000 mAh")
+  const re = /(?:"([^"]{1,160})"|([A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ0-9_ ./%°×+\-]{0,80}))\s*:\s*("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?)/g;
+  let m;
+  const seen = new Set();
+  while ((m = re.exec(s))) {
+    const key = (m[1] || m[2] || '').trim();
+    if (!key) continue;
+    if (/^(className|children|style|icon|jsx|jsxs|to|path|href|src|alt|type|id|true|false|null)$/i.test(key)) continue;
+    let val = m[3];
+    if (val.startsWith('"')) {
+      try { val = JSON.parse(val); } catch { val = val.slice(1, -1); }
+    }
+    if (String(val).length > 280) val = `${String(val).slice(0, 280)}…`;
+    const line = `• ${key}: ${val}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+    if (lines.length >= 500) break;
+  }
+  return lines.join('\n');
+};
+
+/**
+ * Em SPAs (ex.: aerion.com.br) as specs do accordion vivem no bundle JS, não no HTML.
+ * Busca /assets/js/*.js same-origin e extrai technicalData / seções de specs do produto.
+ */
+const enrichProductPageFromJsBundles = async (pageUrl, html, { timeoutMs = 20000, maxBundleBytes = 2_500_000 } = {}) => {
+  let page;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    return { text: '', note: null };
+  }
+  const slug = page.pathname.split('/').filter(Boolean).pop() || '';
+  if (!slug || slug.length < 3) return { text: '', note: null };
+
+  // nome legível a partir do slug (evo-max-v2 -> EVO Max V2 approx)
+  const nameGuess = slug
+    .split('-')
+    .map((p) => (p.length <= 3 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join(' ');
+
+  const assetHrefs = [...html.matchAll(/src=["']([^"']+\.js)["']/gi)]
+    .map((m) => m[1])
+    .filter((h) => /\/assets\/js\//i.test(h) || /chunk|index-|main-|app-/i.test(h))
+    .slice(0, 5);
+  if (!assetHrefs.length) return { text: '', note: null };
+
+  const chunks = [];
+  let usedBundle = null;
+
+  const pushChunk = (title, flat, abs) => {
+    if (!flat || flat.length < 30) return;
+    chunks.push(`--- ${title} ---\n${flat}`);
+    usedBundle = abs;
+  };
+
+  for (const href of assetHrefs) {
+    let abs;
+    try {
+      abs = new URL(href, page.origin).href;
+      if (new URL(abs).hostname !== page.hostname) continue;
+    } catch {
+      continue;
+    }
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(abs, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'AerionSalesBot/1.0 (+checklist-tecnico; commercial research)',
+          Accept: 'application/javascript,text/javascript,*/*',
+        },
+      });
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > maxBundleBytes) continue;
+      const js = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+      if (!js.includes(slug) && !js.includes(`/produtos/${slug}`)) continue;
+
+      // 1) produto catálogo {id:"slug"...}
+      const idNeedle = `id:"${slug}"`;
+      let idPos = js.indexOf(idNeedle);
+      if (idPos < 0) idPos = js.indexOf(`slug:"${slug}"`);
+      if (idPos >= 0) {
+        let start = idPos;
+        for (let k = 0; k < 500 && start > 0; k += 1) {
+          if (js[start] === '{') break;
+          start -= 1;
+        }
+        if (js[start] === '{') {
+          const obj = extractBalancedJsObject(js, start, 12000);
+          if (obj) pushChunk(`produto ${slug}`, jsObjectLiteralToText(obj), abs);
+        }
+      }
+
+      // Tokens do produto a partir do slug (evo-max-v2 → evo, max, v2)
+      const slugTokens = slug.split(/[-_]/).filter((t) => t.length >= 2);
+      const productMatchers = [
+        nameGuess,
+        slug,
+        `/produtos/${slug}`,
+        ...slugTokens.filter((t) => t.length >= 3).map((t) => t),
+      ].filter(Boolean);
+
+      // 2) Blocos specs:{...} — fichas do accordion (variantes 4T/4N etc.)
+      const scoredSpecs = [];
+      let from = 0;
+      while (scoredSpecs.length < 16 && from < js.length) {
+        const sp = js.indexOf('specs:{', from);
+        if (sp < 0) break;
+        from = sp + 7;
+        const brace = sp + 6;
+        if (js[brace] !== '{') continue;
+        const obj = extractBalancedJsObject(js, brace, 100000);
+        if (!obj || obj.length < 200) continue;
+        const looksLikeSpec =
+          obj.includes('BATERIA')
+          || obj.includes('DESEMPENHO')
+          || obj.includes('CÂMERA')
+          || obj.includes('PORTABILIDADE')
+          || obj.includes('TRANSMISS');
+        if (!looksLikeSpec) continue;
+        // contexto imediatamente antes (nome da variante / produto)
+        const before = js.slice(Math.max(0, sp - 400), sp);
+        let score = 0;
+        const blob = `${before}\n${obj}`;
+        const lower = blob.toLowerCase();
+        for (const m of productMatchers) {
+          if (m && lower.includes(String(m).toLowerCase())) score += 2;
+        }
+        if (/evo\s*max|max\s*v2|max\s*4t|max\s*4n/i.test(blob) && /max/i.test(slug)) score += 6;
+        if (/fusion\s*4t|4t\s*v2|abx41/i.test(blob) && /max/i.test(slug)) score += 6;
+        if (/fusion\s*4n|4n\s*v2/i.test(blob) && /max/i.test(slug)) score += 5;
+        if (/autel\s*alpha|dg-l35t/i.test(blob) && /alpha/i.test(slug)) score += 6;
+        if (/evo\s*lite|6175\s*mAh|68\.7\s*Wh/i.test(blob) && /lite/i.test(slug)) score += 6;
+        if (/6175\s*mAh|68\.7\s*Wh/i.test(obj) && /max|alpha/i.test(slug)) score -= 5;
+        if (/10000\s*mAh|237\s*Wh/i.test(obj) && /max/i.test(slug)) score += 3;
+        if (/1665\s*g|1700\s*g|467\s*mm/i.test(obj) && /max/i.test(slug)) score += 4;
+        // Alpha costuma ser bem mais pesado
+        if (/[56]\d{3}\s*g|MTOM|8400\s*g/i.test(obj) && /max/i.test(slug) && !/1665|1700/i.test(obj)) score -= 6;
+        if (score < 4) continue;
+        scoredSpecs.push({ score, obj, len: obj.length });
+      }
+      scoredSpecs.sort((a, b) => b.score - a.score || b.len - a.len);
+      for (const item of scoredSpecs.slice(0, 2)) {
+        pushChunk(`ficha specs (score ${item.score})`, jsObjectLiteralToText(item.obj), abs);
+      }
+
+      // 3) technicalData com GTIN do produto
+      let searchFrom = 0;
+      while (searchFrom < js.length) {
+        const td = js.indexOf('technicalData:', searchFrom);
+        if (td < 0) break;
+        searchFrom = td + 14;
+        const brace = js.indexOf('{', td);
+        if (brace < 0 || brace - td > 30) continue;
+        const obj = extractBalancedJsObject(js, brace, 80000);
+        if (!obj || obj.length < 80) continue;
+        if (!obj.includes(nameGuess) && !obj.includes(slug) && !/GTIN.*Max|GTIN.*Alpha|GTIN.*Lite/i.test(obj)) continue;
+        // só se mencionar o produto alvo
+        if (!new RegExp(slugTokens.filter((t) => t.length > 2).join('|'), 'i').test(obj) && !obj.includes(nameGuess)) continue;
+        pushChunk('technicalData comercial', jsObjectLiteralToText(obj), abs);
+        break;
+      }
+
+      if (chunks.length) break;
+    } catch (_) {
+      /* next */
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  if (!chunks.length) {
+    return {
+      text: '',
+      note: 'Accordion/specs detalhadas nao estavam no HTML (conteudo client-side). Bundle JS sem technicalData extraivel — use "Copiar informacoes" no site ou cole a ficha.',
+    };
+  }
+  return {
+    text: chunks.join('\n\n').slice(0, 50000),
+    note: `Specs extraidas do bundle JS (accordion fechado no HTML)${usedBundle ? ` via ${usedBundle}` : ''}`,
+  };
+};
+
+const fetchPublicUrlText = async (rawUrl, { maxChars = 45000, timeoutMs = 18000 } = {}) => {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl || '').trim());
+  } catch {
+    return { ok: false, url: rawUrl, error: 'URL invalida' };
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return { ok: false, url: parsed.href, error: 'Protocolo nao permitido' };
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, url: parsed.href, error: 'URL com credenciais nao permitida' };
+  }
+  const hostname = parsed.hostname;
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+    return { ok: false, url: parsed.href, error: 'Host local bloqueado' };
+  }
+  if (net.isIP(hostname) && isPrivateIpAddress(hostname)) {
+    return { ok: false, url: parsed.href, error: 'IP privado bloqueado' };
+  }
+  try {
+    const lookups = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (!lookups.length || lookups.some((r) => isPrivateIpAddress(r.address))) {
+      return { ok: false, url: parsed.href, error: 'Host resolve para IP privado' };
+    }
+  } catch (err) {
+    return { ok: false, url: parsed.href, error: `DNS falhou: ${err.message}` };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(parsed.href, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'AerionSalesBot/1.0 (+checklist-tecnico; commercial research)',
+        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+      },
+    });
+    try {
+      const finalUrl = new URL(res.url || parsed.href);
+      if (net.isIP(finalUrl.hostname) && isPrivateIpAddress(finalUrl.hostname)) {
+        return { ok: false, url: parsed.href, error: 'Redirect para IP privado bloqueado' };
+      }
+    } catch (_) { /* ignore */ }
+
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!res.ok) {
+      return { ok: false, url: parsed.href, error: `HTTP ${res.status}`, contentType };
+    }
+    if (contentType.includes('application/pdf') || parsed.pathname.toLowerCase().endsWith('.pdf')) {
+      return {
+        ok: false,
+        url: parsed.href,
+        error: 'PDF nao lido automaticamente — cole o texto da ficha no chat',
+        contentType,
+      };
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > 2 * 1024 * 1024) {
+      return { ok: false, url: parsed.href, error: 'Pagina maior que 2MB' };
+    }
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const rawHtml = decoder.decode(buf);
+    const isHtml = contentType.includes('html') || /<html[\s>]/i.test(rawHtml.slice(0, 500));
+    let text = isHtml ? htmlToPlainText(rawHtml) : rawHtml;
+    let notes = [];
+    const accordionCollapsed = isHtml && /aria-expanded=["']false["']/i.test(rawHtml) && /specs-|Especifica/i.test(rawHtml);
+
+    // Enriquecer com specs do JS (accordion SPA)
+    if (isHtml && (accordionCollapsed || text.length < 15000 || /\/produtos\//i.test(parsed.pathname))) {
+      const enriched = await enrichProductPageFromJsBundles(res.url || parsed.href, rawHtml, {
+        timeoutMs: Math.max(8000, timeoutMs - 2000),
+      });
+      if (enriched.text) {
+        text = `${text}\n\n${enriched.text}`;
+        if (enriched.note) notes.push(enriched.note);
+      } else if (enriched.note) {
+        notes.push(enriched.note);
+      } else if (accordionCollapsed) {
+        notes.push('Pagina tem secoes de especificacoes colapsadas (accordion); HTML so traz marketing. Prefira colar ficha completa se a avaliacao ficar com muitos "?".');
+      }
+    }
+
+    text = text.slice(0, maxChars);
+    if (text.trim().length < 40) {
+      return {
+        ok: false,
+        url: parsed.href,
+        error: 'Pagina sem texto util (SPA ou bloqueio) — cole as specs no chat',
+        chars: text.length,
+        notes,
+      };
+    }
+    return {
+      ok: true,
+      url: res.url || parsed.href,
+      text,
+      chars: text.length,
+      contentType,
+      notes,
+      accordion_collapsed: !!accordionCollapsed,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      url: parsed.href,
+      error: err.name === 'AbortError' ? 'timeout ao ler pagina' : err.message,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const AUTEL_PRODUCT_BRIEF = `
+Linhas Autel (Aerion) — apoio comercial (priorizar ficha/URL colada; se conflitar, a ficha ganha):
+- EVO Lite Enterprise (640T/6K): compacto enterprise, ~40 min voo, termica 640x512 opcional. ~ DJI Mavic 3 Enterprise/Thermal.
+- EVO Max V2 (4T/4N): cameras triplas, termica 640x512, 4T zoom optico ~10x / hibrido ate ~160x, voo ~42 min, transmissao ~15 km FCC / ~8 km CE, IP43, deteccao obstaculos 720°, RTK frequentemente modulo opcional. ~ Matrice 30T.
+- Autel Alpha: IP55, zoom optico alto (~35x), termicas, laser, alcance estendido, ~40 min. ~ Matrice 350 RTK + payload.
+- EVO Nest + Autel Mapper: dock/operacao remota + mapeamento.
+`.trim();
+
+const normalizeChecklistAiStatus = (value) => {
+  if (value === true || value === 1) return 'ok';
+  if (value === false || value === 0) return 'nao_ok';
+  let s = String(value || '').trim().toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  s = s.replace(/\s+/g, ' ');
+  if (!s) return 'verificar';
+  // valores canônicos e sinônimos comuns da IA
+  if (/^(ok|atende|atendido|conforme|compativel|sim|yes|pass|passed|true|cumpre|atende_requisito)$/i.test(s)) return 'ok';
+  if (/^(nao_ok|nao ok|nao-ok|naoatende|nao atende|incompativel|nao conforme|x|fail|failed|false|reprova|reprovado|n)$/i.test(s)) return 'nao_ok';
+  if (/^(verificar|pendente|duvida|incerto|\?|unknown|tbd|check)$/i.test(s)) return 'verificar';
+  if (/\bok\b/.test(s) && !/nao/.test(s)) return 'ok';
+  if (/nao\s*ok|nao\s*atend|incompat/.test(s)) return 'nao_ok';
+  return 'verificar';
+};
+
+/** Lê status de campos alternativos que a IA às vezes usa no lugar de "status". */
+const pickRequirementStatus = (row) => {
+  if (!row || typeof row !== 'object') return 'verificar';
+  const candidates = [
+    row.status,
+    row.avaliacao,
+    row.resultado,
+    row.conformidade,
+    row.verdict,
+    row.state,
+    row.ok,
+    row.atende,
+  ];
+  for (const c of candidates) {
+    if (c === undefined || c === null || c === '') continue;
+    // { status: true } / ok: true
+    if (typeof c === 'boolean' || typeof c === 'number') {
+      return normalizeChecklistAiStatus(c);
+    }
+    const n = normalizeChecklistAiStatus(c);
+    if (n !== 'verificar' || /verificar|pendente|\?/i.test(String(c))) return n;
+  }
+  // "OK - 42 min" em observacao no início
+  const obs = String(row.observacao || row.obs || '');
+  if (/^\s*ok\b/i.test(obs)) return 'ok';
+  if (/^\s*(nao_ok|não_ok|nao ok|x)\b/i.test(obs)) return 'nao_ok';
+  return 'verificar';
+};
+
+const countProposalStatuses = (requirements = []) => {
+  const list = Array.isArray(requirements) ? requirements : [];
+  return {
+    ok: list.filter((r) => r.status === 'ok').length,
+    nao_ok: list.filter((r) => r.status === 'nao_ok').length,
+    verificar: list.filter((r) => r.status === 'verificar' || r.status === 'pendente' || !r.status).length,
+    total: list.length,
+  };
+};
+
+const normalizeChecklistAiProposal = (raw, { max = 200 } = {}) => {
+  if (!raw || typeof raw !== 'object') {
+    return { mode_hint: 'replace', modelo_produto: null, requirements: [] };
+  }
+  // às vezes a IA devolve requirements na raiz
+  const root = raw.proposal && typeof raw.proposal === 'object' ? raw.proposal : raw;
+  const modeHint = ['replace', 'append', 'patch'].includes(root.mode_hint)
+    ? root.mode_hint
+    : (['replace', 'append', 'patch'].includes(raw.mode_hint) ? raw.mode_hint : 'replace');
+  const modelo = root.modelo_produto != null
+    ? toNullableText(root.modelo_produto)
+    : (raw.modelo_produto != null ? toNullableText(raw.modelo_produto) : null);
+  const list = Array.isArray(root.requirements)
+    ? root.requirements
+    : (Array.isArray(raw.requirements)
+      ? raw.requirements
+      : (Array.isArray(raw.items) ? raw.items : []));
+  const requirements = [];
+  for (let i = 0; i < list.length && requirements.length < max; i += 1) {
+    const r = list[i] || {};
+    const requisito = toNullableText(r.requisito || r.texto || r.descricao || r.requirement);
+    if (!requisito) continue;
+    requirements.push({
+      id: r.id != null && Number.isFinite(Number(r.id)) ? Number(r.id) : null,
+      secao: toNullableText(r.secao || r.section) || null,
+      requisito,
+      status: pickRequirementStatus(r),
+      observacao: toNullableText(r.observacao || r.obs || r.motivo || r.justificativa) || '',
+      valor_ofertado: r.valor_ofertado != null ? toNullableNumber(r.valor_ofertado) : null,
+      ordem: i,
+    });
+  }
+  return { mode_hint: modeHint, modelo_produto: modelo, requirements };
+};
+
+/** Segunda passagem: só status por id/índice (mais confiável que reescrever 80+ requisitos). */
+const evaluateChecklistStatusesPass = async ({
+  requirements,
+  modelo,
+  productContext,
+  urlBlocks,
+}) => {
+  const compact = (requirements || []).map((r, index) => ({
+    i: index,
+    id: r.id,
+    secao: r.secao || null,
+    requisito: r.requisito,
+  }));
+  if (!compact.length) return { ok: false, error: 'sem requisitos' };
+
+  const system = `Você avalia conformidade de requisitos de edital vs produto.
+Responda SOMENTE JSON válido, sem markdown:
+{"items":[{"i":0,"id":123,"status":"ok|nao_ok|verificar","observacao":"fonte curta"}]}
+
+REGRAS:
+- Um item por requisito da lista (mesma ordem / mesmo i).
+- status EXATAMENTE: ok | nao_ok | verificar
+- Use ok/nao_ok quando houver evidência na ficha/URL/modelo; verificar só se faltar dado.
+- observacao: 1 linha com base (ex: "site: IP43 < IP54 exigido", "ficha: 42min >= 40min").
+- NÃO invente requisitos. NÃO omita itens. Total items = ${compact.length}.
+- Se o produto for EVO Max / Autel e a ficha trouxer números, JULGUE (não deixe tudo verificar).`;
+
+  const user = `MODELO: ${modelo || '(não informado)'}
+
+FONTES DO PRODUTO:
+${productContext || '(sem texto extra)'}
+${urlBlocks || ''}
+
+REQUISITOS:
+${JSON.stringify(compact)}`;
+
+  const ai = await chatCompletionJson({
+    system,
+    user,
+    maxTokens: Math.min(16000, Math.max(4000, compact.length * 80)),
+    temperature: 0.05,
+    timeoutMs: 120000,
+  });
+  if (!ai.ok) return { ok: false, error: ai.error };
+
+  const items = Array.isArray(ai.data?.items)
+    ? ai.data.items
+    : (Array.isArray(ai.data?.requirements) ? ai.data.requirements : []);
+  if (!items.length) return { ok: false, error: 'items vazio' };
+
+  const byIndex = new Map();
+  const byId = new Map();
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    const status = pickRequirementStatus(it);
+    const obs = toNullableText(it.observacao || it.obs || it.motivo) || '';
+    if (it.i != null && Number.isFinite(Number(it.i))) byIndex.set(Number(it.i), { status, observacao: obs });
+    if (it.id != null && Number.isFinite(Number(it.id))) byId.set(Number(it.id), { status, observacao: obs });
+  }
+
+  const merged = requirements.map((r, index) => {
+    const hit = (r.id != null && byId.has(Number(r.id)))
+      ? byId.get(Number(r.id))
+      : byIndex.get(index);
+    if (!hit) return r;
+    return {
+      ...r,
+      status: hit.status,
+      observacao: hit.observacao || r.observacao || '',
+    };
+  });
+  return { ok: true, requirements: merged, provider: ai.provider, model: ai.model };
 };
 
 const normalizePorteCode = (value) => {

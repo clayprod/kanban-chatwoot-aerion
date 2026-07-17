@@ -58,6 +58,7 @@ import {
   ArrowsPointingInIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
+  PrinterIcon,
 } from '@heroicons/react/24/outline';
 import {
   btnPrimary,
@@ -2010,6 +2011,390 @@ const formatCurrency = (value) => {
   }).format(numeric);
 };
 
+/** Agrupa requisitos por seção (ordem = primeira aparição). */
+const CHECKLIST_UNSECTIONED_KEY = '__sem_secao__';
+const groupRequirementsBySection = (requirements = []) => {
+  const groups = [];
+  const indexByKey = new Map();
+  (Array.isArray(requirements) ? requirements : []).forEach((req) => {
+    const secao = String(req?.secao || '').trim();
+    const key = secao || CHECKLIST_UNSECTIONED_KEY;
+    if (!indexByKey.has(key)) {
+      indexByKey.set(key, groups.length);
+      groups.push({
+        key,
+        secao: secao || null,
+        title: secao || 'Geral',
+        items: [],
+      });
+    }
+    groups[indexByKey.get(key)].items.push(req);
+  });
+  return groups;
+};
+
+const countRequirementStatuses = (requirements = []) => {
+  const list = Array.isArray(requirements) ? requirements : [];
+  return {
+    total: list.length,
+    ok: list.filter((r) => r.status === 'ok').length,
+    nao_ok: list.filter((r) => r.status === 'nao_ok').length,
+    verificar: list.filter((r) => r.status === 'verificar' || r.status === 'pendente' || !r.status).length,
+  };
+};
+
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const statusLabelPt = (status) => {
+  if (status === 'ok') return 'OK';
+  if (status === 'nao_ok') return 'Não atende';
+  return 'Verificar';
+};
+
+/**
+ * Relatório de conformidade (edital + itens + checklist) para cliente.
+ * Abre janela de impressão — o usuário salva como PDF no diálogo do browser.
+ */
+/** Nome de arquivo seguro para "Salvar como PDF" (via document.title). */
+const buildSafeReportFileName = (...parts) => {
+  const raw = parts
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .join(' - ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // remove acentos p/ compatibilidade
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  return (raw || 'Relatorio-conformidade').replace(/[. ]+$/g, '');
+};
+
+const printLicitacaoConformidadeReport = ({
+  opportunity,
+  items = [],
+  requirementsByItem = {},
+}) => {
+  if (!opportunity) return;
+  const generatedAt = new Date().toLocaleString('pt-BR');
+  const title = opportunity.titulo || 'Oportunidade de licitação';
+  const allReqs = items.flatMap((item) => requirementsByItem[item.id] || []);
+  const globalCounts = countRequirementStatuses(allReqs);
+
+  // Nome do PDF sugerido: edital + produto(s) ofertado(s)
+  const editalPart = opportunity.numero_edital
+    ? `Edital ${opportunity.numero_edital}`
+    : (opportunity.titulo || 'Edital');
+  const productModels = [...new Set(
+    (items || [])
+      .map((it) => String(it.modelo_produto || '').trim())
+      .filter(Boolean)
+  )];
+  const productPart = productModels.length
+    ? productModels.slice(0, 3).join(', ') + (productModels.length > 3 ? ` +${productModels.length - 3}` : '')
+    : (items[0]?.descricao
+      ? String(items[0].descricao).slice(0, 40)
+      : 'produto');
+  const reportFileBase = buildSafeReportFileName(editalPart, productPart, 'conformidade');
+
+  const metaRows = [
+    ['Título', opportunity.titulo],
+    ['Nº edital', opportunity.numero_edital],
+    ['Processo SEI', opportunity.numero_processo_sei],
+    ['Órgão', opportunity.orgao_nome],
+    ['CNPJ órgão', opportunity.orgao_cnpj],
+    ['UASG', opportunity.uasg_codigo],
+    ['Fase', opportunity.fase],
+    ['Status', opportunity.status],
+    ['Valor oportunidade', formatCurrency(opportunity.valor_oportunidade)],
+    ['Data publicação', opportunity.data_publicacao],
+    ['Data sessão', opportunity.data_sessao],
+    ['Limite proposta', opportunity.data_envio_proposta_limite],
+    ['Link edital', opportunity.links?.edital],
+    ['Link SEI', opportunity.links?.sei],
+  ].filter(([, v]) => v != null && String(v).trim() !== '');
+
+  const itemsHtml = (items.length ? items : []).map((item, itemIndex) => {
+    const reqs = requirementsByItem[item.id] || [];
+    const counts = countRequirementStatuses(reqs);
+    const groups = groupRequirementsBySection(reqs);
+    const sectionsHtml = groups.length
+      ? groups.map((group) => {
+        const sc = countRequirementStatuses(group.items);
+        const rows = group.items.map((req, idx) => {
+          const st = req.status === 'ok' ? 'ok' : (req.status === 'nao_ok' ? 'nao_ok' : 'verificar');
+          return `
+            <tr class="req-${st}">
+              <td class="num">${idx + 1}</td>
+              <td class="status"><span class="pill pill-${st}">${escapeHtml(statusLabelPt(req.status))}</span></td>
+              <td class="req">${escapeHtml(req.requisito || '')}</td>
+              <td class="obs">${escapeHtml(req.observacao || '—')}</td>
+            </tr>`;
+        }).join('');
+        return `
+          <div class="section">
+            <div class="section-head">
+              <h4>${escapeHtml(group.title)}</h4>
+              <span class="muted">${sc.ok} OK · ${sc.nao_ok} X · ${sc.verificar} ? · ${sc.total}</span>
+            </div>
+            <table class="req-table">
+              <thead>
+                <tr>
+                  <th class="num">#</th>
+                  <th class="status">Status</th>
+                  <th class="req">Requisito</th>
+                  <th class="obs">Observação / evidência</th>
+                </tr>
+              </thead>
+              <tbody>${rows || '<tr><td colspan="4" class="muted">Sem requisitos nesta seção.</td></tr>'}</tbody>
+            </table>
+          </div>`;
+      }).join('')
+      : '<p class="muted">Nenhum requisito técnico cadastrado neste item.</p>';
+
+    return `
+      <section class="item-block">
+        <div class="item-head">
+          <div>
+            <h3>Item ${escapeHtml(item.numero_item || String(itemIndex + 1))}</h3>
+            <p class="item-desc">${escapeHtml(item.descricao || 'Sem descrição')}</p>
+          </div>
+          <div class="item-meta">
+            <div><span class="label">Modelo / produto</span><strong>${escapeHtml(item.modelo_produto || '—')}</strong></div>
+            <div><span class="label">Qtd</span><strong>${escapeHtml(item.quantidade ?? '—')}</strong></div>
+            <div><span class="label">Preço ref.</span><strong>${escapeHtml(formatCurrency(item.valor_referencia) || '—')}</strong></div>
+            <div><span class="label">Checklist</span><strong>${counts.ok}/${counts.total} OK · ${counts.nao_ok} X · ${counts.verificar} ?</strong></div>
+          </div>
+        </div>
+        ${sectionsHtml}
+      </section>`;
+  }).join('') || '<p class="muted">Nenhum item de participação cadastrado.</p>';
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(reportFileBase)}</title>
+  <style>
+    @page { size: A4; margin: 14mm 12mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      color: #0f172a;
+      font-size: 11px;
+      line-height: 1.45;
+      margin: 0;
+      background: #fff;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    h2 { font-size: 13px; margin: 18px 0 8px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; color: #334155; }
+    h3 { font-size: 13px; margin: 0 0 4px; }
+    h4 { font-size: 11px; margin: 0; color: #0f172a; }
+    p { margin: 0 0 6px; }
+    .muted { color: #64748b; }
+    .brand {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+      border-bottom: 2px solid #0f766e; padding-bottom: 10px; margin-bottom: 12px;
+    }
+    .brand-mark { font-weight: 700; font-size: 14px; color: #0f766e; letter-spacing: 0.02em; }
+    .summary {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+      margin: 10px 0 14px;
+    }
+    .summary .card {
+      border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; background: #f8fafc;
+    }
+    .summary .card strong { display: block; font-size: 16px; margin-top: 2px; }
+    .summary .ok strong { color: #15803d; }
+    .summary .x strong { color: #b91c1c; }
+    .summary .q strong { color: #b45309; }
+    table.meta { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    table.meta td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid #f1f5f9; }
+    table.meta td.k { width: 28%; color: #64748b; font-weight: 600; }
+    .item-block {
+      border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; margin: 12px 0;
+      page-break-inside: avoid;
+    }
+    .item-head { margin-bottom: 10px; }
+    .item-desc { color: #334155; margin-bottom: 8px; }
+    .item-meta {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+      background: #f8fafc; border-radius: 8px; padding: 8px;
+    }
+    .item-meta .label { display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; }
+    .section { margin-top: 10px; page-break-inside: avoid; }
+    .section-head {
+      display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+      background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 6px; padding: 6px 8px; margin-bottom: 6px;
+    }
+    .req-table { width: 100%; border-collapse: collapse; }
+    .req-table th, .req-table td {
+      border: 1px solid #e2e8f0; padding: 5px 6px; text-align: left; vertical-align: top;
+    }
+    .req-table th { background: #f1f5f9; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: #475569; }
+    .req-table .num { width: 28px; text-align: center; color: #64748b; }
+    .req-table .status { width: 88px; }
+    .req-table .obs { width: 28%; }
+    .pill {
+      display: inline-block; min-width: 64px; text-align: center;
+      border-radius: 999px; padding: 2px 6px; font-size: 10px; font-weight: 700;
+    }
+    .pill-ok { background: #dcfce7; color: #166534; }
+    .pill-nao_ok { background: #fee2e2; color: #991b1b; }
+    .pill-verificar { background: #fef3c7; color: #92400e; }
+    tr.req-ok td { background: #f0fdf4; }
+    tr.req-nao_ok td { background: #fef2f2; }
+    tr.req-verificar td { background: #fffbeb; }
+    .footer {
+      margin-top: 18px; padding-top: 8px; border-top: 1px solid #cbd5e1;
+      font-size: 10px; color: #64748b;
+    }
+    .note {
+      margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+      background: #f8fafc; border: 1px solid #e2e8f0; color: #475569;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      .item-block, .section { break-inside: avoid; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="brand">
+    <div>
+      <div class="brand-mark">Aerion · Relatório de conformidade</div>
+      <h1>${escapeHtml(title)}</h1>
+      <p class="muted">Documento para apresentação a clientes · participação com produto ofertado</p>
+    </div>
+    <div style="text-align:right">
+      <p class="muted">Gerado em</p>
+      <strong>${escapeHtml(generatedAt)}</strong>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="card"><span class="muted">Itens</span><strong>${items.length}</strong></div>
+    <div class="card ok"><span class="muted">OK</span><strong>${globalCounts.ok}</strong></div>
+    <div class="card x"><span class="muted">Não atende</span><strong>${globalCounts.nao_ok}</strong></div>
+    <div class="card q"><span class="muted">Verificar</span><strong>${globalCounts.verificar}</strong></div>
+  </div>
+
+  <h2>1. Dados do edital / processo</h2>
+  <table class="meta">
+    <tbody>
+      ${metaRows.map(([k, v]) => `
+        <tr>
+          <td class="k">${escapeHtml(k)}</td>
+          <td>${escapeHtml(v)}</td>
+        </tr>`).join('')}
+    </tbody>
+  </table>
+
+  <h2>2. Itens, produto ofertado e ficha de comparação</h2>
+  ${itemsHtml}
+
+  <div class="note">
+    Legenda: <strong>OK</strong> = atende com evidência · <strong>Não atende</strong> = não conforme ·
+    <strong>Verificar</strong> = pendente de confirmação (dado ausente ou ambíguo).
+    Este relatório não inclui contatos internos, comentários ou dados operacionais do CRM.
+  </div>
+  <div class="footer">
+    Aerion Sales Command · Relatório de conformidade técnica · ${escapeHtml(generatedAt)}
+  </div>
+</body>
+</html>`;
+
+  // Impressão via iframe oculto — não depende de pop-up (noopener deixava a aba em branco / null).
+  try {
+    const existing = document.getElementById('licitacao-print-frame');
+    if (existing) existing.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'licitacao-print-frame';
+    iframe.setAttribute('title', 'Impressão relatório de conformidade');
+    iframe.setAttribute('aria-hidden', 'true');
+    Object.assign(iframe.style, {
+      position: 'fixed',
+      right: '0',
+      bottom: '0',
+      width: '0',
+      height: '0',
+      border: '0',
+      opacity: '0',
+      pointerEvents: 'none',
+    });
+    document.body.appendChild(iframe);
+
+    const frameDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!frameDoc || !iframe.contentWindow) {
+      throw new Error('iframe sem documento');
+    }
+
+    frameDoc.open();
+    frameDoc.write(html);
+    frameDoc.close();
+    // Chrome/Edge usam document.title como nome sugerido em "Salvar como PDF"
+    try { frameDoc.title = reportFileBase; } catch (_) { /* ignore */ }
+
+    const doPrint = () => {
+      try {
+        try { iframe.contentDocument.title = reportFileBase; } catch (_) { /* ignore */ }
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (err) {
+        console.error('print frame error:', err);
+        // Fallback: Blob URL em nova aba (sem noopener, para o browser carregar o HTML)
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const win = window.open(url, '_blank');
+        if (!win) {
+          window.alert('Não foi possível iniciar a impressão. Tente novamente.');
+        } else {
+          try { win.document.title = reportFileBase; } catch (_) { /* ignore */ }
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        }
+      } finally {
+        setTimeout(() => {
+          try { iframe.remove(); } catch (_) { /* ignore */ }
+        }, 60_000);
+      }
+    };
+
+    // srcdoc/write: alguns browsers disparam load de forma assíncrona
+    if (iframe.contentDocument?.readyState === 'complete') {
+      setTimeout(doPrint, 100);
+    } else {
+      iframe.onload = () => setTimeout(doPrint, 100);
+      setTimeout(doPrint, 400); // fallback se onload não disparar após document.write
+    }
+  } catch (error) {
+    console.error('printLicitacaoConformidadeReport:', error);
+    // Último recurso: blob URL
+    try {
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (!win) {
+        window.alert('Não foi possível abrir o relatório. Verifique o bloqueio de pop-ups e tente de novo.');
+      } else {
+        setTimeout(() => {
+          try { win.focus(); win.print(); } catch (_) { /* user imprime manualmente */ }
+        }, 400);
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
+    } catch (err2) {
+      console.error(err2);
+      window.alert('Falha ao gerar o relatório para impressão.');
+    }
+  }
+};
+
 const formatPncpDate = (value) => {
   if (!value) return null;
   const date = new Date(value);
@@ -2222,6 +2607,44 @@ const contactMatchesQuery = (contact, rawQuery) => {
   return digitFields.some((digits) => digits.includes(queryDigits));
 };
 
+/** Match pipeline licitações in global search (edital, órgão, UASG, processo, etc.). */
+const getLicitacaoSearchText = (item) => normalizeText([
+  item?.titulo,
+  item?.orgao_nome,
+  item?.orgao_cnpj,
+  item?.orgao_codigo,
+  item?.uasg_codigo,
+  item?.uasg_nome,
+  item?.numero_edital,
+  item?.numero_processo_sei,
+  item?.numero_compra,
+  item?.modalidade,
+  item?.codigo_item_catalogo,
+  item?.intermediario_razao_social,
+  item?.fase,
+  item?.status,
+  item?.palavras_chave,
+].filter(Boolean).join(' '));
+
+const licitacaoMatchesQuery = (item, rawQuery) => {
+  const query = normalizeText(rawQuery).trim();
+  if (!query) return true;
+  if (getLicitacaoSearchText(item).includes(query)) return true;
+  const queryDigits = String(rawQuery || '').replace(/\D/g, '');
+  if (queryDigits.length < 3) return false;
+  const digitFields = [
+    item?.orgao_cnpj,
+    item?.uasg_codigo,
+    item?.numero_edital,
+    item?.numero_processo_sei,
+    item?.numero_compra,
+    item?.id,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).replace(/\D/g, ''));
+  return digitFields.some((digits) => digits.includes(queryDigits));
+};
+
 const getContactLabel = (contact) => {
   const name = getCompanyContactDisplay(
     contact?.company_name,
@@ -2315,6 +2738,18 @@ const getStageNumber = (stage) => {
   const raw = String(stage || '').split('.')[0];
   const num = Number(raw.trim());
   return Number.isNaN(num) ? 999 : num;
+};
+
+/** Colunas terminal/negativas: cards ficam visualmente apagados (menos destaque). */
+const isLeadLostOrAfterStage = (stage) => {
+  const n = getStageNumber(stage);
+  // 14. Fechado-Perdido → 17. Nurturing (Ganho = 13 permanece em destaque)
+  return n >= 14 && n <= 17;
+};
+const isLicLostOrAfterStage = (stage) => {
+  const n = getStageNumber(stage);
+  // 13. Perdido → 15. Descartado
+  return n >= 13 && n <= 15;
 };
 
 const buildGroupedHistorySeries = (historyRows, metric = 'count') => {
@@ -3838,6 +4273,7 @@ const KanbanColumn = memo(function KanbanColumn({
   const focusIdStr = focusedSearchContactId != null ? String(focusedSearchContactId) : '';
   const columnHasSearchFocus = Boolean(focusIdStr && itemIds.includes(focusIdStr));
   const stageGroup = groupForStageNum(getStageNumber(title));
+  const isLostOrAfter = isLeadLostOrAfterStage(title);
 
   const renderItem = useCallback(
     (index) => {
@@ -3863,7 +4299,7 @@ const KanbanColumn = memo(function KanbanColumn({
     <div
       ref={setNodeRef}
       data-column-title={title}
-      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''}`}
+      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
     >
       <div className="flex flex-col gap-1.5 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -4136,6 +4572,7 @@ const LicitacaoColumn = memo(function LicitacaoColumn({
   const focusItemId = focusIdStr ? `opp:${focusIdStr}` : null;
   const columnHasSearchFocus = Boolean(focusItemId && itemIds.includes(focusItemId));
   const stageGroup = licGroupForStageNum(getStageNumber(title));
+  const isLostOrAfter = isLicLostOrAfterStage(title);
 
   const renderItem = useCallback(
     (index) => {
@@ -4169,7 +4606,7 @@ const LicitacaoColumn = memo(function LicitacaoColumn({
     <div
       ref={setNodeRef}
       data-column-title={title}
-      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''}`}
+      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
     >
       <div className="flex flex-col gap-1.5 pb-2 border-b border-line bg-bg2 sticky top-0 z-10">
         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -7154,8 +7591,18 @@ function App() {
   const [checklistModalItemId, setChecklistModalItemId] = useState(null);
   const [newItemRequirementForm, setNewItemRequirementForm] = useState({});
   const [itemRequirementCostInputMap, setItemRequirementCostInputMap] = useState({});
+  // Assistente IA do checklist por item: { open, messages, proposal, loading, error, applyMode, draftText }
+  const [itemChecklistAiMap, setItemChecklistAiMap] = useState({});
+  // Colapso de seções do checklist: `${itemId}::${sectionKey}` -> true se colapsado
+  const [checklistSectionCollapsed, setChecklistSectionCollapsed] = useState({});
+  // Edição inline do nome da seção: { itemId, groupKey, isProposal, value }
+  const [checklistSectionEditing, setChecklistSectionEditing] = useState(null);
   const [itemQuantityInputMap, setItemQuantityInputMap] = useState({});
   const [itemReferenceInputMap, setItemReferenceInputMap] = useState({});
+  // Evita “comer letras” no checklist: seq por req + debounce de PUT
+  const itemReqWriteSeqRef = useRef({});
+  const itemReqDebounceRef = useRef({});
+  const itemRequirementsMapRef = useRef({});
   const [contactLinkForm, setContactLinkForm] = useState({ contact_id: '', papel: '', observacao: '' });
   const [contactLinkQuery, setContactLinkQuery] = useState('');
   const [selectedComments, setSelectedComments] = useState([]);
@@ -9681,25 +10128,8 @@ function App() {
   );
 
   const filteredLicitacaoOpportunities = useMemo(() => {
-    const search = normalizeText(licitacaoSearch);
     // Keep source order so drag-and-drop can open gaps between cards (Trello-like).
-    return licitacaoOpportunities.filter(item => {
-      if (!search) {
-        return true;
-      }
-      const values = [
-        item.titulo,
-        item.orgao_nome,
-        item.uasg_codigo,
-        item.numero_edital,
-        item.numero_processo_sei,
-        item.codigo_item_catalogo,
-        item.intermediario_razao_social,
-      ]
-        .filter(Boolean)
-        .map(value => normalizeText(value));
-      return values.some(value => value.includes(search));
-    });
+    return licitacaoOpportunities.filter((item) => licitacaoMatchesQuery(item, licitacaoSearch));
   }, [licitacaoOpportunities, licitacaoSearch]);
 
   const opportunitiesByColumnPrevRef = useRef(Object.create(null));
@@ -11911,6 +12341,8 @@ function App() {
       setItemRequirementCostInputMap({});
       setItemQuantityInputMap({});
       setItemReferenceInputMap({});
+      setItemChecklistAiMap({});
+      setChecklistSectionCollapsed({});
 
       const items = Array.isArray(itemsResponse.data) ? itemsResponse.data : [];
       setSelectedItems(items);
@@ -11931,6 +12363,7 @@ function App() {
       setItemRequirementCostInputMap({});
       setItemQuantityInputMap({});
       setItemReferenceInputMap({});
+      setItemChecklistAiMap({});
     }
   };
 
@@ -12016,6 +12449,7 @@ function App() {
       setSelectedCommercialRequirements([]);
       setSelectedItems([]);
       setItemRequirementsMap({});
+      setItemChecklistAiMap({});
       setSelectedLinkedContacts([]);
       setSelectedComments([]);
       setContactLinkQuery('');
@@ -12105,16 +12539,84 @@ function App() {
     }
   };
 
-  const updateItem = async (itemId, changes) => {
+  const itemWriteSeqRef = useRef({});
+  const itemWriteDebounceRef = useRef({});
+  const selectedItemsRef = useRef([]);
+  selectedItemsRef.current = selectedItems;
+
+  const updateItem = (itemId, changes, options = {}) => {
     if (!selectedOpportunity) {
       return;
     }
-    try {
-      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`, changes);
-      setSelectedItems(prev => prev.map(item => (item.id === itemId ? response.data : item)));
-    } catch (error) {
-      console.error('Error updating item:', error);
+    const keys = Object.keys(changes || {});
+    if (!keys.length) return;
+
+    // Otimista: UI responde na hora
+    setSelectedItems((prev) => prev.map((item) => (item.id === itemId ? { ...item, ...changes } : item)));
+
+    const textOnly = keys.every((k) => k === 'descricao' || k === 'modelo_produto' || k === 'numero_item' || k === 'unidade');
+    const immediate = options.immediate === true || !textOnly;
+    const writeKey = String(itemId);
+
+    const persist = async () => {
+      const seq = (itemWriteSeqRef.current[writeKey] || 0) + 1;
+      itemWriteSeqRef.current[writeKey] = seq;
+      const latest = selectedItemsRef.current.find((it) => it.id === itemId);
+      const payload = latest
+        ? {
+            descricao: latest.descricao,
+            modelo_produto: latest.modelo_produto,
+            numero_item: latest.numero_item,
+            quantidade: latest.quantidade,
+            unidade: latest.unidade,
+            valor_referencia: latest.valor_referencia,
+            valor_proposta: latest.valor_proposta,
+            custo_total_item: latest.custo_total_item,
+            prazo_entrega_dias: latest.prazo_entrega_dias,
+            status_participacao: latest.status_participacao,
+            ...changes,
+          }
+        : changes;
+      try {
+        const response = await axios.put(
+          `/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}`,
+          payload
+        );
+        if (itemWriteSeqRef.current[writeKey] !== seq) return;
+        setSelectedItems((prev) => prev.map((item) => {
+          if (item.id !== itemId) return item;
+          const local = selectedItemsRef.current.find((it) => it.id === itemId);
+          if (!local) return response.data;
+          // Não deixa resposta atrasada apagar o que o usuário já digitou
+          return {
+            ...response.data,
+            descricao: local.descricao,
+            modelo_produto: local.modelo_produto,
+            numero_item: local.numero_item,
+            unidade: local.unidade,
+            quantidade: local.quantidade,
+            valor_referencia: local.valor_referencia,
+          };
+        }));
+      } catch (error) {
+        if (itemWriteSeqRef.current[writeKey] === seq) {
+          console.error('Error updating item:', error);
+        }
+      }
+    };
+
+    if (itemWriteDebounceRef.current[writeKey]) {
+      clearTimeout(itemWriteDebounceRef.current[writeKey]);
+      itemWriteDebounceRef.current[writeKey] = null;
     }
+    if (immediate) {
+      void persist();
+      return;
+    }
+    itemWriteDebounceRef.current[writeKey] = setTimeout(() => {
+      itemWriteDebounceRef.current[writeKey] = null;
+      void persist();
+    }, 400);
   };
 
   const setItemNumericInput = (type, itemId, value) => {
@@ -12213,6 +12715,7 @@ function App() {
     try {
       const response = await axios.post(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements`, {
         requisito: form.requisito,
+        secao: form.secao || null,
         status: form.status || 'verificar',
         observacao: form.observacao || null,
         valor_ofertado: form.custo_subitem ? parseCurrency(form.custo_subitem) : null,
@@ -12224,26 +12727,110 @@ function App() {
       }));
       setNewItemRequirementForm(prev => ({
         ...prev,
-        [itemId]: { requisito: '', status: 'verificar', observacao: '', custo_subitem: '' },
+        [itemId]: {
+          requisito: '',
+          secao: form.secao || '',
+          status: 'verificar',
+          observacao: '',
+          custo_subitem: '',
+        },
       }));
     } catch (error) {
       console.error('Error adding item requirement:', error);
     }
   };
 
-  const updateItemRequirement = async (itemId, requirementId, changes) => {
+  // Mantém ref espelhando o map para flush debounced com o valor mais recente
+  itemRequirementsMapRef.current = itemRequirementsMap;
+
+  /**
+   * Atualiza requisito do checklist.
+   * - Sempre otimista no estado local (digitação fluida).
+   * - Texto (requisito/observacao): debounced PUT; respostas antigas são ignoradas.
+   * - Status/custo/seção: PUT imediato.
+   * Isso evita o bug clássico de “comer letras” por race no axios.
+   */
+  const updateItemRequirement = (itemId, requirementId, changes, options = {}) => {
     if (!selectedOpportunity) {
       return;
     }
-    try {
-      const response = await axios.put(`/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`, changes);
-      setItemRequirementsMap(prev => ({
-        ...prev,
-        [itemId]: (prev[itemId] || []).map(item => (item.id === requirementId ? response.data : item)),
-      }));
-    } catch (error) {
-      console.error('Error updating item requirement:', error);
+    const keys = Object.keys(changes || {});
+    if (!keys.length) return;
+
+    // 1) UI imediata
+    setItemRequirementsMap((prev) => ({
+      ...prev,
+      [itemId]: (prev[itemId] || []).map((row) => (
+        row.id === requirementId ? { ...row, ...changes } : row
+      )),
+    }));
+
+    const writeKey = `${itemId}:${requirementId}`;
+    const textOnly = keys.every((k) => k === 'requisito' || k === 'observacao');
+    const immediate = options.immediate === true || !textOnly;
+
+    const persist = async () => {
+      const seq = (itemReqWriteSeqRef.current[writeKey] || 0) + 1;
+      itemReqWriteSeqRef.current[writeKey] = seq;
+      // No flush, manda o snapshot local mais recente do requisito (não só o "changes" antigo)
+      const latest = (itemRequirementsMapRef.current[itemId] || []).find((r) => r.id === requirementId);
+      const payload = latest
+        ? {
+            requisito: latest.requisito,
+            observacao: latest.observacao,
+            status: latest.status,
+            secao: latest.secao,
+            valor_ofertado: latest.valor_ofertado,
+            valor_referencia: latest.valor_referencia,
+            ordem: latest.ordem,
+            ...changes,
+          }
+        : changes;
+      try {
+        const response = await axios.put(
+          `/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/${requirementId}`,
+          payload
+        );
+        // Resposta velha? descarta (evita sobrescrever o que o usuário já digitou)
+        if (itemReqWriteSeqRef.current[writeKey] !== seq) {
+          return;
+        }
+        setItemRequirementsMap((prev) => ({
+          ...prev,
+          [itemId]: (prev[itemId] || []).map((row) => {
+            if (row.id !== requirementId) return row;
+            // Preserva campos de texto locais se o usuário digitou depois deste request
+            const local = (itemRequirementsMapRef.current[itemId] || []).find((r) => r.id === requirementId);
+            if (!local) return response.data;
+            return {
+              ...response.data,
+              requisito: local.requisito,
+              observacao: local.observacao,
+              status: local.status,
+              secao: local.secao ?? response.data.secao,
+              valor_ofertado: local.valor_ofertado,
+            };
+          }),
+        }));
+      } catch (error) {
+        if (itemReqWriteSeqRef.current[writeKey] === seq) {
+          console.error('Error updating item requirement:', error);
+        }
+      }
+    };
+
+    if (itemReqDebounceRef.current[writeKey]) {
+      clearTimeout(itemReqDebounceRef.current[writeKey]);
+      itemReqDebounceRef.current[writeKey] = null;
     }
+    if (immediate) {
+      void persist();
+      return;
+    }
+    itemReqDebounceRef.current[writeKey] = setTimeout(() => {
+      itemReqDebounceRef.current[writeKey] = null;
+      void persist();
+    }, 400);
   };
 
   const setItemRequirementCostInput = (itemId, requirementId, value) => {
@@ -12289,6 +12876,276 @@ function App() {
       });
     } catch (error) {
       console.error('Error deleting item requirement:', error);
+    }
+  };
+
+  const emptyItemChecklistAiState = () => ({
+    open: false,
+    messages: [],
+    proposal: null,
+    loading: false,
+    error: null,
+    applyMode: 'replace',
+    draftText: '',
+    applying: false,
+    // Fluxo guiado: extract → evaluate → ready (aplicar)
+    phase: 'extract',
+  });
+
+  const patchItemChecklistAi = (itemId, patch) => {
+    setItemChecklistAiMap(prev => {
+      const current = prev[itemId] || emptyItemChecklistAiState();
+      const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
+      return { ...prev, [itemId]: next };
+    });
+  };
+
+  const toggleItemChecklistAi = (itemId) => {
+    patchItemChecklistAi(itemId, (current) => ({
+      ...current,
+      open: !current.open,
+    }));
+  };
+
+  const sendItemChecklistAi = async (itemId, options = {}) => {
+    if (!selectedOpportunity) return;
+    const state = itemChecklistAiMap[itemId] || emptyItemChecklistAiState();
+    const text = String(state.draftText || '').trim();
+    const intent = options.intent
+      || (state.phase === 'evaluate' || state.phase === 'ready' ? 'evaluate' : 'extract');
+
+    // Avaliar: modelo do item basta. Extrair/revisar: texto OU checklist/prévia existente (para pedir revisão sem colar de novo)
+    const itemRow = (selectedItems || []).find((it) => String(it.id) === String(itemId));
+    const modeloItem = String(itemRow?.modelo_produto || '').trim();
+    const hasLiveOrProposal = (itemRequirementsMap[itemId] || []).length > 0
+      || !!(state.proposal?.requirements?.length);
+    if (!text && !(intent === 'evaluate' && modeloItem) && !(intent === 'extract' && hasLiveOrProposal)) return;
+    if (state.loading) return;
+
+    const liveForSeed = itemRequirementsMap[itemId] || [];
+    const hasExistingChecklist = liveForSeed.length > 0 || !!(state.proposal?.requirements?.length);
+
+    let contentForAi = text;
+    let contentForUi = text;
+    if (intent === 'extract') {
+      contentForAi = [
+        hasExistingChecklist
+          ? 'INTENÇÃO: REVISAR/EXTRAIR requisitos (passo 1).'
+          : 'INTENÇÃO: EXTRAIR requisitos do edital abaixo.',
+        'NÃO avalie conformidade com produto agora. status de novos/alterados sem julgamento de modelo = verificar (pode manter status ok/nao_ok já existentes se o texto do requisito não mudou).',
+        'Ignore comparação de produto neste passo (isso é o passo 2).',
+        hasExistingChecklist
+          ? 'Já existe checklist/prévia: pode REVISAR, ADICIONAR, REMOVER, reordenar ou reextrair conforme o pedido/texto do usuário. Mantenha ids dos requisitos que permanecerem. mode_hint replace se reextrair tudo; patch se só ajustar; append se só acrescentar.'
+          : 'Gere a lista completa a partir do texto.',
+        '',
+        text || (hasExistingChecklist
+          ? '(sem texto novo — revise a prévia/checklist atual conforme o histórico da conversa)'
+          : ''),
+      ].filter(Boolean).join('\n');
+      contentForUi = text || (hasExistingChecklist ? 'Revisar checklist/prévia atual' : text);
+    } else if (intent === 'evaluate') {
+      const refParts = [];
+      if (modeloItem) refParts.push(`Modelo no campo do item: ${modeloItem}`);
+      if (text) refParts.push(text);
+      contentForAi = [
+        'INTENÇÃO: AVALIAR conformidade da prévia/checklist já extraída.',
+        'NÃO reextrair o edital. NÃO inventar requisitos novos (a menos que eu peça explicitamente).',
+        'Mantenha seções, textos e ordem; preencha status (ok/nao_ok/verificar) e observacao curta.',
+        'Use a referência de produto abaixo (modelo, ficha colada e/ou URL).',
+        '',
+        refParts.join('\n\n') || '(sem referência — use só o que souber do modelo do item)',
+      ].join('\n');
+      contentForUi = text
+        ? (modeloItem ? `Avaliar com: ${modeloItem}\n${text}` : `Avaliar com:\n${text}`)
+        : `Avaliar com modelo do item: ${modeloItem}`;
+    }
+
+    const userMessage = { role: 'user', content: contentForUi };
+    // Histórico enviado à API usa o prompt com intenção (última msg user enriquecida)
+    const historyForApi = [
+      ...(state.messages || []).map((m) => ({ role: m.role, content: m.content })),
+      { role: 'user', content: contentForAi },
+    ];
+    const nextMessagesUi = [...(state.messages || []), userMessage];
+    patchItemChecklistAi(itemId, {
+      messages: nextMessagesUi,
+      draftText: '',
+      loading: true,
+      error: null,
+      open: true,
+      phase: intent === 'evaluate' ? 'evaluate' : 'extract',
+    });
+
+    // Sem prévia: manda o checklist gravado (com ids) — avaliar só status; extrair/revisar pode editar a lista
+    let proposalPayload = state.proposal || null;
+    if (!proposalPayload && liveForSeed.length) {
+      proposalPayload = {
+        mode_hint: intent === 'evaluate' ? 'patch' : 'replace',
+        modelo_produto: modeloItem || null,
+        requirements: liveForSeed.map((r, index) => ({
+          id: r.id,
+          secao: r.secao || null,
+          requisito: r.requisito,
+          status: r.status || 'verificar',
+          observacao: r.observacao || '',
+          ordem: r.ordem != null ? r.ordem : index,
+        })),
+      };
+    }
+
+    try {
+      const response = await axios.post(
+        `/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/ai/chat`,
+        {
+          messages: historyForApi,
+          proposal: proposalPayload,
+          include_current_checklist: true,
+          intent,
+          modelo_produto_hint: modeloItem || null,
+        },
+        { timeout: 120000 }
+      );
+      const data = response.data || {};
+      const proposal = data.proposal || null;
+      const modeHint = proposal?.mode_hint;
+      const hasIds = (proposal?.requirements || []).some((r) => r.id != null);
+      const applyMode = intent === 'evaluate' && (hasIds || proposalPayload?.mode_hint === 'patch')
+        ? 'patch'
+        : (['replace', 'append', 'patch'].includes(modeHint) ? modeHint : (state.applyMode || 'replace'));
+      const sourcesNote = Array.isArray(data.sources) && data.sources.length
+        ? data.sources
+          .map((s) => (s.ok ? `✓ ${s.url} (${s.chars} chars)` : `✗ ${s.url}: ${s.error || 'falha'}`))
+          .join('\n')
+        : '';
+      let assistantContent = data.assistant_message || 'Prévia gerada.';
+      if (sourcesNote) {
+        assistantContent = `${assistantContent}\n\nFontes:\n${sourcesNote}`;
+      }
+      const reqCount = Array.isArray(proposal?.requirements) ? proposal.requirements.length : 0;
+      // Caminho usual: após extrair lista com sucesso, sugere modo produto (usuário ainda pode aplicar/ficar na lista)
+      let nextPhase = intent === 'evaluate' ? 'evaluate' : 'extract';
+      if (intent === 'extract' && reqCount > 0) nextPhase = 'evaluate';
+      if (intent === 'extract' && reqCount === 0) nextPhase = 'extract';
+
+      patchItemChecklistAi(itemId, {
+        messages: [...nextMessagesUi, { role: 'assistant', content: assistantContent }],
+        proposal,
+        applyMode,
+        loading: false,
+        error: null,
+        phase: nextPhase,
+      });
+    } catch (error) {
+      console.error('Error checklist AI chat:', error);
+      const detail = error?.response?.data?.detail || error?.response?.data?.error || error.message;
+      patchItemChecklistAi(itemId, {
+        messages: nextMessagesUi,
+        loading: false,
+        error: detail || 'Falha ao consultar a IA',
+      });
+    }
+  };
+
+  const updateItemChecklistAiProposalReq = (itemId, index, changes) => {
+    patchItemChecklistAi(itemId, (current) => {
+      const proposal = current.proposal;
+      if (!proposal || !Array.isArray(proposal.requirements)) return current;
+      const requirements = proposal.requirements.map((req, i) => (
+        i === index ? { ...req, ...changes } : req
+      ));
+      return { ...current, proposal: { ...proposal, requirements } };
+    });
+  };
+
+  const removeItemChecklistAiProposalReq = (itemId, index) => {
+    patchItemChecklistAi(itemId, (current) => {
+      const proposal = current.proposal;
+      if (!proposal || !Array.isArray(proposal.requirements)) return current;
+      return {
+        ...current,
+        proposal: {
+          ...proposal,
+          requirements: proposal.requirements.filter((_, i) => i !== index),
+        },
+      };
+    });
+  };
+
+  const discardItemChecklistAiProposal = (itemId) => {
+    patchItemChecklistAi(itemId, { proposal: null, error: null, phase: 'extract' });
+  };
+
+  const applyItemChecklistAiProposal = async (itemId) => {
+    if (!selectedOpportunity) return;
+    const state = itemChecklistAiMap[itemId] || emptyItemChecklistAiState();
+    const proposal = state.proposal;
+    if (!proposal || !Array.isArray(proposal.requirements) || !proposal.requirements.length) return;
+    if (state.applying) return;
+
+    const mode = ['replace', 'append', 'patch'].includes(state.applyMode)
+      ? state.applyMode
+      : (proposal.mode_hint || 'replace');
+
+    patchItemChecklistAi(itemId, { applying: true, error: null });
+    try {
+      const payload = {
+        mode,
+        requirements: proposal.requirements.map((req, index) => ({
+          id: req.id || undefined,
+          secao: req.secao || null,
+          requisito: req.requisito,
+          status: req.status || 'verificar',
+          observacao: req.observacao || null,
+          valor_ofertado: req.valor_ofertado != null ? req.valor_ofertado : null,
+          ordem: req.ordem != null ? req.ordem : index,
+        })),
+      };
+      if (proposal.modelo_produto) {
+        payload.modelo_produto = proposal.modelo_produto;
+      }
+      const response = await axios.post(
+        `/api/licitacoes/opportunities/${selectedOpportunity.id}/items/${itemId}/requirements/bulk`,
+        payload
+      );
+      const data = response.data || {};
+      setItemRequirementsMap(prev => ({
+        ...prev,
+        [itemId]: Array.isArray(data.requirements) ? data.requirements : [],
+      }));
+      if (data.item) {
+        setSelectedItems(prev => prev.map(item => (item.id === itemId ? { ...item, ...data.item } : item)));
+      } else if (proposal.modelo_produto) {
+        setSelectedItems(prev => prev.map(item => (
+          item.id === itemId ? { ...item, modelo_produto: proposal.modelo_produto } : item
+        )));
+      }
+      const appliedList = Array.isArray(data.requirements) ? data.requirements : payload.requirements;
+      const hadEvaluation = appliedList.some((r) => r.status === 'ok' || r.status === 'nao_ok');
+      // Não força ordem: permanece no modo atual (lista ou produto)
+      const stayPhase = state.phase === 'extract' ? 'extract' : 'evaluate';
+      patchItemChecklistAi(itemId, {
+        applying: false,
+        proposal: null,
+        error: null,
+        phase: stayPhase,
+        applyMode: hadEvaluation ? (state.applyMode || 'replace') : 'patch',
+        messages: [
+          ...(state.messages || []),
+          {
+            role: 'assistant',
+            content: hadEvaluation
+              ? `Aplicado ao checklist (${mode}): ${payload.requirements.length} requisito(s) com avaliação. Pode reavaliar no modo produto ou revisar a lista no modo lista.`
+              : `Aplicado ao checklist (${mode}): ${payload.requirements.length} requisito(s). Pode aplicar de novo após revisar a lista, ou usar o modo produto para marcar OK/X/?.`,
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Error applying checklist AI proposal:', error);
+      const detail = error?.response?.data?.error || error.message;
+      patchItemChecklistAi(itemId, {
+        applying: false,
+        error: detail || 'Falha ao aplicar a prévia',
+      });
     }
   };
 
@@ -13328,6 +14185,7 @@ function App() {
         id: contact.id,
         label: contact.company_name || contact.name || `Contato #${contact.id}`,
         sublabel: [
+          'CRM',
           contact.company_name && contact.name ? contact.name : null,
           stage || null,
           contact.agent_name ? `Agente: ${contact.agent_name}` : null,
@@ -13337,9 +14195,30 @@ function App() {
         kind: 'contact',
       });
     });
-    // Prefer name starts-with, then shorter labels.
+    licitacaoOpportunities.forEach((item) => {
+      if (!licitacaoMatchesQuery(item, term)) return;
+      scored.push({
+        id: item.id,
+        label: item.titulo || `Licitação #${item.id}`,
+        sublabel: [
+          'Licitação',
+          item.orgao_nome || null,
+          item.numero_edital ? `Edital ${item.numero_edital}` : null,
+          item.fase || null,
+        ].filter(Boolean).join(' · '),
+        opportunity: item,
+        kind: 'licitacao',
+      });
+    });
+    // Prefer name starts-with, then shorter labels. Digit-heavy queries rank licitações first.
     const q = normalizeText(term);
+    const digitQ = term.replace(/\D/g, '');
+    const preferLicitacao = digitQ.length >= 3;
     scored.sort((a, b) => {
+      if (preferLicitacao && a.kind !== b.kind) {
+        if (a.kind === 'licitacao') return -1;
+        if (b.kind === 'licitacao') return 1;
+      }
       const aName = normalizeText(a.label);
       const bName = normalizeText(b.label);
       const aStart = aName.startsWith(q) ? 0 : 1;
@@ -13347,17 +14226,32 @@ function App() {
       if (aStart !== bStart) return aStart - bStart;
       return aName.length - bName.length;
     });
-    return scored.slice(0, 8);
-  }, [globalSearchQ, contacts, leadColumns, customerColumns]);
+    return scored.slice(0, 10);
+  }, [globalSearchQ, contacts, leadColumns, customerColumns, licitacaoOpportunities]);
 
   const openGlobalSearchResult = useCallback((result) => {
     if (!result) return;
     setGlobalSearchOpen(false);
+    if (result.kind === 'licitacao') {
+      const term = globalSearchQ.trim();
+      setActiveView('Licitações');
+      setLicitacaoSubview('board');
+      setLicitacaoSearch(term || result.label || '');
+      setLicitacaoSearchFocusIndex(0);
+      const opp = result.opportunity
+        || licitacaoOpportunities.find((item) => String(item.id) === String(result.id));
+      if (opp) {
+        openOpportunity(opp);
+      } else {
+        setFocusedSearchOpportunityId(result.id);
+      }
+      return;
+    }
     pendingBoardFocusContactIdRef.current = result.id;
     setActiveTab(result.tab === 'customers' ? 'customers' : 'leads');
     setActiveView('Board');
     setSearchQuery(globalSearchQ.trim() || result.label);
-  }, [globalSearchQ]);
+  }, [globalSearchQ, licitacaoOpportunities, openOpportunity]);
 
   const runGlobalSearchToRfb = useCallback(() => {
     const term = globalSearchQ.trim();
@@ -13374,6 +14268,16 @@ function App() {
     if (!term) return;
     setSearchQuery(term);
     setActiveView('Board');
+    setGlobalSearchOpen(false);
+  }, [globalSearchQ]);
+
+  const runGlobalSearchToLicitacoes = useCallback(() => {
+    const term = globalSearchQ.trim();
+    if (!term) return;
+    setLicitacaoSearch(term);
+    setLicitacaoSearchFocusIndex(0);
+    setActiveView('Licitações');
+    setLicitacaoSubview('board');
     setGlobalSearchOpen(false);
   }, [globalSearchQ]);
 
@@ -13950,7 +14854,7 @@ function App() {
                       <MagnifyingGlassIcon className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
                       <input
                         type="search"
-                        placeholder="Buscar no CRM, funil ou CNPJ…"
+                        placeholder="CRM, licitações, edital, órgão ou CNPJ…"
                         value={globalSearchQ}
                         onChange={(event) => {
                           setGlobalSearchQ(event.target.value);
@@ -13959,7 +14863,8 @@ function App() {
                         onFocus={() => setGlobalSearchOpen(true)}
                         onKeyDown={(event) => {
                           const term = globalSearchQ.trim();
-                          const optionCount = globalSearchResults.length + 2; // contacts + funil + RFB
+                          // results + funil + licitações + RFB
+                          const optionCount = globalSearchResults.length + 3;
                           if (event.key === 'Escape') {
                             setGlobalSearchOpen(false);
                             event.currentTarget.blur();
@@ -13986,6 +14891,10 @@ function App() {
                           }
                           if (globalSearchHighlight === globalSearchResults.length) {
                             runGlobalSearchToBoard();
+                            return;
+                          }
+                          if (globalSearchHighlight === globalSearchResults.length + 1) {
+                            runGlobalSearchToLicitacoes();
                             return;
                           }
                           // Default / last option: RFB (also when no pipeline hits).
@@ -14020,17 +14929,19 @@ function App() {
                             Resultados
                           </p>
                           {globalSearchResults.length === 0 ? (
-                            <p className="bg-surf px-3 pb-2 text-xs text-muted">Nenhum lead no funil com esse termo.</p>
+                            <p className="bg-surf px-3 pb-2 text-xs text-muted">
+                              Nenhum contato ou licitação no pipeline com esse termo.
+                            </p>
                           ) : (
                             <VerticalScrollArrows
                               className="min-h-0 flex-1 bg-surf"
                               contentClassName="py-1"
                               remeasureKey={globalSearchResults.length}
-                              style={{ maxHeight: Math.max(120, (globalSearchPos.maxHeight || 360) - 120) }}
+                              style={{ maxHeight: Math.max(120, (globalSearchPos.maxHeight || 360) - 150) }}
                             >
                               <ul role="presentation">
                                 {globalSearchResults.map((result, index) => (
-                                  <li key={`gs-${result.id}`}>
+                                  <li key={`gs-${result.kind}-${result.id}`}>
                                     <button
                                       type="button"
                                       role="option"
@@ -14068,8 +14979,21 @@ function App() {
                               role="option"
                               aria-selected={globalSearchHighlight === globalSearchResults.length + 1}
                               onMouseEnter={() => setGlobalSearchHighlight(globalSearchResults.length + 1)}
-                              onClick={runGlobalSearchToRfb}
+                              onClick={runGlobalSearchToLicitacoes}
                               className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition ${globalSearchHighlight === globalSearchResults.length + 1 ? 'bg-primary/15 text-ink' : 'text-ink hover:bg-surf2'}`}
+                            >
+                              <ScaleIcon className="h-4 w-4 shrink-0 text-muted" />
+                              <span className="min-w-0 flex-1 truncate">
+                                Buscar em licitações <span className="text-muted">“{globalSearchQ.trim()}”</span>
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={globalSearchHighlight === globalSearchResults.length + 2}
+                              onMouseEnter={() => setGlobalSearchHighlight(globalSearchResults.length + 2)}
+                              onClick={runGlobalSearchToRfb}
+                              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition ${globalSearchHighlight === globalSearchResults.length + 2 ? 'bg-primary/15 text-ink' : 'text-ink hover:bg-surf2'}`}
                             >
                               <DocumentMagnifyingGlassIcon className="h-4 w-4 shrink-0 text-muted" />
                               <span className="min-w-0 flex-1 truncate">
@@ -17412,105 +18336,149 @@ function App() {
 
               {selectedOpportunity && createPortal(
                 <div
-                  className="fixed inset-0 z-modal flex items-center justify-center p-3 sm:p-4"
+                  className="fixed inset-0 z-modal flex items-center justify-center p-2 sm:p-4"
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="licitacao-detail-title"
                 >
                   <button
                     type="button"
-                    className="absolute inset-0 bg-black/55"
+                    className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
                     aria-label="Fechar detalhes"
                     onClick={() => {
                       setSelectedOpportunity(null);
                       setContactLinkQuery('');
                     }}
                   />
-                  <div className="relative flex w-full max-w-5xl max-h-[min(92vh,920px)] flex-col overflow-hidden rounded-[16px] border border-line bg-surf shadow-lift dark:bg-[#141a28] dark:border-[#232c40]">
+                  {(() => {
+                    const oppReqAll = selectedItems.flatMap((it) => itemRequirementsMap[it.id] || []);
+                    const oppReqCounts = countRequirementStatuses(oppReqAll);
+                    const oppFieldLabel = 'mb-1 block text-[11px] font-medium text-muted';
+                    const oppSection = 'rounded-xl border border-line bg-surf p-3.5 sm:p-4 shadow-sm dark:bg-[#141a28] dark:border-[#232c40]';
+                    const oppSectionHead = 'mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-line/70 pb-2.5';
+                    const oppSectionTitle = 'text-[11px] font-semibold uppercase tracking-[0.07em] text-muted';
+                    return (
+                  <div className="relative flex w-full max-w-6xl max-h-[min(94vh,980px)] flex-col overflow-hidden rounded-2xl border border-line bg-bg2 shadow-[0_24px_64px_rgba(0,0,0,.35)] dark:bg-[#0e1220] dark:border-[#232c40]">
                     {/* Header */}
-                    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
-                      <div className="min-w-0 flex-1">
-                        <h3 id="licitacao-detail-title" className="font-display text-base font-semibold text-ink truncate sm:text-lg">
-                          {selectedOpportunity.titulo || 'Oportunidade'}
-                        </h3>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          {selectedOpportunity.fase && (
-                            <span className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] font-medium text-muted">
-                              {selectedOpportunity.fase}
+                    <div className="shrink-0 border-b border-line bg-surf dark:bg-[#141a28]">
+                      <div className="h-1 w-full bg-[linear-gradient(90deg,#7c5cff_0%,#38d6e6_55%,#f59e0b_100%)]" aria-hidden />
+                      <div className="flex items-start justify-between gap-3 px-4 py-3.5 sm:px-5">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
+                            Licitação · oportunidade
+                          </p>
+                          <h3 id="licitacao-detail-title" className="mt-0.5 font-display text-base font-semibold leading-snug text-ink sm:text-lg" style={{ textWrap: 'balance' }}>
+                            {selectedOpportunity.titulo || 'Oportunidade'}
+                          </h3>
+                          <p className="mt-1 truncate text-[12px] text-muted" title={[selectedOpportunity.orgao_nome, selectedOpportunity.numero_edital].filter(Boolean).join(' · ')}>
+                            {selectedOpportunity.orgao_nome || 'Órgão não informado'}
+                            {selectedOpportunity.numero_edital ? ` · Edital ${selectedOpportunity.numero_edital}` : ''}
+                            {selectedOpportunity.uasg_codigo ? ` · UASG ${selectedOpportunity.uasg_codigo}` : ''}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {selectedOpportunity.fase && (
+                              <span className={`${metaChip} !text-[11px] !px-2 !py-0.5 font-medium text-ink`}>
+                                {selectedOpportunity.fase}
+                              </span>
+                            )}
+                            <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold capitalize ${
+                              selectedOpportunity.status === 'suspenso'
+                                ? 'border-status-warning/35 bg-status-warning/10 text-status-warning'
+                                : 'border-status-success/30 bg-status-success/10 text-status-success'
+                            }`}>
+                              {selectedOpportunity.status === 'suspenso' ? 'Suspenso' : 'Ativo'}
                             </span>
-                          )}
-                          <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold capitalize ${
-                            selectedOpportunity.status === 'suspenso'
-                              ? 'border-status-warning/35 bg-status-warning/10 text-status-warning'
-                              : 'border-status-success/30 bg-status-success/10 text-status-success'
-                          }`}>
-                            {selectedOpportunity.status === 'suspenso' ? 'suspenso' : 'ativo'}
-                          </span>
-                          {selectedOpportunity.uasg_codigo && (
-                            <span className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 font-mono text-[11px] text-muted">
-                              UASG {selectedOpportunity.uasg_codigo}
+                            <span className="inline-flex items-center rounded-md border border-amber/30 bg-amber/[0.12] px-2 py-0.5 font-mono text-[11px] font-semibold text-amber">
+                              {formatCompactCurrency(selectedOpportunity.valor_oportunidade) || 'R$ 0'}
                             </span>
-                          )}
-                          <span className="inline-flex items-center rounded-md border border-amber/25 bg-amber/[0.12] px-2 py-0.5 font-mono text-[11px] font-semibold text-amber">
-                            {formatCompactCurrency(selectedOpportunity.valor_oportunidade) || 'R$ 0'}
-                          </span>
+                            {selectedItems.length > 0 && (
+                              <span className={`${metaChip} !text-[11px] !px-2 !py-0.5`}>
+                                {selectedItems.length} item{selectedItems.length === 1 ? '' : 's'}
+                              </span>
+                            )}
+                            {oppReqCounts.total > 0 && (
+                              <span className={`${metaChip} !text-[11px] !px-2 !py-0.5`}>
+                                <span className="text-status-success font-semibold">{oppReqCounts.ok}</span>
+                                <span className="text-muted">/</span>
+                                <span className="text-status-danger font-semibold">{oppReqCounts.nao_ok}</span>
+                                <span className="text-muted">/</span>
+                                <span className="text-status-warning font-semibold">{oppReqCounts.verificar}</span>
+                                <span className="ml-1 text-muted">checklist</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={deleteSelectedOpportunity}
-                          className="h-8 rounded-[10px] border border-status-danger/30 bg-status-danger/10 px-3 text-xs font-semibold text-status-danger transition hover:bg-status-danger/20"
-                        >
-                          Excluir
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedOpportunity(null);
-                            setContactLinkQuery('');
-                          }}
-                          className={iconBtn}
-                          aria-label="Fechar"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                          <button
+                            type="button"
+                            onClick={() => printLicitacaoConformidadeReport({
+                              opportunity: selectedOpportunity,
+                              items: selectedItems,
+                              requirementsByItem: itemRequirementsMap,
+                            })}
+                            className={`${btnSecondarySm} gap-1.5`}
+                            title="Relatório de conformidade (edital + produto + checklist) — imprimir ou PDF"
+                          >
+                            <PrinterIcon className="h-4 w-4" aria-hidden />
+                            <span className="hidden sm:inline">PDF</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={deleteSelectedOpportunity}
+                            className={`${btnDangerGhost} !h-8 !px-3 !text-xs`}
+                          >
+                            Excluir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedOpportunity(null);
+                              setContactLinkQuery('');
+                            }}
+                            className={`${iconBtn} !h-8 !w-8`}
+                            aria-label="Fechar"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
                     {/* Body */}
-                    <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="space-y-4 px-4 py-4 sm:px-5">
-                      <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4">
-                        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Dados do processo</h4>
+                    <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="space-y-3.5 p-3.5 sm:p-5">
+                      <section className={oppSection}>
+                        <div className={oppSectionHead}>
+                          <h4 className={oppSectionTitle}>Dados do processo</h4>
+                        </div>
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
                           <div className="min-w-0 sm:col-span-2 lg:col-span-6">
-                            <label className="mb-1 block text-xs font-medium text-muted">Título da oportunidade</label>
+                            <label className={oppFieldLabel}>Título da oportunidade</label>
                             <input className={`${input} w-full text-sm`} value={selectedOpportunity.titulo || ''} onChange={(event) => updateSelectedOpportunity({ titulo: event.target.value })} />
                           </div>
                           <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">Número do edital</label>
+                            <label className={oppFieldLabel}>Número do edital</label>
                             <input className={`${input} w-full text-sm`} value={selectedOpportunity.numero_edital || ''} onChange={(event) => updateSelectedOpportunity({ numero_edital: event.target.value })} />
                           </div>
                           <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">Processo SEI</label>
+                            <label className={oppFieldLabel}>Processo SEI</label>
                             <input className={`${input} w-full text-sm`} value={selectedOpportunity.numero_processo_sei || ''} onChange={(event) => updateSelectedOpportunity({ numero_processo_sei: event.target.value })} />
                           </div>
                           <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">UASG</label>
+                            <label className={oppFieldLabel}>UASG</label>
                             <input className={`${input} w-full text-sm`} value={selectedOpportunity.uasg_codigo || ''} onChange={(event) => updateSelectedOpportunity({ uasg_codigo: event.target.value })} />
                           </div>
-                          <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">Órgão</label>
+                          <div className="min-w-0 lg:col-span-5">
+                            <label className={oppFieldLabel}>Órgão</label>
                             <input className={`${input} w-full text-sm`} value={selectedOpportunity.orgao_nome || ''} onChange={(event) => updateSelectedOpportunity({ orgao_nome: event.target.value })} />
                           </div>
-                          <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">Fase</label>
+                          <div className="min-w-0 lg:col-span-2">
+                            <label className={oppFieldLabel}>Fase</label>
                             <select className={`${select} filter-select text-sm`} value={selectedOpportunity.fase || ''} onChange={(event) => updateSelectedOpportunity({ fase: event.target.value })}>
                               {licitacaoColumns.map(column => (<option key={column} value={column}>{column}</option>))}
                             </select>
                           </div>
-                          <div className="min-w-0 lg:col-span-3">
-                            <label className="mb-1 block text-xs font-medium text-muted">Status</label>
+                          <div className="min-w-0 lg:col-span-2">
+                            <label className={oppFieldLabel}>Status</label>
                             <select
                               className={`${select} filter-select text-sm`}
                               value={['ativo', 'suspenso'].includes(selectedOpportunity.status) ? selectedOpportunity.status : 'ativo'}
@@ -17521,7 +18489,7 @@ function App() {
                             </select>
                           </div>
                           <div className="min-w-0 sm:col-span-2 lg:col-span-4">
-                            <label className="mb-1 block text-xs font-medium text-muted">Valor da oportunidade</label>
+                            <label className={oppFieldLabel}>Valor da oportunidade</label>
                             <input
                               className={`${input} w-full text-sm disabled:opacity-60`}
                               inputMode="decimal"
@@ -17533,60 +18501,54 @@ function App() {
                               title={hasItemsDrivingOpportunityValue ? 'Valor calculado automaticamente pelos itens de participação.' : ''}
                             />
                             {hasItemsDrivingOpportunityValue && (
-                              <p className="mt-1 text-[11px] text-muted">Calculado automaticamente pelos itens (qtd × preço de referência).</p>
+                              <p className="mt-1 text-[11px] text-muted">Calculado pelos itens (qtd × preço ref.).</p>
                             )}
-                          </div>
-                          <div className="min-w-0 sm:col-span-2 lg:col-span-8 flex items-end">
-                            <p className="text-[12px] text-muted pb-2 truncate" title={selectedOpportunity.orgao_nome || ''}>
-                              {selectedOpportunity.orgao_nome
-                                ? `Órgão: ${selectedOpportunity.orgao_nome}`
-                                : 'Sem órgão informado'}
-                              {selectedOpportunity.numero_edital ? ` · Edital ${selectedOpportunity.numero_edital}` : ''}
-                            </p>
                           </div>
                         </div>
                       </section>
 
-                      <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4">
-                        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Links</h4>
+                      <section className={oppSection}>
+                        <div className={oppSectionHead}>
+                          <h4 className={oppSectionTitle}>Links externos</h4>
+                          <div className="flex flex-wrap gap-1.5">
+                            {selectedOpportunity.links?.edital && (
+                              <a href={selectedOpportunity.links.edital} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/15">Edital ↗</a>
+                            )}
+                            {selectedOpportunity.links?.sei && (
+                              <a href={selectedOpportunity.links.sei} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/15">SEI ↗</a>
+                            )}
+                            {selectedOpportunity.links?.pncp && (
+                              <a href={selectedOpportunity.links.pncp} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/15">PNCP ↗</a>
+                            )}
+                            {selectedOpportunity.links?.compras && (
+                              <a href={selectedOpportunity.links.compras} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/15">Compras.gov ↗</a>
+                            )}
+                          </div>
+                        </div>
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div className="min-w-0">
-                            <label className="mb-1 block text-xs font-medium text-muted">Link do edital</label>
+                            <label className={oppFieldLabel}>Link do edital</label>
                             <input className={`${input} w-full text-sm`} placeholder="https://..." value={selectedOpportunity.links?.edital || ''} onChange={(event) => updateSelectedOpportunity({ links: { ...selectedOpportunity.links, edital: event.target.value || null } })} />
                           </div>
                           <div className="min-w-0">
-                            <label className="mb-1 block text-xs font-medium text-muted">Link SEI</label>
+                            <label className={oppFieldLabel}>Link SEI</label>
                             <input className={`${input} w-full text-sm`} placeholder="https://..." value={selectedOpportunity.links?.sei || ''} onChange={(event) => updateSelectedOpportunity({ links: { ...selectedOpportunity.links, sei: event.target.value || null } })} />
                           </div>
                           <div className="min-w-0">
-                            <label className="mb-1 block text-xs font-medium text-muted">Link PNCP</label>
+                            <label className={oppFieldLabel}>Link PNCP</label>
                             <input className={`${input} w-full text-sm`} placeholder="https://..." value={selectedOpportunity.links?.pncp || ''} onChange={(event) => updateSelectedOpportunity({ links: { ...selectedOpportunity.links, pncp: event.target.value || null } })} />
                           </div>
                           <div className="min-w-0">
-                            <label className="mb-1 block text-xs font-medium text-muted">Link Compras.gov</label>
+                            <label className={oppFieldLabel}>Link Compras.gov</label>
                             <input className={`${input} w-full text-sm`} placeholder="https://..." value={selectedOpportunity.links?.compras || ''} onChange={(event) => updateSelectedOpportunity({ links: { ...selectedOpportunity.links, compras: event.target.value || null } })} />
                           </div>
                         </div>
-                        {(selectedOpportunity.links?.edital || selectedOpportunity.links?.sei || selectedOpportunity.links?.pncp || selectedOpportunity.links?.compras) && (
-                          <div className="mt-2.5 flex flex-wrap gap-2">
-                            {selectedOpportunity.links?.edital && (
-                              <a href={selectedOpportunity.links.edital} target="_blank" rel="noreferrer" className="text-[12px] font-medium text-primary hover:underline">Abrir edital ↗</a>
-                            )}
-                            {selectedOpportunity.links?.sei && (
-                              <a href={selectedOpportunity.links.sei} target="_blank" rel="noreferrer" className="text-[12px] font-medium text-primary hover:underline">Abrir SEI ↗</a>
-                            )}
-                            {selectedOpportunity.links?.pncp && (
-                              <a href={selectedOpportunity.links.pncp} target="_blank" rel="noreferrer" className="text-[12px] font-medium text-primary hover:underline">Abrir PNCP ↗</a>
-                            )}
-                            {selectedOpportunity.links?.compras && (
-                              <a href={selectedOpportunity.links.compras} target="_blank" rel="noreferrer" className="text-[12px] font-medium text-primary hover:underline">Abrir Compras.gov ↗</a>
-                            )}
-                          </div>
-                        )}
                       </section>
 
-                      <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4">
-                        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Datas importantes</h4>
+                      <section className={oppSection}>
+                        <div className={oppSectionHead}>
+                          <h4 className={oppSectionTitle}>Datas importantes</h4>
+                        </div>
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                           <div className="min-w-0">
                             <label className="mb-1 block text-xs font-medium text-muted">Publicação do aviso</label>
@@ -17639,12 +18601,12 @@ function App() {
                         </div>
                       </section>
 
-                      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                        <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4 flex flex-col min-h-0">
-                          <div className="mb-3 flex items-center justify-between gap-2">
-                            <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Checklist comercial</h4>
-                            <span className="text-[11px] tabular-nums text-muted">
-                              {selectedCommercialRequirements.filter(r => r.status === 'ok').length}/{selectedCommercialRequirements.length}
+                      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
+                        <section className={`${oppSection} flex min-h-0 flex-col`}>
+                          <div className={oppSectionHead}>
+                            <h4 className={oppSectionTitle}>Checklist comercial</h4>
+                            <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 text-[11px] tabular-nums text-muted">
+                              {selectedCommercialRequirements.filter(r => r.status === 'ok').length}/{selectedCommercialRequirements.length} OK
                             </span>
                           </div>
                           <div className="flex gap-2">
@@ -17689,8 +18651,13 @@ function App() {
                           </VerticalScrollArrows>
                         </section>
 
-                        <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4 flex flex-col min-h-0">
-                          <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Contatos Chatwoot</h4>
+                        <section className={`${oppSection} flex min-h-0 flex-col`}>
+                          <div className={oppSectionHead}>
+                            <h4 className={oppSectionTitle}>Contatos</h4>
+                            <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 text-[11px] tabular-nums text-muted">
+                              {selectedLinkedContacts.length}
+                            </span>
+                          </div>
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
                             <div className="min-w-0 sm:col-span-5">
                               <input
@@ -17754,17 +18721,32 @@ function App() {
                         </section>
                       </div>
 
-                      <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4">
-                        <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                      <section className={oppSection}>
+                        <div className={oppSectionHead}>
                           <div>
-                            <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Itens de participação</h4>
-                            <p className="mt-0.5 text-[11px] text-muted">Clique no item para expandir o checklist técnico</p>
+                            <h4 className={oppSectionTitle}>Itens de participação</h4>
+                            <p className="mt-0.5 text-[11px] text-muted">Expanda o item para o checklist técnico e o assistente de conformidade</p>
                           </div>
-                          <p className="text-[12px] text-muted">
-                            Total: <strong className="font-mono text-ink">{formatCurrency(itemsParticipationTotal) || 'R$ 0,00'}</strong>
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className={`${btnSecondaryXs} gap-1`}
+                              onClick={() => printLicitacaoConformidadeReport({
+                                opportunity: selectedOpportunity,
+                                items: selectedItems,
+                                requirementsByItem: itemRequirementsMap,
+                              })}
+                              title="Relatório para cliente: edital + produto + comparação OK/X/?"
+                            >
+                              <PrinterIcon className="h-3.5 w-3.5" aria-hidden />
+                              Relatório PDF
+                            </button>
+                            <span className="rounded-full border border-line bg-bg2 px-2.5 py-0.5 font-mono text-[12px] font-semibold text-ink">
+                              {formatCurrency(itemsParticipationTotal) || 'R$ 0,00'}
+                            </span>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                        <div className="mb-3 grid grid-cols-1 gap-2 rounded-xl border border-dashed border-line bg-bg2/50 p-2 sm:grid-cols-12">
                           <input className={`${input} h-8 w-full text-xs sm:col-span-2`} placeholder="Item #" value={newItemForm.numero_item} onChange={(event) => setNewItemForm(prev => ({ ...prev, numero_item: event.target.value }))} />
                           <input className={`${input} h-8 w-full text-xs sm:col-span-4`} placeholder="Descrição" value={newItemForm.descricao} onChange={(event) => setNewItemForm(prev => ({ ...prev, descricao: event.target.value }))} />
                           <input className={`${input} h-8 w-full text-xs sm:col-span-2`} placeholder="Modelo" value={newItemForm.modelo_produto} onChange={(event) => setNewItemForm(prev => ({ ...prev, modelo_produto: event.target.value }))} />
@@ -17773,16 +18755,16 @@ function App() {
                           <button type="button" className={`${btnPrimarySm} px-2 sm:col-span-1`} onClick={addItem}>Add</button>
                         </div>
 
-                        <div className="mt-3 space-y-2">
+                        <div className="space-y-2">
                           {selectedItems.map(item => {
                             const checklistStatus = getItemChecklistStatus(item.id);
                             const itemRequirements = itemRequirementsMap[item.id] || [];
                             const checklistCostTotal = itemRequirements.reduce((sum, req) => sum + (parseCurrency(req.valor_ofertado) || 0), 0);
                             const isExpanded = checklistModalItemId === item.id;
                             return (
-                              <div key={item.id} className={`overflow-hidden rounded-[12px] border ${isExpanded ? 'border-primary/45 bg-surf' : 'border-line bg-surf'}`}>
+                              <div key={item.id} className={`overflow-hidden rounded-xl border transition ${isExpanded ? 'border-primary/40 bg-surf shadow-sm ring-1 ring-primary/15' : 'border-line bg-bg2/30 hover:border-line hover:bg-surf'}`}>
                                 <div
-                                  className={`flex cursor-pointer items-center gap-2 p-2.5 transition hover:bg-bg2/60 ${isExpanded ? 'bg-primary/[0.06]' : ''}`}
+                                  className={`flex cursor-pointer items-center gap-2 px-3 py-2.5 transition ${isExpanded ? 'bg-primary/[0.07]' : 'hover:bg-bg2/50'}`}
                                   onClick={() => setChecklistModalItemId(isExpanded ? null : item.id)}
                                   onKeyDown={(event) => {
                                     if (event.key === 'Enter' || event.key === ' ') {
@@ -17794,10 +18776,15 @@ function App() {
                                   tabIndex={0}
                                 >
                                   <span className={`shrink-0 text-[10px] text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-                                  <strong className="shrink-0 text-xs text-primary">#{item.numero_item || '—'}</strong>
-                                  <span className={`min-w-0 flex-1 text-xs text-ink ${isExpanded ? 'whitespace-normal break-words' : 'truncate'}`}>{item.descricao || 'Sem descrição'}</span>
-                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${checklistStatus.className}`}>{checklistStatus.counts}</span>
-                                  <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:inline">{formatCurrency(getItemParticipationTotal(item)) || 'R$ 0'}</span>
+                                  <strong className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-bold text-primary">#{item.numero_item || '—'}</strong>
+                                  <div className="min-w-0 flex-1">
+                                    <span className={`block text-xs font-medium text-ink ${isExpanded ? 'whitespace-normal break-words' : 'truncate'}`}>{item.descricao || 'Sem descrição'}</span>
+                                    {item.modelo_produto && (
+                                      <span className="mt-0.5 block truncate text-[10px] text-muted">Modelo: {item.modelo_produto}</span>
+                                    )}
+                                  </div>
+                                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${checklistStatus.className}`}>{checklistStatus.counts}</span>
+                                  <span className="hidden shrink-0 font-mono text-[11px] font-semibold text-ink sm:inline">{formatCurrency(getItemParticipationTotal(item)) || 'R$ 0'}</span>
                                   <button
                                     type="button"
                                     className="shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold text-status-danger hover:bg-status-danger/10"
@@ -17808,8 +18795,8 @@ function App() {
                                 </div>
 
                                 {isExpanded && (
-                                  <div className="border-t border-line bg-bg2/40 p-3">
-                                    <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                                  <div className="border-t border-line bg-surf p-3 sm:p-3.5">
+                                    <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-line bg-bg2/40 p-2.5 sm:grid-cols-3 lg:grid-cols-6">
                                       <div className="min-w-0 col-span-2">
                                         <label className="mb-1 block text-[10px] font-medium text-muted">Descrição</label>
                                         <input className={`${input} h-7 w-full text-xs`} value={item.descricao || ''} onChange={(event) => updateItem(item.id, { descricao: event.target.value })} />
@@ -17846,64 +18833,739 @@ function App() {
                                       </div>
                                     </div>
 
-                                    <div className="border-t border-line pt-3">
-                                      <div className="mb-2 flex items-center justify-between gap-2">
-                                        <h5 className="text-xs font-semibold text-ink">Checklist técnico</h5>
-                                        <span className="text-[10px] text-muted">
-                                          {itemRequirements.filter(r => r.status === 'ok').length}/{itemRequirements.length} · {formatCurrency(checklistCostTotal) || 'R$ 0'}
-                                        </span>
-                                      </div>
-                                      <div className="mb-2 flex gap-2">
-                                        <input
-                                          className={`${input} h-7 min-w-0 flex-1 text-xs`}
-                                          placeholder="Novo requisito técnico..."
-                                          value={(newItemRequirementForm[item.id]?.requisito) || ''}
-                                          onClick={(e) => e.stopPropagation()}
-                                          onChange={(event) => setNewItemRequirementForm(prev => ({
+                                    <div className="border-t border-line pt-3" onClick={(e) => e.stopPropagation()}>
+                                      {(() => {
+                                        const statusCounts = countRequirementStatuses(itemRequirements);
+                                        const sectionGroups = groupRequirementsBySection(itemRequirements);
+                                        const sectionTitles = sectionGroups
+                                          .map((g) => g.secao)
+                                          .filter(Boolean);
+                                        const reqForm = newItemRequirementForm[item.id] || {
+                                          requisito: '',
+                                          secao: '',
+                                          status: 'verificar',
+                                          observacao: '',
+                                          custo_subitem: '',
+                                        };
+                                        const toggleSection = (sectionKey) => {
+                                          const k = `${item.id}::${sectionKey}`;
+                                          setChecklistSectionCollapsed((prev) => ({
                                             ...prev,
-                                            [item.id]: { ...(prev[item.id] || { status: 'verificar', observacao: '', custo_subitem: '' }), requisito: event.target.value },
-                                          }))}
-                                          onKeyDown={(event) => { if (event.key === 'Enter') addItemRequirement(item.id); }}
-                                        />
-                                        <button type="button" className={`${btnPrimaryXs} shrink-0 text-[10px]`} onClick={(e) => { e.stopPropagation(); addItemRequirement(item.id); }}>
-                                          Adicionar
-                                        </button>
-                                      </div>
-                                      <VerticalScrollArrows className="max-h-48" contentClassName="space-y-1 pr-0.5">
-                                        {itemRequirements.map((req, index) => (
-                                          <div
-                                            key={req.id}
-                                            className={`flex flex-wrap items-center gap-1.5 rounded-[10px] border p-1.5 sm:flex-nowrap ${
-                                              req.status === 'ok' ? 'border-status-success/30 bg-status-success/5'
-                                                : req.status === 'nao_ok' ? 'border-status-danger/30 bg-status-danger/5'
-                                                : 'border-line bg-surf'
-                                            }`}
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            <span className="w-5 shrink-0 text-center text-[10px] font-semibold text-muted">{index + 1}</span>
-                                            <div className="flex h-6 shrink-0 items-center gap-0.5 rounded border border-line bg-bg2 px-0.5">
-                                              <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'ok' ? 'bg-status-success text-white' : 'text-muted hover:bg-status-success/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'ok' })}>OK</button>
-                                              <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'nao_ok' ? 'bg-status-danger text-white' : 'text-muted hover:bg-status-danger/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'nao_ok' })}>X</button>
-                                              <button type="button" className={`h-5 w-6 rounded text-[9px] font-bold ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning text-white' : 'text-muted hover:bg-status-warning/10'}`} onClick={() => updateItemRequirement(item.id, req.id, { status: 'verificar' })}>?</button>
+                                            [k]: !prev[k],
+                                          }));
+                                        };
+                                        const isSectionCollapsed = (sectionKey) => !!checklistSectionCollapsed[`${item.id}::${sectionKey}`];
+
+                                        const matchesSection = (req, groupSecao) => {
+                                          const s = String(req?.secao || '').trim() || null;
+                                          return groupSecao ? s === groupSecao : !s;
+                                        };
+
+                                        const commitSectionRename = async (group, isProposal) => {
+                                          if (!checklistSectionEditing
+                                            || checklistSectionEditing.itemId !== item.id
+                                            || checklistSectionEditing.groupKey !== group.key
+                                            || !!checklistSectionEditing.isProposal !== !!isProposal) {
+                                            return;
+                                          }
+                                          const nextSecao = String(checklistSectionEditing.value || '').trim() || null;
+                                          const oldSecao = group.secao || null;
+                                          setChecklistSectionEditing(null);
+                                          if ((oldSecao || null) === (nextSecao || null)) return;
+
+                                          if (isProposal) {
+                                            patchItemChecklistAi(item.id, (current) => {
+                                              const requirements = (current.proposal?.requirements || []).map((req) => (
+                                                matchesSection(req, oldSecao) ? { ...req, secao: nextSecao } : req
+                                              ));
+                                              return {
+                                                ...current,
+                                                proposal: current.proposal
+                                                  ? { ...current.proposal, requirements }
+                                                  : current.proposal,
+                                              };
+                                            });
+                                            return;
+                                          }
+
+                                          const targets = (itemRequirementsMap[item.id] || []).filter((req) => matchesSection(req, oldSecao));
+                                          await Promise.all(
+                                            targets.map((req) => updateItemRequirement(item.id, req.id, { secao: nextSecao }))
+                                          );
+                                        };
+
+                                        const renderReqRow = (req, index, opts = {}) => {
+                                          const onStatus = opts.onStatus;
+                                          const onChange = opts.onChange;
+                                          const onDelete = opts.onDelete;
+                                          const isProposal = !!opts.isProposal;
+                                          return (
+                                            <div
+                                              key={req.id || `p-${index}`}
+                                              className={`group flex flex-wrap items-center gap-1.5 rounded-lg border px-2 py-1.5 sm:flex-nowrap ${
+                                                req.status === 'ok'
+                                                  ? 'border-status-success/25 bg-status-success/[0.06]'
+                                                  : req.status === 'nao_ok'
+                                                    ? 'border-status-danger/25 bg-status-danger/[0.06]'
+                                                    : 'border-line/80 bg-surf hover:border-line'
+                                              }`}
+                                            >
+                                              <span className="w-5 shrink-0 text-center text-[10px] font-medium tabular-nums text-muted">{index + 1}</span>
+                                              <div className="flex h-7 shrink-0 items-center gap-0.5 rounded-md border border-line bg-bg2 p-0.5">
+                                                <button
+                                                  type="button"
+                                                  title="Atende"
+                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'ok' ? 'bg-status-success text-white shadow-sm' : 'text-muted hover:bg-status-success/15 hover:text-status-success'}`}
+                                                  onClick={() => onStatus('ok')}
+                                                >
+                                                  OK
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  title="Não atende"
+                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'nao_ok' ? 'bg-status-danger text-white shadow-sm' : 'text-muted hover:bg-status-danger/15 hover:text-status-danger'}`}
+                                                  onClick={() => onStatus('nao_ok')}
+                                                >
+                                                  X
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  title="Verificar"
+                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning text-white shadow-sm' : 'text-muted hover:bg-status-warning/15 hover:text-status-warning'}`}
+                                                  onClick={() => onStatus('verificar')}
+                                                >
+                                                  ?
+                                                </button>
+                                              </div>
+                                              <input
+                                                className={`${input} h-7 min-w-0 flex-1 text-[11px] leading-snug`}
+                                                value={req.requisito || ''}
+                                                onChange={(event) => onChange({ requisito: event.target.value })}
+                                              />
+                                              <input
+                                                className={`${input} h-7 w-24 shrink-0 text-[10px] sm:w-28`}
+                                                placeholder="Obs"
+                                                value={req.observacao || ''}
+                                                onChange={(event) => onChange({ observacao: event.target.value })}
+                                              />
+                                              {!isProposal && (
+                                                <input
+                                                  className={`${input} h-7 w-[4.5rem] shrink-0 text-[10px]`}
+                                                  placeholder="Custo"
+                                                  inputMode="decimal"
+                                                  value={itemRequirementCostInputMap[`${item.id}:${req.id}`] ?? toPtBrDecimalInput(req.valor_ofertado)}
+                                                  onChange={(event) => setItemRequirementCostInput(item.id, req.id, event.target.value)}
+                                                  onBlur={() => commitItemRequirementCost(item.id, req.id, req.valor_ofertado)}
+                                                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                                                />
+                                              )}
+                                              <button
+                                                type="button"
+                                                className="h-7 w-7 shrink-0 rounded-md border border-transparent text-sm font-bold text-muted opacity-60 transition hover:border-status-danger/30 hover:bg-status-danger/10 hover:text-status-danger hover:opacity-100"
+                                                onClick={onDelete}
+                                                title="Remover"
+                                              >
+                                                ×
+                                              </button>
                                             </div>
-                                            <input className={`${input} h-6 min-w-0 flex-1 text-[11px]`} value={req.requisito || ''} onChange={(event) => updateItemRequirement(item.id, req.id, { requisito: event.target.value })} />
-                                            <input className={`${input} h-6 w-20 shrink-0 text-[11px] sm:w-24`} placeholder="Obs" value={req.observacao || ''} onChange={(event) => updateItemRequirement(item.id, req.id, { observacao: event.target.value })} />
-                                            <input
-                                              className={`${input} h-6 w-16 shrink-0 text-[11px] sm:w-20`}
-                                              placeholder="Custo"
-                                              inputMode="decimal"
-                                              value={itemRequirementCostInputMap[`${item.id}:${req.id}`] ?? toPtBrDecimalInput(req.valor_ofertado)}
-                                              onChange={(event) => setItemRequirementCostInput(item.id, req.id, event.target.value)}
-                                              onBlur={() => commitItemRequirementCost(item.id, req.id, req.valor_ofertado)}
-                                              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                                            />
-                                            <button type="button" className="h-6 w-6 shrink-0 rounded border border-status-danger/30 bg-status-danger/10 text-[10px] font-bold text-status-danger" onClick={() => deleteItemRequirement(item.id, req.id)}>×</button>
-                                          </div>
-                                        ))}
-                                        {itemRequirements.length === 0 && (
-                                          <p className="py-2 text-center text-[10px] text-muted">Nenhum requisito técnico.</p>
-                                        )}
-                                      </VerticalScrollArrows>
+                                          );
+                                        };
+
+                                        const renderSectionedList = (groups, { isProposal, maxH, getGlobalIndex }) => (
+                                          <VerticalScrollArrows className={maxH} contentClassName="space-y-2 pr-0.5">
+                                            {groups.length === 0 && (
+                                              <div className="rounded-lg border border-dashed border-line bg-bg2/40 px-3 py-6 text-center">
+                                                <p className="text-[11px] text-muted">
+                                                  {isProposal ? 'Prévia vazia.' : 'Nenhum requisito ainda.'}
+                                                </p>
+                                                {!isProposal && (
+                                                  <p className="mt-1 text-[10px] text-muted/80">
+                                                    Adicione manualmente ou use o Assistente IA para colar o edital.
+                                                  </p>
+                                                )}
+                                              </div>
+                                            )}
+                                            {groups.map((group) => {
+                                              const sc = countRequirementStatuses(group.items);
+                                              const collapsed = !isProposal && isSectionCollapsed(group.key);
+                                              const headerId = isProposal ? `proposal-${item.id}-${group.key}` : `live-${item.id}-${group.key}`;
+                                              const isEditingTitle = checklistSectionEditing
+                                                && checklistSectionEditing.itemId === item.id
+                                                && checklistSectionEditing.groupKey === group.key
+                                                && !!checklistSectionEditing.isProposal === !!isProposal;
+                                              const showAsSection = !!group.secao || groups.length > 1 || isEditingTitle;
+
+                                              // Lista plana (sem seções reais): não mostra cabeçalho "Geral" editável à toa
+                                              if (!showAsSection) {
+                                                return (
+                                                  <div key={headerId} className="space-y-1">
+                                                    {group.items.map((req) => {
+                                                      const globalIndex = getGlobalIndex(req);
+                                                      if (isProposal) {
+                                                        return renderReqRow(req, globalIndex, {
+                                                          isProposal: true,
+                                                          onStatus: (status) => updateItemChecklistAiProposalReq(item.id, globalIndex, { status }),
+                                                          onChange: (changes) => updateItemChecklistAiProposalReq(item.id, globalIndex, changes),
+                                                          onDelete: () => removeItemChecklistAiProposalReq(item.id, globalIndex),
+                                                        });
+                                                      }
+                                                      return renderReqRow(req, globalIndex, {
+                                                        onStatus: (status) => updateItemRequirement(item.id, req.id, { status }),
+                                                        onChange: (changes) => updateItemRequirement(item.id, req.id, changes),
+                                                        onDelete: () => deleteItemRequirement(item.id, req.id),
+                                                      });
+                                                    })}
+                                                  </div>
+                                                );
+                                              }
+
+                                              return (
+                                                <div key={headerId} className="overflow-hidden rounded-xl border border-line bg-bg2/30">
+                                                  <div className="flex w-full items-center gap-2 bg-bg2/60 px-2.5 py-2">
+                                                    {!isProposal && (
+                                                      <button
+                                                        type="button"
+                                                        className="shrink-0 p-0.5 text-[9px] text-muted"
+                                                        title={collapsed ? 'Expandir' : 'Recolher'}
+                                                        onClick={() => toggleSection(group.key)}
+                                                      >
+                                                        <span className={`inline-block transition-transform ${!collapsed ? 'rotate-90' : ''}`}>▶</span>
+                                                      </button>
+                                                    )}
+                                                    <div className="min-w-0 flex-1">
+                                                      {isEditingTitle ? (
+                                                        <input
+                                                          className={`${input} h-7 w-full text-[11px] font-semibold`}
+                                                          autoFocus
+                                                          value={checklistSectionEditing.value}
+                                                          placeholder="Nome da seção"
+                                                          onChange={(event) => setChecklistSectionEditing((prev) => (
+                                                            prev ? { ...prev, value: event.target.value } : prev
+                                                          ))}
+                                                          onBlur={() => commitSectionRename(group, isProposal)}
+                                                          onKeyDown={(event) => {
+                                                            if (event.key === 'Enter') {
+                                                              event.preventDefault();
+                                                              event.currentTarget.blur();
+                                                            }
+                                                            if (event.key === 'Escape') {
+                                                              event.preventDefault();
+                                                              setChecklistSectionEditing(null);
+                                                            }
+                                                          }}
+                                                          onClick={(event) => event.stopPropagation()}
+                                                        />
+                                                      ) : (
+                                                        <button
+                                                          type="button"
+                                                          className="block max-w-full truncate text-left text-[11px] font-semibold text-ink hover:text-primary hover:underline"
+                                                          title="Clique para editar o nome da seção"
+                                                          onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            setChecklistSectionEditing({
+                                                              itemId: item.id,
+                                                              groupKey: group.key,
+                                                              isProposal: !!isProposal,
+                                                              value: group.secao || '',
+                                                            });
+                                                          }}
+                                                        >
+                                                          {group.title}
+                                                        </button>
+                                                      )}
+                                                      <p className="text-[9px] text-muted">
+                                                        {sc.ok} OK · {sc.nao_ok} X · {sc.verificar} ? · {sc.total} item{sc.total === 1 ? '' : 's'}
+                                                      </p>
+                                                    </div>
+                                                    <span
+                                                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${
+                                                        sc.total > 0 && sc.ok === sc.total
+                                                          ? 'bg-status-success/15 text-status-success'
+                                                          : sc.nao_ok > 0
+                                                            ? 'bg-status-danger/15 text-status-danger'
+                                                            : 'bg-status-warning/15 text-status-warning'
+                                                      }`}
+                                                    >
+                                                      {sc.ok}/{sc.total}
+                                                    </span>
+                                                  </div>
+                                                  {(isProposal || !collapsed) && (
+                                                    <div className="space-y-1 border-t border-line/80 p-1.5">
+                                                      {group.items.map((req) => {
+                                                        const globalIndex = getGlobalIndex(req);
+                                                        if (isProposal) {
+                                                          return renderReqRow(req, globalIndex, {
+                                                            isProposal: true,
+                                                            onStatus: (status) => updateItemChecklistAiProposalReq(item.id, globalIndex, { status }),
+                                                            onChange: (changes) => updateItemChecklistAiProposalReq(item.id, globalIndex, changes),
+                                                            onDelete: () => removeItemChecklistAiProposalReq(item.id, globalIndex),
+                                                          });
+                                                        }
+                                                        return renderReqRow(req, globalIndex, {
+                                                          onStatus: (status) => updateItemRequirement(item.id, req.id, { status }),
+                                                          onChange: (changes) => updateItemRequirement(item.id, req.id, changes),
+                                                          onDelete: () => deleteItemRequirement(item.id, req.id),
+                                                        });
+                                                      })}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </VerticalScrollArrows>
+                                        );
+
+                                        const aiState = itemChecklistAiMap[item.id] || emptyItemChecklistAiState();
+                                        const proposalReqs = Array.isArray(aiState.proposal?.requirements)
+                                          ? aiState.proposal.requirements
+                                          : [];
+                                        const proposalGroups = groupRequirementsBySection(proposalReqs);
+                                        const proposalCounts = countRequirementStatuses(proposalReqs);
+                                        const proposalSectionCount = proposalGroups.filter((g) => g.secao).length;
+
+                                        return (
+                                          <>
+                                            <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                                              <div>
+                                                <h5 className="text-xs font-semibold tracking-tight text-ink">Checklist técnico</h5>
+                                                <p className="mt-0.5 text-[10px] text-muted">
+                                                  Organizado por seções do edital · custos opcionais por requisito
+                                                </p>
+                                              </div>
+                                              <div className="flex flex-wrap items-center gap-1.5">
+                                                <span className="rounded-full border border-status-success/25 bg-status-success/10 px-2 py-0.5 text-[10px] font-semibold text-status-success">
+                                                  {statusCounts.ok} OK
+                                                </span>
+                                                <span className="rounded-full border border-status-danger/25 bg-status-danger/10 px-2 py-0.5 text-[10px] font-semibold text-status-danger">
+                                                  {statusCounts.nao_ok} X
+                                                </span>
+                                                <span className="rounded-full border border-status-warning/25 bg-status-warning/10 px-2 py-0.5 text-[10px] font-semibold text-status-warning">
+                                                  {statusCounts.verificar} ?
+                                                </span>
+                                                <span className="rounded-full border border-line bg-surf px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted">
+                                                  {statusCounts.total} · {formatCurrency(checklistCostTotal) || 'R$ 0'}
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            <div className="mb-3 rounded-xl border border-line bg-surf p-2">
+                                              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-12">
+                                                <input
+                                                  className={`${input} h-8 text-xs sm:col-span-3`}
+                                                  list={`checklist-secoes-${item.id}`}
+                                                  placeholder="Seção (opcional)"
+                                                  value={reqForm.secao || ''}
+                                                  onChange={(event) => setNewItemRequirementForm((prev) => ({
+                                                    ...prev,
+                                                    [item.id]: { ...reqForm, secao: event.target.value },
+                                                  }))}
+                                                />
+                                                <datalist id={`checklist-secoes-${item.id}`}>
+                                                  {sectionTitles.map((title) => (
+                                                    <option key={title} value={title} />
+                                                  ))}
+                                                </datalist>
+                                                <input
+                                                  className={`${input} h-8 text-xs sm:col-span-7`}
+                                                  placeholder="Novo requisito técnico ou comercial..."
+                                                  value={reqForm.requisito || ''}
+                                                  onChange={(event) => setNewItemRequirementForm((prev) => ({
+                                                    ...prev,
+                                                    [item.id]: { ...reqForm, requisito: event.target.value },
+                                                  }))}
+                                                  onKeyDown={(event) => { if (event.key === 'Enter') addItemRequirement(item.id); }}
+                                                />
+                                                <button
+                                                  type="button"
+                                                  className={`${btnPrimaryXs} h-8 sm:col-span-2`}
+                                                  onClick={() => addItemRequirement(item.id)}
+                                                >
+                                                  Adicionar
+                                                </button>
+                                              </div>
+                                            </div>
+
+                                            {renderSectionedList(sectionGroups, {
+                                              isProposal: false,
+                                              maxH: 'max-h-72',
+                                              getGlobalIndex: (req) => itemRequirements.findIndex((r) => r.id === req.id),
+                                            })}
+
+                                            {/* Assistente IA */}
+                                            <div className="mt-4 overflow-hidden rounded-xl border border-primary/20 bg-gradient-to-b from-primary/[0.07] to-surf shadow-sm">
+                                              <button
+                                                type="button"
+                                                className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left transition hover:bg-primary/[0.06]"
+                                                onClick={() => toggleItemChecklistAi(item.id)}
+                                              >
+                                                <span className="flex min-w-0 items-center gap-2">
+                                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                                                    <ChatBubbleLeftRightIcon className="h-4 w-4" aria-hidden />
+                                                  </span>
+                                                  <span className="min-w-0">
+                                                    <span className="block text-xs font-semibold text-ink">Assistente IA</span>
+                                                    <span className="block truncate text-[10px] text-muted">
+                                                      Usual: lista → produto → aplicar · dá para pular ou voltar quando precisar
+                                                    </span>
+                                                  </span>
+                                                </span>
+                                                <span className="flex shrink-0 items-center gap-2">
+                                                  {proposalReqs.length > 0 && (
+                                                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                                                      prévia {proposalCounts.ok}/{proposalCounts.total}
+                                                      {proposalSectionCount > 0 ? ` · ${proposalSectionCount} seções` : ''}
+                                                    </span>
+                                                  )}
+                                                  <span className={`text-[10px] text-muted transition-transform ${aiState.open ? 'rotate-90' : ''}`}>▶</span>
+                                                </span>
+                                              </button>
+
+                                              {aiState.open && (
+                                                <div className="space-y-3 border-t border-primary/15 px-3 py-3">
+                                                  {(() => {
+                                                    const liveReqs = itemRequirements;
+                                                    const hasProposal = proposalReqs.length > 0;
+                                                    // Fonte da lista: prévia da IA e/ou checklist já gravado
+                                                    const hasChecklistSource = hasProposal || liveReqs.length > 0;
+                                                    // Dois modos livres (não é wizard 1→2→3). "ready" vira evaluate na UI.
+                                                    const mode = (() => {
+                                                      const p = aiState.phase;
+                                                      if (p === 'evaluate' || p === 'ready') return 'evaluate';
+                                                      if (p === 'extract') return 'extract';
+                                                      // default: se já tem lista, abre em produto; senão em lista
+                                                      return hasChecklistSource ? 'evaluate' : 'extract';
+                                                    })();
+                                                    const isListMode = mode === 'extract';
+                                                    const isProductMode = mode === 'evaluate';
+                                                    const modeloNow = String(item.modelo_produto || '').trim();
+                                                    const draftReady = !!String(aiState.draftText || '').trim();
+                                                    const canExtract = !aiState.loading && (draftReady || hasChecklistSource);
+                                                    const canEvaluate = hasChecklistSource && !aiState.loading && (draftReady || !!modeloNow);
+                                                    const modeCls = (active) => (
+                                                      active
+                                                        ? 'border-primary/40 bg-primary/15 text-primary'
+                                                        : 'border-line bg-bg2 text-muted hover:border-line hover:text-ink'
+                                                    );
+                                                    return (
+                                                      <>
+                                                  {/* Caminho usual = lista → produto → aplicar; modos livres se precisar pular/voltar */}
+                                                  <div className="flex flex-wrap items-center gap-1.5">
+                                                    <button
+                                                      type="button"
+                                                      className={`rounded-lg border px-2.5 py-1.5 text-left transition ${modeCls(isListMode)}`}
+                                                      onClick={() => patchItemChecklistAi(item.id, { phase: 'extract' })}
+                                                    >
+                                                      <span className="block text-[9px] font-bold uppercase tracking-wide opacity-75">1 · usual</span>
+                                                      <span className="block text-[10px] font-semibold leading-tight">Lista do edital</span>
+                                                      <span className="block text-[9px] opacity-80">extrair · revisar · +/−</span>
+                                                    </button>
+                                                    <span className="hidden text-muted sm:inline" aria-hidden>→</span>
+                                                    <button
+                                                      type="button"
+                                                      className={`rounded-lg border px-2.5 py-1.5 text-left transition ${modeCls(isProductMode)} ${!hasChecklistSource ? 'opacity-50' : ''}`}
+                                                      disabled={!hasChecklistSource}
+                                                      title={!hasChecklistSource ? 'Crie requisitos na lista antes de comparar (caminho usual)' : undefined}
+                                                      onClick={() => hasChecklistSource && patchItemChecklistAi(item.id, { phase: 'evaluate' })}
+                                                    >
+                                                      <span className="block text-[9px] font-bold uppercase tracking-wide opacity-75">2 · usual</span>
+                                                      <span className="block text-[10px] font-semibold leading-tight">Produto</span>
+                                                      <span className="block text-[9px] opacity-80">OK · X · ?</span>
+                                                    </button>
+                                                    <span className="hidden text-muted sm:inline" aria-hidden>→</span>
+                                                    <div
+                                                      className={`rounded-lg border px-2.5 py-1.5 ${
+                                                        hasProposal
+                                                          ? 'border-status-success/35 bg-status-success/10 text-status-success'
+                                                          : 'border-line bg-bg2 text-muted'
+                                                      }`}
+                                                      title="Aplicar fica na prévia à direita — disponível sempre que houver prévia"
+                                                    >
+                                                      <span className="block text-[9px] font-bold uppercase tracking-wide opacity-75">3 · quando quiser</span>
+                                                      <span className="block text-[10px] font-semibold leading-tight">Aplicar prévia</span>
+                                                      <span className="block text-[9px] opacity-80">
+                                                        {hasProposal ? 'disponível à direita' : 'após gerar prévia'}
+                                                      </span>
+                                                    </div>
+                                                  </div>
+
+                                                  <div className={`rounded-lg border px-2.5 py-2 text-[10px] leading-relaxed text-muted ${
+                                                    isListMode
+                                                      ? 'border-primary/20 bg-primary/[0.06]'
+                                                      : 'border-status-warning/25 bg-status-warning/10'
+                                                  }`}
+                                                  >
+                                                    {isListMode ? (
+                                                      <>
+                                                        <strong className="text-ink">Lista</strong>
+                                                        {' — '}No fluxo usual, extrai o edital e segue para o produto.
+                                                        Se preferir, <strong className="text-ink">aplique já</strong> a prévia e compare depois — ou só revise a lista.
+                                                        {liveReqs.length > 0 && (
+                                                          <span className="mt-1 block text-ink">
+                                                            Checklist gravado: {liveReqs.length} requisito(s).
+                                                          </span>
+                                                        )}
+                                                      </>
+                                                    ) : (
+                                                      <>
+                                                        <strong className="text-ink">Produto</strong>
+                                                        {' — '}Fluxo usual depois da lista: modelo/ficha → OK/X/? → aplicar.
+                                                        Pode voltar à lista a qualquer momento se faltar requisito.
+                                                        {modeloNow && (
+                                                          <span className="mt-1 block text-ink">
+                                                            Modelo do item: <strong>{modeloNow}</strong>
+                                                          </span>
+                                                        )}
+                                                      </>
+                                                    )}
+                                                  </div>
+
+                                                  <div className="grid gap-3 lg:grid-cols-5">
+                                                    <div className="flex min-h-0 flex-col lg:col-span-2">
+                                                      <VerticalScrollArrows className="mb-2 max-h-36 flex-1" contentClassName="space-y-1.5 pr-0.5">
+                                                        {(aiState.messages || []).length === 0 && (
+                                                          <div className="rounded-lg border border-dashed border-line bg-bg2/50 px-3 py-4 text-center text-[10px] text-muted">
+                                                            {isProductMode
+                                                              ? (liveReqs.length > 0
+                                                                ? `Lista com ${liveReqs.length} requisitos. Cole ficha/link ou use o Modelo.`
+                                                                : 'Prévia pronta. Cole ficha/link ou use o Modelo.')
+                                                              : (liveReqs.length > 0
+                                                                ? `Já há ${liveReqs.length} requisitos. Cole trecho do edital ou peça: “adicione…”, “remova…”`
+                                                                : 'Cole o texto do edital e extraia a lista.')}
+                                                          </div>
+                                                        )}
+                                                        {(aiState.messages || []).map((msg, msgIdx) => (
+                                                          <div
+                                                            key={`${msg.role}-${msgIdx}`}
+                                                            className={`rounded-lg px-2.5 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words ${
+                                                              msg.role === 'user'
+                                                                ? 'ml-3 border border-primary/20 bg-primary/10 text-ink'
+                                                                : 'mr-3 border border-line bg-bg2 text-ink'
+                                                            }`}
+                                                          >
+                                                            <span className="mb-0.5 block text-[9px] font-semibold uppercase tracking-wide text-muted">
+                                                              {msg.role === 'user' ? 'Você' : 'IA'}
+                                                            </span>
+                                                            {msg.content}
+                                                          </div>
+                                                        ))}
+                                                      </VerticalScrollArrows>
+
+                                                      {aiState.error && (
+                                                        <p className="mb-2 rounded-md border border-status-danger/30 bg-status-danger/10 px-2 py-1.5 text-[10px] text-status-danger">
+                                                          {aiState.error}
+                                                        </p>
+                                                      )}
+
+                                                      <textarea
+                                                        className={`${textarea} mb-2 min-h-[5.5rem] w-full resize-y text-xs`}
+                                                        placeholder={
+                                                          isProductMode
+                                                            ? 'Cole a ficha técnica, specs do produto ou link (URL)…\nOu deixe vazio e use o campo Modelo do item. (Ctrl+Enter)'
+                                                            : hasChecklistSource
+                                                              ? 'Cole trecho do edital e/ou peça: “adicione…”, “remova…”, “revise a seção 4.5.3…” (Ctrl+Enter)'
+                                                              : 'Cole aqui o trecho do edital / termo de referência… (Ctrl+Enter extrai)'
+                                                        }
+                                                        value={aiState.draftText || ''}
+                                                        disabled={aiState.loading}
+                                                        onChange={(event) => patchItemChecklistAi(item.id, { draftText: event.target.value })}
+                                                        onKeyDown={(event) => {
+                                                          if (event.key === 'Enter' && event.ctrlKey) {
+                                                            event.preventDefault();
+                                                            sendItemChecklistAi(item.id, { intent: isProductMode ? 'evaluate' : 'extract' });
+                                                          }
+                                                        }}
+                                                        rows={4}
+                                                      />
+
+                                                      {isListMode ? (
+                                                        <div className="flex flex-col gap-1.5">
+                                                          <button
+                                                            type="button"
+                                                            className={`${btnPrimary} w-full text-xs`}
+                                                            disabled={!canExtract}
+                                                            onClick={() => sendItemChecklistAi(item.id, { intent: 'extract' })}
+                                                          >
+                                                            {aiState.loading
+                                                              ? 'Processando lista…'
+                                                              : hasChecklistSource
+                                                                ? 'Atualizar lista (revisar / reextrair)'
+                                                                : 'Extrair requisitos do edital'}
+                                                          </button>
+                                                          {hasChecklistSource && (
+                                                            <button
+                                                              type="button"
+                                                              className={`${btnSecondaryXs} w-full justify-center`}
+                                                              disabled={aiState.loading}
+                                                              onClick={() => patchItemChecklistAi(item.id, { phase: 'evaluate' })}
+                                                            >
+                                                              Seguinte usual: produto (ou aplique a prévia se já bastar)
+                                                            </button>
+                                                          )}
+                                                          {!draftReady && !hasChecklistSource && (
+                                                            <p className="text-center text-[9px] text-muted">
+                                                              Cole o texto do edital para começar.
+                                                            </p>
+                                                          )}
+                                                        </div>
+                                                      ) : (
+                                                        <div className="flex flex-col gap-1.5">
+                                                          <button
+                                                            type="button"
+                                                            className={`${btnPrimary} w-full text-xs`}
+                                                            disabled={!canEvaluate}
+                                                            onClick={() => {
+                                                              if (!hasProposal && liveReqs.length > 0) {
+                                                                patchItemChecklistAi(item.id, { applyMode: 'patch' });
+                                                              }
+                                                              sendItemChecklistAi(item.id, { intent: 'evaluate' });
+                                                            }}
+                                                          >
+                                                            {aiState.loading
+                                                              ? 'Comparando com o produto…'
+                                                              : 'Avaliar conformidade (OK / X / ?)'}
+                                                          </button>
+                                                          <button
+                                                            type="button"
+                                                            className={`${btnSecondaryXs} w-full justify-center`}
+                                                            disabled={aiState.loading}
+                                                            onClick={() => patchItemChecklistAi(item.id, { phase: 'extract' })}
+                                                          >
+                                                            Voltar à lista (revisar requisitos)
+                                                          </button>
+                                                          {!modeloNow && !draftReady && (
+                                                            <p className="text-center text-[9px] text-muted">
+                                                              Preencha o Modelo do item ou cole a ficha/link acima.
+                                                            </p>
+                                                          )}
+                                                        </div>
+                                                      )}
+                                                    </div>
+
+                                                    <div className="min-w-0 lg:col-span-3">
+                                                      {proposalReqs.length === 0 ? (
+                                                        <div className="flex h-full min-h-[12rem] flex-col items-center justify-center rounded-xl border border-dashed border-line bg-bg2/40 px-4 py-8 text-center">
+                                                          <p className="text-[11px] font-medium text-ink">
+                                                            {liveReqs.length > 0
+                                                              ? (isListMode ? 'Checklist gravado' : 'Lista pronta para comparar')
+                                                              : 'Prévia vazia'}
+                                                          </p>
+                                                          <p className="mt-1 max-w-sm text-[10px] text-muted">
+                                                            {liveReqs.length > 0 ? (
+                                                              isListMode ? (
+                                                                <>
+                                                                  Há <strong className="text-ink">{liveReqs.length} requisitos</strong> gravados.
+                                                                  Peça revisões à esquerda; a prévia aparece aqui e você aplica quando quiser.
+                                                                  Ou mude para <strong className="text-ink">modo produto</strong> e avalie.
+                                                                </>
+                                                              ) : (
+                                                                <>
+                                                                  Checklist com <strong className="text-ink">{liveReqs.length} requisitos</strong>.
+                                                                  Informe o modelo/ficha e avalie — depois aplique a prévia de status.
+                                                                </>
+                                                              )
+                                                            ) : (
+                                                              <>
+                                                                Use o <strong className="text-ink">modo lista</strong> para extrair o edital.
+                                                                Aplique a prévia direto, ou use o <strong className="text-ink">modo produto</strong> se quiser comparar antes.
+                                                              </>
+                                                            )}
+                                                          </p>
+                                                          {liveReqs.length > 0 && (
+                                                            <div className="mt-3 flex flex-wrap justify-center gap-2">
+                                                              {!isListMode && (
+                                                                <button
+                                                                  type="button"
+                                                                  className={btnSecondaryXs}
+                                                                  onClick={() => patchItemChecklistAi(item.id, { phase: 'extract' })}
+                                                                >
+                                                                  Modo lista
+                                                                </button>
+                                                              )}
+                                                              {!isProductMode && (
+                                                                <button
+                                                                  type="button"
+                                                                  className={btnPrimaryXs}
+                                                                  onClick={() => patchItemChecklistAi(item.id, { phase: 'evaluate' })}
+                                                                >
+                                                                  Modo produto
+                                                                </button>
+                                                              )}
+                                                            </div>
+                                                          )}
+                                                        </div>
+                                                      ) : (
+                                                        <div className="rounded-xl border border-primary/25 bg-surf p-2.5">
+                                                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                                            <div>
+                                                              <h6 className="text-[11px] font-semibold text-ink">
+                                                                Prévia · {proposalCounts.total} requisitos
+                                                                {proposalSectionCount > 0 ? ` · ${proposalSectionCount} seções` : ''}
+                                                              </h6>
+                                                              {aiState.proposal?.modelo_produto ? (
+                                                                <p className="text-[10px] text-muted">
+                                                                  Modelo: <span className="font-medium text-ink">{aiState.proposal.modelo_produto}</span>
+                                                                </p>
+                                                              ) : hasEvaluated ? null : (
+                                                                <p className="text-[10px] text-status-warning">
+                                                                  Ainda sem avaliação — informe o produto no passo 2.
+                                                                </p>
+                                                              )}
+                                                            </div>
+                                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                              <span className="rounded-full bg-status-success/10 px-1.5 py-0.5 text-[9px] font-semibold text-status-success">{proposalCounts.ok} OK</span>
+                                                              <span className="rounded-full bg-status-danger/10 px-1.5 py-0.5 text-[9px] font-semibold text-status-danger">{proposalCounts.nao_ok} X</span>
+                                                              <span className="rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-status-warning">{proposalCounts.verificar} ?</span>
+                                                              <select
+                                                                className={`${select} h-7 py-0 text-[10px]`}
+                                                                value={aiState.applyMode || 'replace'}
+                                                                onChange={(event) => patchItemChecklistAi(item.id, { applyMode: event.target.value })}
+                                                                title="Como gravar no checklist"
+                                                              >
+                                                                <option value="replace">Substituir checklist</option>
+                                                                <option value="append">Acrescentar</option>
+                                                                <option value="patch">Só atualizar status</option>
+                                                              </select>
+                                                            </div>
+                                                          </div>
+                                                          {renderSectionedList(proposalGroups, {
+                                                            isProposal: true,
+                                                            maxH: 'max-h-80',
+                                                            getGlobalIndex: (req) => {
+                                                              const idx = proposalReqs.indexOf(req);
+                                                              return idx >= 0 ? idx : 0;
+                                                            },
+                                                          })}
+                                                          <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-line pt-2">
+                                                            <button
+                                                              type="button"
+                                                              className={btnSecondaryXs}
+                                                              disabled={aiState.applying}
+                                                              onClick={() => discardItemChecklistAiProposal(item.id)}
+                                                            >
+                                                              Descartar prévia
+                                                            </button>
+                                                            <button
+                                                              type="button"
+                                                              className={btnPrimaryXs}
+                                                              disabled={aiState.applying || proposalReqs.length === 0}
+                                                              onClick={() => applyItemChecklistAiProposal(item.id)}
+                                                            >
+                                                              {aiState.applying ? 'Aplicando…' : 'Aplicar prévia ao checklist'}
+                                                            </button>
+                                                          </div>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                      </>
+                                                    );
+                                                  })()}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </>
+                                        );
+                                      })()}
                                     </div>
                                   </div>
                                 )}
@@ -17916,10 +19578,13 @@ function App() {
                         </div>
                       </section>
 
-                      <section className="rounded-[14px] border border-line bg-bg2/50 p-3.5 sm:p-4">
-                        <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-                          Comentários ({selectedComments.length})
-                        </h4>
+                      <section className={oppSection}>
+                        <div className={oppSectionHead}>
+                          <h4 className={oppSectionTitle}>Comentários</h4>
+                          <span className="rounded-full border border-line bg-bg2 px-2 py-0.5 text-[11px] tabular-nums text-muted">
+                            {selectedComments.length}
+                          </span>
+                        </div>
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <textarea
                             value={newCommentText}
@@ -17940,10 +19605,10 @@ function App() {
                         </div>
                         <VerticalScrollArrows className="mt-3 max-h-56" contentClassName="space-y-2">
                           {selectedComments.length === 0 ? (
-                            <p className="text-xs italic text-muted">Nenhum comentário ainda.</p>
+                            <p className="rounded-lg border border-dashed border-line bg-bg2/40 py-4 text-center text-xs text-muted">Nenhum comentário ainda.</p>
                           ) : (
                             selectedComments.map(comment => (
-                              <div key={comment.id} className="rounded-[12px] border border-line bg-surf p-3">
+                              <div key={comment.id} className="rounded-xl border border-line bg-bg2/40 p-3">
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0 flex-1">
                                     <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-muted">
@@ -17973,6 +19638,8 @@ function App() {
                       </section>
                     </VerticalScrollArrows>
                   </div>
+                    );
+                  })()}
                 </div>,
                 document.body
               )}

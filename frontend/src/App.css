@@ -102,6 +102,29 @@
   box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.28), 0 10px 22px rgba(0, 0, 0, 0.22);
 }
 
+/* Colunas Perdido em diante: coluna inteira apagada (header + cards + empty).
+   Static opacity only — do not animate opacity (fights dnd-kit). */
+.kanban-column.kanban-column-lost {
+  opacity: 0.42;
+  filter: saturate(0.45);
+  border-color: rgba(123, 135, 163, 0.22);
+  background: rgba(123, 135, 163, 0.04);
+  box-shadow: none;
+}
+.kanban-column.kanban-column-lost:hover {
+  opacity: 0.62;
+  filter: saturate(0.6);
+}
+/* Drop target / busca: legível o bastante para interagir */
+.kanban-column.kanban-column-lost.is-over,
+.kanban-column.kanban-column-lost.is-search-focus-column {
+  opacity: 0.88;
+  filter: saturate(0.85);
+}
+.kanban-column.kanban-column-lost .kanban-card {
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .kanban-card.is-search-focus {
     transition: none;
