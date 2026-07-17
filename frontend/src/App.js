@@ -7204,6 +7204,8 @@ function App() {
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpJobModalOpen, setPncpJobModalOpen] = useState(false);
   const [pncpJobModalTab, setPncpJobModalTab] = useState('resultados'); // resultados | termos | auditoria
+  // Header do popup compacto por padrão — mais espaço pra lista de resultados.
+  const [pncpJobHeaderExpanded, setPncpJobHeaderExpanded] = useState(false);
   const [pncpJobFilterDraft, setPncpJobFilterDraft] = useState({
     tipos_documento: 'edital',
     status: 'recebendo_proposta',
@@ -7509,6 +7511,58 @@ function App() {
       }),
     ]);
   }, [authStatus.authenticated]);
+
+  /** Marca todas as notificações do usuário como lidas (inbox inteiro). */
+  const markAllInboxAsRead = useCallback(async () => {
+    const now = new Date().toISOString();
+    setInboxNotifications((prev) => prev.map((n) => ({ ...n, read_at: n.read_at || now })));
+    setInboxUnreadCount(0);
+    try {
+      await axios.post('/api/notifications/read', { all: true });
+    } catch {
+      loadInboxNotifications();
+    }
+  }, [loadInboxNotifications]);
+
+  /** Abre o painel, carrega a lista e marca as que aparecem na tela como vistas. */
+  const openNotificationsPanel = useCallback(async () => {
+    setMobileNavOpen(false);
+    setGlobalSearchOpen(false);
+    setShowNotifications(true);
+    if (!authStatus.authenticated) return;
+    try {
+      const [listRes, countRes] = await Promise.all([
+        axios.get('/api/notifications', { params: { limit: 20 } }),
+        axios.get('/api/notifications/unread-count'),
+      ]);
+      const items = Array.isArray(listRes.data?.items) ? listRes.data.items : [];
+      const unreadIds = items
+        .filter((n) => n && !n.read_at && n.id != null)
+        .map((n) => Number(n.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      const now = new Date().toISOString();
+      // Já entra na tela como vista — evita flash de "não lida" e some o badge das que o user viu.
+      const seenItems = unreadIds.length
+        ? items.map((n) => (unreadIds.includes(Number(n.id)) ? { ...n, read_at: n.read_at || now } : n))
+        : items;
+      const serverUnread = Number(countRes.data?.count) || 0;
+      setInboxNotifications(seenItems);
+      setInboxUnreadCount(Math.max(0, serverUnread - unreadIds.length));
+
+      if (unreadIds.length) {
+        try {
+          await axios.post('/api/notifications/read', { ids: unreadIds });
+          const { data } = await axios.get('/api/notifications/unread-count');
+          setInboxUnreadCount(Number(data?.count) || 0);
+        } catch {
+          loadInboxNotifications();
+        }
+      }
+    } catch {
+      setInboxNotifications([]);
+      setInboxUnreadCount(0);
+    }
+  }, [authStatus.authenticated, loadInboxNotifications]);
 
   useEffect(() => {
     if (!authStatus.authenticated) {
@@ -9981,6 +10035,7 @@ function App() {
   const closePncpSearchJobModal = () => {
     setPncpJobModalOpen(false);
     setPncpJobFiltersEditing(false);
+    setPncpJobHeaderExpanded(false);
     // Nunca deixe o botão "Iniciar busca" preso ao lifecycle do job/modal.
     setPncpSearchLoading(false);
   };
@@ -13484,10 +13539,11 @@ function App() {
                           ref={notifBtnRef}
                           type="button"
                           onClick={() => {
-                            setMobileNavOpen(false);
-                            setGlobalSearchOpen(false);
-                            setShowNotifications(v => !v);
-                            if (!showNotifications) loadInboxNotifications();
+                            if (showNotifications) {
+                              setShowNotifications(false);
+                              return;
+                            }
+                            openNotificationsPanel();
                           }}
                           className={`${iconBtn} relative h-10 w-10 shrink-0 border border-line bg-bg2 ${showNotifications ? 'text-ink ring-2 ring-primary/25' : ''}`}
                           aria-label="Notificações"
@@ -13521,16 +13577,30 @@ function App() {
                                 <p className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
                                   Notificações
                                 </p>
-                                <button
-                                  type="button"
-                                  className="text-[11px] font-semibold text-primary hover:underline"
-                                  onClick={() => {
-                                    setShowNotifications(false);
-                                    setActiveView('Notificações');
-                                  }}
-                                >
-                                  Configurar
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  {inboxNotifications.some((n) => !n.read_at) || unread > 0 ? (
+                                    <button
+                                      type="button"
+                                      className="text-[11px] font-semibold text-muted hover:text-ink hover:underline"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        markAllInboxAsRead();
+                                      }}
+                                    >
+                                      Marcar todas
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="text-[11px] font-semibold text-primary hover:underline"
+                                    onClick={() => {
+                                      setShowNotifications(false);
+                                      setActiveView('Notificações');
+                                    }}
+                                  >
+                                    Configurar
+                                  </button>
+                                </div>
                               </div>
                               <VerticalScrollArrows
                                 className="min-h-0 flex-1"
@@ -13545,19 +13615,8 @@ function App() {
                                     key={item.id}
                                     type="button"
                                     role="menuitem"
-                                    onClick={async () => {
+                                    onClick={() => {
                                       setShowNotifications(false);
-                                      if (!item.read_at) {
-                                        try {
-                                          await axios.post('/api/notifications/read', { ids: [item.id] });
-                                          setInboxUnreadCount((c) => Math.max(0, c - 1));
-                                          setInboxNotifications((prev) => prev.map((n) => (
-                                            n.id === item.id ? { ...n, read_at: new Date().toISOString() } : n
-                                          )));
-                                        } catch {
-                                          /* ignore */
-                                        }
-                                      }
                                       const view = item.data?.view;
                                       const sub = item.data?.sub;
                                       if (view) {
@@ -14800,69 +14859,68 @@ function App() {
                       const canRerun = canRerunPncpSearchJob(job);
                       const live = isPncpJobLive(job?.status);
                       const title = job?.nome || job?.filters?.q || 'Pesquisa PNCP';
+                      const listTotal = Number(pncpSearchResults.total || job?.total || 0);
+                      const listValue = Number(pncpSearchSummary.total_value || job?.summary?.total_value || 0);
+                      const headerExpanded = pncpJobHeaderExpanded;
+                      const pauseCountdown = job?.status === 'paused_rate_limit'
+                        ? formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at)
+                        : null;
+                      const resumePage = job?.status === 'paused_rate_limit'
+                        ? job?.progress?.resume_from_page
+                        : null;
                       return (
                         <>
-                          <div className="shrink-0 border-b border-line px-3 py-2.5 sm:px-4 sm:py-3">
-                            {/* Mobile: coluna (título+fechar → badges → meta → banner → ações). Desktop: título|ações. */}
-                            <div className="flex flex-col gap-2">
-                              <div className="flex min-w-0 items-start gap-2">
-                                <div className="min-w-0 flex-1">
+                          <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4 sm:py-2.5">
+                            {/* Linha fixa: título · status · ações compactas · recolher · fechar */}
+                            <div className="flex min-w-0 items-start gap-1.5">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                                   <h3 className="truncate font-display text-sm font-semibold uppercase tracking-wide text-ink sm:text-base">{title}</h3>
-                                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                    <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-                                      {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
-                                      <span className="truncate">{meta.label}</span>
+                                  <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+                                    {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
+                                    <span className="truncate">{meta.label}</span>
+                                  </span>
+                                  {archiveMeta && (
+                                    <span
+                                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
+                                      title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
+                                    >
+                                      {archiveMeta.label}
                                     </span>
-                                    {archiveMeta && (
-                                      <span
-                                        className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
-                                        title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
-                                      >
-                                        {archiveMeta.label}
-                                      </span>
-                                    )}
-                                  </div>
+                                  )}
                                 </div>
-                                <button type="button" onClick={closePncpSearchJobModal} className={`${iconBtn} shrink-0`} aria-label="Fechar">
-                                  <XMarkIcon className="h-5 w-5" />
-                                </button>
+                                <p className="mt-0.5 truncate font-mono text-[11px] leading-snug text-muted">
+                                  <span className="font-semibold tabular-nums text-ink">{listTotal.toLocaleString('pt-BR')}</span>
+                                  {' na lista'}
+                                  {listValue > 0 ? (
+                                    <>
+                                      {' · '}
+                                      <span className="font-semibold tabular-nums text-ink">{formatCompactCurrency(listValue)}</span>
+                                    </>
+                                  ) : null}
+                                  {' · '}
+                                  {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
+                                  {live && activePncpJobProgress.currentTerm ? (
+                                    <>
+                                      {' · '}
+                                      <span className="font-display font-semibold uppercase tracking-wide text-ink">
+                                        {activePncpJobProgress.currentTerm}
+                                      </span>
+                                    </>
+                                  ) : null}
+                                  {!job?.watchlist_id && !live ? ' · recoleta diária' : ''}
+                                </p>
                               </div>
-
-                              <p className="break-words font-mono text-[11px] leading-snug text-muted">
-                                {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} na lista
-                                {' · '}
-                                {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
-                                {live ? (
-                                  <>
-                                    {' · '}
-                                    <span className="font-display font-semibold uppercase tracking-wide text-ink">
-                                      {activePncpJobProgress.currentTerm || 'preparando'}
-                                    </span>
-                                  </>
-                                ) : null}
-                                {!job?.watchlist_id && !live ? ' · recoleta diária ativa' : ''}
-                              </p>
-
-                              {job?.status === 'paused_rate_limit' && (() => {
-                                const countdown = formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at);
-                                const resumePage = job?.progress?.resume_from_page;
-                                return (
-                                  <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
-                                    <strong>Lista preservada</strong>
-                                    {countdown ? <> · {countdown}</> : ' · retoma sozinho'}
-                                    {resumePage ? <> · continua na pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
-                                    {' '}— não recomeça do zero nem apaga o que já entrou.
-                                  </p>
-                                );
-                              })()}
-                              {job?.error ? (
-                                <p className="line-clamp-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
-                              ) : null}
-
-                              <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
+                              <div className="flex shrink-0 items-center gap-0.5">
                                 {live && (
-                                  <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} justify-center`}>
-                                    <StopIcon className="h-3.5 w-3.5" /> Parar
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelPncpSearchJob(activePncpSearchJobId)}
+                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
+                                    title="Para a coleta e mantém os resultados já salvos"
+                                  >
+                                    <StopIcon className="h-3.5 w-3.5" />
+                                    <span className="hidden sm:inline">Parar</span>
                                   </button>
                                 )}
                                 {canRerun && (
@@ -14870,9 +14928,10 @@ function App() {
                                     type="button"
                                     onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
                                     title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                    className={`${btnSecondarySm} justify-center`}
+                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
                                   >
-                                    <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
+                                    <ArrowPathIcon className="h-3.5 w-3.5" />
+                                    <span className="hidden sm:inline">Rodar</span>
                                   </button>
                                 )}
                                 <button
@@ -14889,101 +14948,151 @@ function App() {
                                     subscribed: Boolean(job?.watchlist_id),
                                     alertsOn: Boolean(job?.whatsapp_enabled || job?.alerts_enabled),
                                   })}
-                                  className={`${btnSecondarySm} justify-center ${job?.watchlist_id ? 'min-w-[2.5rem] px-2' : ''}`}
+                                  className={`${btnSecondaryXs} h-8 min-w-[2rem] px-2`}
                                 >
                                   <WhatsappAlertActionContent
                                     subscribed={Boolean(job?.watchlist_id)}
                                     alertsOn={Boolean(job?.whatsapp_enabled || job?.alerts_enabled)}
                                   />
                                 </button>
-                                <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} justify-center text-status-danger`}>
-                                  <TrashIcon className="h-3.5 w-3.5" /> Excluir
+                                <button
+                                  type="button"
+                                  onClick={() => deletePncpSearchJob(activePncpSearchJobId)}
+                                  className={`${btnSecondaryXs} h-8 px-2 text-status-danger`}
+                                  title="Excluir busca"
+                                  aria-label="Excluir busca"
+                                >
+                                  <TrashIcon className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPncpJobHeaderExpanded(v => !v)}
+                                  className={`${iconBtn} h-8 w-8 shrink-0`}
+                                  aria-expanded={headerExpanded}
+                                  aria-label={headerExpanded ? 'Recolher detalhes do job' : 'Expandir detalhes do job'}
+                                  title={headerExpanded ? 'Recolher detalhes — mais espaço para a lista' : 'Expandir detalhes (métricas, status, funil)'}
+                                >
+                                  {headerExpanded
+                                    ? <ChevronUpIcon className="h-4 w-4" />
+                                    : <ChevronDownIcon className="h-4 w-4" />}
+                                </button>
+                                <button type="button" onClick={closePncpSearchJobModal} className={`${iconBtn} h-8 w-8 shrink-0`} aria-label="Fechar">
+                                  <XMarkIcon className="h-5 w-5" />
                                 </button>
                               </div>
                             </div>
 
-                            <div className="mt-2 h-1 overflow-hidden rounded-full bg-bg2">
-                              <div
-                                className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
-                                style={{ width: `${activePncpJobProgress.pct}%` }}
-                              />
-                            </div>
+                            {/* Pausa: uma linha compacta sempre visível (não some no recolher) */}
+                            {job?.status === 'paused_rate_limit' && (
+                              <p className="mt-1.5 truncate rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
+                                <strong>Lista preservada</strong>
+                                {pauseCountdown ? <> · {pauseCountdown}</> : ' · retoma sozinho'}
+                                {resumePage ? <> · pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
+                                {!headerExpanded ? ' · toque ▾ para mais' : ' — não recomeça do zero'}
+                              </p>
+                            )}
 
-                            {(() => {
-                              const funnelRuns = getPncpJobTermRuns(job, pncpSearchResults);
-                              const funnel = getPncpJobCollectionFunnel(
-                                job,
-                                Number(pncpSearchResults.total || job?.total || 0),
-                                funnelRuns,
-                                pncpSearchResults,
-                              );
-                              return (
-                                <>
-                                  <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
-                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Na lista</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
-                                      <p className="text-[10px] leading-tight text-muted">passaram no filtro</p>
-                                    </div>
-                                    <div
-                                      className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5"
-                                      title={
-                                        `Lidos = soma da coluna “Lidos” da Auditoria (items_collected por termo). `
-                                        + `Universo = soma dos totais da API por termo (overlap possível). `
-                                        + (funnel.exclusiveLidos > 0
-                                          ? `Únicos entre termos: ${Number(funnel.exclusiveLidos).toLocaleString('pt-BR')}. `
-                                          : '')
-                                        + (funnel.duplicatesSum > 0
-                                          ? `Já vistos entre termos: ${Number(funnel.duplicatesSum).toLocaleString('pt-BR')}.`
-                                          : '')
-                                      }
-                                    >
-                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
-                                      <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">
-                                        {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
-                                        {funnel.universeApi > 0 ? (
-                                          <span className="text-[11px] font-semibold text-muted">/{funnel.universeApi.toLocaleString('pt-BR')}</span>
-                                        ) : null}
-                                      </p>
-                                      <p className="text-[10px] leading-tight text-muted line-clamp-2">
-                                        {funnel.coveragePct != null
-                                          ? `${funnel.coveragePct}% · iguais à auditoria`
-                                          : 'soma por termo (auditoria)'}
-                                      </p>
-                                    </div>
-                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos itens pertinentes (que batem com o termo) dos editais classificados. Não usa o total da licitação.">
-                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Valor na lista</p>
-                                      <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
-                                      <p className="text-[10px] leading-tight text-muted">itens pertinentes</p>
-                                    </div>
-                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
-                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">
-                                        {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
-                                        <span className="text-muted"> · </span>
-                                        {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
-                                      </p>
-                                      <p className="text-[10px] leading-tight text-muted line-clamp-2">você ocultou · já no board</p>
-                                    </div>
-                                  </div>
-                                  {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
-                                    <p className="mt-1.5 line-clamp-3 text-[11px] leading-snug text-muted sm:line-clamp-2">
-                                      <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
-                                      {' '}(soma auditoria)
-                                      {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
-                                      {funnel.exclusiveLidos > 0 ? (
-                                        <> · {Number(funnel.exclusiveLidos).toLocaleString('pt-BR')} únicos entre termos</>
-                                      ) : null}
-                                      {funnel.duplicatesSum > 0 ? <> · {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos</> : null}
-                                      {' · '}<strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
-                                      {funnel.currentTerm ? <> · agora “{funnel.currentTerm}”</> : null}.
-                                    </p>
-                                  )}
-                                </>
-                              );
-                            })()}
+                            {/* Detalhes expandidos: erro longo, barra, KPI cards, funil */}
+                            {headerExpanded && (
+                              <div className="mt-2 space-y-2">
+                                {job?.error ? (
+                                  <p className="line-clamp-3 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
+                                ) : null}
 
-                            <div className="mt-2 flex flex-wrap gap-1">
+                                <div className="h-1 overflow-hidden rounded-full bg-bg2">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
+                                    style={{ width: `${activePncpJobProgress.pct}%` }}
+                                  />
+                                </div>
+
+                                {(() => {
+                                  const funnelRuns = getPncpJobTermRuns(job, pncpSearchResults);
+                                  const funnel = getPncpJobCollectionFunnel(
+                                    job,
+                                    listTotal,
+                                    funnelRuns,
+                                    pncpSearchResults,
+                                  );
+                                  return (
+                                    <>
+                                      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
+                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Na lista</p>
+                                          <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">{listTotal.toLocaleString('pt-BR')}</p>
+                                          <p className="text-[10px] leading-tight text-muted">passaram no filtro</p>
+                                        </div>
+                                        <div
+                                          className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5"
+                                          title={
+                                            `Lidos = soma da coluna “Lidos” da Auditoria (items_collected por termo). `
+                                            + `Universo = soma dos totais da API por termo (overlap possível). `
+                                            + (funnel.exclusiveLidos > 0
+                                              ? `Únicos entre termos: ${Number(funnel.exclusiveLidos).toLocaleString('pt-BR')}. `
+                                              : '')
+                                            + (funnel.duplicatesSum > 0
+                                              ? `Já vistos entre termos: ${Number(funnel.duplicatesSum).toLocaleString('pt-BR')}.`
+                                              : '')
+                                          }
+                                        >
+                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
+                                          <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">
+                                            {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
+                                            {funnel.universeApi > 0 ? (
+                                              <span className="text-[11px] font-semibold text-muted">/{funnel.universeApi.toLocaleString('pt-BR')}</span>
+                                            ) : null}
+                                          </p>
+                                          <p className="text-[10px] leading-tight text-muted line-clamp-2">
+                                            {funnel.coveragePct != null
+                                              ? `${funnel.coveragePct}% · iguais à auditoria`
+                                              : 'soma por termo (auditoria)'}
+                                          </p>
+                                        </div>
+                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos itens pertinentes (que batem com o termo) dos editais classificados. Não usa o total da licitação.">
+                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Valor na lista</p>
+                                          <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(listValue) || 'R$ 0'}</p>
+                                          <p className="text-[10px] leading-tight text-muted">itens pertinentes</p>
+                                        </div>
+                                        <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
+                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
+                                          <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">
+                                            {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
+                                            <span className="text-muted"> · </span>
+                                            {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
+                                          </p>
+                                          <p className="text-[10px] leading-tight text-muted line-clamp-2">você ocultou · já no board</p>
+                                        </div>
+                                      </div>
+                                      {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
+                                        <p className="line-clamp-3 text-[11px] leading-snug text-muted sm:line-clamp-2">
+                                          <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
+                                          {' '}(soma auditoria)
+                                          {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
+                                          {funnel.exclusiveLidos > 0 ? (
+                                            <> · {Number(funnel.exclusiveLidos).toLocaleString('pt-BR')} únicos entre termos</>
+                                          ) : null}
+                                          {funnel.duplicatesSum > 0 ? <> · {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos</> : null}
+                                          {' · '}<strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
+                                          {funnel.currentTerm ? <> · agora “{funnel.currentTerm}”</> : null}.
+                                        </p>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            )}
+
+                            {/* Barra fina só no modo compacto (progresso sem roubar altura) */}
+                            {!headerExpanded && live && (
+                              <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-bg2">
+                                <div
+                                  className="h-full rounded-full bg-[linear-gradient(90deg,#7c5cff,#38d6e6)] transition-all"
+                                  style={{ width: `${activePncpJobProgress.pct}%` }}
+                                />
+                              </div>
+                            )}
+
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1">
                               {[
                                 ['resultados', 'Resultados'],
                                 ['termos', 'Termos e filtros'],
@@ -14993,11 +15102,20 @@ function App() {
                                   key={key}
                                   type="button"
                                   onClick={() => setPncpJobModalTab(key)}
-                                  className={`h-8 rounded-md px-2.5 text-[11px] font-semibold transition sm:h-7 sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
+                                  className={`h-7 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
                                 >
                                   {label}
                                 </button>
                               ))}
+                              {!headerExpanded && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPncpJobHeaderExpanded(true)}
+                                  className="ml-auto h-7 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
+                                >
+                                  Detalhes ▾
+                                </button>
+                              )}
                             </div>
                           </div>
 
