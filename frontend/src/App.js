@@ -15108,12 +15108,22 @@ function App() {
                                   <div className={`rounded-[10px] border px-2.5 py-1.5 text-[11px] leading-snug text-muted sm:text-xs ${
                                     job?.status === 'paused_rate_limit'
                                       ? 'border-amber-500/30 bg-amber-500/10'
-                                      : 'border-primary/25 bg-primary/5'
+                                      : job?.status === 'queued'
+                                        ? 'border-sky-500/30 bg-sky-500/10'
+                                        : 'border-primary/25 bg-primary/5'
                                   }`}>
                                     <strong className="text-ink">
                                       {job?.status === 'paused_rate_limit'
-                                        ? 'Pausado: PNCP limitou — lista preservada.'
-                                        : 'Coletando no PNCP…'}
+                                        ? (job?.progress?.waiting_gate || job?.progress?.bulk_deferred
+                                          ? 'Pausado: aguardando cota/gate PNCP — lista preservada.'
+                                          : 'Pausado: PNCP limitou — lista preservada.')
+                                        : job?.status === 'queued'
+                                          ? (job?.progress?.waiting_for_heavy
+                                            ? `Na fila do coletor (aguardando ${String(job.progress.waiting_for_heavy).slice(0, 40)})…`
+                                            : job?.progress?.waiting_gate
+                                              ? 'Na fila: aguardando cota/gate PNCP…'
+                                              : 'Na fila do coletor — ainda não está pedindo páginas…')
+                                          : 'Coletando no PNCP…'}
                                     </strong>
                                     {' '}
                                     {(() => {
@@ -15138,11 +15148,20 @@ function App() {
                                         const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
                                         if (cd) bits.push(cd);
                                       }
+                                      const ageLabel = formatPncpJobAge(job?.updated_at);
+                                      if (ageLabel && ageLabel !== 'agora' && job?.status !== 'running') {
+                                        bits.push(`último avanço ${ageLabel}`);
+                                      }
                                       return bits.join(' · ');
                                     })()}
                                     {job?.status === 'paused_rate_limit' && (
                                       <span className="mt-0.5 block text-[10px] text-amber-800 dark:text-amber-200 sm:text-[11px]">
                                         Retoma sozinho na próxima página — não re-pede o lido nem apaga a lista.
+                                      </span>
+                                    )}
+                                    {job?.status === 'queued' && (
+                                      <span className="mt-0.5 block text-[10px] text-sky-800 dark:text-sky-200 sm:text-[11px]">
+                                        Lista já coletada permanece. A coleta só avança quando o coletor pega a vez (slot/orçamento).
                                       </span>
                                     )}
                                     {job?.status === 'running' && Number(job?.progress?.current_term_duplicates || 0) > 0 && Number(job?.progress?.new_unique_last_page || 0) === 0 && (

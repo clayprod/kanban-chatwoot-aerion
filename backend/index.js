@@ -2985,7 +2985,13 @@ const PNCP_DEEP_SEARCH_JOBS = new Map();
 const PNCP_DEEP_SEARCH_JOB_TTL = 60 * 60 * 1000; // 1 hora
 const PNCP_DEEP_SEARCH_CANCELLED = new Set();
 const PNCP_DEEP_SEARCH_RESUME_TIMERS = new Map();
+// Workers async vivos (Promise). Distingue "queued no map" de "coleta de verdade".
+const PNCP_DEEP_SEARCH_WORKERS = new Map();
 const PNCP_RATE_LIMIT_RESUME_DELAY_MS = 6 * 60 * 1000;
+// Sem update por este tempo → job live é considerado zombie (worker morto / slot preso).
+const PNCP_DEEP_SEARCH_STALE_MS = Math.max(3 * 60 * 1000, Number(process.env.PNCP_DEEP_STALE_MS) || 8 * 60 * 1000);
+// Bulk não pode segurar o heavy slot esperando orçamento/gate para sempre.
+const PNCP_BULK_GATE_WAIT_MAX_MS = Math.max(30_000, Number(process.env.PNCP_BULK_GATE_WAIT_MAX_MS) || 90_000);
 // Buscas que não viraram watchlist ficam ativas por 15 dias (contados desde started_at)
 // e reexecutam diariamente; depois disso o cleanup remove do banco.
 const PNCP_SEARCH_JOB_ARCHIVE_DAYS = 15;
@@ -8148,21 +8154,44 @@ notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
   );
 };
 
+const isPncpBulkDeferredError = (error) => {
+  if (!error) return false;
+  if (error.code === 'PNCP_BULK_DEFERRED') return true;
+  return /PNCP bulk (budget deferred|gate wait)/i.test(String(error.message || ''));
+};
+
 const waitForPncpGateSlot = async (priority = 'sync') => {
+  const waitStarted = Date.now();
   for (;;) {
     // Espera pausa global (429/reset recente) sem spamar a API.
     while (Date.now() < PNCP_GATE.pausedUntil) {
+      // Bulk: não segura o heavy slot por minutos em pause — devolve e agenda retomada.
+      if (priority === 'bulk' && Date.now() - waitStarted > PNCP_BULK_GATE_WAIT_MAX_MS) {
+        const err = new Error('PNCP bulk gate wait exceeded (paused)');
+        err.code = 'PNCP_BULK_DEFERRED';
+        throw err;
+      }
       const left = PNCP_GATE.pausedUntil - Date.now();
       await sleep(Math.min(4000, Math.max(200, left)));
     }
     // Dosagem por classe: bulk/sync aguardam quando o gate está degradado ou o
     // orçamento horário está na reserva; interactive só espera repor tokens.
     if (!canRunPncpPriority(priority)) {
+      if (priority === 'bulk' && Date.now() - waitStarted > PNCP_BULK_GATE_WAIT_MAX_MS) {
+        const err = new Error('PNCP bulk budget deferred');
+        err.code = 'PNCP_BULK_DEFERRED';
+        throw err;
+      }
       await sleep(priority === 'interactive' ? 500 : 3000);
       continue;
     }
     if (PNCP_GATE.active < PNCP_GATE.max && !hasHigherPncpPriorityWaiter(priority)) {
       return;
+    }
+    if (priority === 'bulk' && Date.now() - waitStarted > PNCP_BULK_GATE_WAIT_MAX_MS) {
+      const err = new Error('PNCP bulk gate wait exceeded (queue)');
+      err.code = 'PNCP_BULK_DEFERRED';
+      throw err;
     }
     await new Promise(resolve => PNCP_GATE.queues[priority].push(resolve));
   }
@@ -8202,17 +8231,26 @@ const withPncpGate = async (fn, { priority = 'sync' } = {}) => {
 
 // Serializa os varredores pesados (deep job, PCA, sync de contratos): rodar
 // mais de um ao mesmo tempo foi o que derrubou a cota do PNCP na prática.
-const PNCP_HEAVY_JOB = { current: null, queue: [] };
+const PNCP_HEAVY_JOB = { current: null, queue: [], since: 0 };
+const getPncpHeavyJobSnapshot = () => ({
+  current: PNCP_HEAVY_JOB.current,
+  queue_len: PNCP_HEAVY_JOB.queue.length,
+  held_for_ms: PNCP_HEAVY_JOB.current && PNCP_HEAVY_JOB.since
+    ? Math.max(0, Date.now() - PNCP_HEAVY_JOB.since)
+    : 0,
+});
 const withPncpHeavyJobSlot = async (name, work) => {
   if (PNCP_HEAVY_JOB.current) {
     console.log(`[PNCP Heavy] "${name}" aguardando "${PNCP_HEAVY_JOB.current}" terminar`);
     await new Promise(resolve => PNCP_HEAVY_JOB.queue.push(resolve));
   }
   PNCP_HEAVY_JOB.current = name;
+  PNCP_HEAVY_JOB.since = Date.now();
   try {
     return await work();
   } finally {
     PNCP_HEAVY_JOB.current = null;
+    PNCP_HEAVY_JOB.since = 0;
     const next = PNCP_HEAVY_JOB.queue.shift();
     if (next) next();
   }
@@ -8256,8 +8294,11 @@ const cleanupPncpDeepJobs = () => {
   const now = Date.now();
   for (const [id, job] of PNCP_DEEP_SEARCH_JOBS.entries()) {
     if (now - Number(job.updated_at || job.started_at || 0) > PNCP_DEEP_SEARCH_JOB_TTL) {
+      // Não limpa se ainda há worker vivo (job longo legítimo).
+      if (PNCP_DEEP_SEARCH_WORKERS.has(id)) continue;
       PNCP_DEEP_SEARCH_JOBS.delete(id);
       PNCP_DEEP_SEARCH_CANCELLED.delete(id);
+      PNCP_DEEP_SEARCH_WORKERS.delete(id);
     }
   }
   // Buscas antigas que não viraram watchlist somem do banco depois de 7 dias
@@ -8402,6 +8443,18 @@ const loadPncpDeepJob = async (jobId, accountId = null) => {
   return normalizePncpSearchJobRow(rows[0]);
 };
 
+const isPncpDeepSearchWorkerAlive = (jobId) => PNCP_DEEP_SEARCH_WORKERS.has(jobId);
+
+const isPncpDeepSearchJobStale = (job, now = Date.now()) => {
+  if (!job) return true;
+  const updated = Number(job.updated_at || 0);
+  const ts = Number.isFinite(updated) && updated > 0
+    ? updated
+    : (Date.parse(job.updated_at) || 0);
+  if (!ts) return true;
+  return (now - ts) > PNCP_DEEP_SEARCH_STALE_MS;
+};
+
 const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
   const { force = false } = opts;
   const job = typeof jobOrId === 'string'
@@ -8410,8 +8463,32 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
   if (!job?.id || !job?.account_id) return false;
   if (!force && ['completed', 'cancelled', 'failed'].includes(job.status)) return false;
   const current = PNCP_DEEP_SEARCH_JOBS.get(job.id);
-  if (current && ['queued', 'running', 'cancelling'].includes(current.status)) {
+  const workerAlive = isPncpDeepSearchWorkerAlive(job.id);
+  const liveStatuses = ['queued', 'running', 'cancelling'];
+  // Só reusa se há worker de verdade e progresso recente. Antes: status queued no
+  // map sem worker = zombie eterno (return true e nada rodava).
+  if (
+    !force
+    && current
+    && liveStatuses.includes(current.status)
+    && workerAlive
+    && !isPncpDeepSearchJobStale(current)
+  ) {
     return true;
+  }
+  const needsCancelRestart = Boolean(
+    (force && workerAlive)
+    || (current && liveStatuses.includes(current.status) && (!workerAlive || isPncpDeepSearchJobStale(current)))
+  );
+  const prevWorker = workerAlive ? PNCP_DEEP_SEARCH_WORKERS.get(job.id) : null;
+  if (needsCancelRestart) {
+    console.warn(
+      `[PNCP Search Job] restart ${job.id} status=${current?.status || job.status} ` +
+      `worker=${workerAlive ? 'alive' : 'dead'} force=${force} stale=${current ? isPncpDeepSearchJobStale(current) : true}`
+    );
+    PNCP_DEEP_SEARCH_CANCELLED.add(job.id);
+    // Libera a chave do map para o novo worker registrar; o antigo sai no finally.
+    PNCP_DEEP_SEARCH_WORKERS.delete(job.id);
   }
   // preserveResults: default true (reexecução diária/botão/retomada).
   // Quem precisa limpar (troca de filtros) passa preserveResults: false.
@@ -8426,11 +8503,35 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
     // Não reseta started_at: o countdown de arquivamento conta desde a criação.
     started_at: job.started_at ? new Date(job.started_at).getTime() : Date.now(),
     updated_at: Date.now(),
+    progress: {
+      ...(job.progress || {}),
+      rate_limited: false,
+      waiting_gate: false,
+      waiting_for_heavy: PNCP_HEAVY_JOB.current || null,
+      heavy: getPncpHeavyJobSnapshot(),
+      gate: getPncpGateSnapshot(),
+    },
   };
-  PNCP_DEEP_SEARCH_CANCELLED.delete(job.id);
   PNCP_DEEP_SEARCH_JOBS.set(job.id, nextJob);
   await persistPncpDeepJob(nextJob);
-  setImmediate(() => runPncpDeepSearchJob(job.id));
+
+  const kick = async () => {
+    if (prevWorker) {
+      try {
+        await Promise.race([
+          Promise.resolve(prevWorker).catch(() => null),
+          sleep(2500),
+        ]);
+      } catch (_) { /* ignore */ }
+    }
+    PNCP_DEEP_SEARCH_CANCELLED.delete(job.id);
+    return runPncpDeepSearchJob(job.id);
+  };
+  setImmediate(() => {
+    kick().catch((err) => {
+      console.warn(`[PNCP Search Job] worker ${job.id} falhou ao iniciar:`, err.message);
+    });
+  });
   return true;
 };
 
@@ -8479,8 +8580,9 @@ const schedulePncpSearchResume = (jobId, delayMs = PNCP_RATE_LIMIT_RESUME_DELAY_
     PNCP_DEEP_SEARCH_RESUME_TIMERS.delete(jobId);
     try {
       const job = await loadPncpDeepJob(jobId);
-      if (job?.status === 'paused_rate_limit') {
-        await startPersistedPncpSearchJob(job);
+      // paused_rate_limit = pausa planejada; queued sem worker = zombie pós-restart/race.
+      if (job && ['paused_rate_limit', 'queued', 'running'].includes(job.status)) {
+        await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
       }
     } catch (error) {
       console.warn('[PNCP Search Job] retomada agendada falhou:', error.message);
@@ -8491,23 +8593,43 @@ const schedulePncpSearchResume = (jobId, delayMs = PNCP_RATE_LIMIT_RESUME_DELAY_
 
 const resumePausedPncpSearchJobs = async () => {
   try {
-    const { rows } = await pool.query(
-      `
-        SELECT *
-          FROM ${PNCP_SEARCH_JOBS_TABLE}
-         WHERE status = 'paused_rate_limit'
-           AND updated_at <= NOW() - INTERVAL '6 minutes'
-         ORDER BY updated_at ASC
-         LIMIT 2
-      `
-    );
     // Não retoma se o gate ainda está em pausa por 429.
     if (Date.now() < PNCP_GATE.pausedUntil) {
       return;
     }
+    const staleMinutes = Math.max(3, Math.ceil(PNCP_DEEP_SEARCH_STALE_MS / 60_000));
+    const { rows } = await pool.query(
+      `
+        SELECT *
+          FROM ${PNCP_SEARCH_JOBS_TABLE}
+         WHERE (
+                status = 'paused_rate_limit'
+                AND updated_at <= NOW() - INTERVAL '6 minutes'
+               )
+            OR (
+                status IN ('queued', 'running')
+                AND updated_at <= NOW() - ($1::int * INTERVAL '1 minute')
+               )
+         ORDER BY updated_at ASC
+         LIMIT 5
+      `,
+      [staleMinutes]
+    );
     for (const row of rows) {
       if (PNCP_DEEP_SEARCH_RESUME_TIMERS.has(row.id)) continue;
-      await startPersistedPncpSearchJob(normalizePncpSearchJobRow(row));
+      const mem = PNCP_DEEP_SEARCH_JOBS.get(row.id);
+      // Worker vivo e progresso fresco: deixa quieto.
+      if (mem && isPncpDeepSearchWorkerAlive(row.id) && !isPncpDeepSearchJobStale(mem)) {
+        continue;
+      }
+      console.log(
+        `[PNCP Search Job] recuperando ${row.id} status=${row.status} ` +
+        `(updated_at stale / worker=${isPncpDeepSearchWorkerAlive(row.id) ? 'alive' : 'dead'})`
+      );
+      await startPersistedPncpSearchJob(normalizePncpSearchJobRow(row), {
+        force: true,
+        preserveResults: true,
+      });
     }
   } catch (error) {
     console.warn('[PNCP Search Job] varredura de retomada falhou:', error.message);
@@ -9014,7 +9136,9 @@ const fetchConsultaComplementItems = async ({
   } catch (error) {
     run.errors.push(`pagina ${pagina}: ${error.message}`);
     run.errors = run.errors.slice(-12);
-    if (isPncpThrottleError(error)) {
+    if (isPncpBulkDeferredError(error)) {
+      run.stop_reason = 'rate_limited';
+    } else if (isPncpThrottleError(error)) {
       notePncpThrottle(error.message || 'consulta complement');
       run.stop_reason = 'rate_limited';
     } else {
@@ -9029,10 +9153,95 @@ const fetchConsultaComplementItems = async ({
   return run;
 };
 
+const pauseDeepSearchForBulkDefer = async (job, reason = 'bulk_deferred') => {
+  if (!job) return;
+  const resumeIn = Math.max(45_000, PNCP_RATE_LIMIT_RESUME_DELAY_MS / 2);
+  job.status = 'paused_rate_limit';
+  job.error = (
+    `Coletor aguardando cota/gate PNCP (${reason}). ` +
+    `${Number(job.total || 0)} na lista preservados. ` +
+    `Retoma em ~${Math.ceil(resumeIn / 60000)} min sem recomeçar · ` +
+    `heavy=${PNCP_HEAVY_JOB.current || 'livre'} · gap ${PNCP_GATE.gapMs}ms.`
+  );
+  job.progress = {
+    ...(job.progress || {}),
+    rate_limited: true,
+    waiting_gate: true,
+    bulk_deferred: true,
+    gate: getPncpGateSnapshot(),
+    heavy: getPncpHeavyJobSnapshot(),
+    resume_in_ms: resumeIn,
+    checkpoint: true,
+    classified_total: job.total,
+  };
+  job.updated_at = Date.now();
+  await persistPncpDeepJob(job);
+  schedulePncpSearchResume(job.id, resumeIn);
+};
+
 const runPncpDeepSearchJob = async (jobId) => {
   const job = PNCP_DEEP_SEARCH_JOBS.get(jobId);
   if (!job) return;
-  return withPncpHeavyJobSlot(`deep-search:${String(job.nome || jobId).slice(0, 40)}`, () => runPncpDeepSearchJobUnlocked(jobId));
+  if (PNCP_DEEP_SEARCH_WORKERS.has(jobId)) {
+    console.log(`[PNCP Deep Search] job ${jobId} já tem worker ativo — skip`);
+    return;
+  }
+  const label = `deep-search:${String(job.nome || jobId).slice(0, 40)}`;
+  const workerPromise = (async () => {
+    try {
+      // Antes de pegar o heavy slot: se bulk não pode rodar, espera FORA do slot
+      // (senão PCA/outro job fica atrás de um wait infinito).
+      let gateWaitStarted = Date.now();
+      let lastPersist = 0;
+      while (
+        !canRunPncpPriority('bulk')
+        || Date.now() < PNCP_GATE.pausedUntil
+        || PNCP_HEAVY_JOB.current
+      ) {
+        if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) return;
+        const mem = PNCP_DEEP_SEARCH_JOBS.get(jobId) || job;
+        mem.status = 'queued';
+        mem.progress = {
+          ...(mem.progress || {}),
+          waiting_gate: !canRunPncpPriority('bulk') || Date.now() < PNCP_GATE.pausedUntil,
+          waiting_for_heavy: PNCP_HEAVY_JOB.current || null,
+          heavy: getPncpHeavyJobSnapshot(),
+          gate: getPncpGateSnapshot(),
+        };
+        mem.updated_at = Date.now();
+        if (Date.now() - lastPersist > 15_000) {
+          await persistPncpDeepJob(mem);
+          lastPersist = Date.now();
+        }
+        // Se só o heavy está ocupado, espera o slot (withPncpHeavyJobSlot abaixo).
+        // Se o gate bulk está bloqueado por tempo demais, pausa e libera o processo.
+        if (
+          (!canRunPncpPriority('bulk') || Date.now() < PNCP_GATE.pausedUntil)
+          && Date.now() - gateWaitStarted > PNCP_BULK_GATE_WAIT_MAX_MS
+        ) {
+          await pauseDeepSearchForBulkDefer(mem, 'pre-slot');
+          return;
+        }
+        if (PNCP_HEAVY_JOB.current && canRunPncpPriority('bulk') && Date.now() >= PNCP_GATE.pausedUntil) {
+          // Gate ok — sai do loop e entra no heavy slot (pode enfileirar lá).
+          break;
+        }
+        await sleep(3000);
+      }
+      return await withPncpHeavyJobSlot(label, () => runPncpDeepSearchJobUnlocked(jobId));
+    } catch (error) {
+      if (isPncpBulkDeferredError(error)) {
+        const mem = PNCP_DEEP_SEARCH_JOBS.get(jobId) || job;
+        await pauseDeepSearchForBulkDefer(mem, error.message || 'bulk_deferred');
+        return;
+      }
+      throw error;
+    } finally {
+      PNCP_DEEP_SEARCH_WORKERS.delete(jobId);
+    }
+  })();
+  PNCP_DEEP_SEARCH_WORKERS.set(jobId, workerPromise);
+  return workerPromise;
 };
 
 const runPncpDeepSearchJobUnlocked = async (jobId) => {
@@ -9425,7 +9634,10 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
             run.errors.push(`pagina ${page}: ${error.message}`);
             run.errors = run.errors.slice(-12);
             run.next_page = page; // mesma página na retomada (não pular)
-            if (isPncpThrottleError(error)) {
+            if (isPncpBulkDeferredError(error)) {
+              // Gate/orçamento bulk esgotado — libera heavy slot via pause (não é throttle do IP).
+              run.stop_reason = 'rate_limited';
+            } else if (isPncpThrottleError(error)) {
               notePncpThrottle(error.message || 'search page');
               run.stop_reason = 'rate_limited';
             } else {
@@ -9874,7 +10086,17 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   // Job órfão: ficou queued/running no banco mas o worker (em memória) morreu num
   // restart. Ao abrir o job, retoma o processamento de onde parou (idempotente).
   if (!memoryJob && ['queued', 'running', 'paused_rate_limit'].includes(job.status)) {
-    startPersistedPncpSearchJob(job).catch(err => console.warn('[PNCP Search Job] resume on open falhou:', err.message));
+    startPersistedPncpSearchJob(job, { force: true, preserveResults: true })
+      .catch(err => console.warn('[PNCP Search Job] resume on open falhou:', err.message));
+  }
+  // Zombie em memória: status live no map sem worker, ou sem progresso há STALE_MS.
+  if (
+    memoryJob
+    && ['queued', 'running'].includes(memoryJob.status)
+    && (!isPncpDeepSearchWorkerAlive(memoryJob.id) || isPncpDeepSearchJobStale(memoryJob))
+  ) {
+    startPersistedPncpSearchJob(memoryJob, { force: true, preserveResults: true })
+      .catch(err => console.warn('[PNCP Search Job] resume zombie on open falhou:', err.message));
   }
   // Job "concluído" mas com coleta parcial (conexão resetada/rate limit no meio):
   // retoma automaticamente para completar o que faltou.
@@ -13143,7 +13365,7 @@ const ensurePcaBootstrap = async () => {
   }
 };
 
-const catchUpPcaSyncIfStale = async () => {
+const catchUpPcaSyncIfStale = async ({ deferIfDeepJobs = true, attempt = 0 } = {}) => {
   if (pcaBootstrapState.running) return { started: false, reason: 'bootstrap_running' };
   const { rows } = await pool.query(
     `SELECT bootstrap_concluido,
@@ -13153,6 +13375,28 @@ const catchUpPcaSyncIfStale = async () => {
   );
   if (!rows[0]?.bootstrap_concluido || rows[0]?.stale !== true) {
     return { started: false, reason: 'up_to_date_or_not_initialized' };
+  }
+  // Deep jobs de editais têm prioridade prática: catch-up de PCA no boot roubava o
+  // único heavy slot e deixava buscas em "Na fila" por horas.
+  if (deferIfDeepJobs) {
+    const live = await pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM ${PNCP_SEARCH_JOBS_TABLE}
+        WHERE status IN ('queued', 'running', 'paused_rate_limit', 'cancelling')`
+    );
+    const liveN = Number(live.rows[0]?.n || 0);
+    if (liveN > 0 && attempt < 12) {
+      const delayMs = Math.min(60 * 60 * 1000, 15 * 60 * 1000 * Math.max(1, attempt + 1));
+      console.log(
+        `[pca] catch-up adiado: ${liveN} deep job(s) ativo(s) — retry em ~${Math.round(delayMs / 60000)} min`
+      );
+      setTimeout(() => {
+        catchUpPcaSyncIfStale({ deferIfDeepJobs: true, attempt: attempt + 1 }).catch((err) => {
+          console.warn('[pca] catch-up adiado falhou:', err.message);
+        });
+      }, delayMs);
+      return { started: false, reason: 'deferred_deep_jobs', live_jobs: liveN, retry_in_ms: delayMs };
+    }
   }
   console.log('[pca] sincronização atrasada detectada; iniciando catch-up');
   const result = await runPcaDailySync();
@@ -17513,10 +17757,24 @@ const initializeDataLayer = async () => {
   await resumePausedPncpSearchJobs();
   await pollStageChanges();
 
+  // Retoma buscas profundas ANTES do catch-up PCA — senão o heavy slot fica
+  // com o PCA e os jobs de editais ficam "Na fila" sem coletar.
+  const { rows } = await pool.query(
+    `SELECT id FROM ${PNCP_SEARCH_JOBS_TABLE}
+      WHERE status IN ('queued', 'running', 'paused_rate_limit')
+      ORDER BY updated_at DESC
+      LIMIT 10`
+  );
+  for (const row of rows) {
+    startPersistedPncpSearchJob(row.id, { force: true, preserveResults: true }).catch(() => {});
+  }
+  if (rows.length) console.log(`[PNCP Search Job] retomando ${rows.length} busca(s) órfã(s) após restart.`);
+
+  // PCA bootstrap/catch-up depois (e adia se ainda houver deep jobs vivos).
   setImmediate(() => {
     ensurePcaBootstrap()
       .then((bootstrap) => {
-        if (!bootstrap?.started) return catchUpPcaSyncIfStale();
+        if (!bootstrap?.started) return catchUpPcaSyncIfStale({ deferIfDeepJobs: true });
         return null;
       })
       .catch((error) => {
@@ -17529,18 +17787,6 @@ const initializeDataLayer = async () => {
       console.warn('[pncp-outcomes] verificação inicial da base:', error.message);
     });
   });
-
-  // Retoma buscas profundas que ficaram órfãs após um restart.
-  const { rows } = await pool.query(
-    `SELECT id FROM ${PNCP_SEARCH_JOBS_TABLE}
-      WHERE status IN ('queued', 'running', 'paused_rate_limit')
-      ORDER BY updated_at DESC
-      LIMIT 10`
-  );
-  for (const row of rows) {
-    startPersistedPncpSearchJob(row.id).catch(() => {});
-  }
-  if (rows.length) console.log(`[PNCP Search Job] retomando ${rows.length} busca(s) órfã(s) após restart.`);
 };
 
 let dataLayerInitializationRunning = false;
