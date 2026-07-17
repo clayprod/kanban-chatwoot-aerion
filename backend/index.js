@@ -8056,6 +8056,8 @@ const PNCP_GATE = {
   totalOk: 0,
   totalThrottle: 0,
   pausedUntil: 0,
+  lastThrottleAt: 0,
+  lastHealAt: 0,
   // Orçamento horário agregado (token bucket): dosa o VOLUME total, não só o
   // ritmo. bulk para de consumir com <30% restante; sync com <10%; o resto
   // fica reservado para o uso interativo.
@@ -8076,12 +8078,44 @@ const refillPncpBudget = () => {
 
 const isPncpGateDegraded = () => PNCP_GATE.gapMs >= 4000 || PNCP_GATE.failStreak >= 2;
 
+/**
+ * Cura passiva do gate: sem request de sucesso o failStreak/gap nunca baixavam e
+ * bulk ficava bloqueado para sempre (deadlock — UI só faz 304 local, não PNCP).
+ */
+const healPncpGatePassive = () => {
+  const now = Date.now();
+  if (now < PNCP_GATE.pausedUntil) return;
+  if (PNCP_GATE.failStreak <= 0 && PNCP_GATE.gapMs <= PNCP_GATE.gapMsBase) return;
+  const sinceThrottle = PNCP_GATE.lastThrottleAt
+    ? now - PNCP_GATE.lastThrottleAt
+    : Number.POSITIVE_INFINITY;
+  // Só cura depois de um tempo sem novo throttle (pausa planejada + folga).
+  if (Number.isFinite(sinceThrottle) && sinceThrottle < 90_000) return;
+  if (PNCP_GATE.lastHealAt && now - PNCP_GATE.lastHealAt < 20_000) return;
+  PNCP_GATE.lastHealAt = now;
+  if (PNCP_GATE.failStreak > 0) {
+    PNCP_GATE.failStreak = Math.max(0, PNCP_GATE.failStreak - 1);
+  }
+  if (PNCP_GATE.gapMs > PNCP_GATE.gapMsBase) {
+    PNCP_GATE.gapMs = Math.max(PNCP_GATE.gapMsBase, Math.round(PNCP_GATE.gapMs * 0.82));
+    console.log(
+      `[PNCP Gate] heal passivo → gap=${PNCP_GATE.gapMs}ms failStreak=${PNCP_GATE.failStreak}`
+    );
+  }
+};
+
 const canRunPncpPriority = (priority) => {
   refillPncpBudget();
+  healPncpGatePassive();
   const b = PNCP_GATE.budget;
   if (priority === 'interactive') return b.tokens >= 1;
   if (priority === 'bulk') {
-    return !isPncpGateDegraded() && b.tokens > b.capacity * 0.3;
+    // Enquanto a pausa global (429/reset) está ativa, bulk não roda.
+    if (Date.now() < PNCP_GATE.pausedUntil) return false;
+    // Degradado (gap alto / failStreak) NÃO bloqueia mais o bulk: só deixa lento
+    // (gapMs). Bloquear criava deadlock — sem sucesso PNCP o gate nunca curava.
+    // Reserva de orçamento: bulk só com >25% (antes 30%) para interactive ainda ter folga.
+    return b.tokens > b.capacity * 0.25;
   }
   return b.tokens > b.capacity * 0.1; // sync
 };
@@ -8128,6 +8162,7 @@ notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
   PNCP_GATE.failStreak += 1;
   PNCP_GATE.successStreak = 0;
   PNCP_GATE.totalThrottle += 1;
+  PNCP_GATE.lastThrottleAt = Date.now();
   PNCP_GATE.max = 1;
   // Freia o gap (backoff exponencial suave).
   PNCP_GATE.gapMs = Math.min(

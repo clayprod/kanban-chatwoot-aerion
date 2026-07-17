@@ -8667,11 +8667,13 @@ function App() {
     const mainPagesEst = mainUniverse > 0 && mainPageSize > 0
       ? Math.ceil(mainUniverse / mainPageSize)
       : null;
-    // Brutos “efetivos”: prefere unique_new (dedupe entre termos); fallback soma de lidos.
+    // Brutos do card = progresso do termo principal (páginas × itens da API).
+    // NÃO usar progress.items_collected (congela no baseline do preserve e a UI
+    // fica em 338 enquanto o term_run já está em 600+).
     const sessionUnique = Number(job?.progress?.items_collected || job?.query_plan?.raw_unique_collected || 0);
-    const brutosLidos = sessionUnique > 0
-      ? sessionUnique
-      : (uniqueNewSum > 0 ? uniqueNewSum : (mainRead || brutosLidosSum));
+    const brutosLidos = mainRead > 0
+      ? mainRead
+      : (uniqueNewSum > 0 ? uniqueNewSum : (sessionUnique > 0 ? sessionUnique : brutosLidosSum));
     const classified = Number(classifiedTotal || job?.total || 0);
     const statusFilter = String(job?.filters?.status || 'recebendo_proposta');
     const isOpenOnly = normalizeText(statusFilter) === 'recebendo_proposta';
@@ -19768,6 +19770,15 @@ function App() {
             const SITUACAO_MAP = { '1': 'Nula', '01': 'Nula', '2': 'Ativa', '02': 'Ativa', '3': 'Suspensa', '03': 'Suspensa', '4': 'Inapta', '04': 'Inapta', '8': 'Baixada', '08': 'Baixada' };
             const situacaoLabel = (s) => SITUACAO_MAP[String(s || '')] || s || '—';
             const UF_LIST = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+            // Nome fantasia (ou razão social) + cidade + UF → busca Google em nova aba
+            const googleSearchUrlForCompany = (row) => {
+              const name = String(row?.nome_fantasia || row?.razao_social || '').trim();
+              const city = String(row?.municipio_nome || '').trim();
+              const uf = String(row?.uf || '').trim();
+              const q = [name, city, uf].filter(Boolean).join(' ');
+              if (!q) return null;
+              return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+            };
 
             // ── Import ────────────────────────────────────────────────────
             const openImportDialog = (row, isDup) => {
@@ -21788,6 +21799,25 @@ function App() {
                                           <span className={`flex-shrink-0 rounded-full border px-2 py-0.5 font-medium ${situacaoClass(f.situacao_cadastral)}`}>
                                             {situacaoLabel(f.situacao_cadastral)}
                                           </span>
+                                          {(() => {
+                                            const fGoogleUrl = googleSearchUrlForCompany({
+                                              nome_fantasia: f.nome_fantasia,
+                                              razao_social: row.razao_social,
+                                              municipio_nome: f.municipio_nome,
+                                              uf: f.uf,
+                                            });
+                                            return fGoogleUrl ? (
+                                              <a
+                                                href={fGoogleUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="flex-shrink-0 rounded-[9px] border border-line bg-bg2 px-2 py-1 text-xs text-muted transition hover:border-primary/30 hover:text-ink"
+                                                title="Buscar empresa no Google"
+                                              >
+                                                Buscar no Google
+                                              </a>
+                                            ) : null;
+                                          })()}
                                           <button
                                             type="button"
                                             onClick={() => openImportDialog({ ...f, razao_social: row.razao_social, capital_social: row.capital_social, porte_da_empresa: row.porte_da_empresa, opcao_pelo_simples: row.opcao_pelo_simples, opcao_pelo_mei: row.opcao_pelo_mei, socios_nomes: row.socios_nomes, primeiro_socio: row.primeiro_socio }, fDup)}
@@ -21888,6 +21918,21 @@ function App() {
                                     >
                                       {isDup ? 'Atualizar' : 'Importar'}
                                     </button>
+                                    {(() => {
+                                      const googleUrl = googleSearchUrlForCompany(row);
+                                      return googleUrl ? (
+                                        <a
+                                          href={googleUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          onClick={e => e.stopPropagation()}
+                                          className="inline-flex h-9 items-center rounded-[11px] border border-line bg-bg2 px-3 text-xs font-semibold text-muted transition hover:border-primary/30 hover:text-ink"
+                                          title="Buscar empresa no Google (nome + cidade + UF)"
+                                        >
+                                          Buscar no Google
+                                        </a>
+                                      ) : null;
+                                    })()}
                                     <button
                                       type="button"
                                       onClick={toggleExpand}
