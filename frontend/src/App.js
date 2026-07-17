@@ -3964,22 +3964,24 @@ const LicitacaoCardBody = memo(function LicitacaoCardBody({ opportunity, onEdit 
     : (itemCount === 0 || technicalRequirementsCount === 0 || technicalPendingCount > 0 || technicalItemsWithoutChecklistCount > 0)
       ? { label: 'Pendência Téc.', className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning' }
       : { label: 'Atende', className: 'border border-status-success/30 bg-status-success/10 text-status-success' };
-  // Prazo vencido move automaticamente para Perdido — não há badge "atrasado".
-  const prazoClass = opportunity.prazo_status === 'vence_hoje'
-    ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
-    : opportunity.prazo_status === 'vence_48h'
-      ? 'border border-status-warning/35 bg-status-warning/10 text-status-warning'
-      : opportunity.prazo_status === 'sem_data'
-        ? 'border border-border bg-muted/20 text-muted'
-        : 'border border-primary/30 bg-primary/10 text-primary';
-  const prazoLabel = opportunity.prazo_status === 'vence_hoje'
-    ? 'Vence hoje'
-    : opportunity.prazo_status === 'vence_48h'
-      ? 'Vence em 48h'
-      : opportunity.prazo_status === 'sem_data'
-        ? 'Sem prazo'
-        : opportunity.prazo_status === 'atrasado'
-          ? 'Perdido (prazo)'
+  // Prazo vencido fica no funil até confirmação (modal); badge "Prazo vencido" quando atrasado.
+  const prazoClass = opportunity.prazo_status === 'atrasado'
+    ? 'border border-status-danger/40 bg-status-danger/15 text-status-danger'
+    : opportunity.prazo_status === 'vence_hoje'
+      ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
+      : opportunity.prazo_status === 'vence_48h'
+        ? 'border border-status-warning/35 bg-status-warning/10 text-status-warning'
+        : opportunity.prazo_status === 'sem_data'
+          ? 'border border-border bg-muted/20 text-muted'
+          : 'border border-primary/30 bg-primary/10 text-primary';
+  const prazoLabel = opportunity.prazo_status === 'atrasado'
+    ? 'Prazo vencido'
+    : opportunity.prazo_status === 'vence_hoje'
+      ? 'Vence hoje'
+      : opportunity.prazo_status === 'vence_48h'
+        ? 'Vence em 48h'
+        : opportunity.prazo_status === 'sem_data'
+          ? 'Sem prazo'
           : 'No prazo';
   // Status operacional só Ativo|Suspenso (legado perdido/ganho/… → Ativo; coluna do pipe é o encerramento).
   const statusKey = String(opportunity.status || 'ativo').toLowerCase() === 'suspenso' ? 'suspenso' : 'ativo';
@@ -4507,11 +4509,9 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
       });
       onPromoted && onPromoted();
       setSelecionados(prev => ({ ...prev, [ct.key]: new Set() }));
-      setItems(prev => prev.map(it => (
-        itemIdsPromoviveis.includes(it.item_id)
-          ? { ...it, ja_promovido: true, promovido_para_opportunity_id: r.data?.id || it.promovido_para_opportunity_id }
-          : it
-      )));
+      // Itens promovidos saem da busca (já estão no pipeline).
+      setItems(prev => prev.filter(it => !itemIdsPromoviveis.includes(it.item_id)));
+      setTotal(prev => Math.max(0, Number(prev || 0) - itemIdsPromoviveis.length));
       setLastPromoted({
         titulo: r.data?.titulo || ct.contratacao_nome || `Contratação ${ct.contratacao_id || ''}`,
         itens: itemIdsPromoviveis.length,
@@ -4571,12 +4571,10 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     const key = `promote:${item.item_id}`;
     setItemBusy(prev => ({ ...prev, [key]: true }));
     try {
-      const r = await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
-      updateItemLocal(item.item_id, {
-        ja_promovido: true,
-        signal_status: 'promovido',
-        promovido_para_opportunity_id: r.data?.id || item.promovido_para_opportunity_id,
-      });
+      await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
+      // Item promovido sai da busca (já está no pipeline).
+      setItems(prev => prev.filter(it => String(it.item_id) !== String(item.item_id)));
+      setTotal(prev => Math.max(0, Number(prev || 0) - 1));
       onPromoted && onPromoted();
     } catch (e) {
       alert(`Erro ao promover item: ${e.response?.data?.error || e.message}`);
@@ -4650,6 +4648,10 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
               órgãos públicos publicam, com antecedência, o que pretendem comprar no ano — ainda{' '}
               <strong className="font-semibold text-ink">antes do edital</strong>.
               Busque, use <strong className="font-semibold text-ink">Salvar e monitorar</strong> e a busca vira card em Minhas buscas.
+              {' '}
+              <span className="text-muted2" title="Itens já promovidos ao board não aparecem de novo nos resultados da busca.">
+                A busca não lista itens já no pipeline.
+              </span>
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -4855,6 +4857,9 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
                 {' · '}
                 <span className="font-semibold text-ink">{total}</span> item(ns)
                 <span className="text-muted2"> · ordenado por maior valor</span>
+                <span className="text-muted2" title="Itens já promovidos ao board ficam de fora desta lista.">
+                  {' · '}sem o que já está no pipe
+                </span>
               </p>
             )}
             {loading && <p className="text-xs text-muted">Buscando no banco de PCAs…</p>}
@@ -7225,7 +7230,7 @@ function App() {
   const [pncpWatchlistDialog, setPncpWatchlistDialog] = useState(null); // { source: 'job'|'search', jobId?, defaultName, contextLabel }
   const [pncpWatchlistSaving, setPncpWatchlistSaving] = useState(false);
   const [pncpResultLocalQuery, setPncpResultLocalQuery] = useState('');
-  // list = ativos (sem descartados); pipeline = já no board; hidden = só na aba Descartados.
+  // list = disponíveis (sem descartados e sem já no pipeline); pipeline = já no board; hidden = Descartados.
   const [pncpResultScope, setPncpResultScope] = useState('list');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
   const [pncpJobResultsPageSize, setPncpJobResultsPageSize] = useState(25);
@@ -7365,10 +7370,18 @@ function App() {
   const [processQuery, setProcessQuery] = useState('');
   // Dark (Aerion Command) is the only theme — no light/dark toggle.
   const isDarkMode = true;
-  const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '', name: '', role: 'member', allowedViews: null });
+  const [authStatus, setAuthStatus] = useState({ checked: false, authenticated: false, email: '', name: '', role: 'member', allowedViews: null, uid: null, pagePermissions: null });
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
+  // Modal: prazos vencidos → confirmar Perdido
+  const [expiredProposalModal, setExpiredProposalModal] = useState(null); // { items, selectedIds }
+  const [expiredProposalBusy, setExpiredProposalBusy] = useState(false);
+  const expiredProposalCheckedRef = useRef(false);
+  const expiredProposalOpenRef = useRef(false);
+  // Modal: pregões eletrônicos com sessão hoje
+  const [sessoesHojeModal, setSessoesHojeModal] = useState(null); // { items, dismissKey }
+  const sessoesHojeCheckedRef = useRef(false);
 
   // When logged in, the app shell (h-dvh + chevron scroll) owns vertical overflow.
   useEffect(() => {
@@ -7496,6 +7509,8 @@ function App() {
           name: response.data?.name || '',
           role: response.data?.role || 'member',
           allowedViews: response.data?.allowed_views ?? null,
+          uid: response.data?.uid ?? null,
+          pagePermissions: response.data?.page_permissions ?? null,
         });
       })
       .catch(() => {
@@ -7638,17 +7653,57 @@ function App() {
         u.id === userId
           ? {
               ...u,
+              role: data?.role != null ? data.role : (data?.is_app_admin ? 'admin' : u.role),
+              is_app_admin: data?.is_app_admin != null ? data.is_app_admin : (patch.is_app_admin ?? u.is_app_admin),
               allowed_views: data?.allowed_views != null ? data.allowed_views : (patch.allowed_views ?? u.allowed_views),
+              page_permissions: data?.page_permissions != null ? data.page_permissions : (patch.page_permissions ?? u.page_permissions),
               is_seller: data?.is_seller != null ? data.is_seller : (patch.is_seller ?? u.is_seller),
               seller_label: data?.seller_label !== undefined ? data.seller_label : (patch.seller_label !== undefined ? patch.seller_label : u.seller_label),
               seller_identity: data?.seller_identity !== undefined ? data.seller_identity : u.seller_identity,
             }
           : u
       )));
+      // Se alterou o próprio acesso, recarrega /auth/status para refletir role/perms na sessão.
+      if (authStatus.uid != null && Number(authStatus.uid) === Number(userId)) {
+        try {
+          const status = await axios.get('/api/auth/status');
+          if (status.data?.authenticated) {
+            setAuthStatus((prev) => ({
+              ...prev,
+              role: status.data.role || prev.role,
+              allowedViews: status.data.allowed_views ?? prev.allowedViews,
+              pagePermissions: status.data.page_permissions ?? prev.pagePermissions,
+              uid: status.data.uid ?? prev.uid,
+            }));
+          }
+        } catch (_) { /* ignore */ }
+      }
     } catch (error) {
       console.error('Error saving user access:', error);
     }
-  }, []);
+  }, [authStatus.uid]);
+
+  /** Acesso por aba: none | view | edit. Admin do app = edit em tudo. */
+  const pageAccessLevel = useCallback((viewName) => {
+    if (authStatus.role === 'admin') return 'edit';
+    const perms = authStatus.pagePermissions;
+    if (perms && typeof perms === 'object') {
+      const key = viewName;
+      const level = String(perms[key] || perms[viewName] || '').toLowerCase();
+      if (level === 'view' || level === 'edit' || level === 'none') return level;
+    }
+    const av = authStatus.allowedViews;
+    if (!av || av.length === 0) return 'edit'; // legado: sem restrição = acesso amplo
+    return av.includes(viewName) ? 'edit' : 'none';
+  }, [authStatus.role, authStatus.pagePermissions, authStatus.allowedViews]);
+
+  const canViewPage = useCallback((viewName) => {
+    if (viewName === 'Notificações') return true;
+    const level = pageAccessLevel(viewName);
+    return level === 'view' || level === 'edit';
+  }, [pageAccessLevel]);
+
+  const canEditPage = useCallback((viewName) => pageAccessLevel(viewName) === 'edit', [pageAccessLevel]);
 
   const loadMetas = useCallback((year, background = false) => {
     if (!background) setMetasLoading(true);
@@ -8204,6 +8259,82 @@ function App() {
     }
     loadLicitacoes();
   }, [authStatus.authenticated, loadLicitacoes]);
+
+  // Após login: candidatos a Perdido (confirmação) e pregões eletrônicos de hoje (informativo).
+  useEffect(() => {
+    if (!authStatus.authenticated) {
+      setExpiredProposalModal(null);
+      setSessoesHojeModal(null);
+      expiredProposalCheckedRef.current = false;
+      sessoesHojeCheckedRef.current = false;
+      return undefined;
+    }
+    let cancelled = false;
+    const run = async () => {
+      // Perdido e pregão de hoje: só quem pode editar Licitações.
+      if (!canEditPage('Licitações')) {
+        expiredProposalCheckedRef.current = true;
+        sessoesHojeCheckedRef.current = true;
+        return;
+      }
+      if (!expiredProposalCheckedRef.current) {
+        expiredProposalCheckedRef.current = true;
+        try {
+          const { data } = await axios.get('/api/licitacoes/opportunities/expired-proposal-candidates');
+          const items = data?.items || [];
+          if (!cancelled && items.length > 0) {
+            expiredProposalOpenRef.current = true;
+            setExpiredProposalModal({ items, selectedIds: items.map((i) => i.id) });
+          }
+        } catch (err) {
+          console.warn('[licitacoes] candidates prazo vencido:', err?.message || err);
+        }
+      }
+      // Pregões só depois do modal de Perdido (se houver).
+      if (!sessoesHojeCheckedRef.current) {
+        if (!canEditPage('Licitações')) {
+          sessoesHojeCheckedRef.current = true;
+          return;
+        }
+        const uid = authStatus.uid || authStatus.email || 'anon';
+        const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+        const dismissKey = `pregao-sessoes-hoje-dismissed:${uid}:${dayKey}`;
+        if (typeof localStorage !== 'undefined' && localStorage.getItem(dismissKey)) {
+          sessoesHojeCheckedRef.current = true;
+          return;
+        }
+        // Aguarda o modal de Perdido fechar (se abriu) antes do popup informativo.
+        await new Promise((resolve) => {
+          const start = Date.now();
+          const tick = () => {
+            if (cancelled) return resolve();
+            if (!expiredProposalOpenRef.current || Date.now() - start > 180000) return resolve();
+            setTimeout(tick, 400);
+          };
+          // Um frame para o setState do modal de Perdido gravar a ref.
+          setTimeout(tick, 50);
+        });
+        if (cancelled) return;
+        // Revalida permissão (status pode ter mudado enquanto o modal de Perdido estava aberto).
+        if (!canEditPage('Licitações')) {
+          sessoesHojeCheckedRef.current = true;
+          return;
+        }
+        sessoesHojeCheckedRef.current = true;
+        try {
+          const { data } = await axios.get('/api/licitacoes/opportunities/sessoes-hoje');
+          const items = data?.items || [];
+          if (!cancelled && items.length > 0) {
+            setSessoesHojeModal({ items, dismissKey });
+          }
+        } catch (err) {
+          console.warn('[licitacoes] sessoes-hoje:', err?.message || err);
+        }
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [authStatus.authenticated, authStatus.uid, authStatus.email, canEditPage]);
 
   // Carregar modalidades para a busca do PNCP quando a aba Licitações estiver ativa
   const [pncpFiltersLoaded, setPncpFiltersLoaded] = useState(false);
@@ -8926,34 +9057,36 @@ function App() {
       return acc;
     }, { visible: 0, hidden: 0, pipeline: 0 });
     const listFromServer = Number(server.list ?? NaN);
+    const visibleFromServer = Number(server.visible ?? NaN);
     const allFromServer = Number(server.all ?? NaN);
     const hiddenFromServer = Number(server.hidden ?? NaN);
     const pipelineFromServer = Number(server.pipeline ?? NaN);
     const totalPayload = Number(pncpSearchResults?.total || 0);
-    // "Na lista" = ativos (sem descartados).
-    const list = Number.isFinite(listFromServer)
-      ? listFromServer
-      : Number.isFinite(allFromServer) && Number.isFinite(hiddenFromServer)
-        ? Math.max(0, allFromServer - hiddenFromServer)
-        : Math.max(0, totalPayload);
     const hidden = Number.isFinite(hiddenFromServer)
       ? Math.max(hiddenFromServer, pageCounts.hidden)
       : Math.max(pageCounts.hidden, pncpHiddenIds.length);
     const pipeline = Number.isFinite(pipelineFromServer)
       ? Math.max(pipelineFromServer, pageCounts.pipeline)
       : pageCounts.pipeline;
+    // "Na lista" = só disponíveis (sem descartados e sem já no pipeline).
+    const visible = Number.isFinite(visibleFromServer)
+      ? visibleFromServer
+      : Number.isFinite(listFromServer)
+        ? listFromServer
+        : Math.max(0, totalPayload);
+    const list = Number.isFinite(listFromServer) ? listFromServer : visible;
     return {
-      all: list, // alias legado usado em chips "Na lista"
+      all: Number.isFinite(allFromServer) ? allFromServer : (list + hidden + pipeline),
       list,
-      visible: Math.max(0, list - pipeline),
+      visible,
       hidden,
       pipeline,
     };
   }, [pncpResultsWithVisibility, pncpSearchResults?.visibility_counts, pncpSearchResults?.total, pncpHiddenIds.length]);
 
   const visiblePncpResults = useMemo(() => {
-    // Aba resultados: lista ativa (sem descartados). Aba/scope hidden: só descartados.
-    // Pipeline: filtro client-side sobre a página (board match).
+    // Aba resultados: só disponíveis (sem descartados e sem já no pipeline).
+    // Itens no pipe somem da lista (visibility=pipeline no backend); sem aba "Já no pipeline".
     let list;
     if (pncpResultScope === 'hidden' || pncpResultScope === 'descartados' || pncpJobModalTab === 'descartados') {
       // Backend já devolve só visibility=hidden; aceitar payload da aba sem re-filtrar
@@ -8971,14 +9104,9 @@ function App() {
           list = pncpResultsWithVisibility;
         }
       }
-    } else if (pncpResultScope === 'pipeline') {
-      list = pncpResultsWithVisibility.filter(item => item.__visibility === 'pipeline');
     } else {
-      // list | all | visible — nunca mostrar descartados na lista principal
-      list = pncpResultsWithVisibility.filter(item => item.__visibility !== 'hidden');
-      if (pncpResultScope === 'visible') {
-        list = list.filter(item => item.__visibility === 'visible');
-      }
+      // list | all | visible — só disponíveis (não descartados e não no pipeline)
+      list = pncpResultsWithVisibility.filter(item => item.__visibility === 'visible');
     }
     // Filtro client-side: SRP só é conhecido após enriquecimento (itens sem
     // detalhe têm srp === null e são ocultados apenas com o filtro ligado).
@@ -9982,7 +10110,9 @@ function App() {
 
   const normalizePncpResultScope = (raw) => {
     const scope = String(raw || 'list').toLowerCase();
-    if (scope === 'pipeline' || scope === 'visible' || scope === 'all') return 'list';
+    // pipeline removido da UI — itens no board só somem de "Na lista" via reconcile.
+    if (scope === 'pipeline') return 'list';
+    if (scope === 'visible' || scope === 'all' || scope === 'active') return 'list';
     if (scope === 'descartados' || scope === 'discarded' || scope === 'hidden') return 'hidden';
     return scope || 'list';
   };
@@ -9996,7 +10126,7 @@ function App() {
   const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
     if (!jobId) return null;
     const effectivePage = Math.max(1, Number(page) || 1);
-    // list = ativos; hidden = aba Descartados; pipeline filtra no client sobre a lista ativa.
+    // list = disponíveis (sem pipeline); pipeline = já no board; hidden = Descartados.
     // Preferir override explícito; senão refs (poll não fica preso no scope do open).
     const rawScope = overrides.scope != null
       ? overrides.scope
@@ -10046,11 +10176,12 @@ function App() {
     ));
     setPncpSearchResults(prev => ({
       ...prev,
-      // Lista vazia legítima (0 descartados) deve limpar; não reaproveitar itens da outra aba.
+      // Lista vazia legítima (0 itens no scope) deve limpar; não reaproveitar itens da outra aba.
       items: loadedItems,
-      total: effectiveScope === 'hidden'
+      // total = contagem do scope atual (list / pipeline / hidden).
+      total: (effectiveScope === 'hidden' || effectiveScope === 'pipeline')
         ? total
-        : (total || Number(visCounts?.list ?? visCounts?.all ?? prev.total ?? 0)),
+        : (total || Number(visCounts?.list ?? visCounts?.visible ?? prev.total ?? 0)),
       pagina: Number(payload.pagina || effectivePage),
       tamanhoPagina: Number(payload.tamanhoPagina || effectiveTam),
       totalPaginas: Number(payload.totalPaginas || 1),
@@ -10063,7 +10194,7 @@ function App() {
         payload.list_total
         ?? payload.collection?.list_total
         ?? visCounts?.list
-        ?? (effectiveScope === 'hidden' ? prev.list_total : total)
+        ?? (effectiveScope === 'list' ? total : prev.list_total)
         ?? prev.list_total
         ?? 0
       ),
@@ -12382,6 +12513,8 @@ function App() {
         name: response.data?.name || '',
         role: response.data?.role || 'member',
         allowedViews: response.data?.allowed_views ?? null,
+        uid: response.data?.uid ?? null,
+        pagePermissions: response.data?.page_permissions ?? null,
       });
       setLoginForm({ email: '', password: '' });
     } catch (error) {
@@ -12400,6 +12533,65 @@ function App() {
       console.error('Error logging out:', error);
     }
     setAuthStatus({ checked: true, authenticated: false, email: '' });
+    setExpiredProposalModal(null);
+    setSessoesHojeModal(null);
+    expiredProposalCheckedRef.current = false;
+    sessoesHojeCheckedRef.current = false;
+  };
+
+  const confirmExpiredProposalMove = async () => {
+    if (!expiredProposalModal || expiredProposalBusy) return;
+    const ids = expiredProposalModal.selectedIds?.length
+      ? expiredProposalModal.selectedIds
+      : (expiredProposalModal.items || []).map((i) => i.id);
+    if (!ids.length) {
+      expiredProposalOpenRef.current = false;
+      setExpiredProposalModal(null);
+      return;
+    }
+    setExpiredProposalBusy(true);
+    try {
+      await axios.post('/api/licitacoes/opportunities/confirm-expired-move', { ids });
+      expiredProposalOpenRef.current = false;
+      setExpiredProposalModal(null);
+      await loadLicitacoes();
+    } catch (err) {
+      console.error('[licitacoes] confirm-expired-move:', err);
+      window.alert(err?.response?.data?.error || 'Não foi possível enviar para Perdido.');
+    } finally {
+      setExpiredProposalBusy(false);
+    }
+  };
+
+  const dismissExpiredProposalMove = async () => {
+    if (!expiredProposalModal || expiredProposalBusy) return;
+    const ids = (expiredProposalModal.items || []).map((i) => i.id);
+    if (!ids.length) {
+      expiredProposalOpenRef.current = false;
+      setExpiredProposalModal(null);
+      return;
+    }
+    setExpiredProposalBusy(true);
+    try {
+      await axios.post('/api/licitacoes/opportunities/dismiss-expired-move', { ids });
+      expiredProposalOpenRef.current = false;
+      setExpiredProposalModal(null);
+      await loadLicitacoes();
+    } catch (err) {
+      console.error('[licitacoes] dismiss-expired-move:', err);
+      window.alert(err?.response?.data?.error || 'Não foi possível manter no funil.');
+    } finally {
+      setExpiredProposalBusy(false);
+    }
+  };
+
+  const dismissSessoesHojeModal = () => {
+    if (sessoesHojeModal?.dismissKey && typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(sessoesHojeModal.dismissKey, '1');
+      } catch (_) { /* ignore */ }
+    }
+    setSessoesHojeModal(null);
   };
 
   const historyTicks = useMemo(() => {
@@ -13561,9 +13753,7 @@ function App() {
                     if (authStatus.role === 'admin') return true;
                     // Preferências de push/inbox são pessoais — sempre visíveis.
                     if (item.view === 'Notificações') return true;
-                    const av = authStatus.allowedViews;
-                    if (!av || av.length === 0) return true;
-                    return av.includes(item.accessView || item.view);
+                    return canViewPage(item.accessView || item.view);
                   });
                   if (!groupItems.length) return null;
                   return (
@@ -14500,7 +14690,7 @@ function App() {
                         <h3 className={`${sectionTitle} text-base mb-3`}>Prazos críticos</h3>
                         <p className={`${subtle} mb-3`}>
                           Impugnação = 3 d.ú. antes do fim da proposta (Lei 14.133 art. 164), mesmo sem data preenchida.
-                          Recurso pós-julgamento só conta se a data estiver no card. Proposta vencida: Ativo → Perdido; Suspenso → Monitoramento.
+                          Recurso pós-julgamento só conta se a data estiver no card. Proposta vencida: Ativo pede confirmação antes de Perdido; Suspenso → Monitoramento.
                         </p>
                         <div className="space-y-2">
                           <button
@@ -14889,6 +15079,10 @@ function App() {
                   </div>
                   <p className="text-[11px] text-muted2">
                     Esses filtros definem como o job consulta o PNCP. Depois que a busca existir, o aprofundamento nos resultados fica no popup do card.
+                    {' · '}
+                    <span title="Editais já importados para o board deixam de aparecer em Na lista.">
+                      Não lista o que já está no pipeline
+                    </span>
                   </p>
 
                   {pncpSearchExpanded && (
@@ -15138,7 +15332,7 @@ function App() {
                               </div>
                             </button>
 
-                            {/* Ações: slot fixo Parar/Rodar pra não reflow no poll */}
+                            {/* Ações: Parar/Rodar só no DOM quando existe — sino/Excluir colam à esquerda sem gap */}
                             <div className={`${cardActionBar} flex-nowrap`}>
                               <button
                                 type="button"
@@ -15147,27 +15341,25 @@ function App() {
                               >
                                 Resultados
                               </button>
-                              <div className="flex h-7 w-[6.75rem] shrink-0 items-center">
-                                {live ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => cancelPncpSearchJob(job.id)}
-                                    title="Para a coleta e mantém os resultados já salvos"
-                                    className={`${btnSecondaryXs} w-full justify-center`}
-                                  >
-                                    <StopIcon className="h-3.5 w-3.5" /> Parar
-                                  </button>
-                                ) : canRerun ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => rerunPncpSearchJob(job.id)}
-                                    title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                    className={`${btnSecondaryXs} w-full justify-center`}
-                                  >
-                                    <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar
-                                  </button>
-                                ) : null}
-                              </div>
+                              {live ? (
+                                <button
+                                  type="button"
+                                  onClick={() => cancelPncpSearchJob(job.id)}
+                                  title="Para a coleta e mantém os resultados já salvos"
+                                  className={btnSecondaryXs}
+                                >
+                                  <StopIcon className="h-3.5 w-3.5" /> Parar
+                                </button>
+                              ) : canRerun ? (
+                                <button
+                                  type="button"
+                                  onClick={() => rerunPncpSearchJob(job.id)}
+                                  title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                  className={btnSecondaryXs}
+                                >
+                                  <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={() => convertPncpSearchJobToWatchlist(job.id)}
@@ -15398,30 +15590,28 @@ function App() {
                                 </p>
                               </div>
                               <div className="flex h-8 shrink-0 items-center gap-0.5">
-                                {/* Slot fixo Parar/Rodar — mesma largura, sem pular sino/excluir */}
-                                <div className="flex h-8 w-[4.75rem] shrink-0 items-center justify-end sm:w-[5.5rem]">
-                                  {live ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => cancelPncpSearchJob(activePncpSearchJobId)}
-                                      className={`${btnSecondaryXs} h-8 gap-1 px-2`}
-                                      title="Para a coleta e mantém os resultados já salvos"
-                                    >
-                                      <StopIcon className="h-3.5 w-3.5" />
-                                      <span className="hidden sm:inline">Parar</span>
-                                    </button>
-                                  ) : canRerun ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
-                                      title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                      className={`${btnSecondaryXs} h-8 gap-1 px-2`}
-                                    >
-                                      <ArrowPathIcon className="h-3.5 w-3.5" />
-                                      <span className="hidden sm:inline">Rodar</span>
-                                    </button>
-                                  ) : null}
-                                </div>
+                                {/* Parar/Rodar só quando existe — sino/excluir colam à esquerda sem gap reservado */}
+                                {live ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelPncpSearchJob(activePncpSearchJobId)}
+                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
+                                    title="Para a coleta e mantém os resultados já salvos"
+                                  >
+                                    <StopIcon className="h-3.5 w-3.5" />
+                                    <span className="hidden sm:inline">Parar</span>
+                                  </button>
+                                ) : canRerun ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
+                                    title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                    className={`${btnSecondaryXs} h-8 gap-1 px-2`}
+                                  >
+                                    <ArrowPathIcon className="h-3.5 w-3.5" />
+                                    <span className="hidden sm:inline">Rodar</span>
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)}
@@ -16368,26 +16558,21 @@ function App() {
                                       </span>
                                     ) : (
                                       <>
-                                        {[
-                                          ['list', 'Na lista', pncpVisibilityCounts.list ?? pncpVisibilityCounts.all],
-                                          ['pipeline', 'Já no pipeline', pncpVisibilityCounts.pipeline],
-                                        ].map(([scope, label, count]) => (
-                                          <button
-                                            key={scope}
-                                            type="button"
-                                            onClick={() => {
-                                              setPncpResultScope(scope);
-                                              pncpResultScopeRef.current = scope;
-                                              setPncpJobResultsPage(1);
-                                              pncpJobResultsPageRef.current = 1;
-                                              setShowPncpHidden(false);
-                                              if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: scope === 'pipeline' ? 'list' : scope });
-                                            }}
-                                            className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold ${pncpResultScope === scope ? 'border-primary bg-primary/10 text-primary' : 'border-line text-muted hover:bg-surf'}`}
-                                          >
-                                            {label} ({Number(count || 0).toLocaleString('pt-BR')})
-                                          </button>
-                                        ))}
+                                        <button
+                                          type="button"
+                                          title="Disponíveis para importar — itens já no board não aparecem"
+                                          onClick={() => {
+                                            setPncpResultScope('list');
+                                            pncpResultScopeRef.current = 'list';
+                                            setPncpJobResultsPage(1);
+                                            pncpJobResultsPageRef.current = 1;
+                                            setShowPncpHidden(false);
+                                            if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'list' });
+                                          }}
+                                          className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold ${pncpResultScope === 'list' || pncpResultScope === 'pipeline' ? 'border-primary bg-primary/10 text-primary' : 'border-line text-muted hover:bg-surf'}`}
+                                        >
+                                          Na lista ({Number(pncpVisibilityCounts.list ?? pncpVisibilityCounts.visible || 0).toLocaleString('pt-BR')})
+                                        </button>
                                         {Number(pncpVisibilityCounts.hidden || 0) > 0 && (
                                           <button
                                             type="button"
@@ -16405,6 +16590,12 @@ function App() {
                                             Ver descartados ({Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')})
                                           </button>
                                         )}
+                                        <span
+                                          className="text-[10px] leading-none text-muted2"
+                                          title="Itens já importados para o board não entram em Na lista."
+                                        >
+                                          sem o que já está no pipe
+                                        </span>
                                       </>
                                     )}
                                     {Number(pncpSearchResults.total || 0) > 0 && (
@@ -16455,9 +16646,9 @@ function App() {
                                               <span className="inline-flex shrink-0 items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
                                                 {item.esfera?.nome ? `${item.esfera.nome} · ` : ''}{item.uf || 'BR'}
                                               </span>
-                                              {item.__visibility !== 'visible' && (
+                                              {item.__visibility === 'hidden' && (
                                                 <span className="inline-flex shrink-0 items-center rounded-md bg-amber/15 px-2 py-0.5 text-[11px] font-semibold text-amber">
-                                                  {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Descartado'}
+                                                  Descartado
                                                 </span>
                                               )}
                                             </div>
@@ -16515,7 +16706,8 @@ function App() {
                                             <button
                                               type="button"
                                               onClick={() => importPncpLicitacao(item)}
-                                              disabled={pncpImportingId === item.id || item.__visibility === 'pipeline'}
+                                              disabled={pncpImportingId === item.id || item.__visibility === 'pipeline' || !canEditPage('Licitações')}
+                                              title={!canEditPage('Licitações') ? 'Sem permissão de edição em Licitações' : undefined}
                                               className="h-8 w-full shrink-0 rounded-[10px] bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] px-2 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60"
                                             >
                                               {pncpImportingId === item.id ? 'Importando…' : 'Importar'}
@@ -16538,7 +16730,8 @@ function App() {
                                               <button
                                                 type="button"
                                                 onClick={() => hidePncpItem(item)}
-                                                disabled={pncpVisibilityBusyId === item.id || item.__visibility === 'pipeline'}
+                                                disabled={pncpVisibilityBusyId === item.id || item.__visibility === 'pipeline' || !canEditPage('Licitações')}
+                                                title={!canEditPage('Licitações') ? 'Sem permissão de edição em Licitações' : undefined}
                                                 className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2 disabled:opacity-50"
                                               >
                                                 {pncpVisibilityBusyId === item.id ? 'Descartando…' : 'Descartar'}
@@ -20918,8 +21111,8 @@ function App() {
             <div className="mt-6">
               <div className="toolbar-meta mb-6">
                 <p className="min-w-0 text-sm text-muted">
-                  Papéis vêm do Chatwoot. Marque quem é <span className="font-semibold text-ink/80 dark:text-white/80">vendedor</span> (entra em ranks e divide meta).
-                  Mesmo nome em “Agrupar como” unifica contas (ex.: Clayton pessoal + Aerion → Clayton).
+                  Admin e permissões são do <span className="font-semibold text-ink/80 dark:text-white/80">app</span> (independente do Chatwoot).
+                  Por aba: sem acesso, só ver, ou editar. Marque <span className="font-semibold text-ink/80 dark:text-white/80">vendedor</span> para ranks/meta.
                 </p>
                 <button type="button" onClick={loadUsers} className={`${btnSecondaryLg} w-full shrink-0 px-4 sm:w-auto`}>Atualizar</button>
               </div>
@@ -20929,10 +21122,35 @@ function App() {
                 <div className={`${card} divide-y divide-line`}>
                   {usersList.map(u => {
                     const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo'];
-                    const isAdminUser = u.role === 'admin';
-                    const current = Array.isArray(u.allowed_views) && u.allowed_views.length ? u.allowed_views : (isAdminUser ? allViews : []);
+                    const isAdminUser = Boolean(u.is_app_admin) || u.role === 'admin';
+                    const isCwAdmin = u.cw_role === 'admin';
+                    const perms = (u.page_permissions && typeof u.page_permissions === 'object')
+                      ? u.page_permissions
+                      : {};
+                    const permFor = (v) => {
+                      const p = String(perms[v] || '').toLowerCase();
+                      if (p === 'view' || p === 'edit' || p === 'none') return p;
+                      // legado: allowed_views
+                      if (Array.isArray(u.allowed_views) && u.allowed_views.length) {
+                        return u.allowed_views.includes(v) ? 'edit' : 'none';
+                      }
+                      return isAdminUser ? 'edit' : 'edit';
+                    };
                     const isSeller = Boolean(u.is_seller);
                     const sellerLabel = u.seller_label || '';
+                    const cyclePerm = (current) => {
+                      if (current === 'none') return 'view';
+                      if (current === 'view') return 'edit';
+                      return 'none';
+                    };
+                    const permLabel = (p) => (p === 'edit' ? 'Editar' : p === 'view' ? 'Ver' : 'Sem acesso');
+                    const permClass = (p) => (
+                      p === 'edit'
+                        ? 'bg-primary/10 text-primary border-primary/30'
+                        : p === 'view'
+                          ? 'bg-secondary/10 text-secondary border-secondary/30'
+                          : 'bg-cardAlt text-muted border-border hover:text-ink'
+                    );
                     return (
                       <div key={u.id} className="grid min-w-0 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,14rem)_auto_minmax(0,1fr)] lg:items-start">
                         <div className="flex min-w-0 items-center gap-3">
@@ -20944,8 +21162,13 @@ function App() {
                             <p className={`${subtle} truncate`}>{u.email}</p>
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
                               <span className={`inline-flex items-center h-5 px-2 rounded-full text-[10px] font-semibold ${isAdminUser ? 'bg-secondary/15 text-secondary' : 'bg-bg2 text-muted border border-line'}`}>
-                                {isAdminUser ? 'Admin' : 'Membro'}
+                                {isAdminUser ? 'Admin do app' : 'Membro'}
                               </span>
+                              {isCwAdmin && (
+                                <span className="inline-flex items-center h-5 px-2 rounded-full text-[10px] font-semibold bg-bg2 text-muted border border-line" title="Papel no Chatwoot (não controla o app)">
+                                  Admin CW
+                                </span>
+                              )}
                               {isSeller && (
                                 <span className="inline-flex items-center h-5 px-2 rounded-full text-[10px] font-semibold bg-status-success/15 text-status-success">
                                   Vendedor{sellerLabel ? ` · ${sellerLabel}` : ''}
@@ -20956,6 +21179,17 @@ function App() {
                         </div>
 
                         <div className="flex flex-col gap-2 min-w-[11rem]">
+                          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-line text-primary focus:ring-primary/40"
+                              checked={isAdminUser}
+                              onChange={(e) => {
+                                saveUserAccess(u.id, { is_app_admin: e.target.checked });
+                              }}
+                            />
+                            <span className="text-[12px] font-semibold text-ink dark:text-white">Admin do app</span>
+                          </label>
                           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                             <input
                               type="checkbox"
@@ -21003,20 +21237,22 @@ function App() {
 
                         <div className="flex flex-wrap gap-1.5 min-w-0">
                           {isAdminUser ? (
-                            <span className={subtle}>Acesso total (admin)</span>
+                            <span className={subtle}>Acesso total (admin do app)</span>
                           ) : allViews.map(v => {
-                            const on = current.includes(v);
+                            const p = permFor(v);
                             return (
                               <button
                                 key={v}
                                 type="button"
+                                title="Clique para alternar: Sem acesso → Ver → Editar"
                                 onClick={() => {
-                                  const next = on ? current.filter(x => x !== v) : [...current, v];
-                                  saveUserAccess(u.id, { allowed_views: next });
+                                  const nextLevel = cyclePerm(p);
+                                  const nextPerms = { ...Object.fromEntries(allViews.map((k) => [k, permFor(k)])), [v]: nextLevel };
+                                  saveUserAccess(u.id, { page_permissions: nextPerms });
                                 }}
-                                className={`h-7 px-2.5 rounded-full text-[12px] font-medium border transition ${on ? 'bg-primary/10 text-primary border-primary/30' : 'bg-cardAlt text-muted border-border hover:text-ink'}`}
+                                className={`h-7 px-2.5 rounded-full text-[12px] font-medium border transition ${permClass(p)}`}
                               >
-                                {viewLabel(v)}
+                                {viewLabel(v)} · {permLabel(p)}
                               </button>
                             );
                           })}
@@ -23809,6 +24045,168 @@ function App() {
           </div>
         ) : null}
       </DragOverlay>
+
+      {/* Confirmação em lote: prazos de proposta vencidos → Perdido */}
+      {expiredProposalModal && createPortal(
+        <div className={`${modalOverlay} z-[90]`} role="presentation">
+          <div
+            className={`${modalPanel} max-w-lg flex flex-col gap-4`}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="expired-proposal-title"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-status-danger/25 bg-status-danger/10 text-status-danger">
+                <ExclamationTriangleIcon className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 id="expired-proposal-title" className="font-display text-base font-semibold uppercase tracking-wide text-ink">
+                  Prazos de proposta vencidos
+                </h3>
+                <p className="mt-1 text-sm text-muted">
+                  {expiredProposalModal.items.length} oportunidade(s) ativa(s) com prazo de envio de proposta já passado.
+                  Confirme o envio para <strong className="text-ink">Perdido</strong> ou mantenha no funil.
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-[min(40vh,280px)] space-y-2 overflow-y-auto pr-0.5">
+              {expiredProposalModal.items.map((item) => {
+                const selected = (expiredProposalModal.selectedIds || []).includes(item.id);
+                return (
+                  <label
+                    key={item.id}
+                    className={`flex cursor-pointer gap-3 rounded-[12px] border px-3 py-2.5 transition ${selected ? 'border-primary/40 bg-primary/5' : 'border-line bg-bg2/50'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-line text-primary"
+                      checked={selected}
+                      onChange={() => {
+                        setExpiredProposalModal((prev) => {
+                          if (!prev) return prev;
+                          const set = new Set(prev.selectedIds || []);
+                          if (set.has(item.id)) set.delete(item.id);
+                          else set.add(item.id);
+                          return { ...prev, selectedIds: Array.from(set) };
+                        });
+                      }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-ink" title={item.titulo || ''}>
+                        {item.titulo || `Oportunidade #${item.id}`}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-muted">{item.orgao || 'Órgão n/d'}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <span className={metaChip}>
+                          Limite: {item.data_envio_proposta_limite
+                            ? new Date(item.data_envio_proposta_limite).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                            : 'n/d'}
+                        </span>
+                        {item.fase && <span className={metaChip}>{item.fase}</span>}
+                        {item.valor_oportunidade != null && (
+                          <span className={metaChip}>{formatCurrency(item.valor_oportunidade)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={dismissExpiredProposalMove}
+                disabled={expiredProposalBusy}
+                className={btnSecondary}
+              >
+                {expiredProposalBusy ? 'Salvando…' : 'Manter no funil'}
+              </button>
+              <button
+                type="button"
+                onClick={confirmExpiredProposalMove}
+                disabled={expiredProposalBusy || !(expiredProposalModal.selectedIds || []).length}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-[11px] border border-status-danger/40 bg-status-danger/15 px-4 text-sm font-semibold text-status-danger transition hover:bg-status-danger/25 focus:outline-none focus:ring-2 focus:ring-status-danger/30 disabled:pointer-events-none disabled:opacity-50"
+              >
+                {expiredProposalBusy ? 'Enviando…' : `Enviar para Perdido (${(expiredProposalModal.selectedIds || []).length})`}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Informativo: pregões eletrônicos com sessão hoje (ainda no horário) */}
+      {sessoesHojeModal && !expiredProposalModal && createPortal(
+        <div className={`${modalOverlay} z-[90]`} role="presentation" onClick={dismissSessoesHojeModal}>
+          <div
+            className={`${modalPanel} max-w-lg flex flex-col gap-4`}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sessoes-hoje-title"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 text-primary">
+                <BellAlertIcon className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 id="sessoes-hoje-title" className="font-display text-base font-semibold uppercase tracking-wide text-ink">
+                  Hoje tem pregão eletrônico
+                </h3>
+                <p className="mt-1 text-sm text-muted">
+                  {sessoesHojeModal.items.length} sessão(ões) ainda no horário de hoje.
+                </p>
+              </div>
+              <button type="button" onClick={dismissSessoesHojeModal} className={iconBtn} aria-label="Fechar">
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="max-h-[min(40vh,280px)] space-y-2 overflow-y-auto">
+              {sessoesHojeModal.items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="w-full rounded-[12px] border border-line bg-bg2/50 px-3 py-2.5 text-left transition hover:border-primary/40 hover:bg-primary/5"
+                  onClick={() => {
+                    dismissSessoesHojeModal();
+                    setActiveView('Licitações');
+                    setLicitacaoSubview('board');
+                    const opp = licitacaoOpportunities.find((o) => String(o.id) === String(item.id));
+                    if (opp) openOpportunity(opp);
+                    else setFocusedSearchOpportunityId(item.id);
+                  }}
+                >
+                  <p className="truncate text-sm font-semibold text-ink">{item.titulo || `Oportunidade #${item.id}`}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted">{item.orgao || 'Órgão n/d'}</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <span className={metaChip}>
+                      Sessão:{' '}
+                      {item.data_sessao
+                        ? new Date(item.data_sessao).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                        : 'n/d'}
+                    </span>
+                    {item.modalidade && <span className={metaChip}>{item.modalidade}</span>}
+                    {item.valor_oportunidade != null && (
+                      <span className={metaChip}>{formatCurrency(item.valor_oportunidade)}</span>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-end">
+              <button type="button" onClick={dismissSessoesHojeModal} className={btnPrimary}>
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </DndContext>
   );
 }

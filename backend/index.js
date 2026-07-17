@@ -178,7 +178,16 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Credenciais invalidas.' });
       }
       issueAuthCookie(res, { sub: user.email, uid: user.id, role: user.role, name: user.name });
-      return res.json({ authenticated: true, email: user.email, name: user.name, role: user.role, allowed_views: user.allowed_views || [] });
+      return res.json({
+        authenticated: true,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        uid: user.id,
+        allowed_views: user.allowed_views || [],
+        page_permissions: user.page_permissions || null,
+        is_app_admin: Boolean(user.is_app_admin),
+      });
     }
   } catch (error) {
     console.error('login users lookup failed, falling back to env:', error.message);
@@ -190,7 +199,16 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(401).json({ error: 'Credenciais invalidas.' });
   }
   issueAuthCookie(res, { sub: AUTH_EMAIL, role: 'admin', name: 'Admin' });
-  return res.json({ authenticated: true, email: AUTH_EMAIL, name: 'Admin', role: 'admin', allowed_views: null });
+  return res.json({
+    authenticated: true,
+    email: AUTH_EMAIL,
+    name: 'Admin',
+    role: 'admin',
+    uid: null,
+    allowed_views: null,
+    page_permissions: null,
+    is_app_admin: true,
+  });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -207,10 +225,13 @@ app.get('/api/auth/status', async (req, res) => {
   if (!payload) {
     return res.json({ authenticated: false });
   }
-  // Enrich with fresh role/allowed_views from the DB when we have a user id.
+  // Enrich with fresh app role / permissions from the DB when we have a user id.
   let role = payload.role || 'member';
   let name = payload.name || payload.sub;
   let allowedViews = null;
+  let pagePermissions = null;
+  let isAppAdmin = role === 'admin';
+  let uid = payload.uid || null;
   if (payload.uid) {
     try {
       const fresh = await getUserById(payload.uid);
@@ -218,14 +239,31 @@ app.get('/api/auth/status', async (req, res) => {
         role = fresh.role;
         name = fresh.name;
         allowedViews = fresh.allowed_views;
+        pagePermissions = fresh.page_permissions;
+        isAppAdmin = Boolean(fresh.is_app_admin);
+        uid = fresh.id;
+        // Reemite cookie se o role do app mudou (admin independente do CW).
+        if (payload.role !== role) {
+          issueAuthCookie(res, { sub: payload.sub, uid: payload.uid, role, name });
+        }
       }
     } catch (error) {
       console.error('auth status enrich failed:', error.message);
     }
   } else if (role === 'admin') {
     allowedViews = null; // bootstrap admin sees everything
+    isAppAdmin = true;
   }
-  return res.json({ authenticated: true, email: payload.sub, name, role, allowed_views: allowedViews });
+  return res.json({
+    authenticated: true,
+    email: payload.sub,
+    name,
+    role,
+    uid,
+    allowed_views: allowedViews,
+    page_permissions: pagePermissions,
+    is_app_admin: isAppAdmin,
+  });
 });
 
 // Resiliência do pool: sem isso, se as conexões saturarem (ex.: um job pesado
@@ -255,11 +293,14 @@ pool.on('error', (err) => {
   console.error('[pg] idle client error:', err.message);
 });
 
-// ===================== Auth / RBAC (Chatwoot-backed) =====================
-// Authenticate against Chatwoot's `users` table (Devise bcrypt) + `account_users`
-// role. Page-level access ('allowed_views') is stored app-side, editable by admin.
+// ===================== Auth / RBAC (Chatwoot-backed auth, app-side roles) =====================
+// Authenticate against Chatwoot's `users` table (Devise bcrypt) + account membership.
+// App role (is_app_admin) and page_permissions (view|edit) live in app_user_access —
+// independent of Chatwoot Administrator flag.
 const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '2', 10) || 2;
 const APP_ACCESS_TABLE = 'app_user_access';
+const APP_PAGE_VIEWS = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo', 'Disparo WhatsApp', 'Radar Trends', 'Metas', 'Usuários'];
+const APP_PERM_LEVELS = new Set(['none', 'view', 'edit']);
 
 // Web Push (VAPID) — inbox + push multi-navegador. Ver backend/notifications.js
 registerNotificationRoutes(app, { pool, defaultAccountId: CHATWOOT_ACCOUNT_ID });
@@ -281,6 +322,36 @@ const sellerIdentityFromLabel = (label) => {
   return slug || null;
 };
 
+const normalizePagePermissions = (raw, { fromAllowedViews = null } = {}) => {
+  const out = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const key of APP_PAGE_VIEWS) {
+      const v = String(raw[key] || '').toLowerCase();
+      if (APP_PERM_LEVELS.has(v)) out[key] = v;
+    }
+  }
+  // Legado: allowed_views string[] → cada uma = edit; vazio = todas edit (comportamento antigo).
+  if (!Object.keys(out).length && Array.isArray(fromAllowedViews)) {
+    if (fromAllowedViews.length === 0) {
+      for (const key of APP_PAGE_VIEWS) out[key] = 'edit';
+    } else {
+      for (const key of APP_PAGE_VIEWS) {
+        out[key] = fromAllowedViews.includes(key) ? 'edit' : 'none';
+      }
+      // Notificações sempre pelo menos view se não listada explicitamente como off — mantém default amigável.
+      if (!fromAllowedViews.includes('Notificações') && out.Notificações === 'none') {
+        out.Notificações = 'view';
+      }
+    }
+  }
+  return out;
+};
+
+const pagePermissionsToAllowedViews = (perms) => {
+  if (!perms || typeof perms !== 'object') return [];
+  return APP_PAGE_VIEWS.filter((k) => perms[k] === 'view' || perms[k] === 'edit');
+};
+
 async function ensureAppAccessTable() {
   try {
     await pool.query(`
@@ -296,6 +367,8 @@ async function ensureAppAccessTable() {
     await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS is_seller BOOLEAN NOT NULL DEFAULT false`);
     await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS seller_identity TEXT`);
     await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS seller_label TEXT`);
+    await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS is_app_admin BOOLEAN NOT NULL DEFAULT false`);
+    await pool.query(`ALTER TABLE ${APP_ACCESS_TABLE} ADD COLUMN IF NOT EXISTS page_permissions JSONB NOT NULL DEFAULT '{}'::jsonb`);
 
     // Seed inicial: só se ainda não houver nenhum vendedor marcado.
     // Clayton [Pessoal] + Clayton Aerion → identidade única; Thelga vendedora; Rebeca/Marketing fora do rank.
@@ -323,6 +396,34 @@ async function ensureAppAccessTable() {
         );
       }
     }
+
+    // Bootstrap one-shot: Chatwoot admins → is_app_admin (só se ainda ninguém for app admin).
+    const { rows: appAdminCount } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ${APP_ACCESS_TABLE} WHERE is_app_admin = true`
+    );
+    if ((appAdminCount[0]?.n || 0) === 0) {
+      await pool.query(
+        `
+          INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, is_app_admin, page_permissions, updated_at)
+          SELECT au.user_id, '[]'::jsonb, true, '{}'::jsonb, now()
+            FROM account_users au
+           WHERE au.account_id = $1
+             AND au.role = 1
+          ON CONFLICT (user_id) DO UPDATE SET
+            is_app_admin = true,
+            updated_at = now()
+        `,
+        [CHATWOOT_ACCOUNT_ID]
+      );
+      console.log('[auth] bootstrap is_app_admin from Chatwoot role=1');
+    }
+
+    // Migra allowed_views → page_permissions quando page_permissions ainda vazio.
+    await pool.query(`
+      UPDATE ${APP_ACCESS_TABLE}
+         SET page_permissions = '{}'::jsonb
+       WHERE page_permissions IS NULL
+    `).catch(() => {});
   } catch (error) {
     console.error('ensureAppAccessTable failed:', error.message);
   }
@@ -380,10 +481,37 @@ async function resolveSellerActorIds(agentId, accountId = CHATWOOT_ACCOUNT_ID) {
 
 const mapChatwootRole = (cwRole) => (Number(cwRole) === 1 ? 'admin' : 'member');
 
+const mapUserAccessRow = (u) => {
+  const isAppAdmin = Boolean(u.is_app_admin);
+  const allowedViews = Array.isArray(u.allowed_views) ? u.allowed_views : null;
+  let pagePermissions = normalizePagePermissions(u.page_permissions, { fromAllowedViews: allowedViews });
+  // page_permissions vazio no DB + allowed_views null → acesso amplo (legado)
+  if (!Object.keys(pagePermissions).length && (allowedViews == null || (Array.isArray(allowedViews) && !allowedViews.length))) {
+    pagePermissions = Object.fromEntries(APP_PAGE_VIEWS.map((k) => [k, 'edit']));
+  }
+  const role = isAppAdmin ? 'admin' : 'member';
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name || u.display_name || u.email,
+    role,
+    is_app_admin: isAppAdmin,
+    cw_role: mapChatwootRole(u.cw_role),
+    allowed_views: pagePermissionsToAllowedViews(pagePermissions),
+    page_permissions: pagePermissions,
+    is_seller: Boolean(u.is_seller),
+    seller_identity: u.seller_identity || null,
+    seller_label: u.seller_label || null,
+  };
+};
+
 async function getUserByEmail(email) {
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.display_name, u.encrypted_password, u.confirmed_at,
-            au.role AS cw_role, acc.allowed_views
+            au.role AS cw_role, acc.allowed_views, acc.page_permissions,
+            COALESCE(acc.is_app_admin, false) AS is_app_admin,
+            COALESCE(acc.is_seller, false) AS is_seller,
+            acc.seller_identity, acc.seller_label
        FROM users u
        LEFT JOIN account_users au ON au.user_id = u.id AND au.account_id = $2
        LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
@@ -394,20 +522,21 @@ async function getUserByEmail(email) {
   );
   const u = rows[0];
   if (!u) return null;
+  const mapped = mapUserAccessRow(u);
   return {
-    id: u.id,
-    email: u.email,
-    name: u.name || u.display_name || u.email,
+    ...mapped,
     password_hash: u.encrypted_password,
-    role: mapChatwootRole(u.cw_role),
-    allowed_views: Array.isArray(u.allowed_views) ? u.allowed_views : null,
     active: true,
   };
 }
 
 async function getUserById(id) {
   const { rows } = await pool.query(
-    `SELECT u.id, u.email, u.name, u.display_name, au.role AS cw_role, acc.allowed_views
+    `SELECT u.id, u.email, u.name, u.display_name, au.role AS cw_role,
+            acc.allowed_views, acc.page_permissions,
+            COALESCE(acc.is_app_admin, false) AS is_app_admin,
+            COALESCE(acc.is_seller, false) AS is_seller,
+            acc.seller_identity, acc.seller_label
        FROM users u
        LEFT JOIN account_users au ON au.user_id = u.id AND au.account_id = $2
        LEFT JOIN ${APP_ACCESS_TABLE} acc ON acc.user_id = u.id
@@ -418,13 +547,7 @@ async function getUserById(id) {
   );
   const u = rows[0];
   if (!u) return null;
-  return {
-    id: u.id,
-    email: u.email,
-    name: u.name || u.display_name || u.email,
-    role: mapChatwootRole(u.cw_role),
-    allowed_views: Array.isArray(u.allowed_views) ? u.allowed_views : null,
-  };
+  return mapUserAccessRow(u);
 }
 
 const requireAdmin = (req, res, next) => {
@@ -438,7 +561,8 @@ app.get('/api/users', requireAdmin, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT u.id, u.email,
               COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS name,
-              au.role AS cw_role, acc.allowed_views,
+              au.role AS cw_role, acc.allowed_views, acc.page_permissions,
+              COALESCE(acc.is_app_admin, false) AS is_app_admin,
               COALESCE(acc.is_seller, false) AS is_seller,
               acc.seller_identity, acc.seller_label
          FROM account_users au
@@ -448,29 +572,24 @@ app.get('/api/users', requireAdmin, async (req, res) => {
         ORDER BY name ASC`,
       [CHATWOOT_ACCOUNT_ID]
     );
-    res.json(rows.map(r => ({
-      id: r.id,
-      email: r.email,
-      name: r.name,
-      role: mapChatwootRole(r.cw_role),
-      allowed_views: Array.isArray(r.allowed_views) ? r.allowed_views : null,
-      is_seller: Boolean(r.is_seller),
-      seller_identity: r.seller_identity || null,
-      seller_label: r.seller_label || null,
-    })));
+    res.json(rows.map((r) => mapUserAccessRow(r)));
   } catch (error) {
     console.error('Error listing users:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Set the pages a user can see + flags de vendedor/identidade (app-side). Admin only.
+// Set app admin, page permissions (view|edit), seller flags. Admin only.
 app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
   const userId = Number.parseInt(req.params.id, 10);
   if (!Number.isFinite(userId)) return res.status(400).json({ error: 'Invalid id' });
 
   const hasViews = Array.isArray(req.body?.allowed_views);
   const views = hasViews ? req.body.allowed_views.filter(v => typeof v === 'string') : null;
+  const hasPagePerms = req.body?.page_permissions && typeof req.body.page_permissions === 'object'
+    && !Array.isArray(req.body.page_permissions);
+  const hasAppAdmin = typeof req.body?.is_app_admin === 'boolean';
+  const isAppAdminIn = hasAppAdmin ? Boolean(req.body.is_app_admin) : null;
   const hasSeller = typeof req.body?.is_seller === 'boolean';
   const isSeller = hasSeller ? Boolean(req.body.is_seller) : null;
   const hasLabel = Object.prototype.hasOwnProperty.call(req.body || {}, 'seller_label');
@@ -484,14 +603,32 @@ app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
   try {
     // Carrega estado atual para merge parcial
     const { rows: existingRows } = await pool.query(
-      `SELECT allowed_views, is_seller, seller_identity, seller_label
+      `SELECT allowed_views, page_permissions, is_app_admin, is_seller, seller_identity, seller_label
          FROM ${APP_ACCESS_TABLE} WHERE user_id = $1`,
       [userId]
     );
     const existing = existingRows[0] || {};
-    const nextViews = views != null
-      ? views
-      : (Array.isArray(existing.allowed_views) ? existing.allowed_views : []);
+    const nextIsAppAdmin = isAppAdminIn != null ? isAppAdminIn : Boolean(existing.is_app_admin);
+
+    let nextPerms;
+    if (hasPagePerms) {
+      nextPerms = normalizePagePermissions(req.body.page_permissions);
+      // Completa chaves faltantes com none
+      for (const key of APP_PAGE_VIEWS) {
+        if (!nextPerms[key]) nextPerms[key] = 'none';
+      }
+    } else if (views != null) {
+      nextPerms = normalizePagePermissions(null, { fromAllowedViews: views });
+    } else {
+      nextPerms = normalizePagePermissions(existing.page_permissions, {
+        fromAllowedViews: Array.isArray(existing.allowed_views) ? existing.allowed_views : null,
+      });
+      if (!Object.keys(nextPerms).length) {
+        nextPerms = Object.fromEntries(APP_PAGE_VIEWS.map((k) => [k, 'edit']));
+      }
+    }
+    const nextViews = pagePermissionsToAllowedViews(nextPerms);
+
     const nextIsSeller = isSeller != null ? isSeller : Boolean(existing.is_seller);
     let nextLabel = hasLabel ? sellerLabelRaw : (existing.seller_label || null);
     let nextIdentity = hasLabel ? sellerIdentity : (existing.seller_identity || null);
@@ -503,20 +640,34 @@ app.put('/api/users/:id/access', requireAdmin, async (req, res) => {
     }
 
     await pool.query(
-      `INSERT INTO ${APP_ACCESS_TABLE} (user_id, allowed_views, is_seller, seller_identity, seller_label, updated_at)
-       VALUES ($1, $2::jsonb, $3, $4, $5, now())
+      `INSERT INTO ${APP_ACCESS_TABLE}
+         (user_id, allowed_views, page_permissions, is_app_admin, is_seller, seller_identity, seller_label, updated_at)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7, now())
        ON CONFLICT (user_id) DO UPDATE SET
          allowed_views = EXCLUDED.allowed_views,
+         page_permissions = EXCLUDED.page_permissions,
+         is_app_admin = EXCLUDED.is_app_admin,
          is_seller = EXCLUDED.is_seller,
          seller_identity = EXCLUDED.seller_identity,
          seller_label = EXCLUDED.seller_label,
          updated_at = now()`,
-      [userId, JSON.stringify(nextViews), nextIsSeller, nextIdentity, nextLabel]
+      [
+        userId,
+        JSON.stringify(nextViews),
+        JSON.stringify(nextPerms),
+        nextIsAppAdmin,
+        nextIsSeller,
+        nextIdentity,
+        nextLabel,
+      ]
     );
     res.json({
       ok: true,
       user_id: userId,
+      role: nextIsAppAdmin ? 'admin' : 'member',
+      is_app_admin: nextIsAppAdmin,
       allowed_views: nextViews,
+      page_permissions: nextPerms,
       is_seller: nextIsSeller,
       seller_identity: nextIdentity,
       seller_label: nextLabel,
@@ -2475,10 +2626,10 @@ const getLicitacaoOpenPipelineSql = (alias = '') => `
 const getLicitacaoOperationalPipelineSql = (alias = '') => getLicitacaoOpenPipelineSql(alias);
 
 /**
- * Elegível para auto-mover de fase quando o prazo de proposta venceu:
+ * Elegível para mover de fase quando o prazo de proposta venceu:
  * ainda em jogo (ativo|suspenso, fases 2–11). Fase 12 (contrato) e PCA ficam de fora.
- * - ativo → 13. Perdido (coluna do pipe; status permanece ativo)
- * - suspenso → 6. Monitoramento de Edital (não perde; volta a monitorar)
+ * - ativo → 13. Perdido — só após confirmação do usuário (não auto)
+ * - suspenso → 6. Monitoramento de Edital (automático; não perde; volta a monitorar)
  */
 const getLicitacaoExpiredProposalMoveSql = (alias = '') => `
   ${getLicitacaoOpenStatusSql(alias)}
@@ -2490,46 +2641,137 @@ const getLicitacaoExpiredProposalMoveSql = (alias = '') => `
 const LICITACAO_FASE_PERDIDO = '13. Perdido';
 const LICITACAO_FASE_MONITORAMENTO_EDITAL = '6. Monitoramento de Edital';
 
-/**
- * Regras de prazo vencido (status só Ativo|Suspenso; encerramento é pela coluna):
- * - Ativo → fase 13. Perdido
- * - Suspenso → fase 6. Monitoramento de Edital
- * @param {{ accountId?: number|null }} [opts]
- * @returns {Promise<{ moved: number, to_perdido: number, to_monitoramento: number }>}
- */
-const runExpiredLicitacaoProposalMove = async ({ accountId = null } = {}) => {
-  const params = [LICITACAO_FASE_MONITORAMENTO_EDITAL, LICITACAO_FASE_PERDIDO];
+const statusNormExpr = (alias = '') =>
+  `LOWER(COALESCE(NULLIF(TRIM(${alias}status), ''), 'ativo'))`;
+
+/** Auto-only: suspenso com prazo vencido → Monitoramento de Edital. */
+const runExpiredSuspensoToMonitoramento = async ({ accountId = null } = {}) => {
+  const params = [LICITACAO_FASE_MONITORAMENTO_EDITAL];
   let accountClause = '';
   if (accountId != null) {
     params.push(accountId);
     accountClause = `AND account_id = $${params.length}`;
   }
-  const statusExpr = `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo'))`;
-
+  const statusExpr = statusNormExpr('');
   const { rows } = await pool.query(
     `
       UPDATE ${LICITACAO_TABLE}
-      SET
-        fase = CASE
-          WHEN ${statusExpr} = 'suspenso' THEN $1
-          ELSE $2
-        END,
-        updated_at = NOW()
+      SET fase = $1, updated_at = NOW()
       WHERE ${getLicitacaoExpiredProposalMoveSql('')}
-        AND NOT (
-          (${statusExpr} = 'suspenso' AND fase = $1)
-          OR (${statusExpr} <> 'suspenso' AND fase = $2)
-        )
+        AND ${statusExpr} = 'suspenso'
+        AND fase IS DISTINCT FROM $1
         ${accountClause}
       RETURNING id, status, fase
     `,
     params
   );
-  const toMonitoramento = rows.filter(
-    (r) => String(r.fase) === LICITACAO_FASE_MONITORAMENTO_EDITAL
-  ).length;
-  const toPerdido = rows.length - toMonitoramento;
-  return { moved: rows.length, to_perdido: toPerdido, to_monitoramento: toMonitoramento };
+  return { moved: rows.length, to_monitoramento: rows.length, to_perdido: 0 };
+};
+
+/**
+ * Compat: triggers silenciosos só movem suspenso → Monitoramento.
+ * Ativo → Perdido exige confirmação via API (confirm-expired-move).
+ */
+const runExpiredLicitacaoProposalMove = async ({ accountId = null } = {}) =>
+  runExpiredSuspensoToMonitoramento({ accountId });
+
+/** Candidatos ativo com prazo vencido ainda no funil (exclui dismiss skip_auto_perdido). */
+const findExpiredLicitacaoProposalCandidates = async ({ accountId = null } = {}) => {
+  const params = [LICITACAO_FASE_PERDIDO];
+  let accountClause = '';
+  if (accountId != null) {
+    params.push(accountId);
+    accountClause = `AND o.account_id = $${params.length}`;
+  }
+  const statusExpr = statusNormExpr('o.');
+  const { rows } = await pool.query(
+    `
+      SELECT
+        o.id,
+        o.titulo,
+        o.orgao,
+        o.fase,
+        o.status,
+        o.modalidade,
+        o.valor_oportunidade,
+        o.data_envio_proposta_limite,
+        o.numero_edital,
+        o.metadados
+      FROM ${LICITACAO_TABLE} o
+      WHERE ${getLicitacaoExpiredProposalMoveSql('o.')}
+        AND ${statusExpr} <> 'suspenso'
+        AND o.fase IS DISTINCT FROM $1
+        AND COALESCE((o.metadados->>'skip_auto_perdido')::boolean, false) = false
+        ${accountClause}
+      ORDER BY o.data_envio_proposta_limite ASC NULLS LAST, o.id ASC
+    `,
+    params
+  );
+  return rows;
+};
+
+const applyExpiredLicitacaoProposalMoveToPerdido = async ({ accountId, ids }) => {
+  const idList = (Array.isArray(ids) ? ids : [])
+    .map((id) => Number.parseInt(id, 10))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!idList.length) return { moved: 0, ids: [] };
+
+  const params = [LICITACAO_FASE_PERDIDO, idList];
+  let accountClause = '';
+  if (accountId != null) {
+    params.push(accountId);
+    accountClause = `AND account_id = $${params.length}`;
+  }
+  const statusExpr = statusNormExpr('');
+  const { rows } = await pool.query(
+    `
+      UPDATE ${LICITACAO_TABLE}
+      SET
+        fase = $1,
+        metadados = COALESCE(metadados, '{}'::jsonb) - 'skip_auto_perdido',
+        updated_at = NOW()
+      WHERE id = ANY($2::int[])
+        AND ${getLicitacaoExpiredProposalMoveSql('')}
+        AND ${statusExpr} <> 'suspenso'
+        AND fase IS DISTINCT FROM $1
+        ${accountClause}
+      RETURNING id
+    `,
+    params
+  );
+  return { moved: rows.length, ids: rows.map((r) => r.id) };
+};
+
+const dismissExpiredLicitacaoProposalCandidates = async ({ accountId, ids }) => {
+  const idList = (Array.isArray(ids) ? ids : [])
+    .map((id) => Number.parseInt(id, 10))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!idList.length) return { dismissed: 0, ids: [] };
+
+  const params = [idList, LICITACAO_FASE_PERDIDO];
+  let accountClause = '';
+  if (accountId != null) {
+    params.push(accountId);
+    accountClause = `AND account_id = $${params.length}`;
+  }
+  const statusExpr = statusNormExpr('');
+  const { rows } = await pool.query(
+    `
+      UPDATE ${LICITACAO_TABLE}
+      SET
+        metadados = COALESCE(metadados, '{}'::jsonb)
+          || jsonb_build_object('skip_auto_perdido', true, 'skip_auto_perdido_at', to_jsonb(NOW()::text)),
+        updated_at = NOW()
+      WHERE id = ANY($1::int[])
+        AND ${getLicitacaoExpiredProposalMoveSql('')}
+        AND ${statusExpr} <> 'suspenso'
+        AND fase IS DISTINCT FROM $2
+        ${accountClause}
+      RETURNING id
+    `,
+    params
+  );
+  return { dismissed: rows.length, ids: rows.map((r) => r.id) };
 };
 
 const asTextArray = (value) => {
@@ -5948,12 +6190,167 @@ const LICITACAO_ITEM_TIPO = ['material', 'servico'];
 const LICITACAO_REQUIREMENT_TIPO = ['comercial', 'tecnico'];
 const LICITACAO_REQUIREMENT_STATUS = ['ok', 'nao_ok', 'pendente', 'verificar'];
 
+app.get('/api/licitacoes/opportunities/expired-proposal-candidates', async (req, res) => {
+  const accountId = getAccountId(req);
+  try {
+    await runExpiredSuspensoToMonitoramento({ accountId }).catch((err) => {
+      console.warn('[licitacoes] auto-move suspenso→monitoramento falhou:', err.message);
+    });
+    const rows = await findExpiredLicitacaoProposalCandidates({ accountId });
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        titulo: r.titulo,
+        orgao: r.orgao,
+        fase: r.fase,
+        status: r.status,
+        modalidade: r.modalidade,
+        valor_oportunidade: r.valor_oportunidade != null ? Number(r.valor_oportunidade) : null,
+        data_envio_proposta_limite: r.data_envio_proposta_limite,
+        numero_edital: r.numero_edital,
+      })),
+      count: rows.length,
+    });
+  } catch (error) {
+    console.error('[licitacoes] expired-proposal-candidates:', error);
+    res.status(500).json({ error: 'Erro ao listar candidatos de prazo vencido', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/opportunities/confirm-expired-move', async (req, res) => {
+  const accountId = getAccountId(req);
+  try {
+    const result = await applyExpiredLicitacaoProposalMoveToPerdido({
+      accountId,
+      ids: req.body?.ids,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('[licitacoes] confirm-expired-move:', error);
+    res.status(500).json({ error: 'Erro ao enviar para Perdido', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/opportunities/dismiss-expired-move', async (req, res) => {
+  const accountId = getAccountId(req);
+  try {
+    const result = await dismissExpiredLicitacaoProposalCandidates({
+      accountId,
+      ids: req.body?.ids,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('[licitacoes] dismiss-expired-move:', error);
+    res.status(500).json({ error: 'Erro ao manter no funil', details: error.message });
+  }
+});
+
+/** Pregões eletrônicos com sessão hoje (SP) e horário ainda não passado. */
+app.get('/api/licitacoes/opportunities/sessoes-hoje', async (req, res) => {
+  const accountId = getAccountId(req);
+  try {
+    const openSql = getLicitacaoOpenPipelineSql('o.');
+    const { rows } = await pool.query(
+      `
+        SELECT
+          o.id,
+          o.titulo,
+          o.orgao,
+          o.fase,
+          o.status,
+          o.modalidade,
+          o.valor_oportunidade,
+          o.data_sessao,
+          o.numero_edital,
+          o.links_pncp,
+          o.links
+        FROM ${LICITACAO_TABLE} o
+        WHERE o.account_id = $1
+          AND ${openSql}
+          AND o.data_sessao IS NOT NULL
+          AND o.data_sessao > NOW()
+          AND (o.data_sessao AT TIME ZONE 'America/Sao_Paulo')::date
+              = (NOW() AT TIME ZONE 'America/Sao_Paulo')::date
+          AND (
+            lower(unaccent(COALESCE(o.modalidade, ''))) LIKE '%pregao%eletr%'
+            OR lower(unaccent(COALESCE(o.modalidade, ''))) LIKE '%pregao% eletron%'
+            OR lower(regexp_replace(unaccent(COALESCE(o.modalidade, '')), '[^a-z0-9]+', ' ', 'g'))
+               ~ 'pregao.*eletr'
+          )
+        ORDER BY o.data_sessao ASC NULLS LAST, o.id ASC
+      `,
+      [accountId]
+    );
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        titulo: r.titulo,
+        orgao: r.orgao,
+        fase: r.fase,
+        status: r.status,
+        modalidade: r.modalidade,
+        valor_oportunidade: r.valor_oportunidade != null ? Number(r.valor_oportunidade) : null,
+        data_sessao: r.data_sessao,
+        numero_edital: r.numero_edital,
+        links_pncp: r.links_pncp,
+        links: r.links,
+      })),
+      count: rows.length,
+    });
+  } catch (error) {
+    // Fallback sem unaccent se a extensão não existir.
+    if (String(error.message || '').includes('unaccent')) {
+      try {
+        const openSql = getLicitacaoOpenPipelineSql('o.');
+        const { rows } = await pool.query(
+          `
+            SELECT
+              o.id, o.titulo, o.orgao, o.fase, o.status, o.modalidade,
+              o.valor_oportunidade, o.data_sessao, o.numero_edital, o.links_pncp, o.links
+            FROM ${LICITACAO_TABLE} o
+            WHERE o.account_id = $1
+              AND ${openSql}
+              AND o.data_sessao IS NOT NULL
+              AND o.data_sessao > NOW()
+              AND (o.data_sessao AT TIME ZONE 'America/Sao_Paulo')::date
+                  = (NOW() AT TIME ZONE 'America/Sao_Paulo')::date
+              AND lower(COALESCE(o.modalidade, '')) ~* 'preg[aã]o.*eletr'
+            ORDER BY o.data_sessao ASC NULLS LAST, o.id ASC
+          `,
+          [accountId]
+        );
+        return res.json({
+          items: rows.map((r) => ({
+            id: r.id,
+            titulo: r.titulo,
+            orgao: r.orgao,
+            fase: r.fase,
+            status: r.status,
+            modalidade: r.modalidade,
+            valor_oportunidade: r.valor_oportunidade != null ? Number(r.valor_oportunidade) : null,
+            data_sessao: r.data_sessao,
+            numero_edital: r.numero_edital,
+            links_pncp: r.links_pncp,
+            links: r.links,
+          })),
+          count: rows.length,
+        });
+      } catch (fallbackErr) {
+        console.error('[licitacoes] sessoes-hoje fallback:', fallbackErr);
+        return res.status(500).json({ error: 'Erro ao listar sessões de hoje', details: fallbackErr.message });
+      }
+    }
+    console.error('[licitacoes] sessoes-hoje:', error);
+    res.status(500).json({ error: 'Erro ao listar sessões de hoje', details: error.message });
+  }
+});
+
 app.get('/api/licitacoes/opportunities', async (req, res) => {
   const accountId = getAccountId(req);
   try {
-    // On-read: prazos vencidos saem automaticamente para Perdido (sem badge "atrasado").
-    await runExpiredLicitacaoProposalMove({ accountId }).catch((err) => {
-      console.warn('[licitacoes] auto-move prazo vencido (list) falhou:', err.message);
+    // On-read: só suspenso → Monitoramento (ativo → Perdido exige confirmação na UI).
+    await runExpiredSuspensoToMonitoramento({ accountId }).catch((err) => {
+      console.warn('[licitacoes] auto-move suspenso→monitoramento (list) falhou:', err.message);
     });
 
     const { rows } = await pool.query(
@@ -16125,9 +16522,9 @@ app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
 app.get('/api/licitacoes/overview/summary', async (req, res) => {
   const accountId = getAccountId(req);
   try {
-    // Garante que prazos vencidos já saíram do pipeline aberto antes dos KPIs.
-    await runExpiredLicitacaoProposalMove({ accountId }).catch((err) => {
-      console.warn('[licitacoes] auto-move prazo vencido (summary) falhou:', err.message);
+    // Só suspenso → Monitoramento automático; ativo com prazo vencido fica no funil até confirmar.
+    await runExpiredSuspensoToMonitoramento({ accountId }).catch((err) => {
+      console.warn('[licitacoes] auto-move suspenso→monitoramento (summary) falhou:', err.message);
     });
 
     // KPIs de cima: só pipeline operacional 2–12 (sem PCA).
@@ -19436,16 +19833,16 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
-  // Pipeline: prazo de proposta vencido → coluna 13. Perdido (status perdido).
+  // Pipeline: suspenso com prazo vencido → Monitoramento (ativo → Perdido só com confirm na UI).
   cron.schedule('10 5 * * *', async () => {
     if (!dataLayerReady) return;
     try {
-      const result = await runExpiredLicitacaoProposalMove({});
+      const result = await runExpiredSuspensoToMonitoramento({});
       if (result.moved > 0) {
-        console.log(`[licitacoes] auto-move prazo vencido: moved=${result.moved}`);
+        console.log(`[licitacoes] auto-move suspenso→monitoramento: moved=${result.moved}`);
       }
     } catch (error) {
-      console.error('[licitacoes] auto-move prazo vencido error:', error);
+      console.error('[licitacoes] auto-move suspenso→monitoramento error:', error);
     }
   }, { timezone: 'America/Sao_Paulo' });
 
@@ -19602,12 +19999,12 @@ const initializeDataLayer = async () => {
     runDailyPncpExpiredResultsPurge().catch((err) => {
       console.warn('[pncp-search-jobs] purge vencidos no startup falhou:', err.message);
     });
-    runExpiredLicitacaoProposalMove({}).then((result) => {
+    runExpiredSuspensoToMonitoramento({}).then((result) => {
       if (result.moved > 0) {
-        console.log(`[licitacoes] auto-move prazo vencido no startup: moved=${result.moved}`);
+        console.log(`[licitacoes] auto-move suspenso→monitoramento no startup: moved=${result.moved}`);
       }
     }).catch((err) => {
-      console.warn('[licitacoes] auto-move prazo vencido no startup falhou:', err.message);
+      console.warn('[licitacoes] auto-move suspenso→monitoramento no startup falhou:', err.message);
     });
   });
 

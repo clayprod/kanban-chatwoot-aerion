@@ -642,12 +642,12 @@ const emitDeadlineDigest = async (pool, {
 }) => {
   const dayKey = new Date().toISOString().slice(0, 10);
 
-  // Antes do digest: o que já venceu (proposta) sai para Perdido / Monitoramento.
+  // Antes do digest: só suspenso → Monitoramento (ativo → Perdido exige confirm na UI).
   if (typeof runExpiredLicitacaoProposalMove === 'function') {
     try {
       await runExpiredLicitacaoProposalMove({ accountId });
     } catch (err) {
-      console.warn('[notifications] auto-move prazo antes do digest falhou:', err.message);
+      console.warn('[notifications] auto-move suspenso→monitoramento antes do digest falhou:', err.message);
     }
   }
 
