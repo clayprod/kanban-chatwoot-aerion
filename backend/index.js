@@ -9273,13 +9273,17 @@ const runDailyPncpExpiredResultsPurge = async () => {
   return result;
 };
 
-const countPncpJobResults = async (jobId, accountId = null) => {
+/** Conta resultados do job. Por padrão exclui descartados (visibility=hidden). */
+const countPncpJobResults = async (jobId, accountId = null, { includeHidden = false } = {}) => {
   if (!jobId) return 0;
   const params = [jobId];
   let sql = `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1`;
   if (accountId != null) {
     params.push(accountId);
-    sql += ' AND account_id = $2';
+    sql += ` AND account_id = $${params.length}`;
+  }
+  if (!includeHidden) {
+    sql += ` AND visibility <> 'hidden'`;
   }
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total: 0 }] }));
   return Number(rows[0]?.total || 0);
@@ -9289,8 +9293,9 @@ const countPncpJobResults = async (jobId, accountId = null) => {
  * Soma canônica do "Valor na lista": SOMENTE itens pertinentes (value_matched).
  * Nunca usa total da licitação (value_estimated / valor_global / homologado) —
  * se faltar valor de item, a linha não entra na soma até o enriquecimento preencher.
+ * Descartados (visibility=hidden) não entram no valor da lista ativa.
  */
-const sumPncpJobResultsValue = async (jobId, accountId = null) => {
+const sumPncpJobResultsValue = async (jobId, accountId = null, { includeHidden = false } = {}) => {
   if (!jobId) return 0;
   const params = [jobId];
   let sql = `
@@ -9305,7 +9310,10 @@ const sumPncpJobResultsValue = async (jobId, accountId = null) => {
      WHERE job_id = $1`;
   if (accountId != null) {
     params.push(accountId);
-    sql += ' AND account_id = $2';
+    sql += ` AND account_id = $${params.length}`;
+  }
+  if (!includeHidden) {
+    sql += ` AND visibility <> 'hidden'`;
   }
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [{ total_value: 0 }] }));
   const n = Number(rows[0]?.total_value || 0);
@@ -9314,20 +9322,21 @@ const sumPncpJobResultsValue = async (jobId, accountId = null) => {
 
 const refreshPncpJobSummaryTotals = async (job) => {
   if (!job?.id) return job?.summary || null;
-  const count = await countPncpJobResults(job.id, job.account_id);
-  const totalValue = await sumPncpJobResultsValue(job.id, job.account_id);
+  // total/summary da lista ativa: descartados saem da contagem e do valor.
+  const count = await countPncpJobResults(job.id, job.account_id, { includeHidden: false });
+  const totalValue = await sumPncpJobResultsValue(job.id, job.account_id, { includeHidden: false });
   job.summary = {
     ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
     count,
     total_value: totalValue,
   };
-  job.total = count || job.total || 0;
+  job.total = count || 0;
   return job.summary;
 };
 
-/** Contagens por visibility (para chips Todos/Ocultos/Pipeline do popup). */
+/** Contagens por visibility (chips Na lista / Descartados / Pipeline). */
 const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
-  const empty = { all: 0, visible: 0, hidden: 0, pipeline: 0 };
+  const empty = { all: 0, list: 0, visible: 0, hidden: 0, pipeline: 0 };
   if (!jobId) return empty;
   const params = [jobId];
   let sql = `
@@ -9349,6 +9358,8 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
     else counts.visible += n;
     counts.all += n;
   }
+  // "Na lista" = tudo que não foi descartado (visível + pipeline).
+  counts.list = Math.max(0, counts.all - counts.hidden);
   return counts;
 };
 
@@ -9356,8 +9367,9 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null) => {
  * Contagem canônica na lista por matched_term (fonte = tabela de resultados).
  * A coluna classified_added do term_run é só incremento de fatia e fica menor
  * que o card após retomadas/preserve.
+ * Descartados não entram na lista ativa.
  */
-const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null) => {
+const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null, { includeHidden = false } = {}) => {
   if (!jobId) return { total: 0, by_term: {} };
   const params = [jobId];
   let sql = `
@@ -9370,7 +9382,10 @@ const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null) => {
      WHERE job_id = $1`;
   if (accountId != null) {
     params.push(accountId);
-    sql += ' AND account_id = $2';
+    sql += ` AND account_id = $${params.length}`;
+  }
+  if (!includeHidden) {
+    sql += ` AND visibility <> 'hidden'`;
   }
   sql += ' GROUP BY 1 ORDER BY cnt DESC';
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [] }));
@@ -10760,15 +10775,18 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   }
   const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
   const accountId = getAccountId(req);
-  // Total canônico da lista + contagem por termo (auditoria alinhada ao card).
+  // Total canônico da lista ativa (sem descartados) + contagem por termo.
   let listTotal = Number(job.total || 0);
   let listByTerm = {};
+  let visibilityCounts = null;
   try {
     const [vis, byTerm] = await Promise.all([
       countPncpJobResultsByVisibility(job.id, accountId || job.account_id || null),
-      countPncpJobResultsByMatchedTerm(job.id, accountId || job.account_id || null),
+      countPncpJobResultsByMatchedTerm(job.id, accountId || job.account_id || null, { includeHidden: false }),
     ]);
-    listTotal = Number(vis.all || byTerm.total || listTotal || 0);
+    visibilityCounts = vis;
+    // "Na lista" / total do card = ativos (list), não inclui descartados.
+    listTotal = Number(vis.list ?? byTerm.total ?? listTotal ?? 0);
     listByTerm = byTerm.by_term || {};
   } catch (err) {
     console.warn('[PNCP Search Job] contagem por termo falhou:', err.message);
@@ -10784,8 +10802,9 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     suggested_positive_terms: job.suggested_positive_terms || [],
     suggested_negative_terms: job.suggested_negative_terms || [],
     progress: job.progress,
-    // Preferir contagem da tabela (mesma fonte do card "Na lista").
+    // Preferir contagem da tabela (lista ativa, sem descartados).
     total: listTotal || job.total,
+    visibility_counts: visibilityCounts,
     // Inclui 'queued': entre retomadas o status vira queued por um instante; o UI
     // não deve apagar a lista (itens/total vêm do último snapshot + tabela).
     items: ['queued', 'running', 'completed', 'paused_rate_limit', 'failed', 'cancelled'].includes(job.status)
@@ -10840,7 +10859,8 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
     const tam = Math.max(5, Math.min(100, Number(req.query.tam || 25) || 25));
     const offset = (pagina - 1) * tam;
     const ordenacao = String(req.query.ordenacao || job.filters?.ordenacao || 'relevancia_desc');
-    const scope = String(req.query.scope || 'visible');
+    // list (default) = ativos (não descartados); hidden = só descartados; all = tudo no DB.
+    const scope = String(req.query.scope || 'list').toLowerCase();
     const orderSql = ordenacao === 'valor_desc_data_desc'
       ? 'COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC'
       : ordenacao === 'valor_asc_data_desc'
@@ -10850,15 +10870,17 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           : ordenacao === 'data_asc'
             ? 'deadline_at ASC NULLS LAST, updated_at DESC'
             : 'score DESC NULLS LAST, COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC';
-    // scope=all: lista tudo; visible (default legado): só não ocultos/pipeline no DB.
-    // Ocultos/pipeline do frontend (localStorage + board) ainda filtrados no client.
-    const visibilityClause = scope === 'all'
-      ? ''
-      : scope === 'hidden'
-        ? ` AND visibility = 'hidden'`
-        : scope === 'pipeline'
-          ? ` AND visibility = 'pipeline'`
-          : ` AND visibility = 'visible'`;
+    // list/all(legado UI)/active: sem descartados; hidden/descartados: só hidden;
+    // visible/pipeline: filtro fino; everything: inclui descartados (debug).
+    const visibilityClause = (scope === 'hidden' || scope === 'descartados' || scope === 'discarded')
+      ? ` AND visibility = 'hidden'`
+      : scope === 'pipeline'
+        ? ` AND visibility = 'pipeline'`
+        : scope === 'visible'
+          ? ` AND visibility = 'visible'`
+          : (scope === 'everything' || scope === 'with_hidden')
+            ? ''
+            : ` AND visibility <> 'hidden'`; // list | all | active | default
 
     const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId);
     const countResult = await pool.query(
@@ -10866,10 +10888,11 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
       [job.id, accountId]
     );
     const total = Number(countResult.rows[0]?.total || 0);
+    const listTotalCanonical = Number(visibilityCounts.list || 0);
     if (total > 0 || visibilityCounts.all > 0) {
       const { rows } = total > 0
         ? await pool.query(
-          `SELECT payload
+          `SELECT payload, visibility, result_key
              FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
             WHERE job_id = $1 AND account_id = $2${visibilityClause}
             ORDER BY ${orderSql}
@@ -10877,7 +10900,14 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           [job.id, accountId, tam, offset]
         )
         : { rows: [] };
-      let pageItems = rows.map(row => row.payload).filter(Boolean);
+      let pageItems = rows.map(row => {
+        const payload = row.payload && typeof row.payload === 'object' ? { ...row.payload } : row.payload;
+        if (payload && typeof payload === 'object') {
+          payload.__visibility_db = row.visibility || 'visible';
+          payload.__result_key = row.result_key || null;
+        }
+        return payload;
+      }).filter(Boolean);
       // Valores de item não vêm da busca textual — insiste em enriquecer se faltar
       // valor_itens_pertinentes (total da licitação sozinho NÃO dispensa o enrich).
       const enrichOnRead = String(req.query.enrich || 'true') !== 'false';
@@ -10894,44 +10924,67 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           enrichPromise,
           new Promise(resolve => setTimeout(resolve, 3500, null)),
         ]);
-        if (enriched) pageItems = enriched;
+        if (enriched) {
+          // Reanexa metadados de visibility/result_key após o enrich (payload puro).
+          const metaByKey = new Map(
+            rows.map(r => [String(r.result_key || ''), { visibility: r.visibility, result_key: r.result_key }])
+          );
+          pageItems = enriched.map((item) => {
+            if (!item || typeof item !== 'object') return item;
+            const key = String(item.__result_key || getPncpSearchResultKey(item) || '');
+            const meta = metaByKey.get(key);
+            return {
+              ...item,
+              __visibility_db: item.__visibility_db || meta?.visibility || 'visible',
+              __result_key: item.__result_key || meta?.result_key || key || null,
+            };
+          });
+        }
       }
-      // Soma de valor da lista completa (não do summary parcial do deep job).
+      // Soma/contagem da lista ativa (descartados fora do valor e do "na lista").
       const [listTotalValue, listByTerm] = await Promise.all([
-        sumPncpJobResultsValue(job.id, accountId),
-        countPncpJobResultsByMatchedTerm(job.id, accountId),
+        sumPncpJobResultsValue(job.id, accountId, { includeHidden: false }),
+        countPncpJobResultsByMatchedTerm(job.id, accountId, { includeHidden: false }),
       ]);
+      // Para aba descartados, count do response = do scope; summary do job mantém lista ativa.
+      const summaryCount = (scope === 'hidden' || scope === 'descartados' || scope === 'discarded')
+        ? total
+        : (listTotalCanonical || total);
       const summary = {
         ...(job.summary && typeof job.summary === 'object' ? job.summary : {}),
-        count: total || visibilityCounts.all,
+        count: summaryCount,
         total_value: listTotalValue,
       };
       // Se enriquecemos a página, o SUM já pode ter subido; persiste no job p/ o card.
-      if (listTotalValue > 0 && Number(job.summary?.total_value || 0) !== listTotalValue) {
+      if (listTotalValue > 0 && Number(job.summary?.total_value || 0) !== listTotalValue
+          && scope !== 'hidden' && scope !== 'descartados' && scope !== 'discarded') {
         job.summary = summary;
+        job.total = summaryCount;
         persistPncpDeepJob(job).catch(() => null);
       }
       return res.json({
         items: pageItems,
-        total: total || visibilityCounts.all,
+        total,
         pagina,
         tamanhoPagina: tam,
-        totalPaginas: Math.max(1, Math.ceil((total || visibilityCounts.all) / tam)),
+        totalPaginas: Math.max(1, Math.ceil((total || 1) / tam)),
         summary,
         values_enriched_on_read: enrichOnRead,
         visibility_counts: visibilityCounts,
         list_by_term: listByTerm.by_term || {},
-        list_total: Number(listByTerm.total || total || visibilityCounts.all || 0),
+        list_total: Number(listByTerm.total || listTotalCanonical || 0),
         // Progresso da coleta (auditoria/UI): brutos da API ≠ classificados no filtro.
+        // classified = lista ativa (sem descartados).
         collection: {
-          classified: visibilityCounts.all,
+          classified: listTotalCanonical,
+          discarded: Number(visibilityCounts.hidden || 0),
           current_term: job.progress?.current_term || null,
           current_page: job.progress?.current_page || null,
           resume_from_page: job.progress?.resume_from_page || null,
           term_collected: job.progress?.current_term_collected || null,
           term_total_api: job.progress?.current_term_total_reported || null,
           list_by_term: listByTerm.by_term || {},
-          list_total: Number(listByTerm.total || total || visibilityCounts.all || 0),
+          list_total: Number(listByTerm.total || listTotalCanonical || 0),
         },
       });
     }
@@ -10956,6 +11009,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
       },
       visibility_counts: {
         all: fallbackTotal,
+        list: fallbackTotal,
         visible: fallbackTotal,
         hidden: 0,
         pipeline: 0,
@@ -10963,6 +11017,119 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao paginar resultados da busca PNCP', details: error.message });
+  }
+});
+
+// Descartar / restaurar item da lista de resultados do job (visibility hidden|visible).
+// Descartados saem da lista ativa e da contagem; permanecem na aba Descartados até
+// restaurar ou até o purge de prazo vencido removê-los do job.
+app.patch('/api/licitacoes/pncp/search/deep/:jobId/results/visibility', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const job = await loadPncpDeepJob(req.params.jobId, accountId);
+    if (!job) return res.status(404).json({ error: 'Busca profunda nao encontrada' });
+
+    const rawVis = String(req.body?.visibility || '').toLowerCase().trim();
+    const visibility = (rawVis === 'hidden' || rawVis === 'descartado' || rawVis === 'discarded')
+      ? 'hidden'
+      : (rawVis === 'visible' || rawVis === 'restore' || rawVis === 'restaurar' || rawVis === 'list')
+        ? 'visible'
+        : null;
+    if (!visibility) {
+      return res.status(400).json({ error: 'visibility deve ser hidden (descartar) ou visible (restaurar)' });
+    }
+
+    const item = req.body?.item && typeof req.body.item === 'object' ? req.body.item : {};
+    const resultKey = String(
+      req.body?.result_key
+      || item.__result_key
+      || getPncpSearchResultKey(item)
+      || ''
+    ).trim();
+    const itemId = String(req.body?.item_id || item.id || '').trim();
+    if (!resultKey && !itemId) {
+      return res.status(400).json({ error: 'Informe result_key ou item' });
+    }
+
+    let updated = null;
+    if (resultKey) {
+      const byKey = await pool.query(
+        `UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+            SET visibility = $1, updated_at = NOW()
+          WHERE job_id = $2 AND account_id = $3 AND result_key = $4
+          RETURNING result_key, visibility`,
+        [visibility, job.id, accountId, resultKey]
+      );
+      updated = byKey.rows[0] || null;
+    }
+    // Fallback: casar por id no payload (itens legados / chave divergente).
+    if (!updated && itemId) {
+      const byId = await pool.query(
+        `UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+            SET visibility = $1, updated_at = NOW()
+          WHERE job_id = $2 AND account_id = $3
+            AND (
+              payload->>'id' = $4
+              OR result_key = $4
+              OR result_key = ('id:' || $4)
+            )
+          RETURNING result_key, visibility`,
+        [visibility, job.id, accountId, itemId]
+      );
+      updated = byId.rows[0] || null;
+    }
+    if (!updated) {
+      return res.status(404).json({ error: 'Resultado nao encontrado neste job' });
+    }
+
+    await refreshPncpJobSummaryTotals(job);
+    job.updated_at = Date.now();
+    if (PNCP_DEEP_SEARCH_JOBS.has(job.id)) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+    await persistPncpDeepJob(job).catch(() => null);
+
+    const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId);
+    res.json({
+      ok: true,
+      result_key: updated.result_key,
+      visibility: updated.visibility,
+      visibility_counts: visibilityCounts,
+      total: Number(visibilityCounts.list || 0),
+      summary: job.summary || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar visibility do resultado', details: error.message });
+  }
+});
+
+// Restaurar todos os descartados do job de volta para a lista ativa.
+app.post('/api/licitacoes/pncp/search/deep/:jobId/results/restore-discarded', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const job = await loadPncpDeepJob(req.params.jobId, accountId);
+    if (!job) return res.status(404).json({ error: 'Busca profunda nao encontrada' });
+
+    const { rowCount } = await pool.query(
+      `UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+          SET visibility = 'visible', updated_at = NOW()
+        WHERE job_id = $1 AND account_id = $2 AND visibility = 'hidden'`,
+      [job.id, accountId]
+    );
+
+    await refreshPncpJobSummaryTotals(job);
+    job.updated_at = Date.now();
+    if (PNCP_DEEP_SEARCH_JOBS.has(job.id)) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+    await persistPncpDeepJob(job).catch(() => null);
+
+    const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId);
+    res.json({
+      ok: true,
+      restored: Number(rowCount || 0),
+      visibility_counts: visibilityCounts,
+      total: Number(visibilityCounts.list || 0),
+      summary: job.summary || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao restaurar descartados', details: error.message });
   }
 });
 

@@ -2252,27 +2252,38 @@ const resolveContactIdFromInput = (inputValue, contactList = []) => {
   return exactMatch ? String(exactMatch.id) : '';
 };
 
-const formatCompactNumber = (value) => {
-  if (value === null || value === undefined) {
-    return value;
+/** Abrevia com K/M/B (mais curto que "mil"/"mi" do pt-BR compact) — cabe em KPIs mobile. */
+const formatCompactScaled = (value, { currency = false } = {}) => {
+  if (value === null || value === undefined) return value;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return currency ? null : value;
+
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  // Escala + promove no limite (ex.: 999,95K → 1M) para não virar "1.000K".
+  let scaled = abs;
+  let suffix = '';
+  if (abs >= 999_950_000) {
+    scaled = abs / 1_000_000_000;
+    suffix = 'B';
+  } else if (abs >= 999_950) {
+    scaled = abs / 1_000_000;
+    suffix = 'M';
+  } else if (abs >= 1_000) {
+    scaled = abs / 1_000;
+    suffix = 'K';
   }
-  return new Intl.NumberFormat('pt-BR', {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(Number(value));
+
+  const numStr = scaled.toLocaleString('pt-BR', {
+    maximumFractionDigits: suffix ? 1 : 0,
+    minimumFractionDigits: 0,
+  });
+  return currency ? `${sign}R$ ${numStr}${suffix}` : `${sign}${numStr}${suffix}`;
 };
 
-const formatCompactCurrency = (value) => {
-  if (value === null || value === undefined) {
-    return value;
-  }
-  return new Intl.NumberFormat('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(Number(value));
-};
+const formatCompactNumber = (value) => formatCompactScaled(value);
+
+const formatCompactCurrency = (value) => formatCompactScaled(value, { currency: true });
 
 /** Moeda em cards estreitos: compacta a partir de 1M para não estourar layout. */
 const formatPncpCardCurrency = (value) => {
@@ -7203,7 +7214,7 @@ function App() {
   const [pncpSummaryExpanded, setPncpSummaryExpanded] = useState(false);
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpJobModalOpen, setPncpJobModalOpen] = useState(false);
-  const [pncpJobModalTab, setPncpJobModalTab] = useState('resultados'); // resultados | termos | auditoria
+  const [pncpJobModalTab, setPncpJobModalTab] = useState('resultados'); // resultados | termos | auditoria | descartados
   // Header do popup compacto por padrão — mais espaço pra lista de resultados.
   const [pncpJobHeaderExpanded, setPncpJobHeaderExpanded] = useState(false);
   const [pncpJobFilterDraft, setPncpJobFilterDraft] = useState({
@@ -7228,18 +7239,23 @@ function App() {
   const [pncpWatchlistDialog, setPncpWatchlistDialog] = useState(null); // { source: 'job'|'search', jobId?, defaultName, contextLabel }
   const [pncpWatchlistSaving, setPncpWatchlistSaving] = useState(false);
   const [pncpResultLocalQuery, setPncpResultLocalQuery] = useState('');
-  const [pncpResultScope, setPncpResultScope] = useState('all');
+  // list = ativos (sem descartados); pipeline = já no board; hidden = só na aba Descartados.
+  const [pncpResultScope, setPncpResultScope] = useState('list');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
   const [pncpJobResultsPageSize, setPncpJobResultsPageSize] = useState(25);
   const [pncpDebugControlId, setPncpDebugControlId] = useState('');
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
+  // Fallback legado (localStorage) + IDs recém-descartados em otimista até o reload.
   const [pncpHiddenIds, setPncpHiddenIds] = useState(() => {
     try {
       const stored = localStorage.getItem('pncp_hidden_ids');
       return stored ? JSON.parse(stored) : [];
     } catch { return []; }
   });
+  const [pncpVisibilityBusyId, setPncpVisibilityBusyId] = useState(null);
+  // Evita re-disparar migração localStorage→DB no mesmo job (falha de rede não deve loopar).
+  const pncpLegacyDiscardSyncedRef = useRef(new Set());
   const [showPncpHidden, setShowPncpHidden] = useState(false);
   const [pncpOutcomeFilters, setPncpOutcomeFilters] = useState({
     q: '',
@@ -8875,8 +8891,12 @@ function App() {
   }, [licitacaoOpportunities]);
 
   const getPncpResultVisibility = useCallback((item) => {
-    if (pncpHiddenIds.includes(item.id)) {
+    // Preferência: coluna do DB (após PATCH); depois localStorage legado; pipeline do board.
+    if (item.__visibility_db === 'hidden' || pncpHiddenIds.includes(item.id)) {
       return 'hidden';
+    }
+    if (item.__visibility_db === 'pipeline') {
+      return 'pipeline';
     }
     const controlId = normalizePncpControlId(item.numero_controle_pncp);
     if (controlId && pncpInPipelineIndex.controls.has(controlId)) {
@@ -8902,28 +8922,53 @@ function App() {
   }, [pncpSearchResults.items, getPncpResultVisibility]);
 
   const pncpVisibilityCounts = useMemo(() => {
-    // Ocultos = localStorage; pipeline = já no board — calculados na página carregada.
-    // "Todos" / total do job vêm do backend (tabela completa), senão o chip
-    // mostrava só o tamanho da página (25) com Classificados 36+.
+    // Contagens canônicas do backend (tabela completa). Fallback: página + total.
+    const server = pncpSearchResults?.visibility_counts || {};
     const pageCounts = pncpResultsWithVisibility.reduce((acc, item) => {
       acc[item.__visibility] = (acc[item.__visibility] || 0) + 1;
-      acc.all += 1;
       return acc;
-    }, { all: 0, visible: 0, hidden: 0, pipeline: 0 });
-    const serverAll = Number(pncpSearchResults?.visibility_counts?.all || pncpSearchResults?.total || 0);
-    const jobTotal = Math.max(serverAll, Number(pncpSearchResults?.total || 0), pageCounts.all);
+    }, { visible: 0, hidden: 0, pipeline: 0 });
+    const listFromServer = Number(server.list ?? NaN);
+    const allFromServer = Number(server.all ?? NaN);
+    const hiddenFromServer = Number(server.hidden ?? NaN);
+    const pipelineFromServer = Number(server.pipeline ?? NaN);
+    const totalPayload = Number(pncpSearchResults?.total || 0);
+    // "Na lista" = ativos (sem descartados).
+    const list = Number.isFinite(listFromServer)
+      ? listFromServer
+      : Number.isFinite(allFromServer) && Number.isFinite(hiddenFromServer)
+        ? Math.max(0, allFromServer - hiddenFromServer)
+        : Math.max(0, totalPayload);
+    const hidden = Number.isFinite(hiddenFromServer)
+      ? Math.max(hiddenFromServer, pageCounts.hidden)
+      : Math.max(pageCounts.hidden, pncpHiddenIds.length);
+    const pipeline = Number.isFinite(pipelineFromServer)
+      ? Math.max(pipelineFromServer, pageCounts.pipeline)
+      : pageCounts.pipeline;
     return {
-      all: jobTotal,
-      visible: Math.max(0, jobTotal - pageCounts.hidden - pageCounts.pipeline),
-      hidden: pageCounts.hidden,
-      pipeline: pageCounts.pipeline,
+      all: list, // alias legado usado em chips "Na lista"
+      list,
+      visible: Math.max(0, list - pipeline),
+      hidden,
+      pipeline,
     };
-  }, [pncpResultsWithVisibility, pncpSearchResults?.visibility_counts, pncpSearchResults?.total]);
+  }, [pncpResultsWithVisibility, pncpSearchResults?.visibility_counts, pncpSearchResults?.total, pncpHiddenIds.length]);
 
   const visiblePncpResults = useMemo(() => {
-    let list = pncpResultScope === 'all'
-      ? pncpResultsWithVisibility
-      : pncpResultsWithVisibility.filter(item => item.__visibility === pncpResultScope);
+    // Aba resultados: lista ativa (sem descartados). Aba/scope hidden: só descartados.
+    // Pipeline: filtro client-side sobre a página (board match).
+    let list;
+    if (pncpResultScope === 'hidden' || pncpResultScope === 'descartados') {
+      list = pncpResultsWithVisibility.filter(item => item.__visibility === 'hidden');
+    } else if (pncpResultScope === 'pipeline') {
+      list = pncpResultsWithVisibility.filter(item => item.__visibility === 'pipeline');
+    } else {
+      // list | all | visible — nunca mostrar descartados na lista principal
+      list = pncpResultsWithVisibility.filter(item => item.__visibility !== 'hidden');
+      if (pncpResultScope === 'visible') {
+        list = list.filter(item => item.__visibility === 'visible');
+      }
+    }
     // Filtro client-side: SRP só é conhecido após enriquecimento (itens sem
     // detalhe têm srp === null e são ocultados apenas com o filtro ligado).
     if (pncpSearchFilters.srp_only) {
@@ -9900,6 +9945,7 @@ function App() {
         query_plan: nextPlan,
         list_by_term: job.list_by_term || job.query_plan?.list_by_term || prev.list_by_term || null,
         list_total: Number(job.list_total ?? job.query_plan?.list_total ?? prev.list_total ?? nextTotal) || nextTotal,
+        visibility_counts: job.visibility_counts || prev.visibility_counts || null,
         diagnostics: {
           aiRequested: true,
           aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
@@ -9908,7 +9954,7 @@ function App() {
       };
     });
     if (resetScope) {
-      setPncpResultScope('all');
+      setPncpResultScope('list');
       setShowPncpHidden(false);
     }
   };
@@ -9916,7 +9962,13 @@ function App() {
   const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
     if (!jobId) return null;
     const effectivePage = Math.max(1, Number(page) || 1);
-    const effectiveScope = overrides.scope || (pncpResultScope === 'hidden' || pncpResultScope === 'pipeline' ? 'all' : pncpResultScope);
+    // list = ativos; hidden = aba Descartados; pipeline filtra no client sobre a lista ativa.
+    const rawScope = overrides.scope || pncpResultScope || 'list';
+    const effectiveScope = (rawScope === 'pipeline' || rawScope === 'visible' || rawScope === 'all')
+      ? 'list'
+      : (rawScope === 'descartados' || rawScope === 'discarded')
+        ? 'hidden'
+        : rawScope;
     const effectiveTam = Math.max(5, Math.min(100, Number(overrides.tam || pncpJobResultsPageSize || 25) || 25));
     const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}/results`, {
       params: {
@@ -9933,10 +9985,11 @@ function App() {
     if (Number(payload.tamanhoPagina || effectiveTam) !== pncpJobResultsPageSize) {
       setPncpJobResultsPageSize(Number(payload.tamanhoPagina || effectiveTam));
     }
+    const loadedItems = Array.isArray(payload.items) ? payload.items : [];
     setPncpSearchResults(prev => ({
       ...prev,
-      items: Array.isArray(payload.items) ? payload.items : (prev.items || []),
-      total: total || Number(visCounts?.all || prev.total || 0),
+      items: loadedItems.length ? loadedItems : (Array.isArray(payload.items) ? payload.items : (prev.items || [])),
+      total: total || Number(visCounts?.list ?? visCounts?.all ?? prev.total ?? 0),
       pagina: Number(payload.pagina || effectivePage),
       tamanhoPagina: Number(payload.tamanhoPagina || effectiveTam),
       totalPaginas: Number(payload.totalPaginas || 1),
@@ -9948,16 +10001,42 @@ function App() {
       list_total: Number(
         payload.list_total
         ?? payload.collection?.list_total
+        ?? visCounts?.list
         ?? total
         ?? prev.list_total
         ?? 0
       ),
     }));
-    // Mantém o card alinhado ao total real da tabela de resultados (mesma fonte do popup).
-    const canonicalTotal = total || Number(visCounts?.all || 0);
-    if (jobId && Number.isFinite(canonicalTotal) && canonicalTotal > 0) {
+    // Migra descarte legado (localStorage) → visibility=hidden no job, para sumir da lista e ir à aba Descartados.
+    if (effectiveScope === 'list' && pncpHiddenIds.length > 0 && loadedItems.length > 0) {
+      const syncKey = String(jobId);
+      const legacyToSync = loadedItems.filter(it => it && pncpHiddenIds.includes(it.id) && it.__visibility_db !== 'hidden');
+      if (legacyToSync.length > 0 && !pncpLegacyDiscardSyncedRef.current.has(syncKey)) {
+        pncpLegacyDiscardSyncedRef.current.add(syncKey);
+        Promise.allSettled(legacyToSync.map(it => axios.patch(
+          `/api/licitacoes/pncp/search/deep/${jobId}/results/visibility`,
+          { item: it, item_id: it.id, result_key: it.__result_key || undefined, visibility: 'hidden' }
+        ))).then((results) => {
+          const anyOk = results.some(r => r.status === 'fulfilled');
+          if (anyOk) {
+            loadPncpJobResults(jobId, effectivePage, { scope: effectiveScope, tam: effectiveTam }).catch(() => null);
+          }
+        }).catch(() => null);
+      }
+    }
+    // Card do job = lista ativa (sem descartados).
+    const canonicalTotal = Number(visCounts?.list ?? payload.list_total ?? total ?? 0);
+    if (jobId && Number.isFinite(canonicalTotal) && canonicalTotal >= 0) {
       setPncpSearchJobs(prev => prev.map(job => (
-        String(job.id) === String(jobId) ? { ...job, total: canonicalTotal } : job
+        String(job.id) === String(jobId)
+          ? {
+              ...job,
+              total: canonicalTotal,
+              summary: payload.summary
+                ? { ...(job.summary || {}), ...payload.summary, count: canonicalTotal }
+                : job.summary,
+            }
+          : job
       )));
     }
     return payload;
@@ -9982,7 +10061,7 @@ function App() {
       const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}`);
       setActivePncpSearchJobId(jobId);
       setPncpResultLocalQuery('');
-      setPncpResultScope('all');
+      setPncpResultScope('list');
       setPncpJobModalTab('resultados');
       setPncpJobFiltersEditing(false);
       seedPncpJobFilterDraft(response.data?.filters || {});
@@ -10354,7 +10433,7 @@ function App() {
         };
         setPncpSearchJobs(prev => [optimisticJob, ...prev.filter(job => String(job.id) !== String(jobId))].slice(0, 20));
       }
-      setPncpResultScope('all');
+      setPncpResultScope('list');
       setShowPncpHidden(false);
       await loadPncpSearchJobs();
       if (jobId) {
@@ -11211,24 +11290,205 @@ function App() {
     setPncpWatchlistDialog({ source: 'search', defaultName: term, contextLabel: term });
   };
 
-  // Ocultar item da busca PNCP
-  const hidePncpItem = (itemId) => {
-    const newHidden = [...pncpHiddenIds, itemId];
-    setPncpHiddenIds(newHidden);
-    localStorage.setItem('pncp_hidden_ids', JSON.stringify(newHidden));
+  // Descartar item: some da lista ativa, não conta mais, vai para aba Descartados.
+  const hidePncpItem = async (itemOrId) => {
+    const item = itemOrId && typeof itemOrId === 'object' ? itemOrId : { id: itemOrId };
+    const itemId = item.id;
+    if (!itemId || pncpVisibilityBusyId === itemId) return;
+    const alreadyLocal = pncpHiddenIds.some(id => String(id) === String(itemId));
+    const alreadyDb = item.__visibility_db === 'hidden' || item.__visibility === 'hidden';
+    if (!alreadyLocal) {
+      const newHidden = [...pncpHiddenIds, itemId];
+      setPncpHiddenIds(newHidden);
+      localStorage.setItem('pncp_hidden_ids', JSON.stringify(newHidden));
+    }
+    // Otimista: some da página atual e ajusta contagens (só se ainda estava na lista).
+    if (!alreadyDb) {
+      setPncpSearchResults(prev => {
+        const wasOnPage = (prev.items || []).some(i => String(i.id) === String(itemId));
+        const nextItems = (prev.items || []).filter(i => String(i.id) !== String(itemId));
+        const prevVis = prev.visibility_counts || {};
+        const prevHidden = Number(prevVis.hidden || 0);
+        const prevList = Number(prevVis.list ?? prevVis.all ?? prev.total ?? 0);
+        const nextHidden = prevHidden + 1;
+        const nextList = Math.max(0, prevList - 1);
+        return {
+          ...prev,
+          items: nextItems,
+          total: Math.max(0, Number(prev.total || 0) - (wasOnPage && pncpResultScope !== 'hidden' ? 1 : 0)),
+          list_total: nextList,
+          visibility_counts: {
+            ...prevVis,
+            hidden: nextHidden,
+            list: nextList,
+            all: Number(prevVis.all || 0) || (nextList + nextHidden),
+          },
+        };
+      });
+      if (activePncpSearchJobId) {
+        setPncpSearchJobs(prev => prev.map(job => (
+          String(job.id) === String(activePncpSearchJobId)
+            ? {
+                ...job,
+                total: Math.max(0, Number(job.total || 0) - 1),
+                summary: job.summary
+                  ? { ...job.summary, count: Math.max(0, Number(job.summary.count || job.total || 0) - 1) }
+                  : job.summary,
+              }
+            : job
+        )));
+      }
+    }
+    if (activePncpSearchJobId) {
+      setPncpVisibilityBusyId(itemId);
+      try {
+        const response = await axios.patch(
+          `/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}/results/visibility`,
+          { item, item_id: itemId, result_key: item.__result_key || undefined, visibility: 'hidden' }
+        );
+        const visCounts = response.data?.visibility_counts;
+        if (visCounts) {
+          setPncpSearchResults(prev => ({
+            ...prev,
+            visibility_counts: visCounts,
+            list_total: Number(visCounts.list ?? prev.list_total ?? 0),
+            total: pncpResultScope === 'hidden'
+              ? Number(visCounts.hidden ?? prev.total ?? 0)
+              : Number(visCounts.list ?? prev.total ?? 0),
+            summary: response.data?.summary || prev.summary,
+          }));
+          setPncpSearchJobs(prev => prev.map(job => (
+            String(job.id) === String(activePncpSearchJobId)
+              ? {
+                  ...job,
+                  total: Number(visCounts.list ?? job.total ?? 0),
+                  summary: response.data?.summary
+                    ? { ...(job.summary || {}), ...response.data.summary }
+                    : job.summary,
+                }
+              : job
+          )));
+        }
+      } catch (error) {
+        console.warn('Falha ao persistir descarte PNCP:', error?.message || error);
+      } finally {
+        setPncpVisibilityBusyId(null);
+      }
+    }
   };
 
-  // Restaurar item oculto
-  const restorePncpItem = (itemId) => {
-    const newHidden = pncpHiddenIds.filter(id => id !== itemId);
+  // Restaurar item descartado → volta para a lista ativa
+  const restorePncpItem = async (itemOrId) => {
+    const item = itemOrId && typeof itemOrId === 'object' ? itemOrId : { id: itemOrId };
+    const itemId = item.id;
+    if (!itemId) return;
+    const newHidden = pncpHiddenIds.filter(id => String(id) !== String(itemId));
     setPncpHiddenIds(newHidden);
     localStorage.setItem('pncp_hidden_ids', JSON.stringify(newHidden));
+    // Otimista na aba Descartados: some dali.
+    if (pncpResultScope === 'hidden' || pncpJobModalTab === 'descartados') {
+      setPncpSearchResults(prev => {
+        const nextItems = (prev.items || []).filter(i => String(i.id) !== String(itemId));
+        const prevVis = prev.visibility_counts || {};
+        const nextHidden = Math.max(0, Number(prevVis.hidden || 0) - 1);
+        const nextList = Number(prevVis.list ?? prevVis.all ?? 0) + 1;
+        return {
+          ...prev,
+          items: nextItems,
+          total: Math.max(0, Number(prev.total || 0) - 1),
+          list_total: nextList,
+          visibility_counts: {
+            ...prevVis,
+            hidden: nextHidden,
+            list: nextList,
+            all: Number(prevVis.all || 0) || (nextList + nextHidden),
+          },
+        };
+      });
+    }
+    if (activePncpSearchJobId) {
+      setPncpVisibilityBusyId(itemId);
+      try {
+        const response = await axios.patch(
+          `/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}/results/visibility`,
+          { item, item_id: itemId, result_key: item.__result_key || undefined, visibility: 'visible' }
+        );
+        const visCounts = response.data?.visibility_counts;
+        if (visCounts) {
+          setPncpSearchResults(prev => ({
+            ...prev,
+            visibility_counts: visCounts,
+            list_total: Number(visCounts.list ?? prev.list_total ?? 0),
+            total: (pncpResultScope === 'hidden' || pncpJobModalTab === 'descartados')
+              ? Number(visCounts.hidden ?? prev.total ?? 0)
+              : Number(visCounts.list ?? prev.total ?? 0),
+            summary: response.data?.summary || prev.summary,
+          }));
+          setPncpSearchJobs(prev => prev.map(job => (
+            String(job.id) === String(activePncpSearchJobId)
+              ? {
+                  ...job,
+                  total: Number(visCounts.list ?? job.total ?? 0),
+                  summary: response.data?.summary
+                    ? { ...(job.summary || {}), ...response.data.summary }
+                    : job.summary,
+                }
+              : job
+          )));
+        }
+      } catch (error) {
+        console.warn('Falha ao restaurar descarte PNCP:', error?.message || error);
+      } finally {
+        setPncpVisibilityBusyId(null);
+      }
+    }
   };
 
-  // Restaurar todos os itens ocultos
-  const restoreAllPncpItems = () => {
+  // Restaurar todos os descartados do job
+  const restoreAllPncpItems = async () => {
     setPncpHiddenIds([]);
     localStorage.removeItem('pncp_hidden_ids');
+    if (!activePncpSearchJobId) return;
+    setPncpVisibilityBusyId('__all__');
+    try {
+      const response = await axios.post(
+        `/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}/results/restore-discarded`
+      );
+      const visCounts = response.data?.visibility_counts;
+      if (visCounts) {
+        setPncpSearchResults(prev => ({
+          ...prev,
+          visibility_counts: visCounts,
+          list_total: Number(visCounts.list ?? prev.list_total ?? 0),
+          items: (pncpResultScope === 'hidden' || pncpJobModalTab === 'descartados') ? [] : prev.items,
+          total: (pncpResultScope === 'hidden' || pncpJobModalTab === 'descartados')
+            ? 0
+            : Number(visCounts.list ?? prev.total ?? 0),
+          summary: response.data?.summary || prev.summary,
+        }));
+        setPncpSearchJobs(prev => prev.map(job => (
+          String(job.id) === String(activePncpSearchJobId)
+            ? {
+                ...job,
+                total: Number(visCounts.list ?? job.total ?? 0),
+                summary: response.data?.summary
+                  ? { ...(job.summary || {}), ...response.data.summary }
+                  : job.summary,
+              }
+            : job
+        )));
+      }
+      // Recarrega a aba atual para refletir o servidor.
+      if (pncpJobModalTab === 'descartados' || pncpResultScope === 'hidden') {
+        await loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'hidden' });
+      } else {
+        await loadPncpJobResults(activePncpSearchJobId, pncpJobResultsPage || 1, { scope: 'list' });
+      }
+    } catch (error) {
+      console.warn('Falha ao restaurar todos os descartados:', error?.message || error);
+    } finally {
+      setPncpVisibilityBusyId(null);
+    }
   };
 
   const mapPncpImportItemsToDraft = (items = []) => {
@@ -14030,13 +14290,13 @@ function App() {
                           <div className="pointer-events-none absolute -right-6 -top-6 h-16 w-16 rounded-full blur-[22px] opacity-45" style={{ background: kpi.glow }} />
                           <div className="relative flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <p className="text-[11.5px] text-muted leading-none">{kpi.label}</p>
-                              <p className="mt-2 font-mono text-[20px] sm:text-[22px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white truncate">{kpi.value}</p>
+                              <p className="text-[10.5px] sm:text-[11.5px] text-muted leading-none truncate">{kpi.label}</p>
+                              <p className="mt-1.5 sm:mt-2 font-mono text-[15px] sm:text-[20px] xl:text-[22px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white tabular-nums whitespace-nowrap">{kpi.value}</p>
                               {kpi.sub ? (
-                                <p className="mt-1 text-[10px] text-muted tabular-nums">{kpi.sub}</p>
+                                <p className="mt-1 text-[9.5px] sm:text-[10px] text-muted tabular-nums truncate">{kpi.sub}</p>
                               ) : null}
                             </div>
-                            <Icon className={`h-4 w-4 shrink-0 opacity-80 ${kpi.accent}`} />
+                            <Icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0 opacity-80 ${kpi.accent}`} />
                           </div>
                         </div>
                       );
@@ -15072,14 +15332,14 @@ function App() {
                                           <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(listValue) || 'R$ 0'}</p>
                                           <p className="text-[10px] leading-tight text-muted">itens pertinentes</p>
                                         </div>
-                                        <div className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
-                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
+                                        <div className="min-h-[3.75rem] min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Descartados (fora da lista) · já no board">
+                                          <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Descart. · pipeline</p>
                                           <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">
                                             {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
                                             <span className="text-muted"> · </span>
                                             {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
                                           </p>
-                                          <p className="text-[10px] leading-tight text-muted line-clamp-1">você ocultou · já no board</p>
+                                          <p className="text-[10px] leading-tight text-muted line-clamp-1">fora da lista · já no board</p>
                                         </div>
                                       </div>
                                       {/* Funil: altura fixa 2 linhas — não some/aparece */}
@@ -15122,17 +15382,35 @@ function App() {
 
                             <div className="mt-1.5 flex h-7 flex-wrap items-center gap-1">
                               {[
-                                ['resultados', 'Resultados'],
-                                ['termos', 'Termos e filtros'],
-                                ['auditoria', 'Auditoria'],
-                              ].map(([key, label]) => (
+                                ['resultados', 'Resultados', null],
+                                ['termos', 'Termos e filtros', null],
+                                ['auditoria', 'Auditoria', null],
+                                ['descartados', 'Descartados', Number(pncpVisibilityCounts.hidden || 0)],
+                              ].map(([key, label, count]) => (
                                 <button
                                   key={key}
                                   type="button"
-                                  onClick={() => setPncpJobModalTab(key)}
+                                  onClick={() => {
+                                    setPncpJobModalTab(key);
+                                    if (key === 'descartados') {
+                                      setPncpResultScope('hidden');
+                                      setShowPncpHidden(false);
+                                      if (activePncpSearchJobId) {
+                                        loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'hidden' });
+                                      }
+                                    } else if (key === 'resultados' && pncpResultScope === 'hidden') {
+                                      setPncpResultScope('list');
+                                      if (activePncpSearchJobId) {
+                                        loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'list' });
+                                      }
+                                    }
+                                  }}
                                   className={`h-7 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
                                 >
                                   {label}
+                                  {count != null && count > 0 ? (
+                                    <span className="ml-1 font-mono text-[10px] opacity-80">({count.toLocaleString('pt-BR')})</span>
+                                  ) : null}
                                 </button>
                               ))}
                               <button
@@ -15528,7 +15806,7 @@ function App() {
                                     {pncpDebugLookup && (
                                       <p className="mt-2">
                                         {pncpDebugLookup.found
-                                          ? `Encontrado: ${pncpDebugLookup.status === 'visible' ? 'visível' : pncpDebugLookup.status === 'pipeline' ? 'já no pipeline' : 'oculto'}`
+                                          ? `Encontrado: ${pncpDebugLookup.status === 'visible' ? 'visível' : pncpDebugLookup.status === 'pipeline' ? 'já no pipeline' : 'descartado'}`
                                           : 'Não está na lista atual (ainda não lido, ou descartado pelo filtro).'}
                                       </p>
                                     )}
@@ -15720,8 +15998,27 @@ function App() {
                               );
                             })()}
 
-                            {pncpJobModalTab === 'resultados' && (
+                            {(pncpJobModalTab === 'resultados' || pncpJobModalTab === 'descartados') && (
                               <div className="space-y-2">
+                                {pncpJobModalTab === 'descartados' && (
+                                  <div className="rounded-[10px] border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-snug text-muted sm:text-xs">
+                                    <p>
+                                      <strong className="text-ink">Descartados</strong>
+                                      {' — '}saíram dos resultados e da contagem da lista. Use <strong className="text-ink">Restaurar</strong> para devolver à lista ativa.
+                                      Itens com prazo vencido são removidos automaticamente (igual à lista principal).
+                                    </p>
+                                    {Number(pncpVisibilityCounts.hidden || 0) > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={restoreAllPncpItems}
+                                        disabled={pncpVisibilityBusyId === '__all__'}
+                                        className="mt-1.5 h-7 rounded-lg border border-line bg-bg2 px-2.5 text-[11px] font-semibold text-muted hover:text-ink disabled:opacity-50"
+                                      >
+                                        {pncpVisibilityBusyId === '__all__' ? 'Restaurando…' : `Restaurar todos (${Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')})`}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                                 <div className="rounded-[10px] border border-line bg-bg2/40 px-2.5 py-2">
                                   <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
                                     <p className="text-[11px] font-semibold text-ink sm:text-xs">Lista classificada deste job</p>
@@ -15770,28 +16067,43 @@ function App() {
                                     </select>
                                   </div>
                                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                                    {[
-                                      ['all', 'Na lista', pncpVisibilityCounts.all],
-                                      ['hidden', 'Ocultos', pncpVisibilityCounts.hidden],
-                                      ['pipeline', 'Já no pipeline', pncpVisibilityCounts.pipeline],
-                                    ].map(([scope, label, count]) => (
-                                      <button
-                                        key={scope}
-                                        type="button"
-                                        onClick={() => {
-                                          setPncpResultScope(scope);
-                                          setShowPncpHidden(false);
-                                          if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope });
-                                        }}
-                                        className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold ${pncpResultScope === scope ? 'border-primary bg-primary/10 text-primary' : 'border-line text-muted hover:bg-surf'}`}
-                                      >
-                                        {label} ({Number(count || 0).toLocaleString('pt-BR')})
-                                      </button>
-                                    ))}
-                                    {pncpHiddenIds.length > 0 && (
-                                      <button type="button" onClick={restoreAllPncpItems} className="h-7 rounded-lg border border-line px-2.5 text-[11px] text-muted hover:text-ink">
-                                        Restaurar ocultos
-                                      </button>
+                                    {pncpJobModalTab === 'descartados' ? (
+                                      <span className="h-7 inline-flex items-center rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 text-[11px] font-semibold text-amber">
+                                        Descartados ({Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')})
+                                      </span>
+                                    ) : (
+                                      <>
+                                        {[
+                                          ['list', 'Na lista', pncpVisibilityCounts.list ?? pncpVisibilityCounts.all],
+                                          ['pipeline', 'Já no pipeline', pncpVisibilityCounts.pipeline],
+                                        ].map(([scope, label, count]) => (
+                                          <button
+                                            key={scope}
+                                            type="button"
+                                            onClick={() => {
+                                              setPncpResultScope(scope);
+                                              setShowPncpHidden(false);
+                                              if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: scope === 'pipeline' ? 'list' : scope });
+                                            }}
+                                            className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold ${pncpResultScope === scope ? 'border-primary bg-primary/10 text-primary' : 'border-line text-muted hover:bg-surf'}`}
+                                          >
+                                            {label} ({Number(count || 0).toLocaleString('pt-BR')})
+                                          </button>
+                                        ))}
+                                        {Number(pncpVisibilityCounts.hidden || 0) > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setPncpJobModalTab('descartados');
+                                              setPncpResultScope('hidden');
+                                              if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'hidden' });
+                                            }}
+                                            className="h-7 rounded-lg border border-line px-2.5 text-[11px] text-muted hover:text-ink"
+                                          >
+                                            Ver descartados ({Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')})
+                                          </button>
+                                        )}
+                                      </>
                                     )}
                                     {Number(pncpSearchResults.total || 0) > 0 && (
                                       <span className="ml-auto font-mono text-[10px] text-muted2">
@@ -15911,7 +16223,7 @@ function App() {
                                               </span>
                                               {item.__visibility !== 'visible' && (
                                                 <span className="inline-flex shrink-0 items-center rounded-md bg-amber/15 px-2 py-0.5 text-[11px] font-semibold text-amber">
-                                                  {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Oculto'}
+                                                  {item.__visibility === 'pipeline' ? 'Já no pipeline' : 'Descartado'}
                                                 </span>
                                               )}
                                             </div>
@@ -15979,13 +16291,23 @@ function App() {
                                                 PNCP ↗
                                               </a>
                                             )}
-                                            {item.__visibility === 'hidden' ? (
-                                              <button type="button" onClick={() => restorePncpItem(item.id)} className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
-                                                Restaurar
+                                            {item.__visibility === 'hidden' || pncpJobModalTab === 'descartados' ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => restorePncpItem(item)}
+                                                disabled={pncpVisibilityBusyId === item.id}
+                                                className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2 disabled:opacity-50"
+                                              >
+                                                {pncpVisibilityBusyId === item.id ? 'Restaurando…' : 'Restaurar'}
                                               </button>
                                             ) : (
-                                              <button type="button" onClick={() => hidePncpItem(item.id)} className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2">
-                                                Ocultar
+                                              <button
+                                                type="button"
+                                                onClick={() => hidePncpItem(item)}
+                                                disabled={pncpVisibilityBusyId === item.id || item.__visibility === 'pipeline'}
+                                                className="h-8 w-full shrink-0 rounded-[10px] border border-line bg-bg2 text-xs font-semibold text-muted hover:bg-surf2 disabled:opacity-50"
+                                              >
+                                                {pncpVisibilityBusyId === item.id ? 'Descartando…' : 'Descartar'}
                                               </button>
                                             )}
                                           </div>
@@ -15996,14 +16318,22 @@ function App() {
                                 ) : (
                                   <div className="rounded-[12px] border border-dashed border-line px-4 py-10 text-center">
                                     <p className="text-sm font-semibold text-ink">
-                                      {live ? 'Ainda coletando…' : pncpSearchResults.total > 0 ? 'Nenhum item neste filtro' : 'Sem resultados nesta busca'}
+                                      {pncpJobModalTab === 'descartados'
+                                        ? 'Nenhum edital descartado'
+                                        : live
+                                          ? 'Ainda coletando…'
+                                          : pncpSearchResults.total > 0
+                                            ? 'Nenhum item neste filtro'
+                                            : 'Sem resultados nesta busca'}
                                     </p>
                                     <p className={`${subtle} mt-1`}>
-                                      {live
-                                        ? 'Os primeiros editais aparecem assim que cada frente terminar uma página.'
-                                        : pncpSearchResults.total > 0
-                                          ? 'Ajuste o filtro local, o escopo ou a ordenação acima.'
-                                          : 'Tente anexar novos termos na aba Termos e frentes.'}
+                                      {pncpJobModalTab === 'descartados'
+                                        ? 'Ao descartar um edital nos Resultados, ele aparece aqui para revisar depois.'
+                                        : live
+                                          ? 'Os primeiros editais aparecem assim que cada frente terminar uma página.'
+                                          : pncpSearchResults.total > 0
+                                            ? 'Ajuste o filtro local, o escopo ou a ordenação acima.'
+                                            : 'Tente anexar novos termos na aba Termos e frentes.'}
                                     </p>
                                   </div>
                                 )}
