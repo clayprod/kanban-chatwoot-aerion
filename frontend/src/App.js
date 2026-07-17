@@ -8708,22 +8708,28 @@ function App() {
       ? exclusiveLidos
       : (brutosLidosSum > 0 ? brutosLidosSum : mainRead);
 
-    // Universo de referência no card: maior total_reported (termo mais largo).
-    // NÃO usamos a soma dos totais — conta o mesmo edital N vezes (drone∩rpa∩uav).
-    const universeApi = mainUniverse || universeMax;
+    // Universo no card:
+    // - base = maior total_reported (termo mais largo na API de busca)
+    // - se lidos únicos (união de frentes) > base, o correlato NÃO estava contido
+    //   no saco maior → o teto real é pelo menos a união já vista (piso observado).
+    // - soma dos totais (universeSum) é teto teórico COM double-count; só informativo.
+    const universeMaxTerm = mainUniverse || universeMax;
+    // Denominador honesto: nunca menor que o que já vimos com certeza.
+    const universeApi = Math.max(universeMaxTerm, brutosLidos, 0);
+    const universeGrewBeyondMain = brutosLidos > universeMaxTerm && universeMaxTerm > 0;
     const classified = Number(classifiedTotal || job?.total || 0);
     const statusFilter = String(job?.filters?.status || 'recebendo_proposta');
     const isOpenOnly = normalizeText(statusFilter) === 'recebendo_proposta';
     const gate = job?.progress?.gate || null;
-    // Cobertura vs maior universo (pode passar de 100% se correlatos trouxerem
-    // itens fora daquele total — raro; cap visual em 100).
+    // Cobertura: lidos / denominador ajustado (≤ 100% por construção).
     const coveragePct = universeApi > 0
       ? Math.min(100, Math.round((brutosLidos / universeApi) * 100))
       : null;
     return {
       universeApi,
-      universeMax: universeApi,
+      universeMax: universeMaxTerm,
       universeSum,
+      universeGrewBeyondMain,
       brutosLidos,
       brutosLidosSum,
       uniqueNewSum,
@@ -14494,10 +14500,13 @@ function App() {
                                     <div
                                       className="rounded-md border border-line bg-bg2 px-2 py-1"
                                       title={
-                                        `Editais únicos já vistos em todas as frentes (drone, correlatos, consulta por data) — mesma lógica da lista (sem contar 2× o mesmo id). `
-                                        + `Denominador = maior universo de um termo de busca (ex. “${funnel.mainTerm || '…'}”), não a soma dos totais (há overlap). `
-                                        + (funnel.universeSum > funnel.universeApi
-                                          ? `Soma bruta dos totais por termo: ${Number(funnel.universeSum).toLocaleString('pt-BR')} (inflada).`
+                                        `Lidos = união de ids em todas as frentes. `
+                                        + `Universo = max(maior total de um termo na API, lidos já vistos). `
+                                        + (funnel.universeGrewBeyondMain
+                                          ? `Correlatos trouxeram itens fora do saco “${funnel.mainTerm || '…'}” (${Number(funnel.universeMax || 0).toLocaleString('pt-BR')}) — o teto subiu para a união observada. `
+                                          : `Enquanto a união ≤ saco “${funnel.mainTerm || '…'}”, usamos esse total da API como referência. `)
+                                        + (funnel.universeSum > Number(funnel.universeMax || 0)
+                                          ? `Soma dos totais por termo: ${Number(funnel.universeSum).toLocaleString('pt-BR')} (teto teórico com overlap).`
                                           : '')
                                       }
                                     >
@@ -14509,9 +14518,11 @@ function App() {
                                         ) : null}
                                       </p>
                                       <p className="text-[9px] leading-tight text-muted">
-                                        {funnel.coveragePct != null
-                                          ? `${funnel.coveragePct}% vs maior termo`
-                                          : 'únicos · todas as frentes'}
+                                        {funnel.universeGrewBeyondMain
+                                          ? 'união ≥ maior termo API'
+                                          : (funnel.coveragePct != null
+                                            ? `${funnel.coveragePct}% vs maior termo`
+                                            : 'únicos · todas as frentes')}
                                       </p>
                                     </div>
                                     <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Soma dos valores dos editais classificados na lista.">
@@ -14531,19 +14542,26 @@ function App() {
                                   </div>
                                   {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
                                     <p className="mt-1 line-clamp-3 text-[10px] leading-snug text-muted sm:text-[11px]" title={
-                                      `Lidos = união de únicos (todas as frentes). Referência de universo = maior termo (“${funnel.mainTerm || '…'}”: ${Number(funnel.universeApi || 0).toLocaleString('pt-BR')}). `
-                                      + (funnel.universeSum > funnel.universeApi
-                                        ? `Soma dos totais por termo ${Number(funnel.universeSum).toLocaleString('pt-BR')} conta overlap. `
+                                      `Lidos = união. Universo no card = max(maior total API de um termo, união já vista). `
+                                      + (funnel.universeGrewBeyondMain
+                                        ? `União passou o saco “${funnel.mainTerm}” (${Number(funnel.universeMax || 0).toLocaleString('pt-BR')}) — correlatos/consulta trouxeram ids de fora. `
                                         : '')
-                                      + `Já vistos/duplicados entre termos: ${Number(funnel.duplicatesSum || 0).toLocaleString('pt-BR')}.`
+                                      + (funnel.universeSum > Number(funnel.universeMax || 0)
+                                        ? `Soma dos totais por termo ${Number(funnel.universeSum).toLocaleString('pt-BR')} (overlap). `
+                                        : '')
+                                      + `Duplicados entre termos: ${Number(funnel.duplicatesSum || 0).toLocaleString('pt-BR')}.`
                                     }>
                                       <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> editais únicos lidos
-                                      {' '}(drone + correlatos + consulta por data, sem contar 2× o mesmo).
+                                      {' '}(todas as frentes, sem 2×).
                                       {funnel.universeApi > 0 ? (
                                         <>
-                                          {' '}Referência de universo: <strong className="text-ink">{funnel.universeApi.toLocaleString('pt-BR')}</strong>
-                                          {' '}no termo “{funnel.mainTerm || '…'}”
-                                          {funnel.isOpenOnly ? ' (API mista: abertos e encerrados)' : ''}.
+                                          {' '}Universo no card: <strong className="text-ink">{funnel.universeApi.toLocaleString('pt-BR')}</strong>
+                                          {funnel.universeGrewBeyondMain ? (
+                                            <> (união já maior que o saco “{funnel.mainTerm || '…'}” de {Number(funnel.universeMax || 0).toLocaleString('pt-BR')} na API)</>
+                                          ) : (
+                                            <> (ref. maior termo “{funnel.mainTerm || '…'}”)</>
+                                          )}
+                                          {funnel.isOpenOnly ? ' · API mista abertos/encerrados' : ''}.
                                         </>
                                       ) : null}
                                       {funnel.duplicatesSum > 0 ? (
@@ -14551,7 +14569,7 @@ function App() {
                                       ) : null}
                                       {' '}· <strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
                                       {funnel.isOpenOnly ? ' (só recebendo proposta)' : ''}.
-                                      {funnel.coveragePct != null && funnel.coveragePct < 100 ? (
+                                      {funnel.coveragePct != null && funnel.coveragePct < 100 && !funnel.universeGrewBeyondMain ? (
                                         <> Cobertura vs “{funnel.mainTerm}”: <strong className="text-ink">{funnel.coveragePct}%</strong>.</>
                                       ) : null}
                                       {funnel.currentTerm ? (
@@ -14873,19 +14891,20 @@ function App() {
                                   <p className="text-xs font-semibold text-ink">O que cada número significa</p>
                                   <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
                                     <div className="rounded-lg border border-line bg-surf px-2.5 py-2">
-                                      <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">1 · Universo (referência)</p>
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">1 · Universo (no card)</p>
                                       <p className="mt-0.5 font-mono text-lg font-bold text-ink">
                                         {funnel.universeApi > 0 ? funnel.universeApi.toLocaleString('pt-BR') : '—'}
                                       </p>
                                       <p className="mt-1 text-[11px] leading-snug text-muted">
-                                        Maior total que a API reporta para <strong className="text-ink">um</strong> termo de busca
-                                        {funnel.mainTerm ? <> (“<span className="text-ink">{funnel.mainTerm}</span>”)</> : null}
-                                        — abertos e encerrados. <strong className="text-ink">Não somamos</strong> drone+uav+rpa:
-                                        o mesmo edital entra em vários totais (overlap).
-                                        {funnel.universeSum > funnel.universeApi ? (
-                                          <> Soma bruta dos totais: {Number(funnel.universeSum).toLocaleString('pt-BR')} (inflada).</>
+                                        <strong className="text-ink">max(maior total de um termo na API, união já lida)</strong>.
+                                        Se correlatos/consulta acharem ids <em>fora</em> do saco
+                                        {funnel.mainTerm ? <> “<span className="text-ink">{funnel.mainTerm}</span>”</> : null}
+                                        {funnel.universeMax > 0 ? <> ({Number(funnel.universeMax).toLocaleString('pt-BR')})</> : null},
+                                        o denominador <strong className="text-ink">sobe com a união</strong> — lidos nunca ficam “maiores que o universo”.
+                                        Continua <strong className="text-ink">sem somar</strong> os totais da API (overlap).
+                                        {funnel.universeSum > Number(funnel.universeMax || 0) ? (
+                                          <> Soma bruta dos totais: {Number(funnel.universeSum).toLocaleString('pt-BR')} (teto com double-count).</>
                                         ) : null}
-                                        {' '}Não é o tamanho da sua lista.
                                       </p>
                                     </div>
                                     <div className="rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-2">
