@@ -481,7 +481,7 @@ const processBlueprint = {
     {
       group: 'Licitações',
       tab: 'Resumo',
-      use: 'Visão executiva do módulo: oportunidades, valor em aberto, prazos críticos (48h / atrasadas) e funil por fase.',
+      use: 'Visão executiva do módulo: oportunidades, valor em aberto (Ativo/Suspenso), prazos próximos e funil por fase (sem PCA).',
       routine: 'Check diário de urgências antes de entrar no Pipeline ou na Busca de Editais.'
     },
     {
@@ -3102,6 +3102,140 @@ function useVerticalScrollArrows(scrollRef, remeasureKey = null) {
   return { canScrollUp, canScrollDown, hasOverflow, scrollByDir, updateMetrics };
 }
 
+/**
+ * Custom horizontal board scroller — pure track + thumb (no native OS scrollbar).
+ * Avoids Windows/Chromium end-cap arrows and keeps perfect vertical alignment
+ * with the circular edge buttons.
+ */
+const KANBAN_HSCROLL_THUMB_MIN_PX = 48;
+
+const KanbanHScrollBar = memo(function KanbanHScrollBar({
+  scrollWidth,
+  clientWidth,
+  scrollLeft,
+  onScrollLeft,
+}) {
+  const trackRef = useRef(null);
+  const dragRef = useRef(null);
+  const [trackWidth, setTrackWidth] = useState(0);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return undefined;
+    const measure = () => setTrackWidth(track.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(track);
+    return () => ro.disconnect();
+  }, []);
+
+  const maxScroll = Math.max(0, scrollWidth - clientWidth);
+  const ratio = scrollWidth > 0 ? clientWidth / scrollWidth : 1;
+  const thumbW = trackWidth > 0
+    ? Math.min(trackWidth, Math.max(trackWidth * ratio, KANBAN_HSCROLL_THUMB_MIN_PX))
+    : KANBAN_HSCROLL_THUMB_MIN_PX;
+  const travel = Math.max(trackWidth - thumbW, 1);
+  const thumbLeft = maxScroll > 0 ? (scrollLeft / maxScroll) * travel : 0;
+
+  const setFromClientX = useCallback(
+    (clientX, { centerThumb = true } = {}) => {
+      const track = trackRef.current;
+      if (!track || maxScroll <= 0) return;
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const localThumbW = Math.min(
+        rect.width,
+        Math.max(rect.width * (clientWidth / Math.max(scrollWidth, 1)), KANBAN_HSCROLL_THUMB_MIN_PX)
+      );
+      const localTravel = Math.max(rect.width - localThumbW, 1);
+      let x = clientX - rect.left;
+      if (centerThumb) x -= localThumbW / 2;
+      const next = Math.max(0, Math.min(maxScroll, (x / localTravel) * maxScroll));
+      onScrollLeft(next);
+    },
+    [clientWidth, maxScroll, onScrollLeft, scrollWidth]
+  );
+
+  const onTrackPointerDown = useCallback(
+    (event) => {
+      if (event.target.closest?.('.kanban-hscroll-thumb')) return;
+      event.preventDefault();
+      setFromClientX(event.clientX, { centerThumb: true });
+    },
+    [setFromClientX]
+  );
+
+  const onThumbPointerDown = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const track = trackRef.current;
+      if (!track || maxScroll <= 0) return;
+      const rect = track.getBoundingClientRect();
+      const localThumbW = Math.min(
+        rect.width,
+        Math.max(rect.width * (clientWidth / Math.max(scrollWidth, 1)), KANBAN_HSCROLL_THUMB_MIN_PX)
+      );
+      const localTravel = Math.max(rect.width - localThumbW, 1);
+      dragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startLeft: scrollLeft,
+        travel: localTravel,
+        maxScroll,
+      };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    [clientWidth, maxScroll, scrollLeft, scrollWidth]
+  );
+
+  const onThumbPointerMove = useCallback(
+    (event) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const dx = event.clientX - drag.startX;
+      const next = Math.max(
+        0,
+        Math.min(drag.maxScroll, drag.startLeft + (dx / drag.travel) * drag.maxScroll)
+      );
+      onScrollLeft(next);
+    },
+    [onScrollLeft]
+  );
+
+  const endDrag = useCallback((event) => {
+    const drag = dragRef.current;
+    if (!drag || (event && drag.pointerId !== event.pointerId)) return;
+    dragRef.current = null;
+  }, []);
+
+  return (
+    <div
+      ref={trackRef}
+      className="kanban-hscroll-track"
+      role="scrollbar"
+      aria-orientation="horizontal"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(maxScroll)}
+      aria-valuenow={Math.round(scrollLeft)}
+      onPointerDown={onTrackPointerDown}
+    >
+      <div
+        className="kanban-hscroll-thumb"
+        style={{ width: `${thumbW}px`, transform: `translate3d(${thumbLeft}px, 0, 0)` }}
+        onPointerDown={onThumbPointerDown}
+        onPointerMove={onThumbPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      />
+    </div>
+  );
+});
+
 /** Compact floating scroll control — replaces old full-width chevron bars. */
 const scrollEdgeBtnClass =
   'scroll-edge-btn pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_6px_16px_rgba(0,0,0,.4)] backdrop-blur-md transition duration-150 hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 disabled:pointer-events-none disabled:opacity-0';
@@ -3816,25 +3950,28 @@ const LicitacaoCardBody = memo(function LicitacaoCardBody({ opportunity, onEdit 
     : (itemCount === 0 || technicalRequirementsCount === 0 || technicalPendingCount > 0 || technicalItemsWithoutChecklistCount > 0)
       ? { label: 'Pendência Téc.', className: 'border border-status-warning/35 bg-status-warning/10 text-status-warning' }
       : { label: 'Atende', className: 'border border-status-success/30 bg-status-success/10 text-status-success' };
-  const prazoClass = opportunity.prazo_status === 'atrasado'
+  // Prazo vencido move automaticamente para Perdido — não há badge "atrasado".
+  const prazoClass = opportunity.prazo_status === 'vence_hoje'
     ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
     : opportunity.prazo_status === 'vence_48h'
       ? 'border border-status-warning/35 bg-status-warning/10 text-status-warning'
       : opportunity.prazo_status === 'sem_data'
         ? 'border border-border bg-muted/20 text-muted'
         : 'border border-primary/30 bg-primary/10 text-primary';
-  const prazoLabel = opportunity.prazo_status === 'atrasado'
-    ? 'Prazo atrasado'
+  const prazoLabel = opportunity.prazo_status === 'vence_hoje'
+    ? 'Vence hoje'
     : opportunity.prazo_status === 'vence_48h'
       ? 'Vence em 48h'
       : opportunity.prazo_status === 'sem_data'
         ? 'Sem prazo'
-        : 'No prazo';
-  const statusBadgeClass = opportunity.status === 'perdido' || opportunity.status === 'nao_atendido'
-    ? 'border border-status-danger/30 bg-status-danger/10 text-status-danger'
-    : opportunity.status === 'ganho'
-      ? 'border border-status-success/30 bg-status-success/10 text-status-success'
-      : 'border border-border bg-cardAlt text-muted';
+        : opportunity.prazo_status === 'atrasado'
+          ? 'Perdido (prazo)'
+          : 'No prazo';
+  // Status operacional só Ativo|Suspenso (legado perdido/ganho/… → Ativo; coluna do pipe é o encerramento).
+  const statusKey = String(opportunity.status || 'ativo').toLowerCase() === 'suspenso' ? 'suspenso' : 'ativo';
+  const statusBadgeClass = statusKey === 'suspenso'
+    ? 'border border-status-warning/35 bg-status-warning/10 text-status-warning'
+    : 'border border-primary/25 bg-primary/10 text-primary';
 
   const sessaoDate = formatLicitacaoDateShort(opportunity.data_sessao);
   const sessaoStatus = getLicitacaoDateStatus(opportunity.data_sessao);
@@ -3848,7 +3985,7 @@ const LicitacaoCardBody = memo(function LicitacaoCardBody({ opportunity, onEdit 
           {prazoLabel}
         </span>
         <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center text-[10px] uppercase px-2 py-0.5 rounded-full leading-tight whitespace-nowrap ${statusBadgeClass}`}>{opportunity.status || 'ativo'}</span>
+          <span className={`inline-flex items-center text-[10px] uppercase px-2 py-0.5 rounded-full leading-tight whitespace-nowrap ${statusBadgeClass}`}>{statusKey}</span>
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
@@ -7107,9 +7244,12 @@ function App() {
     history: [],
     recentActions: [],
   });
-  const [boardScrollMetrics, setBoardScrollMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
+  const [boardScrollMetrics, setBoardScrollMetrics] = useState({
+    scrollWidth: 0,
+    clientWidth: 0,
+    scrollLeft: 0,
+  });
   const boardScrollRef = useRef(null);
-  const boardScrollbarRef = useRef(null);
   const isSyncingRef = useRef(false);
   const dragScrollRafRef = useRef(null);
   const dragPointerXRef = useRef(null);
@@ -8174,9 +8314,11 @@ function App() {
       if (!boardScrollRef.current) {
         return;
       }
+      const el = boardScrollRef.current;
       setBoardScrollMetrics({
-        scrollWidth: boardScrollRef.current.scrollWidth,
-        clientWidth: boardScrollRef.current.clientWidth,
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        scrollLeft: el.scrollLeft,
       });
     };
 
@@ -12183,29 +12325,32 @@ function App() {
     };
   }, [activeDragId]);
 
-  const handleTopScroll = () => {
-    if (!boardScrollRef.current || !boardScrollbarRef.current || isSyncingRef.current) {
-      return;
-    }
-    isSyncingRef.current = true;
-    boardScrollRef.current.scrollLeft = boardScrollbarRef.current.scrollLeft;
-    window.requestAnimationFrame(() => {
-      isSyncingRef.current = false;
-    });
-  };
-
   const handleBoardScroll = () => {
     if (!boardScrollRef.current || isSyncingRef.current) {
       return;
     }
+    const el = boardScrollRef.current;
+    setBoardScrollMetrics({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      scrollLeft: el.scrollLeft,
+    });
+  };
+
+  const setBoardScrollLeft = useCallback((nextLeft) => {
+    if (!boardScrollRef.current) return;
     isSyncingRef.current = true;
-    if (boardScrollbarRef.current) {
-      boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
-    }
+    boardScrollRef.current.scrollLeft = nextLeft;
+    setBoardScrollMetrics((prev) => ({
+      ...prev,
+      scrollLeft: boardScrollRef.current.scrollLeft,
+      scrollWidth: boardScrollRef.current.scrollWidth,
+      clientWidth: boardScrollRef.current.clientWidth,
+    }));
     window.requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
-  };
+  }, []);
 
   const scrollBoardBy = (direction) => {
     if (!boardScrollRef.current) {
@@ -12217,12 +12362,11 @@ function App() {
 
   const syncBoardScrollPeers = useCallback(() => {
     if (!boardScrollRef.current) return;
-    isSyncingRef.current = true;
-    if (boardScrollbarRef.current) {
-      boardScrollbarRef.current.scrollLeft = boardScrollRef.current.scrollLeft;
-    }
-    window.requestAnimationFrame(() => {
-      isSyncingRef.current = false;
+    const el = boardScrollRef.current;
+    setBoardScrollMetrics({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      scrollLeft: el.scrollLeft,
     });
   }, []);
 
@@ -13575,25 +13719,28 @@ function App() {
               </div>
 
           {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-            <div className="mt-3 flex items-center gap-2">
+            <div className="kanban-scroll-controls">
               <button
                 type="button"
                 onClick={() => scrollBoardBy(-1)}
                 aria-label="Rolar board para a esquerda"
-                className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                className="scroll-edge-btn inline-flex h-9 w-9 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 active:scale-95"
               >
-                <ChevronLeftIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                <ChevronLeftIcon className="h-4 w-4 sm:h-3.5 sm:w-3.5" strokeWidth={2.25} />
               </button>
-              <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
-                <div style={{ width: boardScrollMetrics.scrollWidth }} />
-              </div>
+              <KanbanHScrollBar
+                scrollWidth={boardScrollMetrics.scrollWidth}
+                clientWidth={boardScrollMetrics.clientWidth}
+                scrollLeft={boardScrollMetrics.scrollLeft}
+                onScrollLeft={setBoardScrollLeft}
+              />
               <button
                 type="button"
                 onClick={() => scrollBoardBy(1)}
                 aria-label="Rolar board para a direita"
-                className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                className="scroll-edge-btn inline-flex h-9 w-9 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 active:scale-95"
               >
-                <ChevronRightIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                <ChevronRightIcon className="h-4 w-4 sm:h-3.5 sm:w-3.5" strokeWidth={2.25} />
               </button>
             </div>
           )}
@@ -13629,13 +13776,45 @@ function App() {
             <>
               {licitacaoSubview === 'overview' && (
                 <div className="mt-4 space-y-4">
-                  {/* KPIs — faixa compacta */}
+                  {/* KPIs — pipeline 2–12 (sem PCA): Ativas | Suspensas | Oportunidades | Prazos */}
                   <div className="grid gap-2.5 sm:gap-3 grid-cols-2 xl:grid-cols-4">
                     {[
-                      { label: 'Oportunidades', value: licSummary?.opportunities_count ?? licitacaoOpportunities.length ?? 0, icon: BuildingLibraryIcon, glow: 'rgba(124,92,255,.45)', accent: 'text-primary' },
-                      { label: 'Valor em aberto', value: formatCompactCurrency(licSummary?.total_value) || 'R$ 0', icon: BanknotesIcon, glow: 'rgba(255,178,77,.35)', accent: 'text-secondary' },
-                      { label: 'Vencendo em 48h', value: licSummary?.due_48h ?? 0, icon: ChartBarIcon, glow: 'rgba(255,178,77,.35)', accent: 'text-status-warning' },
-                      { label: 'Atrasadas', value: licSummary?.overdue_count ?? 0, icon: DocumentTextIcon, glow: 'rgba(255,93,114,.35)', accent: 'text-status-danger' },
+                      {
+                        label: 'Oportunidades ativas',
+                        value: formatCompactCurrency(licSummary?.by_status?.ativo?.total_value) || 'R$ 0',
+                        sub: licSummary?.by_status?.ativo?.count != null
+                          ? `${licSummary.by_status.ativo.count} item(ns)`
+                          : null,
+                        icon: BanknotesIcon,
+                        glow: 'rgba(56,214,230,.35)',
+                        accent: 'text-primary',
+                      },
+                      {
+                        label: 'Oportunidades suspensas',
+                        value: formatCompactCurrency(licSummary?.by_status?.suspenso?.total_value) || 'R$ 0',
+                        sub: licSummary?.by_status?.suspenso?.count != null
+                          ? `${licSummary.by_status.suspenso.count} item(ns)`
+                          : null,
+                        icon: DocumentTextIcon,
+                        glow: 'rgba(255,178,77,.35)',
+                        accent: 'text-status-warning',
+                      },
+                      {
+                        label: 'Oportunidades',
+                        value: licSummary?.opportunities_count ?? 0,
+                        sub: 'pipeline 2–12 · sem PCA',
+                        icon: BuildingLibraryIcon,
+                        glow: 'rgba(124,92,255,.45)',
+                        accent: 'text-primary',
+                      },
+                      {
+                        label: 'Recurso em 3 d.ú.',
+                        value: licSummary?.due_recurso_3bd ?? licSummary?.due_48h ?? 0,
+                        sub: 'prazo PNCP · dias úteis BR',
+                        icon: ChartBarIcon,
+                        glow: 'rgba(255,93,114,.35)',
+                        accent: 'text-status-danger',
+                      },
                     ].map((kpi, i) => {
                       const Icon = kpi.icon;
                       return (
@@ -13644,7 +13823,10 @@ function App() {
                           <div className="relative flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <p className="text-[11.5px] text-muted leading-none">{kpi.label}</p>
-                              <p className="mt-2 font-mono text-[22px] sm:text-[24px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white truncate">{kpi.value}</p>
+                              <p className="mt-2 font-mono text-[20px] sm:text-[22px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white truncate">{kpi.value}</p>
+                              {kpi.sub ? (
+                                <p className="mt-1 text-[10px] text-muted tabular-nums">{kpi.sub}</p>
+                              ) : null}
                             </div>
                             <Icon className={`h-4 w-4 shrink-0 opacity-80 ${kpi.accent}`} />
                           </div>
@@ -13671,9 +13853,15 @@ function App() {
                     >
                       {(() => {
                         const byStage = {};
+                        const isOpenStatus = (status) => {
+                          const st = String(status || 'ativo').toLowerCase();
+                          return st === 'ativo' || st === 'suspenso';
+                        };
                         licitacaoOpportunities.forEach(o => {
+                          if (!isOpenStatus(o.status)) return;
                           const key = o.fase || o.status || 'Sem fase';
                           const stageNumber = getStageNumber(key);
+                          // Funil operacional 2–12: exclui PCA (1) e encerrados (13–15).
                           if (stageNumber < 2 || stageNumber > 12) return;
                           if (!byStage[stageNumber]) {
                             byStage[stageNumber] = { fase: key, stageNumber, count: 0, value: 0 };
@@ -13762,6 +13950,9 @@ function App() {
                     <div className="xl:col-span-4 flex flex-col gap-4 min-h-0">
                       <div className={`${card} p-4`}>
                         <h3 className={`${sectionTitle} text-base mb-3`}>Prazos críticos</h3>
+                        <p className={`${subtle} mb-3`}>
+                          Vencimento = prazo de proposta. Recurso = 3 dias úteis BR (PNCP). Proposta vencida: Ativo → Perdido; Suspenso → Monitoramento de Edital.
+                        </p>
                         <div className="space-y-2">
                           <button
                             type="button"
@@ -13769,11 +13960,11 @@ function App() {
                             className="w-full flex items-center gap-3 rounded-[12px] bg-status-danger/[0.08] border border-status-danger/20 p-2.5 text-left transition hover:bg-status-danger/[0.12]"
                           >
                             <span className="h-9 w-9 rounded-[10px] bg-status-danger/15 text-status-danger flex items-center justify-center shrink-0 font-bold text-sm tabular-nums">
-                              {licSummary?.overdue_count ?? 0}
+                              {licSummary?.due_today ?? 0}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-[13px] font-semibold text-ink dark:text-white">Atrasadas</p>
-                              <p className={subtle}>Ação imediata</p>
+                              <p className="text-[13px] font-semibold text-ink dark:text-white">Vence hoje</p>
+                              <p className={subtle}>Prazo de proposta / vencimento</p>
                             </div>
                           </button>
                           <button
@@ -13782,11 +13973,11 @@ function App() {
                             className="w-full flex items-center gap-3 rounded-[12px] bg-status-warning/[0.08] border border-status-warning/20 p-2.5 text-left transition hover:bg-status-warning/[0.12]"
                           >
                             <span className="h-9 w-9 rounded-[10px] bg-status-warning/15 text-status-warning flex items-center justify-center shrink-0 font-bold text-sm tabular-nums">
-                              {licSummary?.due_48h ?? 0}
+                              {licSummary?.due_recurso_3bd ?? licSummary?.due_48h ?? 0}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-[13px] font-semibold text-ink dark:text-white">Vencendo em 48h</p>
-                              <p className={subtle}>Priorizar envio</p>
+                              <p className="text-[13px] font-semibold text-ink dark:text-white">Recurso em 3 dias úteis</p>
+                              <p className={subtle}>Calendário nacional BR · PNCP</p>
                             </div>
                           </button>
                         </div>
@@ -13833,7 +14024,7 @@ function App() {
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div>
                         <h3 className={`${sectionTitle} text-base`}>Top oportunidades</h3>
-                        <p className={`${subtle} mt-0.5`}>Maiores valores em aberto no pipeline</p>
+                        <p className={`${subtle} mt-0.5`}>Pipeline operacional (fases 2–12) — sem monitoramento de PCA</p>
                       </div>
                       <button
                         type="button"
@@ -13844,8 +14035,14 @@ function App() {
                       </button>
                     </div>
                     {(() => {
+                      // Pipeline aberto só: Ativo|Suspenso, fases 2–12 (sem PCA / encerrados).
                       const top = [...licitacaoOpportunities]
-                        .filter(o => !String(o.status || '').toLowerCase().includes('perdido'))
+                        .filter((o) => {
+                          const st = String(o.status || 'ativo').toLowerCase();
+                          if (st !== 'ativo' && st !== 'suspenso') return false;
+                          const n = getStageNumber(o.fase || '');
+                          return n >= 2 && n <= 12;
+                        })
                         .sort((a, b) => (Number(b.valor_oportunidade) || 0) - (Number(a.valor_oportunidade) || 0))
                         .slice(0, 8);
                       return top.length ? (
@@ -14441,7 +14638,7 @@ function App() {
               {pncpJobModalOpen && activePncpSearchJobId && createPortal(
                 <div className={modalOverlay} onClick={closePncpSearchJobModal} role="presentation">
                   <div
-                    className="flex w-full max-w-6xl max-h-[92vh] flex-col overflow-hidden rounded-[16px] border border-border bg-card shadow-lift dark:bg-[#111827] dark:border-[#1f2937]"
+                    className="flex w-full max-w-6xl max-h-[min(92dvh,100%)] flex-col overflow-hidden rounded-t-[16px] border border-border bg-card shadow-lift sm:rounded-[16px] dark:bg-[#111827] dark:border-[#1f2937]"
                     onClick={(event) => event.stopPropagation()}
                     role="dialog"
                     aria-modal="true"
@@ -14456,57 +14653,66 @@ function App() {
                       const title = job?.nome || job?.filters?.q || 'Pesquisa PNCP';
                       return (
                         <>
-                          <div className="shrink-0 border-b border-line px-3 py-2 sm:px-4">
-                            <div className="flex flex-wrap items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="shrink-0 border-b border-line px-3 py-2.5 sm:px-4 sm:py-3">
+                            {/* Mobile: coluna (título+fechar → badges → meta → banner → ações). Desktop: título|ações. */}
+                            <div className="flex flex-col gap-2">
+                              <div className="flex min-w-0 items-start gap-2">
+                                <div className="min-w-0 flex-1">
                                   <h3 className="truncate font-display text-sm font-semibold uppercase tracking-wide text-ink sm:text-base">{title}</h3>
-                                  <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-                                    {meta.live && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
-                                    {meta.label}
-                                  </span>
-                                  {archiveMeta && (
-                                    <span
-                                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
-                                      title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
-                                    >
-                                      {archiveMeta.label}
+                                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                    <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
+                                      {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
+                                      <span className="truncate">{meta.label}</span>
                                     </span>
-                                  )}
-                                </div>
-                                <p className="mt-0.5 font-mono text-[10px] leading-tight text-muted sm:text-[11px]">
-                                  {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} na lista
-                                  {' · '}
-                                  {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
-                                  {live ? (
-                                    <>
-                                      {' · '}
-                                      <span className="font-display font-semibold uppercase tracking-wide text-ink">
-                                        {activePncpJobProgress.currentTerm || 'preparando'}
+                                    {archiveMeta && (
+                                      <span
+                                        className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
+                                        title="Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo."
+                                      >
+                                        {archiveMeta.label}
                                       </span>
-                                    </>
-                                  ) : null}
-                                  {!job?.watchlist_id && !live ? ' · recoleta diária ativa' : ''}
-                                </p>
-                                {job?.status === 'paused_rate_limit' && (() => {
-                                  const countdown = formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at);
-                                  const resumePage = job?.progress?.resume_from_page;
-                                  return (
-                                    <p className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] leading-snug text-amber-800 dark:text-amber-200 sm:text-[11px]">
-                                      <strong>Lista preservada</strong>
-                                      {countdown ? <> · {countdown}</> : ' · retoma sozinho'}
-                                      {resumePage ? <> · continua na pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
-                                      {' '}— não recomeça do zero nem apaga o que já entrou.
-                                    </p>
-                                  );
-                                })()}
-                                {job?.error ? (
-                                  <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-amber-700 dark:text-amber-300 sm:text-[11px]" title={job.error}>{job.error}</p>
-                                ) : null}
+                                    )}
+                                  </div>
+                                </div>
+                                <button type="button" onClick={closePncpSearchJobModal} className={`${iconBtn} shrink-0`} aria-label="Fechar">
+                                  <XMarkIcon className="h-5 w-5" />
+                                </button>
                               </div>
-                              <div className="flex flex-wrap items-center gap-1">
+
+                              <p className="break-words font-mono text-[11px] leading-snug text-muted">
+                                {Number(pncpSearchResults.total || job?.total || 0).toLocaleString('pt-BR')} na lista
+                                {' · '}
+                                {activePncpJobProgress.done}/{activePncpJobProgress.total} termo(s)
+                                {live ? (
+                                  <>
+                                    {' · '}
+                                    <span className="font-display font-semibold uppercase tracking-wide text-ink">
+                                      {activePncpJobProgress.currentTerm || 'preparando'}
+                                    </span>
+                                  </>
+                                ) : null}
+                                {!job?.watchlist_id && !live ? ' · recoleta diária ativa' : ''}
+                              </p>
+
+                              {job?.status === 'paused_rate_limit' && (() => {
+                                const countdown = formatPncpResumeCountdown(job?.progress?.resume_in_ms, job?.updated_at);
+                                const resumePage = job?.progress?.resume_from_page;
+                                return (
+                                  <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
+                                    <strong>Lista preservada</strong>
+                                    {countdown ? <> · {countdown}</> : ' · retoma sozinho'}
+                                    {resumePage ? <> · continua na pág. {Number(resumePage).toLocaleString('pt-BR')}</> : null}
+                                    {' '}— não recomeça do zero nem apaga o que já entrou.
+                                  </p>
+                                );
+                              })()}
+                              {job?.error ? (
+                                <p className="line-clamp-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
+                              ) : null}
+
+                              <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
                                 {live && (
-                                  <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm}`}>
+                                  <button type="button" onClick={() => cancelPncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} justify-center`}>
                                     <StopIcon className="h-3.5 w-3.5" /> Parar
                                   </button>
                                 )}
@@ -14515,7 +14721,7 @@ function App() {
                                     type="button"
                                     onClick={() => rerunPncpSearchJob(activePncpSearchJobId)}
                                     title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                    className={`${btnSecondarySm}`}
+                                    className={`${btnSecondarySm} justify-center`}
                                   >
                                     <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
                                   </button>
@@ -14524,7 +14730,7 @@ function App() {
                                   type="button"
                                   onClick={() => convertPncpSearchJobToWatchlist(activePncpSearchJobId)}
                                   title={job?.watchlist_id ? 'Editar assinatura e alertas' : 'Assinar esta busca e opcionalmente receber WhatsApp de novos editais'}
-                                  className={`${btnSecondarySm}`}
+                                  className={`${btnSecondarySm} justify-center`}
                                 >
                                   {job?.whatsapp_enabled || job?.alerts_enabled
                                     ? 'Alertas ✓'
@@ -14532,16 +14738,13 @@ function App() {
                                       ? 'Alertas'
                                       : 'Assinar'}
                                 </button>
-                                <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} text-status-danger`}>
+                                <button type="button" onClick={() => deletePncpSearchJob(activePncpSearchJobId)} className={`${btnSecondarySm} justify-center text-status-danger`}>
                                   <TrashIcon className="h-3.5 w-3.5" /> Excluir
-                                </button>
-                                <button type="button" onClick={closePncpSearchJobModal} className={iconBtn} aria-label="Fechar">
-                                  <XMarkIcon className="h-5 w-5" />
                                 </button>
                               </div>
                             </div>
 
-                            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-bg2">
+                            <div className="mt-2 h-1 overflow-hidden rounded-full bg-bg2">
                               <div
                                 className={`h-full rounded-full transition-all ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
                                 style={{ width: `${activePncpJobProgress.pct}%` }}
@@ -14558,14 +14761,14 @@ function App() {
                               );
                               return (
                                 <>
-                                  <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
-                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Na lista</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
-                                      <p className="text-[9px] leading-tight text-muted">passaram no filtro</p>
+                                  <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Editais que passaram no filtro do job e entraram na lista (aba Resultados).">
+                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Na lista</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
+                                      <p className="text-[10px] leading-tight text-muted">passaram no filtro</p>
                                     </div>
                                     <div
-                                      className="rounded-md border border-line bg-bg2 px-2 py-1"
+                                      className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5"
                                       title={
                                         `Lidos = soma da coluna “Lidos” da Auditoria (items_collected por termo). `
                                         + `Universo = soma dos totais da API por termo (overlap possível). `
@@ -14577,36 +14780,36 @@ function App() {
                                           : '')
                                       }
                                     >
-                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink">
+                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
+                                      <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">
                                         {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
                                         {funnel.universeApi > 0 ? (
                                           <span className="text-[11px] font-semibold text-muted">/{funnel.universeApi.toLocaleString('pt-BR')}</span>
                                         ) : null}
                                       </p>
-                                      <p className="text-[9px] leading-tight text-muted">
+                                      <p className="text-[10px] leading-tight text-muted line-clamp-2">
                                         {funnel.coveragePct != null
                                           ? `${funnel.coveragePct}% · iguais à auditoria`
                                           : 'soma por termo (auditoria)'}
                                       </p>
                                     </div>
-                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Soma dos valores dos editais classificados na lista.">
-                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Valor na lista</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
-                                      <p className="text-[9px] leading-tight text-muted">só classificados</p>
+                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos editais classificados na lista.">
+                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Valor na lista</p>
+                                      <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
+                                      <p className="text-[10px] leading-tight text-muted">só classificados</p>
                                     </div>
-                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Você ocultou · já no board">
-                                      <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
-                                      <p className="font-mono text-sm font-bold leading-tight text-ink">
+                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
+                                      <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
+                                      <p className="font-mono text-sm font-bold leading-tight text-ink tabular-nums">
                                         {Number(pncpVisibilityCounts.hidden || 0).toLocaleString('pt-BR')}
                                         <span className="text-muted"> · </span>
                                         {Number(pncpVisibilityCounts.pipeline || 0).toLocaleString('pt-BR')}
                                       </p>
-                                      <p className="text-[9px] leading-tight text-muted">você ocultou · já no board</p>
+                                      <p className="text-[10px] leading-tight text-muted line-clamp-2">você ocultou · já no board</p>
                                     </div>
                                   </div>
                                   {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
-                                    <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-muted sm:text-[11px]">
+                                    <p className="mt-1.5 line-clamp-3 text-[11px] leading-snug text-muted sm:line-clamp-2">
                                       <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
                                       {' '}(soma auditoria)
                                       {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
@@ -14622,7 +14825,7 @@ function App() {
                               );
                             })()}
 
-                            <div className="mt-1.5 flex flex-wrap gap-1">
+                            <div className="mt-2 flex flex-wrap gap-1">
                               {[
                                 ['resultados', 'Resultados'],
                                 ['termos', 'Termos e filtros'],
@@ -14632,7 +14835,7 @@ function App() {
                                   key={key}
                                   type="button"
                                   onClick={() => setPncpJobModalTab(key)}
-                                  className={`h-7 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
+                                  className={`h-8 rounded-md px-2.5 text-[11px] font-semibold transition sm:h-7 sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
                                 >
                                   {label}
                                 </button>
@@ -15593,13 +15796,7 @@ function App() {
                             <label className="mb-1 block text-xs font-medium text-muted">Status</label>
                             <select className={`${select} filter-select text-sm`} value={newOpportunityForm.status} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, status: event.target.value }))}>
                               <option value="ativo">Ativo</option>
-                              <option value="ganho">Ganho</option>
-                              <option value="perdido">Perdido</option>
                               <option value="suspenso">Suspenso</option>
-                              <option value="cancelado">Cancelado</option>
-                              <option value="fracassado">Fracassado</option>
-                              <option value="nao_atendido">Não atendido</option>
-                              <option value="arquivado">Arquivado</option>
                             </select>
                           </div>
                           <div className="min-w-0 lg:col-span-3">
@@ -16054,25 +16251,28 @@ function App() {
               </div>
 
               {boardScrollMetrics.scrollWidth > boardScrollMetrics.clientWidth && (
-                <div className="mt-3 flex items-center gap-2">
+                <div className="kanban-scroll-controls">
                   <button
                     type="button"
                     onClick={() => scrollBoardBy(-1)}
                     aria-label="Rolar board para a esquerda"
-                    className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                    className="scroll-edge-btn inline-flex h-9 w-9 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 active:scale-95"
                   >
-                    <ChevronLeftIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                    <ChevronLeftIcon className="h-4 w-4 sm:h-3.5 sm:w-3.5" strokeWidth={2.25} />
                   </button>
-                  <div className="kanban-scrollbar scrollbar-theme flex-1" ref={boardScrollbarRef} onScroll={handleTopScroll}>
-                    <div style={{ width: boardScrollMetrics.scrollWidth }} />
-                  </div>
+                  <KanbanHScrollBar
+                    scrollWidth={boardScrollMetrics.scrollWidth}
+                    clientWidth={boardScrollMetrics.clientWidth}
+                    scrollLeft={boardScrollMetrics.scrollLeft}
+                    onScrollLeft={setBoardScrollLeft}
+                  />
                   <button
                     type="button"
                     onClick={() => scrollBoardBy(1)}
                     aria-label="Rolar board para a direita"
-                    className="scroll-edge-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                    className="scroll-edge-btn inline-flex h-9 w-9 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-full border border-line/90 bg-surf/95 text-muted shadow-[0_4px_12px_rgba(0,0,0,.28)] backdrop-blur-md transition hover:border-primary/45 hover:bg-surf2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 active:scale-95"
                   >
-                    <ChevronRightIcon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                    <ChevronRightIcon className="h-4 w-4 sm:h-3.5 sm:w-3.5" strokeWidth={2.25} />
                   </button>
                 </div>
               )}
@@ -16127,12 +16327,11 @@ function App() {
                             </span>
                           )}
                           <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold capitalize ${
-                            selectedOpportunity.status === 'ativo' ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                              : selectedOpportunity.status === 'ganho' ? 'border-status-success/30 bg-status-success/10 text-status-success'
-                              : selectedOpportunity.status === 'perdido' || selectedOpportunity.status === 'cancelado' ? 'border-status-danger/30 bg-status-danger/10 text-status-danger'
-                              : 'border-line bg-bg2 text-muted'
+                            selectedOpportunity.status === 'suspenso'
+                              ? 'border-status-warning/35 bg-status-warning/10 text-status-warning'
+                              : 'border-status-success/30 bg-status-success/10 text-status-success'
                           }`}>
-                            {selectedOpportunity.status || 'ativo'}
+                            {selectedOpportunity.status === 'suspenso' ? 'suspenso' : 'ativo'}
                           </span>
                           {selectedOpportunity.uasg_codigo && (
                             <span className="inline-flex items-center rounded-md border border-line bg-bg2 px-2 py-0.5 font-mono text-[11px] text-muted">
@@ -16199,15 +16398,13 @@ function App() {
                           </div>
                           <div className="min-w-0 lg:col-span-3">
                             <label className="mb-1 block text-xs font-medium text-muted">Status</label>
-                            <select className={`${select} filter-select text-sm`} value={selectedOpportunity.status || 'ativo'} onChange={(event) => updateSelectedOpportunity({ status: event.target.value })}>
+                            <select
+                              className={`${select} filter-select text-sm`}
+                              value={['ativo', 'suspenso'].includes(selectedOpportunity.status) ? selectedOpportunity.status : 'ativo'}
+                              onChange={(event) => updateSelectedOpportunity({ status: event.target.value })}
+                            >
                               <option value="ativo">Ativo</option>
-                              <option value="ganho">Ganho</option>
-                              <option value="perdido">Perdido</option>
                               <option value="suspenso">Suspenso</option>
-                              <option value="cancelado">Cancelado</option>
-                              <option value="fracassado">Fracassado</option>
-                              <option value="nao_atendido">Não atendido</option>
-                              <option value="arquivado">Arquivado</option>
                             </select>
                           </div>
                           <div className="min-w-0 sm:col-span-2 lg:col-span-4">
@@ -17243,34 +17440,53 @@ function App() {
                       const negTotal = stageGroupData
                         .filter(g => ['Meio', 'Fundo'].includes(g.group))
                         .reduce((s, g) => s + (g.count || 0), 0);
+                      // Valor em aberto das oportunidades (etapas 7–13) — fallback via by-stage
+                      const oppValueFromStages = stageFunnelData
+                        .filter((s) => {
+                          const n = Number(s.stageNumber);
+                          return n >= 7 && n <= 13;
+                        })
+                        .reduce((acc, s) => acc + (Number(s.totalValue) || 0), 0);
+                      const opportunitiesValue = Number(
+                        sum.opportunities_value != null ? sum.opportunities_value : oppValueFromStages
+                      ) || 0;
+                      const opportunitiesMonthValue = Number(sum.opportunities_month_value) || 0;
                       const kpis = [
                         {
                           month: sum.leads_month_count ?? 0,
                           total: sum.leads_count ?? 0,
+                          valueMonth: null,
+                          valueTotal: null,
                           labelMonth: 'Leads no mês',
                           labelTotal: 'totais',
                           icon: UsersIcon,
                           glow: 'rgba(124,92,255,.5)',
                         },
                         {
-                          month: null,
-                          total: negTotal,
-                          labelMonth: null,
-                          labelTotal: 'Em negociação',
-                          icon: ChartBarIcon,
-                          glow: 'rgba(56,214,230,.4)',
-                        },
-                        {
                           month: sum.opportunities_month_count ?? 0,
                           total: sum.opportunities_count ?? 0,
+                          valueMonth: opportunitiesMonthValue,
+                          valueTotal: opportunitiesValue,
                           labelMonth: 'Oportunidades no mês',
                           labelTotal: 'totais',
                           icon: BanknotesIcon,
                           glow: 'rgba(255,178,77,.4)',
                         },
                         {
+                          month: null,
+                          total: negTotal,
+                          valueMonth: null,
+                          valueTotal: null,
+                          labelMonth: null,
+                          labelTotal: 'Em negociação',
+                          icon: ChartBarIcon,
+                          glow: 'rgba(56,214,230,.4)',
+                        },
+                        {
                           month: sum.active_customers_month_count ?? 0,
                           total: sum.customers_count ?? 0,
+                          valueMonth: null,
+                          valueTotal: null,
                           labelMonth: 'Clientes ativos no mês',
                           labelTotal: 'totais',
                           icon: CheckBadgeIcon,
@@ -17280,6 +17496,12 @@ function App() {
                       return kpis.map((kpi, i) => {
                         const Icon = kpi.icon;
                         const hasMonth = kpi.month != null;
+                        const hasValue = kpi.valueTotal != null;
+                        // Com valor: fonte um pouco menor para caber qtd + R$ no card
+                        const mainNumCls = hasValue
+                          ? 'font-mono text-[24px] sm:text-[26px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white truncate'
+                          : 'font-mono text-[29px] font-bold tracking-[-.03em] leading-none text-ink dark:text-white truncate';
+                        const fmtMoney = (n) => formatCompactCurrency(n) || 'R$ 0';
                         return (
                           <div key={i} className={`${card} relative overflow-hidden p-3.5 sm:p-[18px] transition hover:border-primary/30 min-w-0`}>
                             <div className="pointer-events-none absolute -right-8 -top-8 h-[90px] w-[90px] rounded-full blur-[26px] opacity-50" style={{ background: kpi.glow }} />
@@ -17288,20 +17510,31 @@ function App() {
                             </div>
                             {hasMonth ? (
                               <>
-                                <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">
+                                <p className={`${mainNumCls} mt-3.5 min-w-0`}>
                                   <span>{fmt(kpi.month)}</span>
                                   <span className="text-muted/50 font-semibold mx-1.5">/</span>
-                                  <span className="text-[22px] text-ink/75 dark:text-white/75">{fmt(kpi.total)}</span>
+                                  <span className={`${hasValue ? 'text-[18px] sm:text-[20px]' : 'text-[22px]'} text-ink/75 dark:text-white/75`}>{fmt(kpi.total)}</span>
                                 </p>
+                                {hasValue && (
+                                  <p
+                                    className="mt-1.5 font-mono text-[13px] sm:text-[14px] font-semibold tabular-nums leading-none text-amber truncate"
+                                    title={`Mês: ${formatCurrency(kpi.valueMonth) || 'R$ 0,00'} · Total: ${formatCurrency(kpi.valueTotal) || 'R$ 0,00'}`}
+                                  >
+                                    <span>{fmtMoney(kpi.valueMonth)}</span>
+                                    <span className="text-muted/50 font-semibold mx-1">/</span>
+                                    <span className="text-amber/80">{fmtMoney(kpi.valueTotal)}</span>
+                                  </p>
+                                )}
                                 <p className="text-[12.5px] text-muted mt-1.5 truncate">
                                   {kpi.labelMonth}
                                   <span className="text-muted/50"> / </span>
                                   {kpi.labelTotal}
+                                  {hasValue && <span className="text-muted/50"> · valor</span>}
                                 </p>
                               </>
                             ) : (
                               <>
-                                <p className="font-mono text-[29px] font-bold tracking-[-.03em] leading-none mt-3.5 text-ink dark:text-white truncate">
+                                <p className={`${mainNumCls} mt-3.5`}>
                                   {fmt(kpi.total)}
                                 </p>
                                 <p className="text-[12.5px] text-muted mt-1.5">{kpi.labelTotal}</p>

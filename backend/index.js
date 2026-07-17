@@ -17,6 +17,11 @@ const {
   ensureVapidConfigured,
   getVapidConfig,
 } = require('./notifications');
+const {
+  brazilBusinessDaysDeadlineWindow,
+  startOfDaySaoPaulo,
+  endOfDaySaoPaulo,
+} = require('./brazilBusinessDays');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -1697,6 +1702,19 @@ const migrateLicitacaoFases = async () => {
       [to, from]
     );
   }
+
+  // Status só Ativo|Suspenso; encerramento fica na coluna do pipe (ex.: 13. Perdido).
+  // Limpa legado + auto-move antigo que gravava status='perdido'.
+  const statusFix = await pool.query(
+    `
+      UPDATE ${LICITACAO_TABLE}
+      SET status = 'ativo', updated_at = NOW()
+      WHERE LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo')) NOT IN ('ativo', 'suspenso')
+    `
+  );
+  if (statusFix.rowCount > 0) {
+    console.log(`[licitacoes] status normalizado para ativo: ${statusFix.rowCount} card(s) (legado/auto-move)`);
+  }
 };
 
 let pollingInProgress = false;
@@ -2427,10 +2445,93 @@ const getPrazoStatusSql = (alias = '') => `
   CASE
     WHEN ${alias}data_envio_proposta_limite IS NULL THEN 'sem_data'
     WHEN ${alias}data_envio_proposta_limite < NOW() THEN 'atrasado'
+    WHEN ${alias}data_envio_proposta_limite >= date_trunc('day', NOW())
+      AND ${alias}data_envio_proposta_limite < date_trunc('day', NOW()) + INTERVAL '1 day'
+      THEN 'vence_hoje'
     WHEN ${alias}data_envio_proposta_limite <= NOW() + INTERVAL '48 hours' THEN 'vence_48h'
     ELSE 'em_dia'
   END
 `;
+
+/** Número da fase a partir de "13. Perdido" (prefixo numérico). */
+const getLicitacaoFaseNumSql = (alias = '') =>
+  `NULLIF(substring(COALESCE(${alias}fase, '') from '^[0-9]+'), '')::int`;
+
+/**
+ * Status “em aberto” (Ativo | Suspenso). Trata null/vazio como ativo.
+ */
+const getLicitacaoOpenStatusSql = (alias = '') =>
+  `LOWER(COALESCE(NULLIF(TRIM(${alias}status), ''), 'ativo')) IN ('ativo', 'suspenso')`;
+
+/**
+ * Pipeline operacional do resumo/KPIs: Ativo|Suspenso nas fases 2–12.
+ * PCA (fase 1) fica só no card “Monitoramento de PCA” — não entra nos totais de cima.
+ */
+const getLicitacaoOpenPipelineSql = (alias = '') => `
+  ${getLicitacaoOpenStatusSql(alias)}
+  AND ${getLicitacaoFaseNumSql(alias)} BETWEEN 2 AND 12
+`;
+
+/** Alias explícito (prazos / digest) — mesmo escopo operacional, sem PCA. */
+const getLicitacaoOperationalPipelineSql = (alias = '') => getLicitacaoOpenPipelineSql(alias);
+
+/**
+ * Elegível para auto-mover de fase quando o prazo de proposta venceu:
+ * ainda em jogo (ativo|suspenso, fases 2–11). Fase 12 (contrato) e PCA ficam de fora.
+ * - ativo → 13. Perdido (coluna do pipe; status permanece ativo)
+ * - suspenso → 6. Monitoramento de Edital (não perde; volta a monitorar)
+ */
+const getLicitacaoExpiredProposalMoveSql = (alias = '') => `
+  ${getLicitacaoOpenStatusSql(alias)}
+  AND ${getLicitacaoFaseNumSql(alias)} BETWEEN 2 AND 11
+  AND ${alias}data_envio_proposta_limite IS NOT NULL
+  AND ${alias}data_envio_proposta_limite < NOW()
+`;
+
+const LICITACAO_FASE_PERDIDO = '13. Perdido';
+const LICITACAO_FASE_MONITORAMENTO_EDITAL = '6. Monitoramento de Edital';
+
+/**
+ * Regras de prazo vencido (status só Ativo|Suspenso; encerramento é pela coluna):
+ * - Ativo → fase 13. Perdido
+ * - Suspenso → fase 6. Monitoramento de Edital
+ * @param {{ accountId?: number|null }} [opts]
+ * @returns {Promise<{ moved: number, to_perdido: number, to_monitoramento: number }>}
+ */
+const runExpiredLicitacaoProposalMove = async ({ accountId = null } = {}) => {
+  const params = [LICITACAO_FASE_MONITORAMENTO_EDITAL, LICITACAO_FASE_PERDIDO];
+  let accountClause = '';
+  if (accountId != null) {
+    params.push(accountId);
+    accountClause = `AND account_id = $${params.length}`;
+  }
+  const statusExpr = `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo'))`;
+
+  const { rows } = await pool.query(
+    `
+      UPDATE ${LICITACAO_TABLE}
+      SET
+        fase = CASE
+          WHEN ${statusExpr} = 'suspenso' THEN $1
+          ELSE $2
+        END,
+        updated_at = NOW()
+      WHERE ${getLicitacaoExpiredProposalMoveSql('')}
+        AND NOT (
+          (${statusExpr} = 'suspenso' AND fase = $1)
+          OR (${statusExpr} <> 'suspenso' AND fase = $2)
+        )
+        ${accountClause}
+      RETURNING id, status, fase
+    `,
+    params
+  );
+  const toMonitoramento = rows.filter(
+    (r) => String(r.fase) === LICITACAO_FASE_MONITORAMENTO_EDITAL
+  ).length;
+  const toPerdido = rows.length - toMonitoramento;
+  return { moved: rows.length, to_perdido: toPerdido, to_monitoramento: toMonitoramento };
+};
 
 const asTextArray = (value) => {
   if (Array.isArray(value)) {
@@ -4394,10 +4495,17 @@ const normalizeOpportunityLinks = (links) => {
   return normalized;
 };
 
+/** Status operacional: só ativo | suspenso. Legado (ganho/perdido/…) → ativo (encerramento é a coluna). */
+const normalizeLicitacaoStatus = (status) => {
+  const s = String(status || '').trim().toLowerCase();
+  return s === 'suspenso' ? 'suspenso' : 'ativo';
+};
+
 const normalizeOpportunityRow = (row) => {
   const links = normalizeOpportunityLinks(row?.links);
   return {
     ...row,
+    status: normalizeLicitacaoStatus(row?.status),
     links,
     links_pncp: normalizePncpItemUrl(row?.links_pncp || links.pncp || null),
   };
@@ -4898,10 +5006,20 @@ app.get('/api/overview/summary', async (req, res) => {
           WHERE stage_num BETWEEN 7 AND 13
         ) AS opportunities_month_count,
         (
+          SELECT COALESCE(SUM(p.value_num), 0)
+          FROM (
+            SELECT DISTINCT contact_id
+            FROM month_events
+            WHERE stage_num BETWEEN 7 AND 13
+          ) m
+          JOIN parsed p ON p.id = m.contact_id
+        ) AS opportunities_month_value,
+        (
           SELECT COUNT(DISTINCT contact_id)
           FROM month_events
           WHERE stage_num BETWEEN 18 AND 25
         ) AS active_customers_month_count,
+        COALESCE(SUM(value_num) FILTER (WHERE stage_num BETWEEN 7 AND 13), 0) AS opportunities_value,
         COALESCE(SUM(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS total_value,
         COALESCE(AVG(value_num) FILTER (WHERE stage_num IS DISTINCT FROM 14), 0) AS avg_value
       FROM parsed;
@@ -5568,7 +5686,8 @@ const getAccountId = (req) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 2;
 };
 
-const LICITACAO_STATUS = ['ativo', 'ganho', 'perdido', 'nao_atendido', 'suspenso', 'cancelado', 'fracassado', 'arquivado'];
+// Status operacional: só Ativo | Suspenso. Encerramento (ganho/perdido/etc.) é pela coluna do pipe.
+const LICITACAO_STATUS = ['ativo', 'suspenso'];
 const LICITACAO_ORIGEM = ['direta', 'intermediario', 'automatica_api', 'pca_pncp'];
 const LICITACAO_MODELO_INTERMEDIACAO = ['revenda', 'comissao', 'misto'];
 const LICITACAO_STATUS_COMISSAO = ['pendente', 'aprovado', 'pago', 'cancelado'];
@@ -5579,6 +5698,11 @@ const LICITACAO_REQUIREMENT_STATUS = ['ok', 'nao_ok', 'pendente', 'verificar'];
 app.get('/api/licitacoes/opportunities', async (req, res) => {
   const accountId = getAccountId(req);
   try {
+    // On-read: prazos vencidos saem automaticamente para Perdido (sem badge "atrasado").
+    await runExpiredLicitacaoProposalMove({ accountId }).catch((err) => {
+      console.warn('[licitacoes] auto-move prazo vencido (list) falhou:', err.message);
+    });
+
     const { rows } = await pool.query(
       `
         SELECT
@@ -5787,9 +5911,13 @@ app.put('/api/licitacoes/opportunities/:id', async (req, res) => {
     if (!LICITACAO_FASES.includes(fase)) {
       return res.status(400).json({ error: 'Fase invalida' });
     }
-    const status = body.status !== undefined ? String(body.status) : current.status;
-    if (!LICITACAO_STATUS.includes(status)) {
-      return res.status(400).json({ error: 'Status invalido' });
+    // Só aceita ativo|suspenso em escrita; legado (ganho/perdido/…) permanece se o campo não for alterado.
+    let status = current.status;
+    if (body.status !== undefined) {
+      status = String(body.status);
+      if (!LICITACAO_STATUS.includes(status)) {
+        return res.status(400).json({ error: 'Status invalido (use ativo ou suspenso)' });
+      }
     }
 
     const origem = body.origem_oportunidade !== undefined ? String(body.origem_oportunidade) : current.origem_oportunidade;
@@ -14800,30 +14928,96 @@ app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
 app.get('/api/licitacoes/overview/summary', async (req, res) => {
   const accountId = getAccountId(req);
   try {
+    // Garante que prazos vencidos já saíram do pipeline aberto antes dos KPIs.
+    await runExpiredLicitacaoProposalMove({ accountId }).catch((err) => {
+      console.warn('[licitacoes] auto-move prazo vencido (summary) falhou:', err.message);
+    });
+
+    // KPIs de cima: só pipeline operacional 2–12 (sem PCA).
+    // Prazo de recurso (PNCP): janela de 3 dias úteis no calendário nacional BR.
+    const openSql = getLicitacaoOpenPipelineSql('');
+    const statusNorm = `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo'))`;
+    const recursoWindow = brazilBusinessDaysDeadlineWindow(3);
+    const startToday = startOfDaySaoPaulo();
+    const endToday = endOfDaySaoPaulo();
     const { rows } = await pool.query(
       `
         SELECT
-          COUNT(*)::int AS opportunities_count,
-          COALESCE(
-            SUM(valor_oportunidade) FILTER (
-              WHERE LOWER(COALESCE(status, '')) <> 'perdido'
-                AND LOWER(COALESCE(fase, '')) NOT LIKE '%perdido%'
-                AND LOWER(COALESCE(fase, '')) NOT LIKE '%descartado%'
-            ),
-            0
-          ) AS total_value,
+          COUNT(*) FILTER (WHERE ${openSql})::int AS opportunities_count,
+          COALESCE(SUM(valor_oportunidade) FILTER (WHERE ${openSql}), 0)::float AS total_value,
+          COUNT(*) FILTER (
+            WHERE ${openSql} AND ${statusNorm} = 'ativo'
+          )::int AS ativo_count,
+          COALESCE(SUM(valor_oportunidade) FILTER (
+            WHERE ${openSql} AND ${statusNorm} = 'ativo'
+          ), 0)::float AS ativo_value,
+          COUNT(*) FILTER (
+            WHERE ${openSql} AND ${statusNorm} = 'suspenso'
+          )::int AS suspenso_count,
+          COALESCE(SUM(valor_oportunidade) FILTER (
+            WHERE ${openSql} AND ${statusNorm} = 'suspenso'
+          ), 0)::float AS suspenso_value,
           COUNT(*) FILTER (WHERE status = 'ganho')::int AS won_count,
           COUNT(*) FILTER (WHERE status = 'perdido' OR status = 'nao_atendido')::int AS lost_count,
-          COUNT(*) FILTER (WHERE ${getPrazoStatusSql()} = 'vence_48h')::int AS due_48h,
-          COUNT(*) FILTER (WHERE ${getPrazoStatusSql()} = 'atrasado')::int AS overdue_count,
+          COUNT(*) FILTER (
+            WHERE ${openSql}
+              AND data_recurso_limite IS NOT NULL
+              AND data_recurso_limite >= $2
+              AND data_recurso_limite <= $3
+          )::int AS due_recurso_3bd,
+          -- "Vence hoje" = vencimento real (prazo de proposta), não recurso.
+          COUNT(*) FILTER (
+            WHERE ${openSql}
+              AND data_envio_proposta_limite IS NOT NULL
+              AND data_envio_proposta_limite >= $4
+              AND data_envio_proposta_limite <= $5
+          )::int AS due_today,
           COALESCE(SUM(comissao_valor_previsto), 0) AS comissao_prevista,
           COALESCE(SUM(comissao_valor_real) FILTER (WHERE status_comissao = 'pago'), 0) AS comissao_paga
         FROM ${LICITACAO_TABLE}
         WHERE account_id = $1
       `,
-      [accountId]
+      [
+        accountId,
+        startToday.toISOString(),
+        recursoWindow.endInclusive.toISOString(),
+        startToday.toISOString(),
+        endToday.toISOString(),
+      ]
     );
-    res.json(rows[0]);
+    const row = rows[0] || {};
+    const dueRecurso3bd = Number(row.due_recurso_3bd) || 0;
+    const dueToday = Number(row.due_today) || 0;
+    res.json({
+      opportunities_count: Number(row.opportunities_count) || 0,
+      total_value: Number(row.total_value) || 0,
+      by_status: {
+        ativo: {
+          count: Number(row.ativo_count) || 0,
+          total_value: Number(row.ativo_value) || 0,
+        },
+        suspenso: {
+          count: Number(row.suspenso_count) || 0,
+          total_value: Number(row.suspenso_value) || 0,
+        },
+      },
+      won_count: Number(row.won_count) || 0,
+      lost_count: Number(row.lost_count) || 0,
+      // Recurso (PNCP): 3 dias úteis BR.
+      due_recurso_3bd: dueRecurso3bd,
+      // Vencimento real (proposta) no dia de hoje.
+      due_today: dueToday,
+      // Alias: KPI antigo "48h" → agora recurso 3 d.ú.
+      due_48h: dueRecurso3bd,
+      overdue_count: 0,
+      comissao_prevista: row.comissao_prevista,
+      comissao_paga: row.comissao_paga,
+      recurso_window: {
+        business_days: 3,
+        end: recursoWindow.endInclusive.toISOString(),
+        nth_business_day: recursoWindow.nthBusinessDay.toISOString(),
+      },
+    });
   } catch (error) {
     console.error('Error fetching licitacao overview summary:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -18048,6 +18242,19 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Pipeline: prazo de proposta vencido → coluna 13. Perdido (status perdido).
+  cron.schedule('10 5 * * *', async () => {
+    if (!dataLayerReady) return;
+    try {
+      const result = await runExpiredLicitacaoProposalMove({});
+      if (result.moved > 0) {
+        console.log(`[licitacoes] auto-move prazo vencido: moved=${result.moved}`);
+      }
+    } catch (error) {
+      console.error('[licitacoes] auto-move prazo vencido error:', error);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Buscas de editais ainda ativas (sem watchlist, < 7 dias): recoleta diária mantendo o acervo.
   cron.schedule('20 8 * * *', async () => {
     if (!dataLayerReady) {
@@ -18099,7 +18306,12 @@ const registerBackgroundSchedules = () => {
     try {
       const result = await emitDeadlineDigest(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
-        getPrazoStatusSql,
+        // Digest de recurso: pipeline operacional (sem PCA) + 3 dias úteis BR.
+        getLicitacaoOpenPipelineSql: getLicitacaoOperationalPipelineSql,
+        runExpiredLicitacaoProposalMove,
+        brazilBusinessDaysDeadlineWindow,
+        startOfDaySaoPaulo,
+        endOfDaySaoPaulo,
       });
       if (result.created > 0 || result.pushed > 0) {
         console.log('[notifications] deadline digest:', result);
@@ -18182,6 +18394,13 @@ const initializeDataLayer = async () => {
   setImmediate(() => {
     runDailyPncpExpiredResultsPurge().catch((err) => {
       console.warn('[pncp-search-jobs] purge vencidos no startup falhou:', err.message);
+    });
+    runExpiredLicitacaoProposalMove({}).then((result) => {
+      if (result.moved > 0) {
+        console.log(`[licitacoes] auto-move prazo vencido no startup: moved=${result.moved}`);
+      }
+    }).catch((err) => {
+      console.warn('[licitacoes] auto-move prazo vencido no startup falhou:', err.message);
     });
   });
 

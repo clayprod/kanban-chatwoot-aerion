@@ -456,41 +456,61 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
   background: #3a4663;
 }
 
-.kanban-scrollbar {
-  overflow-x: auto;
-  overflow-y: hidden;
-  height: 10px;
-  padding: 2px 0;
-  scrollbar-width: thin;
-  scrollbar-color: #3a4663 transparent;
+/*
+ * Custom kanban horizontal scroller (no native OS scrollbar — no Windows arrows).
+ * Track height is slightly under the edge buttons (h-8/h-9); flex centers them.
+ */
+.kanban-scroll-controls {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center; /* vertical center: buttons + track */
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.15rem;
+  background: rgba(10, 13, 20, 0.94);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
-.kanban-scrollbar > div {
-  height: 1px;
-}
-
-.kanban-scrollbar::-webkit-scrollbar {
-  height: 6px;
-}
-
-.kanban-scrollbar::-webkit-scrollbar-thumb {
-  background: #3a4663;
+.kanban-hscroll-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Almost button height (32–36px), a bit shorter */
+  height: 26px;
   border-radius: 999px;
-  border: none;
-  min-height: 6px;
+  background: rgba(35, 44, 64, 0.65);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.kanban-scrollbar::-webkit-scrollbar-thumb:hover {
+.kanban-hscroll-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  will-change: transform;
+  border-radius: 999px;
   background: #5a6a8a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: grab;
+  touch-action: none;
+  transition: background 0.12s ease;
 }
 
-.kanban-scrollbar::-webkit-scrollbar-track {
-  background: rgba(35, 44, 64, 0.45);
-  border-radius: 999px;
+.kanban-hscroll-thumb:hover {
+  background: #7a8aaa;
 }
 
-/* Horizontal scroll stays; only the top .kanban-scrollbar is visible.
-   Native bottom bar is redundant (synced from the top control). */
+.kanban-hscroll-thumb:active {
+  cursor: grabbing;
+  background: #8b9bb8;
+}
+
 /* Chart panels — TV / wallboard portal (must sit above #root { z-index: 1 }) */
 .chart-panel {
   position: relative;

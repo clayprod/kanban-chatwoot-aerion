@@ -130,18 +130,18 @@ const NOTIFICATION_TYPE_CATALOG = {
     description: 'Quando uma busca profunda PNCP termina.',
     channels: ['in_app', 'push'],
   },
-  'pipeline.overdue': {
-    type: 'pipeline.overdue',
-    category: 'licitacoes',
-    label: 'Licitação atrasada',
-    description: 'Oportunidades no pipeline com prazo de proposta vencido.',
-    channels: ['in_app', 'push'],
-  },
   'pipeline.due_48h': {
     type: 'pipeline.due_48h',
     category: 'licitacoes',
-    label: 'Prazo nas próximas 48h',
-    description: 'Oportunidades com prazo de envio de proposta em até 48 horas.',
+    label: 'Prazo de recurso em 3 dias úteis',
+    description: 'Oportunidades com data limite de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
+    channels: ['in_app', 'push'],
+  },
+  'pipeline.due_today': {
+    type: 'pipeline.due_today',
+    category: 'licitacoes',
+    label: 'Prazo vence hoje',
+    description: 'Oportunidades com prazo de envio de proposta (vencimento) no dia de hoje.',
     channels: ['in_app', 'push'],
   },
   'pipeline.opportunity_created': {
@@ -207,8 +207,8 @@ const DEFAULT_NOTIFICATION_PREFS = {
     'watchlist.edital_match': { in_app: true, push: true },
     'watchlist.pca_match': { in_app: true, push: true },
     'search.job_completed': { in_app: true, push: true },
-    'pipeline.overdue': { in_app: true, push: true },
     'pipeline.due_48h': { in_app: true, push: false },
+    'pipeline.due_today': { in_app: true, push: true },
     'pipeline.opportunity_created': { in_app: true, push: true },
     'metas.updated': { in_app: true, push: false },
     'dados.rfb_import_done': { in_app: true, push: false },
@@ -634,58 +634,109 @@ const emitFunnelStaleInboxDigest = async (pool, {
   return { count: n, ...r };
 };
 
-const emitDeadlineDigest = async (pool, { accountId = 2, getPrazoStatusSql }) => {
+const emitDeadlineDigest = async (pool, {
+  accountId = 2,
+  getLicitacaoOpenPipelineSql,
+  runExpiredLicitacaoProposalMove,
+  brazilBusinessDaysDeadlineWindow,
+  startOfDaySaoPaulo,
+  endOfDaySaoPaulo,
+}) => {
   const dayKey = new Date().toISOString().slice(0, 10);
-  const prazoSql = typeof getPrazoStatusSql === 'function'
-    ? getPrazoStatusSql()
-    : `CASE
-        WHEN data_envio_proposta_limite IS NULL THEN 'sem_data'
-        WHEN data_envio_proposta_limite < NOW() THEN 'atrasado'
-        WHEN data_envio_proposta_limite <= NOW() + INTERVAL '48 hours' THEN 'vence_48h'
-        ELSE 'em_dia'
-      END`;
 
-  const { rows } = await pool.query(
-    `
-      SELECT
-        COUNT(*) FILTER (WHERE ${prazoSql} = 'atrasado')::int AS overdue_count,
-        COUNT(*) FILTER (WHERE ${prazoSql} = 'vence_48h')::int AS due_48h
-      FROM licitacao_opportunities
-      WHERE account_id = $1
-        AND COALESCE(status, 'ativo') = 'ativo'
-    `,
-    [accountId]
-  );
-  const overdue = Number(rows[0]?.overdue_count) || 0;
-  const due48 = Number(rows[0]?.due_48h) || 0;
+  // Antes do digest: o que já venceu (proposta) sai para Perdido / Monitoramento.
+  if (typeof runExpiredLicitacaoProposalMove === 'function') {
+    try {
+      await runExpiredLicitacaoProposalMove({ accountId });
+    } catch (err) {
+      console.warn('[notifications] auto-move prazo antes do digest falhou:', err.message);
+    }
+  }
+
+  // Prazo de recurso (PNCP), 3 dias úteis no calendário nacional BR.
+  const openSql = typeof getLicitacaoOpenPipelineSql === 'function'
+    ? getLicitacaoOpenPipelineSql()
+    : `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo')) IN ('ativo', 'suspenso')
+       AND NULLIF(substring(COALESCE(fase, '') from '^[0-9]+'), '')::int BETWEEN 2 AND 12`;
+
+  const windowFn = typeof brazilBusinessDaysDeadlineWindow === 'function'
+    ? brazilBusinessDaysDeadlineWindow
+    : null;
+  const startTodayFn = typeof startOfDaySaoPaulo === 'function' ? startOfDaySaoPaulo : null;
+  const endTodayFn = typeof endOfDaySaoPaulo === 'function' ? endOfDaySaoPaulo : null;
+
+  let dueRecurso3bd = 0;
+  let dueToday = 0;
+
+  if (windowFn && startTodayFn && endTodayFn) {
+    const win = windowFn(3);
+    const startToday = startTodayFn();
+    const endToday = endTodayFn();
+    const { rows } = await pool.query(
+      `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE ${openSql}
+              AND data_recurso_limite IS NOT NULL
+              AND data_recurso_limite >= $2
+              AND data_recurso_limite <= $3
+          )::int AS due_recurso_3bd,
+          COUNT(*) FILTER (
+            WHERE ${openSql}
+              AND data_envio_proposta_limite IS NOT NULL
+              AND data_envio_proposta_limite >= $4
+              AND data_envio_proposta_limite <= $5
+          )::int AS due_today
+        FROM licitacao_opportunities
+        WHERE account_id = $1
+      `,
+      [
+        accountId,
+        startToday.toISOString(),
+        win.endInclusive.toISOString(),
+        startToday.toISOString(),
+        endToday.toISOString(),
+      ]
+    );
+    dueRecurso3bd = Number(rows[0]?.due_recurso_3bd) || 0;
+    dueToday = Number(rows[0]?.due_today) || 0;
+  }
+
   let created = 0;
   let pushed = 0;
 
-  if (overdue > 0) {
+  if (dueToday > 0) {
     const r = await notifyAccountUsers(pool, {
       accountId,
-      type: 'pipeline.overdue',
-      title: `${overdue} licitação${overdue === 1 ? '' : 'ões'} atrasada${overdue === 1 ? '' : 's'}`,
-      body: 'Há prazos de proposta vencidos no pipeline que exigem ação.',
-      data: { view: 'Licitações', sub: 'overview', count: overdue },
+      type: 'pipeline.due_today',
+      title: `${dueToday} licitação${dueToday === 1 ? '' : 'ões'} vencem hoje`,
+      body: 'Prazo de envio de proposta (vencimento) no dia de hoje.',
+      data: { view: 'Licitações', sub: 'overview', count: dueToday },
       dedupeKey: `account:${accountId}:day:${dayKey}`,
     });
     created += r.created;
     pushed += r.pushed;
   }
-  if (due48 > 0) {
+  if (dueRecurso3bd > 0) {
     const r = await notifyAccountUsers(pool, {
       accountId,
       type: 'pipeline.due_48h',
-      title: `${due48} licitação${due48 === 1 ? '' : 'ões'} vencendo em 48h`,
-      body: 'Prazos de envio de proposta nas próximas 48 horas.',
-      data: { view: 'Licitações', sub: 'overview', count: due48 },
+      title: `${dueRecurso3bd} licitação${dueRecurso3bd === 1 ? '' : 'ões'} com recurso em 3 dias úteis`,
+      body: 'Prazo de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
+      data: { view: 'Licitações', sub: 'overview', count: dueRecurso3bd },
       dedupeKey: `account:${accountId}:day:${dayKey}`,
     });
     created += r.created;
     pushed += r.pushed;
   }
-  return { overdue, due48, created, pushed };
+  return {
+    overdue: 0,
+    due48: dueRecurso3bd,
+    dueToday,
+    due_recurso_3bd: dueRecurso3bd,
+    created,
+    pushed,
+  };
 };
 
 const registerNotificationRoutes = (app, { pool, defaultAccountId = 2 }) => {

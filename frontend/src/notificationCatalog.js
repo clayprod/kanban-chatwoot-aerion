@@ -107,16 +107,16 @@ export const NOTIFICATION_TYPES = [
     description: 'Quando uma busca profunda PNCP termina.',
   },
   {
-    type: 'pipeline.overdue',
-    category: 'licitacoes',
-    label: 'Licitação atrasada',
-    description: 'Oportunidades no pipeline com prazo de proposta vencido.',
-  },
-  {
     type: 'pipeline.due_48h',
     category: 'licitacoes',
-    label: 'Prazo nas próximas 48h',
-    description: 'Oportunidades com prazo de envio de proposta em até 48 horas.',
+    label: 'Prazo de recurso em 3 dias úteis',
+    description: 'Oportunidades com data limite de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
+  },
+  {
+    type: 'pipeline.due_today',
+    category: 'licitacoes',
+    label: 'Prazo vence hoje',
+    description: 'Oportunidades com prazo de envio de proposta (vencimento) no dia de hoje.',
   },
   {
     type: 'pipeline.opportunity_created',
