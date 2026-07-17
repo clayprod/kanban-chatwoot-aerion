@@ -8623,19 +8623,45 @@ function App() {
   }, [activePncpSearchJob]);
 
   /**
-   * Funil da coleta (mesma lógica de conjunto da lista):
-   * - Lidos = editais **únicos** já vistos em qualquer frente (drone+uav+rpa+consulta…),
-   *   como a lista é o conjunto único que passou no filtro.
-   * - Universo de referência = maior total_reported entre termos de *busca*
-   *   (não somamos 4810+3062 — o mesmo edital entra em vários termos e inflaria o teto).
-   * - Soma dos universos fica só como “teto teórico c/ overlap” no tooltip.
+   * Fonte única de term_runs para card, auditoria e banner — evita um usar job e
+   * outro query_plan velho (poll atualizava term_runs no job e o card lia plan stale).
    */
-  const getPncpJobCollectionFunnel = useCallback((job, classifiedTotal = 0, extraTermRuns = null) => {
+  const getPncpJobTermRuns = useCallback((job, results = null) => {
+    const candidates = [
+      job?.term_runs,
+      results?.query_plan?.term_runs,
+      job?.query_plan?.term_runs,
+      results?.term_runs,
+    ];
+    // Prefere o array com mais progresso (soma de pages_completed / items).
+    let best = [];
+    let bestScore = -1;
+    candidates.forEach((arr) => {
+      if (!Array.isArray(arr) || !arr.length) return;
+      const score = arr.reduce((s, r) => (
+        s
+        + Number(r?.pages_completed || 0) * 1000
+        + Number(r?.items_collected || 0)
+        + Number(r?.unique_new || 0)
+      ), 0) + arr.length;
+      if (score >= bestScore) {
+        bestScore = score;
+        best = arr;
+      }
+    });
+    return best;
+  }, []);
+
+  /**
+   * Funil da coleta — números alinhados à tabela de Auditoria:
+   * - Lidos = soma de items_collected por termo (coluna "Lidos" da auditoria)
+   * - Universo = soma de total_reported por termo de busca (coluna "Universo")
+   * - Únicos / Já vistos = unique_new / duplicates (colunas da auditoria)
+   */
+  const getPncpJobCollectionFunnel = useCallback((job, classifiedTotal = 0, extraTermRuns = null, results = null) => {
     const termRuns = Array.isArray(extraTermRuns) && extraTermRuns.length
       ? extraTermRuns
-      : (Array.isArray(job?.term_runs) && job.term_runs.length
-        ? job.term_runs
-        : (Array.isArray(job?.query_plan?.term_runs) ? job.query_plan.term_runs : []));
+      : getPncpJobTermRuns(job, results);
     const searchRuns = termRuns.filter(r => r?.source !== 'pncp_consulta_complement');
     const complementRuns = termRuns.filter(r => r?.source === 'pncp_consulta_complement');
     // Por termo: usa a última execução (retomadas sobrescrevem o progresso).
@@ -8643,13 +8669,23 @@ function App() {
     searchRuns.forEach((run) => {
       const key = normalizeText(run?.term || '');
       if (!key) return;
-      latestByTerm.set(key, run);
+      const prev = latestByTerm.get(key);
+      // Em empate, fica o de mais páginas/itens (mais recente/avançado).
+      if (!prev) {
+        latestByTerm.set(key, run);
+        return;
+      }
+      const prevScore = Number(prev.pages_completed || 0) * 1000 + Number(prev.items_collected || 0);
+      const nextScore = Number(run.pages_completed || 0) * 1000 + Number(run.items_collected || 0);
+      if (nextScore >= prevScore) latestByTerm.set(key, run);
     });
     const latestRuns = [...latestByTerm.values()];
-    // Complemento: última fatia (mesmo source pode repetir em retomas).
-    const complementRun = complementRuns.length
-      ? complementRuns[complementRuns.length - 1]
-      : null;
+    const complementRun = complementRuns.reduce((best, run) => {
+      if (!best) return run;
+      const b = Number(best.pages_completed || 0) * 1000 + Number(best.items_collected || 0);
+      const n = Number(run.pages_completed || 0) * 1000 + Number(run.items_collected || 0);
+      return n >= b ? run : best;
+    }, null);
 
     let universeMax = 0;
     let universeSum = 0;
@@ -8679,7 +8715,6 @@ function App() {
       pagesReq += Number(complementRun.pages_requested || 0);
     }
 
-    // Termo de referência = maior universo na busca textual (não a consulta por data).
     const mainRun = latestRuns.reduce((best, run) => (
       Number(run.total_reported || 0) > Number(best?.total_reported || 0) ? run : best
     ), null);
@@ -8699,18 +8734,13 @@ function App() {
       ? Math.ceil(mainUniverse / mainPageSize)
       : null;
 
-    // Lidos exclusivos (união): unique_new por frente já é “novo vs seen global”.
-    // sessionUnique / raw_unique_collected reforça o piso se o term_run estiver atrasado.
+    // Lidos do card = mesma soma da coluna "Lidos" da auditoria (items_collected).
+    // Progress ao vivo reforça o piso se term_runs ainda não chegou no poll.
+    const progressCollected = Number(job?.progress?.current_term_collected || 0);
     const sessionUnique = Number(job?.progress?.items_collected || job?.query_plan?.raw_unique_collected || 0);
+    const brutosLidos = Math.max(brutosLidosSum, mainRead, progressCollected, 0);
     const exclusiveLidos = Math.max(uniqueNewSum, sessionUnique, 0);
-    // Fallback se ainda não há unique_new (jobs antigos): usa soma de brutos de página.
-    const brutosLidos = exclusiveLidos > 0
-      ? exclusiveLidos
-      : (brutosLidosSum > 0 ? brutosLidosSum : mainRead);
 
-    // Universo no card = soma dos total_reported de cada termo de busca
-    // (pedido do produto: número simples; pode haver overlap entre termos).
-    // Piso = lidos únicos já vistos (nunca mostra lidos > universo).
     const universeMaxTerm = mainUniverse || universeMax;
     const universeApi = Math.max(universeSum > 0 ? universeSum : universeMaxTerm, brutosLidos, 0);
     const universeGrewBeyondMain = brutosLidos > universeMaxTerm && universeMaxTerm > 0;
@@ -8729,7 +8759,7 @@ function App() {
       brutosLidos,
       brutosLidosSum,
       uniqueNewSum,
-      exclusiveLidos: brutosLidos,
+      exclusiveLidos,
       mainRead,
       complementUnique,
       duplicatesSum,
@@ -8759,8 +8789,9 @@ function App() {
       classifyPct: brutosLidos > 0
         ? Math.min(100, Math.round((classified / brutosLidos) * 100))
         : null,
+      termRuns,
     };
-  }, []);
+  }, [getPncpJobTermRuns]);
 
   const formatPncpStopReason = (reason) => {
     const map = {
@@ -9474,6 +9505,18 @@ function App() {
     if (!job) return;
     setPncpSearchResults(prev => {
       const nextTotal = Number(job.total || 0) || Number(prev.total || 0) || 0;
+      // term_runs vivo do backend tem prioridade — NÃO ficar preso em query_plan parcial velho.
+      const freshRuns = getPncpJobTermRuns(job, prev);
+      const nextPlan = {
+        ...(prev.query_plan || {}),
+        ...(job.query_plan || {}),
+        mode: job.query_plan?.mode || prev.query_plan?.mode || 'deep_background',
+        term_runs: freshRuns.length
+          ? freshRuns
+          : (job.term_runs || job.query_plan?.term_runs || prev.query_plan?.term_runs || []),
+        terms: job.terms || job.query_plan?.terms || prev.query_plan?.terms,
+        terms_planned: job.terms || job.query_plan?.terms_planned || prev.query_plan?.terms_planned,
+      };
       return {
         ...prev,
         // Não zera a lista quando o job está em 'queued' entre retomadas (items=[]).
@@ -9489,7 +9532,7 @@ function App() {
         termosNegativos: job.negative_terms || prev.termosNegativos || [],
         fonteIA: job.suggested_positive_terms?.length ? 'IA + termos aceitos' : (prev.fonteIA || null),
         summary: job.summary || prev.summary || null,
-        query_plan: job.query_plan || prev.query_plan || { mode: 'deep_background', term_runs: job.term_runs || [] },
+        query_plan: nextPlan,
         diagnostics: {
           aiRequested: true,
           aiUsed: Boolean(job.suggested_positive_terms?.length || job.accepted_positive_terms?.length),
@@ -10726,30 +10769,39 @@ function App() {
         if (stopped) return;
         applyPncpJobSnapshot(response.data);
         await loadPncpJobResults(activePncpSearchJobId, pncpJobResultsPage);
-        setPncpSearchJobs(prev => prev.map(job => (
-          String(job.id) === String(activePncpSearchJobId)
-            ? {
-                ...job,
-                status: response.data?.status || job.status,
-                progress: response.data?.progress || job.progress,
-                total: Number(response.data?.total || 0),
-                terms: response.data?.terms || job.terms,
-                negative_terms: response.data?.negative_terms || job.negative_terms,
-                filters: response.data?.filters || job.filters,
-                summary: response.data?.summary || job.summary,
-                error: response.data?.error || null,
-                watchlist_id: response.data?.watchlist_id ?? job.watchlist_id,
-                started_at: response.data?.started_at || job.started_at,
-                updated_at: response.data?.updated_at || job.updated_at,
-                completed_at: response.data?.completed_at || job.completed_at,
-                archive_at: response.data?.archive_at ?? job.archive_at,
-                days_until_archive: response.data?.days_until_archive ?? job.days_until_archive,
-                archive_days: response.data?.archive_days || job.archive_days || 15,
-                term_runs: response.data?.term_runs || response.data?.query_plan?.term_runs || job.term_runs,
-                query_plan: response.data?.query_plan || job.query_plan,
-              }
-            : job
-        )));
+        const polledRuns = response.data?.term_runs
+          || response.data?.query_plan?.term_runs
+          || null;
+        setPncpSearchJobs(prev => prev.map(jobRow => {
+          if (String(jobRow.id) !== String(activePncpSearchJobId)) return jobRow;
+          const nextRuns = Array.isArray(polledRuns) && polledRuns.length
+            ? polledRuns
+            : (jobRow.term_runs || []);
+          return {
+            ...jobRow,
+            status: response.data?.status || jobRow.status,
+            progress: response.data?.progress || jobRow.progress,
+            total: Number(response.data?.total ?? jobRow.total ?? 0),
+            terms: response.data?.terms || jobRow.terms,
+            negative_terms: response.data?.negative_terms || jobRow.negative_terms,
+            filters: response.data?.filters || jobRow.filters,
+            summary: response.data?.summary || jobRow.summary,
+            error: response.data?.error || null,
+            watchlist_id: response.data?.watchlist_id ?? jobRow.watchlist_id,
+            started_at: response.data?.started_at || jobRow.started_at,
+            updated_at: response.data?.updated_at || jobRow.updated_at,
+            completed_at: response.data?.completed_at || jobRow.completed_at,
+            archive_at: response.data?.archive_at ?? jobRow.archive_at,
+            days_until_archive: response.data?.days_until_archive ?? jobRow.days_until_archive,
+            archive_days: response.data?.archive_days || jobRow.archive_days || 15,
+            term_runs: nextRuns,
+            query_plan: {
+              ...(jobRow.query_plan || {}),
+              ...(response.data?.query_plan || {}),
+              term_runs: nextRuns,
+            },
+          };
+        }));
         const status = response.data?.status;
         if (['completed', 'failed', 'cancelled'].includes(status)) {
           loadPncpSearchJobs();
@@ -14483,8 +14535,13 @@ function App() {
                             </div>
 
                             {(() => {
-                              const funnelRuns = job?.term_runs || pncpSearchResults.query_plan?.term_runs || [];
-                              const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), funnelRuns);
+                              const funnelRuns = getPncpJobTermRuns(job, pncpSearchResults);
+                              const funnel = getPncpJobCollectionFunnel(
+                                job,
+                                Number(pncpSearchResults.total || job?.total || 0),
+                                funnelRuns,
+                                pncpSearchResults,
+                              );
                               return (
                                 <>
                                   <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
@@ -14496,10 +14553,13 @@ function App() {
                                     <div
                                       className="rounded-md border border-line bg-bg2 px-2 py-1"
                                       title={
-                                        `Lidos = editais únicos em todas as frentes. `
-                                        + `Universo = soma dos totais da API por termo de busca (pode haver overlap). `
-                                        + (funnel.universeMax > 0
-                                          ? `Maior termo isolado (“${funnel.mainTerm || '…'}”): ${Number(funnel.universeMax).toLocaleString('pt-BR')}.`
+                                        `Lidos = soma da coluna “Lidos” da Auditoria (items_collected por termo). `
+                                        + `Universo = soma dos totais da API por termo (overlap possível). `
+                                        + (funnel.exclusiveLidos > 0
+                                          ? `Únicos entre termos: ${Number(funnel.exclusiveLidos).toLocaleString('pt-BR')}. `
+                                          : '')
+                                        + (funnel.duplicatesSum > 0
+                                          ? `Já vistos entre termos: ${Number(funnel.duplicatesSum).toLocaleString('pt-BR')}.`
                                           : '')
                                       }
                                     >
@@ -14512,8 +14572,8 @@ function App() {
                                       </p>
                                       <p className="text-[9px] leading-tight text-muted">
                                         {funnel.coveragePct != null
-                                          ? `${funnel.coveragePct}% do universo somado`
-                                          : 'únicos · universo somado'}
+                                          ? `${funnel.coveragePct}% · iguais à auditoria`
+                                          : 'soma por termo (auditoria)'}
                                       </p>
                                     </div>
                                     <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Soma dos valores dos editais classificados na lista.">
@@ -14533,10 +14593,11 @@ function App() {
                                   </div>
                                   {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
                                     <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-muted sm:text-[11px]">
-                                      <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> únicos lidos
-                                      {' · '}universo somado <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
-                                      {funnel.universeMax > 0 && funnel.universeMax !== funnel.universeApi ? (
-                                        <> (maior termo “{funnel.mainTerm || '…'}”: {Number(funnel.universeMax).toLocaleString('pt-BR')})</>
+                                      <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> lidos
+                                      {' '}(soma auditoria)
+                                      {' · '}universo <strong className="text-ink">{Number(funnel.universeApi || 0).toLocaleString('pt-BR')}</strong>
+                                      {funnel.exclusiveLidos > 0 ? (
+                                        <> · {Number(funnel.exclusiveLidos).toLocaleString('pt-BR')} únicos entre termos</>
                                       ) : null}
                                       {funnel.duplicatesSum > 0 ? <> · {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos</> : null}
                                       {' · '}<strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
@@ -14830,10 +14891,7 @@ function App() {
                             })()}
 
                             {pncpJobModalTab === 'auditoria' && (() => {
-                              const termRuns = pncpSearchResults.query_plan?.term_runs
-                                || job?.term_runs
-                                || job?.query_plan?.term_runs
-                                || [];
+                              const termRuns = getPncpJobTermRuns(job, pncpSearchResults);
                               const plannedTerms = job?.terms || pncpSearchResults.query_plan?.terms_planned || pncpSearchResults.termosUsados || [];
                               const executedTerms = new Set(
                                 termRuns
@@ -14842,7 +14900,12 @@ function App() {
                               );
                               const pendingTerms = plannedTerms.filter(t => !executedTerms.has(normalizeText(t)));
                               const currentTerm = job?.progress?.current_term || activePncpJobProgress.currentTerm || '';
-                              const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), termRuns);
+                              const funnel = getPncpJobCollectionFunnel(
+                                job,
+                                Number(pncpSearchResults.total || job?.total || 0),
+                                termRuns,
+                                pncpSearchResults,
+                              );
                               const filterStatusLabel = formatPncpStatusFilterLabel(job?.filters?.status);
                               const orgaoLabel = job?.filters?.orgao_cnpj || pncpSearchResults.query_plan?.local_filters?.orgao || 'qualquer';
                               const uasgLabel = job?.filters?.unidade_codigo || pncpSearchResults.query_plan?.local_filters?.unidade || 'qualquer';
@@ -15190,8 +15253,13 @@ function App() {
                                     </strong>
                                     {' '}
                                     {(() => {
-                                      const funnelRuns = job?.term_runs || pncpSearchResults.query_plan?.term_runs || [];
-                                      const funnel = getPncpJobCollectionFunnel(job, Number(pncpSearchResults.total || job?.total || 0), funnelRuns);
+                                      const funnelRuns = getPncpJobTermRuns(job, pncpSearchResults);
+                                      const funnel = getPncpJobCollectionFunnel(
+                                        job,
+                                        Number(pncpSearchResults.total || job?.total || 0),
+                                        funnelRuns,
+                                        pncpSearchResults,
+                                      );
                                       const prog = job?.progress || {};
                                       const term = prog.current_term || funnel.mainTerm || activePncpJobProgress.currentTerm || '';
                                       const page = prog.resume_from_page || prog.current_page;
