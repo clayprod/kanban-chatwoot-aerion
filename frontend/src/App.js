@@ -8622,7 +8622,14 @@ function App() {
     };
   }, [activePncpSearchJob]);
 
-  /** Funil da coleta: universo PNCP → lidos brutos → classificados no job. */
+  /**
+   * Funil da coleta (mesma lógica de conjunto da lista):
+   * - Lidos = editais **únicos** já vistos em qualquer frente (drone+uav+rpa+consulta…),
+   *   como a lista é o conjunto único que passou no filtro.
+   * - Universo de referência = maior total_reported entre termos de *busca*
+   *   (não somamos 4810+3062 — o mesmo edital entra em vários termos e inflaria o teto).
+   * - Soma dos universos fica só como “teto teórico c/ overlap” no tooltip.
+   */
   const getPncpJobCollectionFunnel = useCallback((job, classifiedTotal = 0, extraTermRuns = null) => {
     const termRuns = Array.isArray(extraTermRuns) && extraTermRuns.length
       ? extraTermRuns
@@ -8630,6 +8637,7 @@ function App() {
         ? job.term_runs
         : (Array.isArray(job?.query_plan?.term_runs) ? job.query_plan.term_runs : []));
     const searchRuns = termRuns.filter(r => r?.source !== 'pncp_consulta_complement');
+    const complementRuns = termRuns.filter(r => r?.source === 'pncp_consulta_complement');
     // Por termo: usa a última execução (retomadas sobrescrevem o progresso).
     const latestByTerm = new Map();
     searchRuns.forEach((run) => {
@@ -8638,27 +8646,50 @@ function App() {
       latestByTerm.set(key, run);
     });
     const latestRuns = [...latestByTerm.values()];
-    let universeApi = 0;
+    // Complemento: última fatia (mesmo source pode repetir em retomas).
+    const complementRun = complementRuns.length
+      ? complementRuns[complementRuns.length - 1]
+      : null;
+
+    let universeMax = 0;
+    let universeSum = 0;
     let brutosLidosSum = 0;
     let uniqueNewSum = 0;
     let duplicatesSum = 0;
     let pagesDone = 0;
     let pagesReq = 0;
     latestRuns.forEach((run) => {
-      universeApi = Math.max(universeApi, Number(run.total_reported || 0));
+      const u = Number(run.total_reported || 0);
+      if (u > universeMax) universeMax = u;
+      universeSum += u;
       brutosLidosSum += Number(run.items_collected || 0);
       uniqueNewSum += Number(run.unique_new || 0);
       duplicatesSum += Number(run.duplicates_skipped || 0);
       pagesDone += Number(run.pages_completed || 0);
       pagesReq += Number(run.pages_requested || 0);
     });
-    // Termo principal = maior universo; também expomos o termo *atual* do job.
+    const complementUnique = Number(complementRun?.unique_new || 0);
+    const complementCollected = Number(complementRun?.items_collected || 0);
+    const complementDups = Number(complementRun?.duplicates_skipped || 0);
+    uniqueNewSum += complementUnique;
+    brutosLidosSum += complementCollected;
+    duplicatesSum += complementDups;
+    if (complementRun) {
+      pagesDone += Number(complementRun.pages_completed || 0);
+      pagesReq += Number(complementRun.pages_requested || 0);
+    }
+
+    // Termo de referência = maior universo na busca textual (não a consulta por data).
     const mainRun = latestRuns.reduce((best, run) => (
       Number(run.total_reported || 0) > Number(best?.total_reported || 0) ? run : best
     ), null);
     const currentTermName = job?.progress?.current_term || '';
     const currentRun = currentTermName
-      ? latestRuns.find((r) => normalizeText(r.term) === normalizeText(currentTermName))
+      ? (
+        normalizeText(currentTermName).includes('consulta')
+          ? complementRun
+          : latestRuns.find((r) => normalizeText(r.term) === normalizeText(currentTermName))
+      )
       : null;
     const mainRead = Number(mainRun?.items_collected || 0);
     const mainUniverse = Number(mainRun?.total_reported || 0);
@@ -8667,44 +8698,62 @@ function App() {
     const mainPagesEst = mainUniverse > 0 && mainPageSize > 0
       ? Math.ceil(mainUniverse / mainPageSize)
       : null;
-    // Brutos do card = progresso do termo principal (páginas × itens da API).
-    // NÃO usar progress.items_collected (congela no baseline do preserve e a UI
-    // fica em 338 enquanto o term_run já está em 600+).
+
+    // Lidos exclusivos (união): unique_new por frente já é “novo vs seen global”.
+    // sessionUnique / raw_unique_collected reforça o piso se o term_run estiver atrasado.
     const sessionUnique = Number(job?.progress?.items_collected || job?.query_plan?.raw_unique_collected || 0);
-    const brutosLidos = mainRead > 0
-      ? mainRead
-      : (uniqueNewSum > 0 ? uniqueNewSum : (sessionUnique > 0 ? sessionUnique : brutosLidosSum));
+    const exclusiveLidos = Math.max(uniqueNewSum, sessionUnique, 0);
+    // Fallback se ainda não há unique_new (jobs antigos): usa soma de brutos de página.
+    const brutosLidos = exclusiveLidos > 0
+      ? exclusiveLidos
+      : (brutosLidosSum > 0 ? brutosLidosSum : mainRead);
+
+    // Universo de referência no card: maior total_reported (termo mais largo).
+    // NÃO usamos a soma dos totais — conta o mesmo edital N vezes (drone∩rpa∩uav).
+    const universeApi = mainUniverse || universeMax;
     const classified = Number(classifiedTotal || job?.total || 0);
     const statusFilter = String(job?.filters?.status || 'recebendo_proposta');
     const isOpenOnly = normalizeText(statusFilter) === 'recebendo_proposta';
     const gate = job?.progress?.gate || null;
+    // Cobertura vs maior universo (pode passar de 100% se correlatos trouxerem
+    // itens fora daquele total — raro; cap visual em 100).
+    const coveragePct = universeApi > 0
+      ? Math.min(100, Math.round((brutosLidos / universeApi) * 100))
+      : null;
     return {
-      universeApi: mainUniverse || universeApi,
+      universeApi,
+      universeMax: universeApi,
+      universeSum,
       brutosLidos,
       brutosLidosSum,
       uniqueNewSum,
+      exclusiveLidos: brutosLidos,
+      mainRead,
+      complementUnique,
       duplicatesSum,
       classified,
-      pagesDone: mainPagesDone || pagesDone,
+      pagesDone,
       pagesReq,
       pagesEst: mainPagesEst,
       pageSize: mainPageSize,
       mainTerm: mainRun?.term || job?.filters?.q || job?.nome || '',
       mainStop: mainRun?.stop_reason || null,
       currentTerm: currentTermName || null,
-      currentRead: currentRun ? Number(currentRun.items_collected || 0) : null,
+      currentRead: currentRun ? Number(currentRun.items_collected || currentRun.unique_new || 0) : null,
       currentUniverse: currentRun ? Number(currentRun.total_reported || 0) : null,
-      currentUnique: currentRun ? Number(currentRun.unique_new || 0) : Number(job?.progress?.current_term_unique_new || 0) || null,
-      currentDuplicates: currentRun ? Number(currentRun.duplicates_skipped || 0) : Number(job?.progress?.current_term_duplicates || 0) || null,
+      currentUnique: currentRun
+        ? Number(currentRun.unique_new || 0)
+        : Number(job?.progress?.current_term_unique_new || 0) || null,
+      currentDuplicates: currentRun
+        ? Number(currentRun.duplicates_skipped || 0)
+        : Number(job?.progress?.current_term_duplicates || 0) || null,
       isOpenOnly,
       statusFilter,
       resumePage: job?.progress?.resume_from_page || null,
       resumeInMs: Number(job?.progress?.resume_in_ms || 0) || null,
       checkpoint: Boolean(job?.progress?.checkpoint || job?.progress?.checkpoint_mode || job?.progress?.resumed),
       gate,
-      coveragePct: mainUniverse > 0
-        ? Math.min(100, Math.round((mainRead / mainUniverse) * 100))
-        : null,
+      coveragePct,
       classifyPct: brutosLidos > 0
         ? Math.min(100, Math.round((classified / brutosLidos) * 100))
         : null,
@@ -14442,7 +14491,16 @@ function App() {
                                       <p className="font-mono text-sm font-bold leading-tight text-ink">{Number(pncpSearchResults.total || 0).toLocaleString('pt-BR')}</p>
                                       <p className="text-[9px] leading-tight text-muted">passaram no filtro</p>
                                     </div>
-                                    <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Itens brutos já baixados da API do PNCP (inclui encerrados). Não é o total da lista.">
+                                    <div
+                                      className="rounded-md border border-line bg-bg2 px-2 py-1"
+                                      title={
+                                        `Editais únicos já vistos em todas as frentes (drone, correlatos, consulta por data) — mesma lógica da lista (sem contar 2× o mesmo id). `
+                                        + `Denominador = maior universo de um termo de busca (ex. “${funnel.mainTerm || '…'}”), não a soma dos totais (há overlap). `
+                                        + (funnel.universeSum > funnel.universeApi
+                                          ? `Soma bruta dos totais por termo: ${Number(funnel.universeSum).toLocaleString('pt-BR')} (inflada).`
+                                          : '')
+                                      }
+                                    >
                                       <p className="font-mono text-[8px] uppercase tracking-wide text-muted2">Lidos no PNCP</p>
                                       <p className="font-mono text-sm font-bold leading-tight text-ink">
                                         {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
@@ -14451,7 +14509,9 @@ function App() {
                                         ) : null}
                                       </p>
                                       <p className="text-[9px] leading-tight text-muted">
-                                        {funnel.coveragePct != null ? `${funnel.coveragePct}% do universo` : 'universo da API'}
+                                        {funnel.coveragePct != null
+                                          ? `${funnel.coveragePct}% vs maior termo`
+                                          : 'únicos · todas as frentes'}
                                       </p>
                                     </div>
                                     <div className="rounded-md border border-line bg-bg2 px-2 py-1" title="Soma dos valores dos editais classificados na lista.">
@@ -14469,21 +14529,34 @@ function App() {
                                       <p className="text-[9px] leading-tight text-muted">você ocultou · já no board</p>
                                     </div>
                                   </div>
-                                  {funnel.universeApi > 0 && (
-                                    <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-muted sm:text-[11px]" title={
-                                      `O PNCP tem ${funnel.universeApi.toLocaleString('pt-BR')} resultados para “${funnel.mainTerm || '…'}”${funnel.isOpenOnly ? ' (todas as situações)' : ''}. Já lemos ${funnel.brutosLidos.toLocaleString('pt-BR')} brutos${funnel.duplicatesSum > 0 ? ` (${funnel.duplicatesSum.toLocaleString('pt-BR')} repetidos entre termos)` : ''}; só ${funnel.classified.toLocaleString('pt-BR')} entraram na lista${funnel.isOpenOnly ? ' (filtro: recebendo proposta)' : ''}.`
+                                  {(funnel.universeApi > 0 || funnel.brutosLidos > 0) && (
+                                    <p className="mt-1 line-clamp-3 text-[10px] leading-snug text-muted sm:text-[11px]" title={
+                                      `Lidos = união de únicos (todas as frentes). Referência de universo = maior termo (“${funnel.mainTerm || '…'}”: ${Number(funnel.universeApi || 0).toLocaleString('pt-BR')}). `
+                                      + (funnel.universeSum > funnel.universeApi
+                                        ? `Soma dos totais por termo ${Number(funnel.universeSum).toLocaleString('pt-BR')} conta overlap. `
+                                        : '')
+                                      + `Já vistos/duplicados entre termos: ${Number(funnel.duplicatesSum || 0).toLocaleString('pt-BR')}.`
                                     }>
-                                      O PNCP tem <strong className="text-ink">{funnel.universeApi.toLocaleString('pt-BR')}</strong> resultados para “{funnel.mainTerm || '…'}”
-                                      {funnel.isOpenOnly ? ' (todas as situações)' : ''}.
-                                      {' '}Já lemos <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> brutos
-                                      {funnel.duplicatesSum > 0 ? <> ({funnel.duplicatesSum.toLocaleString('pt-BR')} repetidos entre termos)</> : null}
-                                      ; só <strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> entraram na lista
-                                      {funnel.isOpenOnly ? ' (filtro: recebendo proposta)' : ''}.
-                                      {funnel.coveragePct != null && funnel.coveragePct < 100 ? (
-                                        <> Cobertura “{funnel.mainTerm}”: <strong className="text-ink">{funnel.coveragePct}%</strong>.</>
+                                      <strong className="text-ink">{funnel.brutosLidos.toLocaleString('pt-BR')}</strong> editais únicos lidos
+                                      {' '}(drone + correlatos + consulta por data, sem contar 2× o mesmo).
+                                      {funnel.universeApi > 0 ? (
+                                        <>
+                                          {' '}Referência de universo: <strong className="text-ink">{funnel.universeApi.toLocaleString('pt-BR')}</strong>
+                                          {' '}no termo “{funnel.mainTerm || '…'}”
+                                          {funnel.isOpenOnly ? ' (API mista: abertos e encerrados)' : ''}.
+                                        </>
                                       ) : null}
-                                      {funnel.currentTerm && funnel.currentTerm !== funnel.mainTerm ? (
-                                        <> Agora em “{funnel.currentTerm}”
+                                      {funnel.duplicatesSum > 0 ? (
+                                        <> {' '}· {funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos entre termos.</>
+                                      ) : null}
+                                      {' '}· <strong className="text-ink">{funnel.classified.toLocaleString('pt-BR')}</strong> na lista
+                                      {funnel.isOpenOnly ? ' (só recebendo proposta)' : ''}.
+                                      {funnel.coveragePct != null && funnel.coveragePct < 100 ? (
+                                        <> Cobertura vs “{funnel.mainTerm}”: <strong className="text-ink">{funnel.coveragePct}%</strong>.</>
+                                      ) : null}
+                                      {funnel.currentTerm ? (
+                                        <>
+                                          {' '}Agora em “{funnel.currentTerm}”
                                           {funnel.currentUnique != null ? <> · {funnel.currentUnique.toLocaleString('pt-BR')} únicos novos</> : null}
                                           {funnel.currentDuplicates > 0 ? <> · {funnel.currentDuplicates.toLocaleString('pt-BR')} já vistos</> : null}.
                                         </>
@@ -14800,19 +14873,23 @@ function App() {
                                   <p className="text-xs font-semibold text-ink">O que cada número significa</p>
                                   <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
                                     <div className="rounded-lg border border-line bg-surf px-2.5 py-2">
-                                      <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">1 · Universo no PNCP</p>
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-muted2">1 · Universo (referência)</p>
                                       <p className="mt-0.5 font-mono text-lg font-bold text-ink">
                                         {funnel.universeApi > 0 ? funnel.universeApi.toLocaleString('pt-BR') : '—'}
                                       </p>
                                       <p className="mt-1 text-[11px] leading-snug text-muted">
-                                        Quantos resultados o PNCP diz que existem para o termo
-                                        {funnel.mainTerm ? <> “<span className="text-ink">{funnel.mainTerm}</span>”</> : null}
-                                        — <strong className="text-ink">todas as situações</strong> (abertos, encerrados, homologados…).
-                                        Não é o tamanho da sua lista.
+                                        Maior total que a API reporta para <strong className="text-ink">um</strong> termo de busca
+                                        {funnel.mainTerm ? <> (“<span className="text-ink">{funnel.mainTerm}</span>”)</> : null}
+                                        — abertos e encerrados. <strong className="text-ink">Não somamos</strong> drone+uav+rpa:
+                                        o mesmo edital entra em vários totais (overlap).
+                                        {funnel.universeSum > funnel.universeApi ? (
+                                          <> Soma bruta dos totais: {Number(funnel.universeSum).toLocaleString('pt-BR')} (inflada).</>
+                                        ) : null}
+                                        {' '}Não é o tamanho da sua lista.
                                       </p>
                                     </div>
                                     <div className="rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-2">
-                                      <p className="font-mono text-[9px] uppercase tracking-wide text-primary/80">2 · Já lidos (brutos)</p>
+                                      <p className="font-mono text-[9px] uppercase tracking-wide text-primary/80">2 · Já lidos (únicos)</p>
                                       <p className="mt-0.5 font-mono text-lg font-bold text-ink">
                                         {funnel.brutosLidos > 0 ? funnel.brutosLidos.toLocaleString('pt-BR') : '—'}
                                         {funnel.universeApi > 0 ? (
@@ -14820,18 +14897,21 @@ function App() {
                                         ) : null}
                                       </p>
                                       <p className="mt-1 text-[11px] leading-snug text-muted">
-                                        Linhas que o job <strong className="text-ink">já baixou</strong> página a página.
-                                        Ex.: <strong className="text-ink">110</strong> = leu ~110 editais brutos
-                                        {funnel.pagesDone ? <> em {funnel.pagesDone} página(s)</> : null}
-                                        {funnel.pagesEst ? <> de ~{funnel.pagesEst} estimadas</> : null}.
-                                        A maioria ainda pode estar encerrada e ser descartada no passo 3.
+                                        União de editais <strong className="text-ink">já vistos</strong> em todas as frentes
+                                        (termos + consulta por data) — <strong className="text-ink">sem contar 2×</strong> o mesmo id,
+                                        igual a lista faz com classificados.
+                                        {funnel.pagesDone ? <> Páginas somadas: {funnel.pagesDone}.</> : null}
+                                        {' '}Muitos ainda caem no filtro (prazo/status) no passo 3.
                                       </p>
                                       {funnel.coveragePct != null && (
                                         <div className="mt-2">
                                           <div className="h-1.5 overflow-hidden rounded-full bg-bg2">
                                             <div className="h-full rounded-full bg-primary/70" style={{ width: `${funnel.coveragePct}%` }} />
                                           </div>
-                                          <p className="mt-0.5 font-mono text-[10px] text-muted">{funnel.coveragePct}% do universo lido</p>
+                                          <p className="mt-0.5 font-mono text-[10px] text-muted">
+                                            {funnel.coveragePct}% vs maior termo
+                                            {funnel.mainTerm ? ` (“${funnel.mainTerm}”)` : ''}
+                                          </p>
                                         </div>
                                       )}
                                     </div>
@@ -14853,11 +14933,11 @@ function App() {
                                     </div>
                                   </div>
                                   <p className="mt-2.5 text-[11px] leading-relaxed text-muted">
-                                    Fluxo: o job varre o <strong className="text-ink">universo</strong> → conta como <strong className="text-ink">lidos</strong>
-                                    {' '}cada item devolvido pela API → aplica filtro → grava só os que entram <strong className="text-ink">na lista</strong>.
-                                    Coleta em <strong className="text-ink">rodízio</strong>: cada termo faz uma fatia de páginas e cede a vez
-                                    (UAV/RPA não ficam eternamente atrás de um termo com milhares de resultados).
-                                    Se o PNCP limitar, pausa e retoma priorizando quem tem menos páginas lidas.
+                                    Fluxo: cada frente pede páginas → entra no conjunto de <strong className="text-ink">lidos únicos</strong>
+                                    {' '}(drone, uav, rpa, consulta por data…) → filtro “recebendo proposta” etc. →
+                                    {' '}<strong className="text-ink">na lista</strong> (também única; valor = soma desses).
+                                    Coleta em <strong className="text-ink">rodízio</strong> de fatias.
+                                    Se o PNCP limitar, pausa e retoma sem apagar o acervo.
                                   </p>
                                   <p className="mt-1.5 text-[11px] text-muted">
                                     Termos: <strong className="text-ink">{plannedTerms.length}</strong> planejados
