@@ -15260,7 +15260,7 @@ function App() {
                             {/*
                               Alturas reservadas de propósito: título e slot de ação
                               NÃO montam/desmontam — só mudam conteúdo. Evita empurrar a lista.
-                              Status de pausa/fila/live: um único banner na aba Resultados.
+                              Status (pausa/fila/live/erro): um único banner abaixo do título.
                             */}
                             <div className="flex min-h-[2.5rem] min-w-0 items-center gap-1.5">
                               <div className="min-w-0 flex-1">
@@ -15380,24 +15380,70 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Erro colapsado no header; pausa/fila/live ficam só no banner único da lista */}
-                            {job?.error && !headerExpanded ? (
-                              <div className="mt-1.5 shrink-0">
-                                <p className="h-[1.625rem] truncate rounded-md border border-amber-500/25 bg-amber-500/8 px-2 leading-[1.5rem] text-[11px] text-amber-700 dark:text-amber-300" title={job.error}>
-                                  {job.error}
-                                </p>
-                              </div>
-                            ) : null}
+                            {/* ÚNICO banner de status (pausa/fila/live/erro real). job.error de rate-limit NÃO vira 2º box. */}
+                            {(() => {
+                              const status = String(job?.status || '');
+                              const isPaused = status === 'paused_rate_limit';
+                              const isQueued = status === 'queued';
+                              const isFailed = status === 'failed';
+                              // Pause/quota grava texto técnico em job.error — não exibir cru nesses estados.
+                              const softStatus = isPaused || isQueued || status === 'running' || status === 'cancelling';
+                              const realError = Boolean(job?.error) && (isFailed || !softStatus);
+                              if (!isPaused && !isQueued && !live && !realError) return null;
+
+                              const prog = job?.progress || {};
+                              const page = prog.resume_from_page || prog.current_page;
+                              const term = prog.current_term || activePncpJobProgress.currentTerm || '';
+                              const bits = [];
+                              let strong = meta?.label || 'Status';
+                              let tone = 'border-line bg-bg2/50 text-muted';
+                              let titleAttr = realError ? String(job.error) : undefined;
+
+                              if (isPaused) {
+                                strong = (prog.waiting_gate || prog.bulk_deferred)
+                                  ? 'Pausado: aguardando cota PNCP'
+                                  : 'Pausado: limite do PNCP';
+                                tone = 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200';
+                                const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
+                                if (cd) bits.push(cd);
+                                else bits.push('retoma sozinho');
+                                if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                if (term) bits.push(String(term));
+                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                                bits.push('sem recomeçar');
+                              } else if (isQueued) {
+                                strong = prog.waiting_for_heavy
+                                  ? `Na fila (aguardando ${String(prog.waiting_for_heavy).slice(0, 40)})`
+                                  : prog.waiting_gate
+                                    ? 'Na fila: aguardando cota PNCP'
+                                    : 'Na fila do coletor';
+                                tone = 'border-sky-500/30 bg-sky-500/10 text-sky-800 dark:text-sky-200';
+                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                              } else if (live) {
+                                strong = status === 'cancelling' ? 'Parando…' : 'Coletando no PNCP';
+                                tone = 'border-primary/25 bg-primary/5 text-muted';
+                                if (term) bits.push(String(term));
+                                if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                              } else if (realError) {
+                                strong = 'Erro';
+                                tone = 'border-status-danger/30 bg-status-danger/10 text-status-danger';
+                                bits.push(formatPncpRunError(job.error));
+                              }
+
+                              return (
+                                <div className={`mt-1.5 shrink-0 rounded-md border px-2 py-1 text-[11px] leading-snug ${tone}`}>
+                                  <p className="line-clamp-2" title={titleAttr}>
+                                    <strong className="text-ink">{strong}.</strong>
+                                    {bits.length ? <>{' '}{bits.join(' · ')}</> : null}
+                                  </p>
+                                </div>
+                              );
+                            })()}
 
                             {/* Detalhes expandidos: blocos com altura mínima fixa */}
                             {headerExpanded && (
                               <div className="mt-2 space-y-2">
-                                <div className="min-h-[2.5rem]">
-                                  {job?.error ? (
-                                    <p className="line-clamp-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300" title={job.error}>{job.error}</p>
-                                  ) : null}
-                                </div>
-
                                 <div className="h-1 shrink-0 overflow-hidden rounded-full bg-bg2">
                                   <div
                                     className={`h-full rounded-full transition-[width] duration-300 ${live ? 'bg-[linear-gradient(90deg,#7c5cff,#38d6e6)]' : 'bg-primary/50'}`}
@@ -16234,80 +16280,6 @@ function App() {
                                       </span>
                                     )}
                                   </div>
-                                </div>
-
-                                {/* Banner de status com altura fixa — live/pausa/fila/concluído não empurram a lista */}
-                                <div
-                                  className={`min-h-[2.75rem] rounded-[10px] border px-2.5 py-1.5 text-[11px] leading-snug text-muted sm:min-h-[2.5rem] sm:text-xs ${
-                                    job?.status === 'paused_rate_limit'
-                                      ? 'border-amber-500/30 bg-amber-500/10'
-                                      : job?.status === 'queued'
-                                        ? 'border-sky-500/30 bg-sky-500/10'
-                                        : live
-                                          ? 'border-primary/25 bg-primary/5'
-                                          : 'border-line bg-bg2/50'
-                                  }`}
-                                >
-                                  <p className="line-clamp-2">
-                                    <strong className="text-ink">
-                                      {job?.status === 'paused_rate_limit'
-                                        ? (job?.progress?.waiting_gate || job?.progress?.bulk_deferred
-                                          ? 'Pausado: aguardando cota PNCP.'
-                                          : 'Pausado: limite do PNCP.')
-                                        : job?.status === 'queued'
-                                          ? (job?.progress?.waiting_for_heavy
-                                            ? `Na fila do coletor (aguardando ${String(job.progress.waiting_for_heavy).slice(0, 40)})…`
-                                            : job?.progress?.waiting_gate
-                                              ? 'Na fila: aguardando cota PNCP…'
-                                              : 'Na fila do coletor — ainda não está pedindo páginas…')
-                                          : live
-                                            ? 'Coletando no PNCP…'
-                                            : (meta?.label || 'Coleta encerrada')}
-                                    </strong>
-                                    {' '}
-                                    {(() => {
-                                      const funnelRuns = getPncpJobTermRuns(job, pncpSearchResults);
-                                      const funnel = getPncpJobCollectionFunnel(
-                                        job,
-                                        Number(pncpSearchResults.total || job?.total || 0),
-                                        funnelRuns,
-                                        pncpSearchResults,
-                                      );
-                                      const prog = job?.progress || {};
-                                      const term = prog.current_term || funnel.mainTerm || activePncpJobProgress.currentTerm || '';
-                                      const page = prog.resume_from_page || prog.current_page;
-                                      const bits = [];
-                                      if (job?.status === 'paused_rate_limit') {
-                                        const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
-                                        if (cd) bits.push(cd);
-                                        else bits.push('retoma sozinho');
-                                        if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
-                                        bits.push(`${funnel.classified.toLocaleString('pt-BR')} na lista`);
-                                        bits.push('sem recomeçar o lido');
-                                        return bits.join(' · ');
-                                      }
-                                      if (live && term) bits.push(`termo “${term}”`);
-                                      if (live && page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
-                                      if (funnel.brutosLidos > 0 && funnel.universeApi > 0) {
-                                        bits.push(`${funnel.brutosLidos.toLocaleString('pt-BR')}/${funnel.universeApi.toLocaleString('pt-BR')} brutos`);
-                                      } else if (funnel.brutosLidos > 0) {
-                                        bits.push(`${funnel.brutosLidos.toLocaleString('pt-BR')} brutos`);
-                                      }
-                                      if (funnel.duplicatesSum > 0) {
-                                        bits.push(`${funnel.duplicatesSum.toLocaleString('pt-BR')} já vistos`);
-                                      }
-                                      bits.push(`${funnel.classified.toLocaleString('pt-BR')} na lista`);
-                                      if (job?.status === 'queued') {
-                                        bits.push('lista permanece até o coletor pegar a vez');
-                                      } else if (live && Number(prog.current_term_duplicates || 0) > 0 && Number(prog.new_unique_last_page || 0) === 0) {
-                                        bits.push('termo atual devolve sobretudo já vistos');
-                                      } else if (!live) {
-                                        const ageLabel = formatPncpJobAge(job?.updated_at || job?.completed_at);
-                                        if (ageLabel) bits.push(`atualizado ${ageLabel}`);
-                                      }
-                                      return bits.join(' · ');
-                                    })()}
-                                  </p>
                                 </div>
 
                                 {visiblePncpResults.length > 0 ? (
