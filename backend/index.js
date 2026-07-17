@@ -243,11 +243,12 @@ const pool = new Pool(
   process.env.DATABASE_URL
     ? { connectionString: process.env.DATABASE_URL, ...POOL_TUNING }
     : {
-        user: 'postgres',
-        host: '10.0.1.11',
-        database: 'tenryu',
-        password: 'REDACTED_PG_PASSWORD',
-        port: 5432,
+        // Prefer DATABASE_URL in prod. Fallback uses only env vars — never hardcode credentials.
+        user: process.env.PGUSER || 'postgres',
+        host: process.env.PGHOST || '127.0.0.1',
+        database: process.env.PGDATABASE || 'tenryu',
+        password: process.env.PGPASSWORD || '',
+        port: Number.parseInt(process.env.PGPORT || '5432', 10) || 5432,
         ...POOL_TUNING,
       }
 );

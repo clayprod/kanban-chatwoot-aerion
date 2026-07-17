@@ -1,12 +1,24 @@
+/**
+ * One-off RFB search diagnostics. Credentials must come from the environment:
+ *   DATABASE_URL=postgres://user:pass@host:5432/db
+ * or PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE.
+ */
 const { Client } = require('pg');
 
-const client = new Client({
-  user: 'postgres',
-  password: 'REDACTED_PG_PASSWORD',
-  host: '195.35.40.49',
-  port: 5432,
-  database: 'tenryu'
-});
+const client = process.env.DATABASE_URL
+  ? new Client({ connectionString: process.env.DATABASE_URL })
+  : new Client({
+      user: process.env.PGUSER || 'postgres',
+      password: process.env.PGPASSWORD || '',
+      host: process.env.PGHOST || '127.0.0.1',
+      port: Number.parseInt(process.env.PGPORT || '5432', 10) || 5432,
+      database: process.env.PGDATABASE || 'tenryu',
+    });
+
+if (!process.env.DATABASE_URL && !process.env.PGPASSWORD) {
+  console.error('Set DATABASE_URL or PGPASSWORD (and related PG* vars) before running this script.');
+  process.exit(1);
+}
 
 async function run() {
   try {
@@ -38,36 +50,35 @@ async function run() {
 
     // Now test the intersection (should work with CTE)
     const intersection = await client.query(`
-      WITH _nome1 AS MATERIALIZED (
-        SELECT cnpj_basico FROM rfb_empresas 
-        WHERE immutable_unaccent(lower(razao_social)) ILIKE immutable_unaccent(lower('%importação%'))
-        UNION
-        SELECT cnpj_basico FROM rfb_estabelecimentos 
-        WHERE cnpj_ordem = '0001' 
-        AND immutable_unaccent(lower(nome_fantasia)) ILIKE immutable_unaccent(lower('%importação%'))
+      WITH nome_match AS (
+        SELECT DISTINCT e.cnpj_basico
+        FROM rfb_estabelecimentos e
+        LEFT JOIN rfb_empresas emp ON emp.cnpj_basico = e.cnpj_basico
+        WHERE e.cnpj_ordem = '0001'
+          AND (
+            immutable_unaccent(lower(e.nome_fantasia)) ILIKE immutable_unaccent(lower('%importação%'))
+            OR immutable_unaccent(lower(emp.razao_social)) ILIKE immutable_unaccent(lower('%importação%'))
+          )
       ),
-      _end1 AS MATERIALIZED (
-        SELECT DISTINCT cnpj_basico FROM rfb_estabelecimentos
+      end_match AS (
+        SELECT DISTINCT cnpj_basico
+        FROM rfb_estabelecimentos
         WHERE cnpj_ordem = '0001'
-        AND (immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower('%bom retiro%'))
-             OR immutable_unaccent(lower(bairro)) ILIKE immutable_unaccent(lower('%bom retiro%')))
-      ),
-      _inter AS MATERIALIZED (
-        SELECT cnpj_basico FROM _nome1 INTERSECT SELECT cnpj_basico FROM _end1
+          AND (
+            immutable_unaccent(lower(logradouro)) ILIKE immutable_unaccent(lower('%bom retiro%'))
+            OR immutable_unaccent(lower(bairro)) ILIKE immutable_unaccent(lower('%bom retiro%'))
+          )
       )
-      SELECT COUNT(*) as cnt FROM _inter;
+      SELECT COUNT(*) as cnt
+      FROM nome_match n
+      INNER JOIN end_match e ON e.cnpj_basico = n.cnpj_basico
     `);
     console.log('Intersection (nome AND endereco):', intersection.rows[0].cnt);
 
-    console.log('\nNote: The query returns ' + intersection.rows[0].cnt + ' NOT 161.');
-    console.log('The reported 161 may have been before the full reimport,');
-    console.log('or may have involved additional filters (UF, municipio, etc.).');
-
-    await client.end();
   } catch (err) {
     console.error('Error:', err.message);
+  } finally {
     await client.end();
-    process.exit(1);
   }
 }
 

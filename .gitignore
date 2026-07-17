@@ -5,3 +5,9 @@ node_modules
 nul
 backend/data/
 backend/scripts/__pycache__/
+
+# Local agent / IDE settings (often accumulate credentials in allow-lists)
+.claude/settings.local.json
+.claude/settings.local.*.json
+.codex/auth.json
+.impeccable/live/
