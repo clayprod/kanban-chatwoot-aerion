@@ -19988,7 +19988,11 @@ function App() {
               } catch (e) {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
-                setRfbError(status === 504 ? 'Tempo limite excedido — busca muito ampla ou índice ainda sendo criado.' : msg);
+                setRfbError(
+                  status === 504
+                    ? 'Tempo limite excedido — filtre por UF, use só CNAE principal, ou afunile porte/capital.'
+                    : msg
+                );
                 // Limpa resultados antigos pra não confundir com a busca que falhou
                 setRfbResults([]);
                 setRfbTotal(0);

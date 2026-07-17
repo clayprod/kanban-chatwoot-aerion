@@ -16857,38 +16857,67 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
-    // CNAE — MATERIALIZED CTE (mesmo padrão do nome/sócio).
-    // OR EXISTS(unnest secondary) no WHERE impede idx_rfb_est_cnae: planner prefere
-    // idx_rfb_est_uf_mun (~3-5M linhas SP+municipio) → timeout com LATERAL joins.
-    // CTE executa o CNAE com o índice uma única vez (~6.558 rows) e materializa a lista;
-    // a query principal JOIN nessa lista pequena via PK → filtros UF/municipio/situacao
-    // reduzem a ~50 linhas → LATERAL lookups triviais.
-    // CNAE — listas independentes para "contém" (cnae) e "não contém" (cnae_not).
-    // Positivo: MATERIALIZED CTE + JOIN.
-    //   Principal: usa idx_rfb_est_cnae (fast index scan).
-    //   Secundário: usa idx_rfb_est_cnae_sec_arr (GIN, 302 MB — criado 2026-04-24).
-    //   cnaeSecNarrow estreita o scan do secundário para UF+municipio (sem narrow:
-    //   seq scan de 70M linhas ~55s; com SP+municipio: ~1-2M linhas <2s).
-    // Negativo: NOT EXISTS correlato (NOT IN com UNION causava timeout consistente).
-    // cnae_only_principal=true pula o ramo do secundário em ambos os lados.
+    // CNAE — duas estratégias:
+    //
+    // A) Inline (progressivo): CNAE sozinho (sem nome/sócio/endereço como grupo).
+    //    MATERIALIZED forçava materializar TODOS os matches do CNAE (100k–500k+) antes
+    //    do LIMIT — com porte/capital isso estourava 120s. Inline em
+    //    e.cnae_fiscal_principal = ANY(...) usa idx_rfb_est_cnae e o LIMIT encerra cedo
+    //    (~150ms para 101 linhas no mesmo cenário).
+    //
+    // B) MATERIALIZED CTE: quando CNAE combina com nome/sócio/endereço (INTERSECT em
+    //    _inter). Materializar uma vez evita re-scan GIN/trgm e estabiliza o planner.
+    //
+    // Secundário: só entra com UF/municipio (cnaeSecNarrow). Sem filtro geográfico o
+    // GIN em 70M linhas materializa centenas de milhares de CNPJs → timeout nacional.
+    // cnae_only_principal=true também desliga o secundário.
+    // Negativo: NOT EXISTS correlato (NOT IN com UNION causava timeout).
     const cnaeCtes  = [];
     const cnaeJoins = [];
+    let cnaeInlineProgressive = false;
+    let cnaeSecondarySkippedNoGeo = false;
     {
       const onlyPrincipal = cnae_only_principal === 'true';
-      const secNarrow = cnaeSecNarrow.length > 0 ? ' AND ' + cnaeSecNarrow.join(' AND ') : '';
+      const hasGeoNarrow = cnaeSecNarrow.length > 0;
+      const includeSecondary = !onlyPrincipal && hasGeoNarrow;
+      const secNarrow = hasGeoNarrow ? ' AND ' + cnaeSecNarrow.join(' AND ') : '';
+      const cnaeHasCompanionGroup = !!(
+        nome.trim() || nome2.trim() || socio.trim() || socio2.trim()
+        || endereco.trim() || endereco2.trim()
+      );
 
       if (cnae.trim()) {
         const codes = cnae.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean);
         if (codes.length > 0) {
-          const parts = codes.flatMap(code => {
-            params.push(code);
-            const i = params.length;
-            const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND identificador_matriz_filial = '1'`;
-            const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND identificador_matriz_filial = '1'${secNarrow}`;
-            return onlyPrincipal ? [principal] : [principal, secundario];
-          });
-          cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
-          cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
+          if (!onlyPrincipal && !hasGeoNarrow) cnaeSecondarySkippedNoGeo = true;
+
+          if (!cnaeHasCompanionGroup) {
+            // Estratégia A: inline + early-stop (sem MATERIALIZED)
+            cnaeInlineProgressive = true;
+            const start = params.length + 1;
+            codes.forEach((c) => params.push(c));
+            const arrParam = `ARRAY[${codes.map((_, i) => `$${start + i}`).join(', ')}]`;
+            if (includeSecondary) {
+              where.push(
+                `(e.cnae_fiscal_principal = ANY(${arrParam})
+                  OR string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ',') && ${arrParam})`
+              );
+            } else {
+              where.push(`e.cnae_fiscal_principal = ANY(${arrParam})`);
+            }
+          } else {
+            // Estratégia B: MATERIALIZED CTE + JOIN (intersect com outros grupos)
+            const parts = codes.flatMap((code) => {
+              params.push(code);
+              const i = params.length;
+              const principal = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE cnae_fiscal_principal = $${i} AND identificador_matriz_filial = '1'`;
+              if (!includeSecondary) return [principal];
+              const secundario = `SELECT cnpj_basico FROM rfb_estabelecimentos WHERE string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ',') @> ARRAY[$${i}] AND identificador_matriz_filial = '1'${secNarrow}`;
+              return [principal, secundario];
+            });
+            cnaeCtes.push(`_cnae_f AS MATERIALIZED (${parts.join('\n  UNION\n  ')})`);
+            cnaeJoins.push(`JOIN _cnae_f ON _cnae_f.cnpj_basico = e.cnpj_basico`);
+          }
         }
       }
       if (cnae_not.trim()) {
@@ -16896,6 +16925,9 @@ app.get('/api/rfb/search', async (req, res) => {
         if (codes.length > 0) {
           // NOT EXISTS correlato com array ANY/&& — usa idx_rfb_est_basico (PK)
           // pra correlação por cnpj_basico, evitando o hash join cheio do NOT IN.
+          // Sem geo: só principal no negativo (mesmo critério do positivo) — GIN nacional
+          // no NOT EXISTS por linha ainda é ok (lookup por basico), mas o secundário no
+          // candidato único é barato; mantém secundário no negativo pois é 1 row lookup.
           const start = params.length + 1;
           codes.forEach(c => params.push(c));
           const arrParam = `ARRAY[${codes.map((_, i) => `$${start + i}`).join(', ')}]`;
@@ -17039,15 +17071,24 @@ app.get('/api/rfb/search', async (req, res) => {
       where.push(`${capitalExpr} <= $${params.length}`);
     }
 
-    // Tempo de abertura em anos (YYYYMMDD → DATE)
-    const aberturaExpr = `TO_DATE(NULLIF(data_de_inicio_da_atividade, '00000000'), 'YYYYMMDD')`;
+    // Tempo de abertura em anos — comparação lexicográfica em YYYYMMDD (texto).
+    // Evita regex + TO_DATE por linha (caros em scans grandes). Datas inválidas
+    // ('00000000', vazio) ficam de fora via bound inferior '18000101'.
     if (abertura_min_anos !== '') {
       const years = parseInt(abertura_min_anos, 10);
-      where.push(`e.data_de_inicio_da_atividade ~ '^\\d{8}$' AND ${aberturaExpr} <= NOW() - INTERVAL '${years} years'`);
+      // idade >= N anos → início <= hoje - N anos
+      where.push(
+        `e.data_de_inicio_da_atividade >= '18000101'
+         AND e.data_de_inicio_da_atividade <= to_char(NOW() - INTERVAL '${years} years', 'YYYYMMDD')`
+      );
     }
     if (abertura_max_anos !== '') {
       const years = parseInt(abertura_max_anos, 10);
-      where.push(`e.data_de_inicio_da_atividade ~ '^\\d{8}$' AND ${aberturaExpr} >= NOW() - INTERVAL '${years} years'`);
+      // idade <= N anos → início >= hoje - N anos
+      where.push(
+        `e.data_de_inicio_da_atividade >= to_char(NOW() - INTERVAL '${years} years', 'YYYYMMDD')
+         AND e.data_de_inicio_da_atividade <= to_char(NOW(), 'YYYYMMDD')`
+      );
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -17058,17 +17099,17 @@ app.get('/api/rfb/search', async (req, res) => {
       socioJoins.length,
     ].filter(Boolean).length;
     const hasCombinedHeavyFilters = positiveFilterGroupCount > 1;
-    // Uma busca nacional por CNAE pode produzir centenas de milhares de candidatos.
-    // Nessa situação, contar e ordenar todo o conjunto repete o CTE pesado e costuma
-    // consumir o timeout mesmo quando os primeiros resultados já estão disponíveis.
-    const hasBroadCnaeSearch = cnaeCtes.length > 0 && cnaeSecNarrow.length === 0;
-    const usesProgressiveTotal = hasCombinedHeavyFilters || hasBroadCnaeSearch;
+    // Busca nacional por CNAE (ou CNAE inline progressivo): não contar o universo inteiro.
+    // Contar/ordenar o set completo materializa centenas de milhares de linhas e estoura
+    // o timeout mesmo quando a 1ª página já está pronta.
+    const hasBroadCnaeSearch = (cnaeCtes.length > 0 || cnaeInlineProgressive) && cnaeSecNarrow.length === 0;
+    const usesProgressiveTotal = hasCombinedHeavyFilters || hasBroadCnaeSearch || cnaeInlineProgressive;
 
     // Ordenação
-    // Quando o CTE de nome está ativo, o conjunto já foi materializado (~29K CNPJs) →
-    // ORDER BY no SQL é seguro e correto (sort de 29K linhas, não 49M).
-    // Sem CTE, ORDER BY colunas não-PK forçaria sort de milhões de linhas → timeout,
-    // então usamos ORDER BY e.cnpj_basico (PK, early termination) + re-sort em JS por página.
+    // Progressive path: SEM ORDER BY — permite early-stop no índice de CNAE.
+    // ORDER BY e.cnpj_basico forçava coletar/ordenar todos os matches do filtro antes
+    // do LIMIT (timeout com porte/capital seletivos sobre CNAEs grandes).
+    // Com CTE de nome/sócio materializado (~dezenas de K), ORDER BY SQL é seguro.
     const ORDER_MAP = {
       razao_social:  'emp.razao_social NULLS LAST',
       nome_fantasia: 'e.nome_fantasia NULLS LAST',
@@ -17079,14 +17120,10 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_desc: 'e.data_de_inicio_da_atividade DESC NULLS LAST',
       abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
-    // SQL ORDER BY quando qualquer filtro reduz o conjunto (where OU CTE de nome).
-    // Sem filtro nenhum, ORDER BY coluna não-PK ordena 49M linhas → timeout;
-    // mantemos ORDER BY cnpj_basico (PK) + JS sort por página só nesse caso extremo.
-    // only_matriz='0001' já está em where[] por padrão, então useSqlOrder é quase sempre true.
     const useSqlOrder = !usesProgressiveTotal && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0);
     const sqlOrderClause = useSqlOrder
       ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
-      : 'e.cnpj_basico NULLS LAST';
+      : null;
 
     let allCtes  = [...nomeCtes, ...cnaeCtes, ...endCtes, ...socioCtes];
     let allJoins = [...nomeJoins, ...cnaeJoins, ...endJoins, ...socioJoins];
@@ -17175,7 +17212,7 @@ app.get('/api/rfb/search', async (req, res) => {
            FROM rfb_cnaes c2
            WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
         ${baseQuery}
-        ORDER BY ${sqlOrderClause}
+        ${sqlOrderClause ? `ORDER BY ${sqlOrderClause}` : ''}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
     const dataQueryFull  = `${ctePrefix} ${dataQuery}`;
@@ -17247,17 +17284,27 @@ app.get('/api/rfb/search', async (req, res) => {
     // ordenou corretamente o resultado via ORDER BY ${sqlOrderClause}.
     if (!useSqlOrder && JS_SORT[order_by]) dataRows.rows.sort(JS_SORT[order_by]);
 
-    res.json({
+    const payload = {
       results: dataRows.rows,
       total: parseInt(countRow.rows[0].count, 10),
       page: parseInt(page, 10) || 1,
       page_size: limit,
-    });
+      progressive: usesProgressiveTotal,
+    };
+    if (cnaeSecondarySkippedNoGeo) {
+      // UI pode avisar: CNAE secundário exige UF/município em buscas nacionais.
+      payload.warnings = [
+        'cnae_secundario_omitido_sem_uf: sem filtro de UF/município a busca usa só CNAE principal (secundário nacional estoura o tempo).',
+      ];
+    }
+    res.json(payload);
   } catch (err) {
     console.error('[rfb/search] Erro:', err.message);
     const timedOut = err?.code === '57014' || /statement timeout|canceling statement/i.test(err?.message || '');
     res.status(timedOut ? 504 : 500).json({
-      error: timedOut ? 'A busca excedeu o tempo limite. Refine os filtros e tente novamente.' : (err.message || 'Erro interno na busca'),
+      error: timedOut
+        ? 'A busca excedeu o tempo limite. Tente filtrar por UF, usar CNAE principal apenas, ou reduzir porte/capital/abertura.'
+        : (err.message || 'Erro interno na busca'),
     });
   }
 });
