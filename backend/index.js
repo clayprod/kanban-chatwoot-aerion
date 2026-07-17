@@ -17496,6 +17496,8 @@ app.get('/api/rfb/search', async (req, res) => {
 
     const hasMoreRows = usesProgressiveTotal && dataRows.rows.length > limit;
     if (hasMoreRows) dataRows.rows = dataRows.rows.slice(0, limit);
+    // Progressive: total é limite inferior (não contagem exata). has_more=true significa
+    // "há mais do que total-1". Nunca fingimos que 101 é o universo completo.
     if (usesProgressiveTotal) {
       const visibleTotal = offset + dataRows.rows.length + (hasMoreRows ? 1 : 0);
       const currentTotal = parseInt(countRow.rows[0].count, 10) || 0;
@@ -17528,12 +17530,15 @@ app.get('/api/rfb/search', async (req, res) => {
     // ordenou corretamente o resultado via ORDER BY ${sqlOrderClause}.
     if (!useSqlOrder && JS_SORT[order_by]) dataRows.rows.sort(JS_SORT[order_by]);
 
+    const resolvedTotal = parseInt(countRow.rows[0].count, 10) || 0;
     const payload = {
       results: dataRows.rows,
-      total: parseInt(countRow.rows[0].count, 10),
+      total: resolvedTotal,
       page: parseInt(page, 10) || 1,
       page_size: limit,
+      // progressive=true: total é mínimo conhecido; não rode COUNT(*) no universo (timeout).
       progressive: usesProgressiveTotal,
+      has_more: usesProgressiveTotal ? hasMoreRows : resolvedTotal > offset + dataRows.rows.length,
     };
     if (cnaeSecondarySkippedNoGeo) {
       // UI pode avisar: CNAE secundário exige UF/município em buscas nacionais.

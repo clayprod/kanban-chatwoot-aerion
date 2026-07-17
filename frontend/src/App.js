@@ -6981,6 +6981,8 @@ function App() {
   const [rfbFiliais, setRfbFiliais] = useState({}); // cnpjBasico → filiais[]
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
+  const [rfbHasMore, setRfbHasMore] = useState(false); // total progressivo (mínimo), há mais no banco
+  const [rfbProgressive, setRfbProgressive] = useState(false);
   const [rfbPage, setRfbPage] = useState(1);
   const [rfbPageSize, setRfbPageSize] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.pageSize || 10; } catch { return 10; } });
   const [rfbOrderBy, setRfbOrderBy] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.orderBy || 'razao_social'; } catch { return 'razao_social'; } });
@@ -19872,6 +19874,9 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            // Lote inicial em memória. Buscas amplas (CNAE nacional) usam total progressivo:
+            // o backend NÃO conta o universo (timeout); devolve has_more + total mínimo.
+            // Páginas além do cache buscam no servidor — não é "só 100 no banco".
             const RFB_CACHE_SIZE = 100;
             const sortRfbResults = (arr, ob) => {
               const r = [...arr];
@@ -19957,6 +19962,8 @@ function App() {
                 const sorted = sortRfbResults(cache.results, ob);
                 setRfbResults(sorted.slice(start, start + ps));
                 setRfbTotal(cache.total);
+                setRfbHasMore(Boolean(cache.hasMore));
+                setRfbProgressive(Boolean(cache.progressive));
                 setRfbPage(pg);
                 return;
               }
@@ -19965,14 +19972,33 @@ function App() {
               try {
                 const params = new URLSearchParams(fp);
                 if (cache.key === filterKey && start >= cache.results.length) {
-                  // Beyond cache — fetch specific page with server sort + known_total
+                  // Beyond cache — busca no servidor. Se for a próxima fatia contígua, anexa ao cache.
                   params.set('page', pg);
                   params.set('page_size', ps);
                   params.set('order_by', ob);
-                  if (rfbTotal > 0) params.set('known_total', rfbTotal);
+                  if (cache.total > 0 && !cache.hasMore) params.set('known_total', cache.total);
                   const res = await axios.get(`/api/rfb/search?${params}`);
-                  setRfbResults(res.data.results || []);
-                  setRfbTotal(res.data.total || rfbTotal);
+                  const batch = res.data.results || [];
+                  const nextHasMore = Boolean(res.data.has_more);
+                  const nextProgressive = Boolean(res.data.progressive) || Boolean(cache.progressive);
+                  const contiguous = start === cache.results.length;
+                  const merged = contiguous ? [...cache.results, ...batch] : cache.results;
+                  const nextTotal = Math.max(
+                    Number(res.data.total) || 0,
+                    (contiguous ? merged.length : start + batch.length) + (nextHasMore ? 1 : 0),
+                    cache.total || 0,
+                  );
+                  rfbCacheRef.current = {
+                    results: merged,
+                    total: nextTotal,
+                    key: filterKey,
+                    hasMore: nextHasMore,
+                    progressive: nextProgressive,
+                  };
+                  setRfbResults(batch);
+                  setRfbTotal(nextTotal);
+                  setRfbHasMore(nextHasMore);
+                  setRfbProgressive(nextProgressive);
                   setRfbPage(pg);
                 } else {
                   // New filters — fetch full cache batch
@@ -19981,11 +20007,15 @@ function App() {
                   params.set('order_by', 'razao_social');
                   const res = await axios.get(`/api/rfb/search?${params}`);
                   const all   = res.data.results || [];
-                  const total = res.data.total   || 0;
-                  rfbCacheRef.current = { results: all, total, key: filterKey };
+                  const hasMore = Boolean(res.data.has_more);
+                  const progressive = Boolean(res.data.progressive);
+                  const total = Math.max(Number(res.data.total) || 0, all.length + (hasMore ? 1 : 0));
+                  rfbCacheRef.current = { results: all, total, key: filterKey, hasMore, progressive };
                   const sorted = sortRfbResults(all, ob);
                   setRfbResults(sorted.slice(start, start + ps));
                   setRfbTotal(total);
+                  setRfbHasMore(hasMore);
+                  setRfbProgressive(progressive);
                   setRfbPage(pg);
                   try {
                     localStorage.setItem('rfb_search', JSON.stringify({
@@ -20015,7 +20045,9 @@ function App() {
                 // Limpa resultados antigos pra não confundir com a busca que falhou
                 setRfbResults([]);
                 setRfbTotal(0);
-                rfbCacheRef.current = { results: [], total: 0, key: null };
+                setRfbHasMore(false);
+                setRfbProgressive(false);
+                rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
               } finally { setRfbLoading(false); }
             };
 
@@ -20092,15 +20124,29 @@ function App() {
               setRfbNatInput('');
               setRfbResults([]);
               setRfbTotal(0);
+              setRfbHasMore(false);
+              setRfbProgressive(false);
               setRfbPage(1);
               setRfbError(null);
               setLeadImportStatus(null);
               setRfbHasSearched(false);
-              rfbCacheRef.current = { results: [], total: 0, key: null };
+              rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
               try { localStorage.removeItem('rfb_search'); } catch {}
             };
 
-            const totalPages = Math.ceil(rfbTotal / rfbPageSize);
+            // Com has_more, total é mínimo: garante botão "próximo" mesmo com 101 e pageSize 100
+            const totalPages = Math.max(
+              1,
+              Math.ceil(Math.max(rfbTotal, 1) / Math.max(rfbPageSize, 1)),
+              rfbHasMore ? rfbPage + 1 : 1,
+            );
+            const rfbTotalLabel = rfbTotal <= 0
+              ? '0'
+              : rfbTotal >= 10001
+                ? '+10.000'
+                : rfbHasMore
+                  ? `${Math.max(rfbTotal - 1, rfbResults.length || 0).toLocaleString('pt-BR')}+`
+                  : rfbTotal.toLocaleString('pt-BR');
 
             // CNAE dropdown — separado para "contém" (cnae) e "não contém" (cnaeNot)
             const cnaeQuery = rfbCnaeInput.trim().toLowerCase();
@@ -20917,7 +20963,7 @@ function App() {
                         </button>
                         {rfbResults.length > 0 && (
                           <span className="font-mono text-xs text-muted lg:justify-self-end">
-                            {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
+                            {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}{rfbHasMore ? ' (mín.)' : ''}
                           </span>
                         )}
                       </div>
@@ -20950,7 +20996,7 @@ function App() {
                           <h3 className="text-sm font-semibold text-ink">Filtros de busca</h3>
                           {rfbResults.length > 0 && (
                             <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-primary">
-                              {rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')} resultado{rfbTotal !== 1 ? 's' : ''}
+                              {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}{rfbHasMore ? ' (mín.)' : ''}
                             </span>
                           )}
                         </div>
@@ -21574,11 +21620,27 @@ function App() {
                       </div>
                     )}
 
+                    {/* Progressive total: contagem exata do universo estoura timeout em CNAE nacional */}
+                    {rfbProgressive && rfbHasMore && rfbResults.length > 0 && rfbTotal < 10001 && (
+                      <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 text-sm text-ink flex items-start gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5 text-primary" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z"/></svg>
+                        <div>
+                          <div className="font-medium text-primary">Há mais resultados além desta página</div>
+                          <div className="text-xs text-muted mt-0.5">
+                            Em buscas amplas (ex.: CNAE nacional) o total exato não é contado para evitar timeout — usamos o índice e paginamos.
+                            Use <strong className="text-ink">Próximo</strong> para carregar mais, ou filtre por <strong className="text-ink">UF</strong> para contagem completa e CNAE secundário.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Results header */}
                     {rfbTotal > 0 && (
                       <div className="toolbar-meta rounded-[18px] border border-line bg-surf p-3 text-sm shadow-card">
                         <span className="min-w-0 text-muted">
-                          Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbTotal)}</span> de <span className="font-semibold text-ink">{rfbTotal >= 10001 ? '+10.000' : rfbTotal.toLocaleString('pt-BR')}</span> resultados
+                          Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbHasMore ? Number.MAX_SAFE_INTEGER : rfbTotal, ((rfbPage - 1) * rfbPageSize) + rfbResults.length)}</span>
+                          {' '}de <span className="font-semibold text-ink">{rfbTotalLabel}</span> resultados
+                          {rfbHasMore ? <span className="text-muted2"> (mínimo conhecido)</span> : null}
                         </span>
                         <div className="toolbar-filters toolbar-filters--2 min-w-0 sm:justify-self-end sm:w-auto sm:min-w-[18rem]">
                           <select
