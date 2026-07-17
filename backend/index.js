@@ -2870,6 +2870,23 @@ const buildWatchlistNotificationMessage = (source, row) => {
     || payload.dataEncerramentoPropostas
   );
   const prazoRelativo = payload.prazo_info?.label || null;
+  const valorEstimado = getPncpBestEstimatedValue(payload);
+  const valorHomologado = (() => {
+    const n = Number(payload.valor_total_homologado ?? payload.valorTotalHomologado);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+  const formatMoneyBr = (n) => `R$ ${Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const valorLines = [];
+  if (valorEstimado != null) {
+    const isItens = Number(payload.valor_itens_pertinentes) > 0
+      && Math.abs(Number(payload.valor_itens_pertinentes) - valorEstimado) < 0.01;
+    valorLines.push(isItens
+      ? `Valor (itens relevantes): ${formatMoneyBr(valorEstimado)}`
+      : `Valor estimado: ${formatMoneyBr(valorEstimado)}`);
+  }
+  if (valorHomologado != null && (valorEstimado == null || Math.abs(valorHomologado - valorEstimado) > 0.01)) {
+    valorLines.push(`Valor homologado: ${formatMoneyBr(valorHomologado)}`);
+  }
   const parts = [
     `[${tag}] Nova oportunidade na assinatura "${row.watchlist_nome || 'Assinatura'}"`,
     title,
@@ -2877,15 +2894,95 @@ const buildWatchlistNotificationMessage = (source, row) => {
     modalidadeLabel ? `Modalidade: ${modalidadeLabel}` : null,
     orgao ? `Orgao: ${orgao}` : null,
     unidade ? `UASG: ${unidade}${payload.unidade?.nome ? ` - ${payload.unidade.nome}` : ''}` : null,
-    payload.valor_total_estimado || payload.valor_global ? `Valor: R$ ${Number(payload.valor_total_estimado || payload.valor_global).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : null,
+    ...valorLines,
     dataPublicacao ? `Publicacao: ${dataPublicacao}` : null,
     dataAbertura ? `Abertura propostas: ${dataAbertura}` : null,
     dataEncerramento ? `Encerramento: ${dataEncerramento}` : null,
     prazoRelativo ? `Prazo: ${prazoRelativo}` : null,
-    row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(2)}` : null,
+    row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(0)}` : null,
     payload.url ? `PNCP: ${payload.url}` : null,
   ];
   return parts.filter(Boolean).join('\n');
+};
+
+/** Preenche valor/datas do edital no envio do WhatsApp se o payload da busca veio vazio. */
+const enrichEditalSignalForNotification = async (sourceRow) => {
+  if (!sourceRow) return sourceRow;
+  const payload = sourceRow.payload && typeof sourceRow.payload === 'object'
+    ? { ...sourceRow.payload }
+    : {};
+  let hasValue = getPncpBestEstimatedValue(payload) != null;
+  const hasEnd = Boolean(payload.data_fim_vigencia || payload.data_encerramento_proposta);
+  if (hasValue && hasEnd) {
+    return { ...sourceRow, payload };
+  }
+  const ids = extractPncpCompraIdentifiers(payload);
+  if (!ids?.cnpj || !ids?.ano || !ids?.sequencial) {
+    return { ...sourceRow, payload };
+  }
+  try {
+    // sync: cede a interactive (busca na tela); não usa bulk.
+    const detalhe = await getPncpCompraDetalhe(ids.cnpj, ids.ano, ids.sequencial, { priority: 'sync' });
+    let changed = false;
+    if (detalhe) {
+      if (!hasValue && detalhe.valor_total_estimado != null) {
+        payload.valor_total_estimado = detalhe.valor_total_estimado;
+        if (payload.valor_global == null) payload.valor_global = detalhe.valor_total_estimado;
+        hasValue = true;
+        changed = true;
+      }
+      if (detalhe.valor_total_homologado != null && payload.valor_total_homologado == null) {
+        payload.valor_total_homologado = detalhe.valor_total_homologado;
+        changed = true;
+      }
+      if (!payload.data_publicacao && !payload.data_publicacao_pncp && detalhe.data_publicacao_pncp) {
+        payload.data_publicacao = detalhe.data_publicacao_pncp;
+        changed = true;
+      }
+      if (!payload.data_inicio_vigencia && detalhe.data_abertura_proposta) {
+        payload.data_inicio_vigencia = detalhe.data_abertura_proposta;
+        changed = true;
+      }
+      if (!payload.data_fim_vigencia && detalhe.data_encerramento_proposta) {
+        payload.data_fim_vigencia = detalhe.data_encerramento_proposta;
+        changed = true;
+      }
+    }
+    // Fallback: soma itens (muitas compras só têm valor nos itens).
+    if (!hasValue) {
+      const itens = await fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, {
+        pageSize: 100,
+        maxPages: 3,
+        priority: 'sync',
+      }).catch(() => []);
+      if (Array.isArray(itens) && itens.length) {
+        let sum = 0;
+        let any = false;
+        for (const it of itens) {
+          const v = Number(it?.valorTotal ?? it?.valor_total ?? it?.valorTotalEstimado);
+          if (Number.isFinite(v) && v > 0) {
+            sum += v;
+            any = true;
+          }
+        }
+        if (any && sum > 0) {
+          payload.valor_total_estimado = Number(sum.toFixed(2));
+          if (payload.valor_global == null) payload.valor_global = payload.valor_total_estimado;
+          hasValue = true;
+          changed = true;
+        }
+      }
+    }
+    if (changed && sourceRow.id) {
+      await pool.query(
+        `UPDATE ${EDITAL_SIGNALS_TABLE} SET payload = $2::jsonb WHERE id = $1`,
+        [sourceRow.id, JSON.stringify(payload)]
+      ).catch((err) => console.warn('[watchlist-notifications] persist enrich falhou:', err.message));
+    }
+  } catch (error) {
+    console.warn('[watchlist-notifications] enrich edital falhou:', error.message);
+  }
+  return { ...sourceRow, payload };
 };
 
 const sendEvolutionTextMessage = async (number, text) => {
@@ -2966,6 +3063,9 @@ const processWatchlistNotifications = async (limit = 20) => {
           [notification.signal_id]
         );
         sourceRow = result.rows[0];
+        if (sourceRow) {
+          sourceRow = await enrichEditalSignalForNotification(sourceRow);
+        }
       }
       if (!sourceRow) throw new Error('Signal nao encontrado para notificacao');
       await sendEvolutionTextMessage(notification.recipient, buildWatchlistNotificationMessage(notification.source, sourceRow));
@@ -18565,12 +18665,13 @@ const registerBackgroundSchedules = () => {
     }
   });
 
-  cron.schedule('0 8 * * *', async () => {
+  // Assinaturas de editais → fila WhatsApp: 08:00 e 13:00, só dias úteis (seg–sex).
+  cron.schedule('0 8,13 * * 1-5', async () => {
     try {
       const result = await runEditalWatchlistMatching();
-      console.log('[editais] daily watchlist sync ok:', result);
+      console.log('[editais] watchlist sync ok:', result);
     } catch (error) {
-      console.error('[editais] daily watchlist sync error:', error);
+      console.error('[editais] watchlist sync error:', error);
     }
   }, { timezone: 'America/Sao_Paulo' });
 

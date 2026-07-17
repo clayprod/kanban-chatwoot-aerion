@@ -217,7 +217,7 @@ const LIC_SUB_LABELS = {
   board: 'Pipeline',
   resultados: 'Contratos/Resultados',
   pca: 'PCA — Contratações anuais',
-  sinais: 'PCA — Buscas monitoradas',
+  sinais: 'PCA — Contratações anuais', // legado: redireciona para pca
 };
 const licSubLabel = (sub) => LIC_SUB_LABELS[sub] || 'Resumo';
 
@@ -4341,7 +4341,7 @@ const statusFilterLabel = (s) => ({
   descartado: 'Descartados',
 }[s] || s);
 
-function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchToWatchlist }) {
+function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   const [q, setQ] = useState('');
   const [usarIa, setUsarIa] = useState(true);
   const [positivos, setPositivos] = useState([]);
@@ -4373,6 +4373,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
   const [lastPromoted, setLastPromoted] = useState(null);
   const [bootstrapStatus, setBootstrapStatus] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
+  // Força o painel de cards a recarregar após “Salvar e monitorar” (mesmo modelo dos jobs de editais).
+  const [watchlistListRefreshVersion, setWatchlistListRefreshVersion] = useState(0);
 
   const filtrosAtivos = Object.entries(filtros).filter(([k, v]) => v && !(k === 'ano_pca' && v === String(new Date().getFullYear()))).length;
   const watchlistTerms = useMemo(() => {
@@ -4549,12 +4551,13 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
       setSaveWhatsappEnabled(false);
       setSaveWhatsappNumber('');
       setSaveWhatsappScoreBand('all');
+      setWatchlistListRefreshVersion(v => v + 1);
       setSaveNotice({
         tone: 'success',
-        message: `Busca salva como assinatura (${watchlistTerms.length} termo${watchlistTerms.length === 1 ? '' : 's'}).${saveWhatsappEnabled ? ' Alertas WhatsApp ligados para novidades.' : ' Você pode ligar o WhatsApp no card da assinatura.'}`,
+        message: `Busca salva (${watchlistTerms.length} termo${watchlistTerms.length === 1 ? '' : 's'}). O card aparece em Minhas buscas abaixo.${saveWhatsappEnabled ? ' Alertas WhatsApp ligados para novidades.' : ' Você pode ligar o WhatsApp no card.'}`,
       });
     } catch (e) {
-      setSaveNotice({ tone: 'error', message: e.response?.data?.error || e.message || 'Não foi possível salvar a watchlist.' });
+      setSaveNotice({ tone: 'error', message: e.response?.data?.error || e.message || 'Não foi possível salvar a busca.' });
     } finally {
       setSaveBusy(false);
     }
@@ -4646,7 +4649,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               O <strong className="font-semibold text-ink">PCA</strong> é o plano de contratações anuais do governo:
               órgãos públicos publicam, com antecedência, o que pretendem comprar no ano — ainda{' '}
               <strong className="font-semibold text-ink">antes do edital</strong>.
-              Use esta tela para mapear demanda futura, priorizar itens e promover oportunidades ao board.
+              Busque, use <strong className="font-semibold text-ink">Salvar e monitorar</strong> e a busca vira card em Minhas buscas.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -4660,9 +4663,6 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                 {bootstrapStatus.total_planos_db.toLocaleString('pt-BR')} planos · {bootstrapStatus.total_itens_db.toLocaleString('pt-BR')} itens · automático
               </span>
             )}
-            <button type="button" onClick={() => onSwitchToWatchlist && onSwitchToWatchlist()} className={`${btnSecondarySm}`}>
-              Buscas monitoradas
-            </button>
           </div>
         </div>
 
@@ -4825,21 +4825,42 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
         )}
       </div>
 
+      {/* Cards de buscas salvas — a própria busca é a assinatura (mesmo modelo dos editais). */}
+      <div>
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className={`${sectionTitle} text-[15px]`}>Minhas buscas</h3>
+            <p className={`${subtle} mt-0.5`}>
+              Cada card é uma busca salva (assinatura). Clique para ver os sinais; WhatsApp só para novidades.
+            </p>
+          </div>
+          <span className="justify-self-start text-[11px] text-muted sm:justify-self-end">Atualização automática</span>
+        </div>
+        <PcaWatchlistsPanel
+          onPromoted={onPromoted}
+          listRefreshVersion={watchlistListRefreshVersion}
+        />
+      </div>
+
       {error && <div className="rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2.5 text-sm text-status-danger">{error}</div>}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          {!loading && contratacoesPlanas.length > 0 && (
-            <p className="text-xs text-muted">
-              <span className="font-semibold text-ink">{contratacoesPlanas.length}</span> contratação(ões)
-              {' · '}
-              <span className="font-semibold text-ink">{total}</span> item(ns)
-              <span className="text-muted2"> · ordenado por maior valor</span>
-            </p>
-          )}
-          {loading && <p className="text-xs text-muted">Buscando no banco de PCAs…</p>}
+      {(hasSearched || loading || contratacoesPlanas.length > 0) && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {!loading && contratacoesPlanas.length > 0 && (
+              <p className="text-xs text-muted">
+                <span className="font-semibold text-ink">Resultados da busca</span>
+                {' · '}
+                <span className="font-semibold text-ink">{contratacoesPlanas.length}</span> contratação(ões)
+                {' · '}
+                <span className="font-semibold text-ink">{total}</span> item(ns)
+                <span className="text-muted2"> · ordenado por maior valor</span>
+              </p>
+            )}
+            {loading && <p className="text-xs text-muted">Buscando no banco de PCAs…</p>}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="space-y-2.5">
         {contratacoesPlanas.map(ct => {
@@ -5016,15 +5037,6 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
             </details>
           );
         })}
-        {!loading && !error && items.length === 0 && !hasSearched && (
-          <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
-            <p className="text-sm font-semibold text-ink">Busque um produto ou serviço nos planos de contratação</p>
-            <p className={`${subtle} mx-auto mt-1 max-w-lg`}>
-              Exemplos: drone, raio-X, veículo blindado ou manutenção preventiva.
-            </p>
-          </div>
-        )}
-
         {!loading && !error && items.length === 0 && hasSearched && (
           <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
             <p className="text-sm font-semibold text-ink">Nenhum PCA encontrado</p>
@@ -5178,7 +5190,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                 ? <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0 text-status-success" />
                 : <ExclamationTriangleIcon className="mt-0.5 h-5 w-5 shrink-0 text-status-danger" />}
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">{saveNotice.tone === 'success' ? 'Watchlist configurada' : 'Não foi possível salvar'}</p>
+                <p className="text-sm font-semibold">{saveNotice.tone === 'success' ? 'Busca salva' : 'Não foi possível salvar'}</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-muted">{saveNotice.message}</p>
               </div>
               <button type="button" onClick={() => setSaveNotice(null)} className={iconBtn} aria-label="Fechar aviso">
@@ -6133,7 +6145,7 @@ function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onCh
   );
 }
 
-function PcaWatchlistsPanel({ onPromoted }) {
+function PcaWatchlistsPanel({ onPromoted, listRefreshVersion = 0 }) {
   const [watchlists, setWatchlists] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -6150,15 +6162,16 @@ function PcaWatchlistsPanel({ onPromoted }) {
     } catch (e) {
       setError(e.response?.status === 504
         ? 'A atualização demorou mais que o esperado. Vamos tentar novamente automaticamente.'
-        : (e.response?.data?.error || 'Não foi possível carregar as buscas monitoradas agora.'));
+        : (e.response?.data?.error || 'Não foi possível carregar as buscas salvas agora.'));
     } finally {
       if (!background) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadWatchlists();
-  }, [loadWatchlists]);
+    // listRefreshVersion > 0 = recarregar em background após “Salvar e monitorar”.
+    loadWatchlists({ background: listRefreshVersion > 0 });
+  }, [loadWatchlists, listRefreshVersion]);
 
   useEffect(() => {
     let lastRefresh = Date.now();
@@ -6207,7 +6220,7 @@ function PcaWatchlistsPanel({ onPromoted }) {
   };
 
   const removeWatchlist = async (row) => {
-    if (!window.confirm(`Excluir watchlist "${row.nome}"?`)) return;
+    if (!window.confirm(`Excluir a busca salva "${row.nome}"?`)) return;
     setBusy(prev => ({ ...prev, [row.id]: true }));
     try {
       await axios.delete(`/api/licitacoes/pca/watchlist/${row.id}`);
@@ -6244,15 +6257,7 @@ function PcaWatchlistsPanel({ onPromoted }) {
   };
 
   return (
-    <div className="mt-4 space-y-3">
-      <div className="toolbar-meta">
-        <p className={subtle}>
-          Cada card é uma <strong className="text-ink">busca salva</strong> (assinatura). Clique para ver os sinais.
-          Matcher roda no sync do PCA; WhatsApp só para novidades.
-        </p>
-        <span className="justify-self-start text-[11px] text-muted sm:justify-self-end">Atualização automática</span>
-      </div>
-
+    <div className="mt-3 space-y-3">
       {error && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2.5 text-sm text-status-danger">
           <span>{error}</span>
@@ -6261,12 +6266,12 @@ function PcaWatchlistsPanel({ onPromoted }) {
       )}
 
       {loading ? (
-        <div className={`${subtle} py-8 text-center`}>Carregando assinaturas…</div>
+        <div className={`${subtle} py-8 text-center`}>Carregando buscas salvas…</div>
       ) : error && watchlists.length === 0 ? null : watchlists.length === 0 ? (
         <div className="rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
-          <p className="text-sm font-semibold text-ink">Nenhuma busca monitorada</p>
+          <p className="text-sm font-semibold text-ink">Nenhuma busca salva ainda</p>
           <p className={`${subtle} mt-1 mx-auto max-w-md`}>
-            Na aba PCA, busque e use <strong>Salvar e monitorar</strong> — a própria busca vira o card de assinatura.
+            Monte os termos acima e use <strong>Salvar e monitorar</strong> — a busca vira este card e continua gerando sinais.
           </p>
         </div>
       ) : (
@@ -6404,25 +6409,6 @@ function PcaWatchlistsPanel({ onPromoted }) {
         </div>,
         document.body
       )}
-    </div>
-  );
-}
-
-function PcaWatchlistPage({ onPromoted }) {
-  return (
-    <div className="mt-6 space-y-5">
-      <section className="rounded-[16px] border border-line bg-surf p-4 md:p-5">
-        <div className="mb-1 max-w-3xl">
-          <h3 className={`${sectionTitle} text-base`}>Buscas monitoradas (PCA)</h3>
-          <p className={`${subtle} mt-1.5 leading-relaxed`}>
-            Cada card é uma <strong className="font-semibold text-ink">busca salva</strong> no
-            {' '}<strong className="font-semibold text-ink">Plano de Contratações Anuais</strong>.
-            Termos + filtros da busca viram a assinatura; sinais aparecem quando o PCA tem itens novos.
-            Crie na aba PCA com “Salvar e monitorar”.
-          </p>
-        </div>
-        <PcaWatchlistsPanel onPromoted={onPromoted} />
-      </section>
     </div>
   );
 }
@@ -7131,7 +7117,7 @@ function App() {
   const disparoDetalheRef = useRef(null);
   const [licitacaoLoading, setLicitacaoLoading] = useState(false);
   const [licitacaoSearch, setLicitacaoSearch] = useState('');
-  const [licitacaoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'sinais' | 'watchlists'
+  const [licitacaoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [selectedCommercialRequirements, setSelectedCommercialRequirements] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
@@ -7256,6 +7242,17 @@ function App() {
   const [pncpVisibilityBusyId, setPncpVisibilityBusyId] = useState(null);
   // Evita re-disparar migração localStorage→DB no mesmo job (falha de rede não deve loopar).
   const pncpLegacyDiscardSyncedRef = useRef(new Set());
+  // Poll do modal captura closure antigo — refs garantem scope/página atuais (ex.: aba Descartados).
+  const pncpResultScopeRef = useRef(pncpResultScope);
+  const pncpJobResultsPageRef = useRef(pncpJobResultsPage);
+  const pncpJobResultsPageSizeRef = useRef(pncpJobResultsPageSize);
+  const pncpJobModalTabRef = useRef(pncpJobModalTab);
+  // Descarta respostas fora de ordem (poll list vs clique em Descartados).
+  const pncpResultsLoadSeqRef = useRef(0);
+  useEffect(() => { pncpResultScopeRef.current = pncpResultScope; }, [pncpResultScope]);
+  useEffect(() => { pncpJobResultsPageRef.current = pncpJobResultsPage; }, [pncpJobResultsPage]);
+  useEffect(() => { pncpJobResultsPageSizeRef.current = pncpJobResultsPageSize; }, [pncpJobResultsPageSize]);
+  useEffect(() => { pncpJobModalTabRef.current = pncpJobModalTab; }, [pncpJobModalTab]);
   const [showPncpHidden, setShowPncpHidden] = useState(false);
   const [pncpOutcomeFilters, setPncpOutcomeFilters] = useState({
     q: '',
@@ -8958,8 +8955,22 @@ function App() {
     // Aba resultados: lista ativa (sem descartados). Aba/scope hidden: só descartados.
     // Pipeline: filtro client-side sobre a página (board match).
     let list;
-    if (pncpResultScope === 'hidden' || pncpResultScope === 'descartados') {
-      list = pncpResultsWithVisibility.filter(item => item.__visibility === 'hidden');
+    if (pncpResultScope === 'hidden' || pncpResultScope === 'descartados' || pncpJobModalTab === 'descartados') {
+      // Backend já devolve só visibility=hidden; aceitar payload da aba sem re-filtrar
+      // por __visibility (evita sumiço se metadado falhar após enrich).
+      list = pncpResultsWithVisibility.filter(item => (
+        item.__visibility === 'hidden' || item.__visibility_db === 'hidden'
+      ));
+      // Se a página veio do scope hidden (todos os itens do payload), não esvaziar
+      // por mismatch pontual de flag — confiar no que o endpoint de descartados mandou.
+      if (!list.length && pncpResultsWithVisibility.length) {
+        const allFromHiddenScope = pncpResultsWithVisibility.every(
+          item => item.__visibility_db === 'hidden' || item.__from_hidden_scope
+        );
+        if (allFromHiddenScope || pncpResultsWithVisibility.some(item => item.__from_hidden_scope)) {
+          list = pncpResultsWithVisibility;
+        }
+      }
     } else if (pncpResultScope === 'pipeline') {
       list = pncpResultsWithVisibility.filter(item => item.__visibility === 'pipeline');
     } else {
@@ -8989,7 +9000,7 @@ function App() {
       });
     }
     return list;
-  }, [pncpResultsWithVisibility, pncpResultScope, pncpResultLocalQuery, pncpSearchFilters.srp_only]);
+  }, [pncpResultsWithVisibility, pncpResultScope, pncpJobModalTab, pncpResultLocalQuery, pncpSearchFilters.srp_only]);
 
   const pncpSearchSummary = useMemo(() => {
     const backendSummary = pncpSearchResults.summary || pncpSearchResults.pageSummary;
@@ -9913,6 +9924,10 @@ function App() {
   // resetScope: só ao abrir o job (poll ao vivo não deve resetar filtro/escopo do usuário).
   const applyPncpJobSnapshot = (job, { resetScope = false } = {}) => {
     if (!job) return;
+    // Snapshot do job NÃO carrega a página de resultados (isso é loadPncpJobResults).
+    // Na aba Descartados, job.items costuma ser a lista ativa — nunca substituir por ele.
+    const onDiscardedTab = pncpJobModalTabRef.current === 'descartados'
+      || pncpResultScopeRef.current === 'hidden';
     setPncpSearchResults(prev => {
       const nextTotal = Number(job.total || 0) || Number(prev.total || 0) || 0;
       // term_runs vivo do backend tem prioridade — NÃO ficar preso em query_plan parcial velho.
@@ -9927,14 +9942,19 @@ function App() {
         terms: job.terms || job.query_plan?.terms || prev.query_plan?.terms,
         terms_planned: job.terms || job.query_plan?.terms_planned || prev.query_plan?.terms_planned,
       };
+      const keepItems = onDiscardedTab
+        || (Array.isArray(prev.items) && prev.items.length > 0);
       return {
         ...prev,
         // Não zera a lista quando o job está em 'queued' entre retomadas (items=[]).
-        // A lista canônica vem de loadPncpJobResults; aqui só preservamos se ainda não houver página.
-        items: (Array.isArray(prev.items) && prev.items.length)
-          ? prev.items
+        // A lista canônica vem de loadPncpJobResults; snapshot só preenche se ainda não houver página.
+        items: keepItems
+          ? (prev.items || [])
           : (Array.isArray(job.items) ? job.items : []),
-        total: nextTotal || (Array.isArray(job.items) ? job.items.length : 0) || Number(prev.total || 0),
+        // Na aba Descartados o total da página é o count hidden, não o total do job.
+        total: onDiscardedTab
+          ? Number(prev.total || job.visibility_counts?.hidden || 0)
+          : (nextTotal || (Array.isArray(job.items) ? job.items.length : 0) || Number(prev.total || 0)),
         pagina: prev.pagina || 1,
         tamanhoPagina: prev.tamanhoPagina || 25,
         totalPaginas: prev.totalPaginas || Math.max(1, Math.ceil((nextTotal || 1) / 25)),
@@ -9955,41 +9975,82 @@ function App() {
     });
     if (resetScope) {
       setPncpResultScope('list');
+      pncpResultScopeRef.current = 'list';
       setShowPncpHidden(false);
     }
+  };
+
+  const normalizePncpResultScope = (raw) => {
+    const scope = String(raw || 'list').toLowerCase();
+    if (scope === 'pipeline' || scope === 'visible' || scope === 'all') return 'list';
+    if (scope === 'descartados' || scope === 'discarded' || scope === 'hidden') return 'hidden';
+    return scope || 'list';
+  };
+
+  const getDesiredPncpResultScope = () => {
+    // Aba Descartados tem prioridade sobre o chip de escopo (poll com closure velha).
+    if (pncpJobModalTabRef.current === 'descartados') return 'hidden';
+    return normalizePncpResultScope(pncpResultScopeRef.current || 'list');
   };
 
   const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
     if (!jobId) return null;
     const effectivePage = Math.max(1, Number(page) || 1);
     // list = ativos; hidden = aba Descartados; pipeline filtra no client sobre a lista ativa.
-    const rawScope = overrides.scope || pncpResultScope || 'list';
-    const effectiveScope = (rawScope === 'pipeline' || rawScope === 'visible' || rawScope === 'all')
-      ? 'list'
-      : (rawScope === 'descartados' || rawScope === 'discarded')
+    // Preferir override explícito; senão refs (poll não fica preso no scope do open).
+    const rawScope = overrides.scope != null
+      ? overrides.scope
+      : (pncpJobModalTabRef.current === 'descartados'
         ? 'hidden'
-        : rawScope;
-    const effectiveTam = Math.max(5, Math.min(100, Number(overrides.tam || pncpJobResultsPageSize || 25) || 25));
-    const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}/results`, {
-      params: {
-        pagina: effectivePage,
-        tam: effectiveTam,
-        ordenacao: overrides.ordenacao || pncpSearchFilters.ordenacao,
-        scope: effectiveScope,
-      },
-    });
+        : (pncpResultScopeRef.current || pncpResultScope || 'list'));
+    const effectiveScope = normalizePncpResultScope(rawScope);
+    const effectiveTam = Math.max(
+      5,
+      Math.min(100, Number(overrides.tam || pncpJobResultsPageSizeRef.current || pncpJobResultsPageSize || 25) || 25)
+    );
+    // Token anti-corrida: resposta antiga (ex.: poll em list) não sobrescreve Descartados.
+    const loadSeq = ++pncpResultsLoadSeqRef.current;
+    let response;
+    try {
+      response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}/results`, {
+        params: {
+          pagina: effectivePage,
+          tam: effectiveTam,
+          ordenacao: overrides.ordenacao || pncpSearchFilters.ordenacao,
+          scope: effectiveScope,
+        },
+      });
+    } catch (error) {
+      if (loadSeq === pncpResultsLoadSeqRef.current) throw error;
+      return null;
+    }
+    // Outra carga mais nova já partiu (troca de aba / novo poll).
+    if (loadSeq !== pncpResultsLoadSeqRef.current) return null;
+    // Scope da UI mudou no meio do request — descarta payload incompatível.
+    const desiredScope = getDesiredPncpResultScope();
+    if (effectiveScope !== desiredScope) return null;
+
     const payload = response.data || {};
     const total = Number(payload.total || 0);
     const visCounts = payload.visibility_counts || null;
     setPncpJobResultsPage(effectivePage);
-    if (Number(payload.tamanhoPagina || effectiveTam) !== pncpJobResultsPageSize) {
+    pncpJobResultsPageRef.current = effectivePage;
+    if (Number(payload.tamanhoPagina || effectiveTam) !== (pncpJobResultsPageSizeRef.current || pncpJobResultsPageSize)) {
       setPncpJobResultsPageSize(Number(payload.tamanhoPagina || effectiveTam));
+      pncpJobResultsPageSizeRef.current = Number(payload.tamanhoPagina || effectiveTam);
     }
-    const loadedItems = Array.isArray(payload.items) ? payload.items : [];
+    const loadedItems = (Array.isArray(payload.items) ? payload.items : []).map(item => (
+      item && typeof item === 'object' && effectiveScope === 'hidden'
+        ? { ...item, __from_hidden_scope: true, __visibility_db: item.__visibility_db || 'hidden' }
+        : item
+    ));
     setPncpSearchResults(prev => ({
       ...prev,
-      items: loadedItems.length ? loadedItems : (Array.isArray(payload.items) ? payload.items : (prev.items || [])),
-      total: total || Number(visCounts?.list ?? visCounts?.all ?? prev.total ?? 0),
+      // Lista vazia legítima (0 descartados) deve limpar; não reaproveitar itens da outra aba.
+      items: loadedItems,
+      total: effectiveScope === 'hidden'
+        ? total
+        : (total || Number(visCounts?.list ?? visCounts?.all ?? prev.total ?? 0)),
       pagina: Number(payload.pagina || effectivePage),
       tamanhoPagina: Number(payload.tamanhoPagina || effectiveTam),
       totalPaginas: Number(payload.totalPaginas || 1),
@@ -10002,7 +10063,7 @@ function App() {
         payload.list_total
         ?? payload.collection?.list_total
         ?? visCounts?.list
-        ?? total
+        ?? (effectiveScope === 'hidden' ? prev.list_total : total)
         ?? prev.list_total
         ?? 0
       ),
@@ -10025,8 +10086,8 @@ function App() {
       }
     }
     // Card do job = lista ativa (sem descartados).
-    const canonicalTotal = Number(visCounts?.list ?? payload.list_total ?? total ?? 0);
-    if (jobId && Number.isFinite(canonicalTotal) && canonicalTotal >= 0) {
+    const canonicalTotal = Number(visCounts?.list ?? payload.list_total ?? (effectiveScope === 'hidden' ? undefined : total) ?? 0);
+    if (jobId && Number.isFinite(canonicalTotal) && canonicalTotal >= 0 && visCounts) {
       setPncpSearchJobs(prev => prev.map(job => (
         String(job.id) === String(jobId)
           ? {
@@ -10062,7 +10123,11 @@ function App() {
       setActivePncpSearchJobId(jobId);
       setPncpResultLocalQuery('');
       setPncpResultScope('list');
+      pncpResultScopeRef.current = 'list';
       setPncpJobModalTab('resultados');
+      pncpJobModalTabRef.current = 'resultados';
+      setPncpJobResultsPage(1);
+      pncpJobResultsPageRef.current = 1;
       setPncpJobFiltersEditing(false);
       seedPncpJobFilterDraft(response.data?.filters || {});
       applyPncpJobSnapshot(response.data, { resetScope: true });
@@ -11216,6 +11281,7 @@ function App() {
 
   // Poll detalhado só com o popup aberto — resultados e progresso ao vivo.
   // Não mexe em pncpSearchLoading: esse flag é só do POST "Iniciar busca".
+  // Scope/página vêm de refs (aba Descartados não pode ser sobrescrita por poll em "list").
   useEffect(() => {
     if (!activePncpSearchJobId || !pncpJobModalOpen) return undefined;
     let stopped = false;
@@ -11224,7 +11290,10 @@ function App() {
         const response = await axios.get(`/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}`);
         if (stopped) return;
         applyPncpJobSnapshot(response.data);
-        await loadPncpJobResults(activePncpSearchJobId, pncpJobResultsPage);
+        const pollScope = getDesiredPncpResultScope();
+        const pollPage = Math.max(1, Number(pncpJobResultsPageRef.current || 1) || 1);
+        await loadPncpJobResults(activePncpSearchJobId, pollPage, { scope: pollScope });
+        if (stopped) return;
         const polledRuns = response.data?.term_runs
           || response.data?.query_plan?.term_runs
           || null;
@@ -13505,7 +13574,7 @@ function App() {
                           ? activeView === item.view && (
                             licitacaoSubview === item.sub
                             || (item.sub === 'editais' && licitacaoSubview === 'editais_watchlist')
-                            || (item.sub === 'pca' && licitacaoSubview === 'sinais')
+                            || (item.sub === 'pca' && licitacaoSubview === 'sinais') // legado → trata como PCA
                           )
                           : activeView === item.view && (item.view !== 'Licitações');
                         const Icon = item.icon;
@@ -15609,14 +15678,21 @@ function App() {
                                   type="button"
                                   onClick={() => {
                                     setPncpJobModalTab(key);
+                                    pncpJobModalTabRef.current = key;
                                     if (key === 'descartados') {
                                       setPncpResultScope('hidden');
+                                      pncpResultScopeRef.current = 'hidden';
+                                      setPncpJobResultsPage(1);
+                                      pncpJobResultsPageRef.current = 1;
                                       setShowPncpHidden(false);
                                       if (activePncpSearchJobId) {
                                         loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'hidden' });
                                       }
-                                    } else if (key === 'resultados' && pncpResultScope === 'hidden') {
+                                    } else if (key === 'resultados' && (pncpResultScope === 'hidden' || pncpResultScopeRef.current === 'hidden')) {
                                       setPncpResultScope('list');
+                                      pncpResultScopeRef.current = 'list';
+                                      setPncpJobResultsPage(1);
+                                      pncpJobResultsPageRef.current = 1;
                                       if (activePncpSearchJobId) {
                                         loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'list' });
                                       }
@@ -16301,6 +16377,9 @@ function App() {
                                             type="button"
                                             onClick={() => {
                                               setPncpResultScope(scope);
+                                              pncpResultScopeRef.current = scope;
+                                              setPncpJobResultsPage(1);
+                                              pncpJobResultsPageRef.current = 1;
                                               setShowPncpHidden(false);
                                               if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: scope === 'pipeline' ? 'list' : scope });
                                             }}
@@ -16314,7 +16393,11 @@ function App() {
                                             type="button"
                                             onClick={() => {
                                               setPncpJobModalTab('descartados');
+                                              pncpJobModalTabRef.current = 'descartados';
                                               setPncpResultScope('hidden');
+                                              pncpResultScopeRef.current = 'hidden';
+                                              setPncpJobResultsPage(1);
+                                              pncpJobResultsPageRef.current = 1;
                                               if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { scope: 'hidden' });
                                             }}
                                             className="h-7 rounded-lg border border-line px-2.5 text-[11px] text-muted hover:text-ink"
@@ -16338,7 +16421,10 @@ function App() {
                                 {visiblePncpResults.length > 0 ? (
                                   <div className="space-y-2">
                                     {visiblePncpResults.map((item) => (
-                                      <div key={item.id} className="overflow-hidden rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40">
+                                      <div
+                                        key={item.__result_key || item.id || item.numero_controle_pncp || item.url}
+                                        className="overflow-hidden rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40"
+                                      >
                                         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7.5rem,9.5rem)]">
                                           <div className="min-w-0 overflow-hidden">
                                             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
@@ -18186,11 +18272,10 @@ function App() {
                 </div>
               )}
 
-              {licitacaoSubview === 'pca' && (
+              {(licitacaoSubview === 'pca' || licitacaoSubview === 'sinais') && (
                 <PcaExplorer
                   onPromoted={() => loadLicitacoes()}
                   onSwitchToBoard={() => setLicitacaoSubview('board')}
-                  onSwitchToWatchlist={() => setLicitacaoSubview('sinais')}
                   onOpenOpportunity={async (opportunityId) => {
                     setLicitacaoSubview('board');
                     let target = licitacaoOpportunities.find(item => String(item.id) === String(opportunityId));
@@ -18203,10 +18288,6 @@ function App() {
                     }
                   }}
                 />
-              )}
-
-              {licitacaoSubview === 'sinais' && (
-                <PcaWatchlistPage onPromoted={() => loadLicitacoes()} />
               )}
 
               {licitacaoSubview === 'editais_watchlist' && (
