@@ -95,6 +95,7 @@ import {
 import {
   countOpenFunnelLeads,
   countOperationalLicitacoes,
+  getCurrentPncpSearchJobsCount,
   getNewEditalSignalsCount,
 } from './navigationBadges';
 import NotificationsView from './NotificationsView';
@@ -2080,7 +2081,8 @@ const createPncpUiSummary = (items = []) => {
     by_publication: { publicado: emptyBucket(), nao_publicado: emptyBucket() },
   };
   for (const item of items) {
-    const value = getBestEstimatedValue(item) || 0;
+    // "Valor na lista" = só itens pertinentes; sem fallback para total da licitação.
+    const value = getPncpItemMatchedValue(item) || 0;
     summary.total_value += value;
     const adherence = Number(item?.score || 0) >= PNCP_SCORE_HIGH_THRESHOLD ? 'alta' : Number(item?.score || 0) >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'media' : 'baixa';
     summary.by_adherence[adherence].count += 1;
@@ -5110,7 +5112,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
                     Celulares que recebem o alerta
                   </label>
                   <textarea
-                    className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+                    className={`${textarea} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
                     rows={3}
                     placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
                     value={saveWhatsappNumber}
@@ -5426,27 +5428,32 @@ function WatchlistWhatsappDialog({
   const [numbersText, setNumbersText] = useState('');
   const [scoreBand, setScoreBand] = useState('all');
   const inputRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Snapshot only when the dialog opens — never reset while the user is typing
+  // (parent re-renders used to recreate initialNumbers / onClose and steal focus).
   useEffect(() => {
     if (!open) return;
     const text = numbersToWhatsappTextarea(initialNumber, initialNumbers);
     setEnabled(initialEnabled || Boolean(text.trim()));
     setNumbersText(text);
     setScoreBand(initialScoreBand || whatsappMinScoreToBandId(initialMinScore));
-  }, [open, initialEnabled, initialNumber, initialNumbers, initialMinScore, initialScoreBand]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: init on open only
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
     const t = window.setTimeout(() => inputRef.current?.focus(), 40);
     const onKey = (event) => {
-      if (event.key === 'Escape' && !saving) onClose?.();
+      if (event.key === 'Escape' && !saving) onCloseRef.current?.();
     };
     window.addEventListener('keydown', onKey);
     return () => {
       window.clearTimeout(t);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open, saving, onClose]);
+  }, [open, saving]);
 
   if (!open) return null;
 
@@ -5516,7 +5523,7 @@ function WatchlistWhatsappDialog({
             ref={inputRef}
             rows={3}
             disabled={saving || !enabled}
-            className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+            className={`${textarea} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
             placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
             value={numbersText}
             onChange={(event) => setNumbersText(event.target.value)}
@@ -5563,14 +5570,19 @@ function CreateEditalWatchlistDialog({
   const [whatsappNumbersText, setWhatsappNumbersText] = useState('');
   const [whatsappScoreBand, setWhatsappScoreBand] = useState('all');
   const nameInputRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Snapshot only when the dialog opens — parent re-renders must not reset fields
+  // or re-focus the name input (that was stealing focus after 1 character).
   useEffect(() => {
     if (!open) return;
     setName(String(defaultName || ''));
     setWhatsappEnabled(Boolean(initialWhatsappEnabled));
     setWhatsappNumbersText(numbersToWhatsappTextarea(initialWhatsappNumber, initialWhatsappNumbers));
     setWhatsappScoreBand(initialWhatsappScoreBand || whatsappMinScoreToBandId(initialWhatsappMinScore));
-  }, [open, defaultName, initialWhatsappEnabled, initialWhatsappNumber, initialWhatsappNumbers, initialWhatsappMinScore, initialWhatsappScoreBand]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: init on open only
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -5579,14 +5591,14 @@ function CreateEditalWatchlistDialog({
       nameInputRef.current?.select();
     }, 40);
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && !saving) onClose?.();
+      if (event.key === 'Escape' && !saving) onCloseRef.current?.();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open, saving, onClose]);
+  }, [open, saving]);
 
   if (!open) return null;
 
@@ -5686,7 +5698,7 @@ function CreateEditalWatchlistDialog({
               <textarea
                 id="create-edital-watchlist-whatsapp"
                 rows={3}
-                className={`${input} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
+                className={`${textarea} w-full min-h-[4.5rem] resize-y font-mono text-[13px]`}
                 placeholder={WHATSAPP_NUMBERS_PLACEHOLDER}
                 value={whatsappNumbersText}
                 disabled={saving}
@@ -6834,10 +6846,11 @@ function EditalWatchlistPage({ onImportSignal, onNewCountChange }) {
 
   const refreshBadge = useCallback(async () => {
     try {
-      const count = await fetchEditalNewSignalsCount();
-      onNewCountChange?.(count);
+      // Mantém contadores internos da watchlist; o badge do menu é contagem de pesquisas.
+      const response = await axios.get('/api/licitacoes/editais/signals/stats');
+      onNewCountChange?.(getNewEditalSignalsCount(response.data));
     } catch {
-      /* badge is best-effort */
+      /* best-effort */
     }
   }, [onNewCountChange]);
 
@@ -6887,18 +6900,148 @@ function EditalWatchlistPage({ onImportSignal, onNewCountChange }) {
   );
 }
 
-const fetchEditalNewSignalsCount = async () => {
-  const response = await axios.get('/api/licitacoes/editais/signals/stats');
-  return getNewEditalSignalsCount(response.data);
+const fetchPncpSearchJobsCount = async () => {
+  const response = await axios.get('/api/licitacoes/pncp/search/jobs');
+  return getCurrentPncpSearchJobsCount(Array.isArray(response.data) ? response.data : []);
 };
 
 // ===================== /PCA =====================
+
+/** RFB filter ops — module-level so inputs do not remount on every App keystroke. */
+const RFB_OP_LIST = [['contains', '∋'], ['not_contains', '∌'], ['starts', '^'], ['ends', '$'], ['exact', '=']];
+const RFB_OP_TITLES = {
+  contains: 'Contém',
+  not_contains: 'Não contém',
+  starts: 'Começa com',
+  ends: 'Termina com',
+  exact: 'Igual a',
+};
+
+const RfbOpPills = memo(function RfbOpPills({ val, set, compact }) {
+  return (
+    <div className={`flex shrink-0 items-center gap-0.5 ${compact ? '' : 'flex-wrap'}`}>
+      {RFB_OP_LIST.map(([op, sym]) => (
+        <button
+          key={op}
+          type="button"
+          onClick={() => set(op)}
+          title={RFB_OP_TITLES[op]}
+          className={`h-6 min-w-[22px] rounded-md border px-1 text-[11px] leading-none transition ${
+            val === op
+              ? 'border-primary bg-primary text-white'
+              : 'border-transparent text-muted2 hover:border-line hover:bg-bg2 hover:text-ink'
+          }`}
+        >
+          {sym}
+        </button>
+      ))}
+    </div>
+  );
+});
+
+const RfbLogicToggle = memo(function RfbLogicToggle({ val, set }) {
+  return (
+    <div className="flex gap-0.5">
+      {['AND', 'OR'].map((l) => (
+        <button
+          key={l}
+          type="button"
+          onClick={() => set(l)}
+          className={`h-6 rounded-md border px-2 text-[11px] font-medium leading-none transition ${
+            val === l
+              ? 'border-primary bg-primary/90 text-white'
+              : 'border-line bg-bg2 text-muted hover:text-ink'
+          }`}
+        >
+          {l === 'AND' ? 'E' : 'OU'}
+        </button>
+      ))}
+    </div>
+  );
+});
+
+const RfbOpInput = memo(function RfbOpInput({ op, setOp, value, onChange, placeholder, onEnter }) {
+  return (
+    <div className="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-[11px] border border-line bg-bg2 transition focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/30">
+      <div className="flex items-center gap-0.5 border-r border-line bg-raise/30 px-1">
+        <RfbOpPills val={op} set={setOp} compact />
+      </div>
+      <input
+        type="text"
+        className="min-w-0 flex-1 bg-transparent px-2.5 text-xs text-ink outline-none placeholder:text-muted"
+        placeholder={placeholder}
+        value={value}
+        onChange={onChange}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onEnter?.();
+        }}
+      />
+    </div>
+  );
+});
+
+const RfbSecondTerm = memo(function RfbSecondTerm({
+  logic,
+  setLogic,
+  op,
+  setOp,
+  value,
+  onChange,
+  placeholder,
+  onEnter,
+}) {
+  return (
+    <div className="mt-1.5 space-y-1.5 rounded-[11px] border border-dashed border-line bg-bg2/60 p-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <RfbLogicToggle val={logic} set={setLogic} />
+        <span className="text-[10px] text-muted2">segundo termo</span>
+      </div>
+      <RfbOpInput
+        op={op}
+        setOp={setOp}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        onEnter={onEnter}
+      />
+    </div>
+  );
+});
+
+/** Process page section shell — stable type so children keep focus across re-renders. */
+const ProcessSection = memo(function ProcessSection({ id, children, isActive }) {
+  return (
+    <section
+      id={id}
+      className={`scroll-mt-3 rounded-[16px] border border-line bg-surf p-4 lg:p-5 ${
+        isActive ? 'border-primary/25' : ''
+      } dark:bg-[#141a28] dark:border-[#232c40]`}
+    >
+      {children}
+    </section>
+  );
+});
+
+const ProcessSectionHeader = memo(function ProcessSectionHeader({ kicker, title, hint, right }) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-2">
+      <div className="min-w-0">
+        {kicker && (
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2">{kicker}</p>
+        )}
+        {title && <h3 className="mt-0.5 text-[15px] font-semibold text-ink">{title}</h3>}
+        {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
+      </div>
+      {right}
+    </div>
+  );
+});
 
 function App() {
   const [contacts, setContacts] = useState([]);
   const [licitacaoOpportunities, setLicitacaoOpportunities] = useState([]);
   const [licSummary, setLicSummary] = useState(null);
-  const [editalNewSignalsCount, setEditalNewSignalsCount] = useState(null);
+  const [pncpSearchJobsCount, setPncpSearchJobsCount] = useState(null);
   const [usersList, setUsersList] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [metasYear, setMetasYear] = useState(new Date().getFullYear());
@@ -7681,30 +7824,19 @@ function App() {
       });
   }, [authStatus.authenticated]);
 
-  const refreshEditalNewSignalsCount = useCallback(async () => {
-    try {
-      const count = await fetchEditalNewSignalsCount();
-      setEditalNewSignalsCount(count);
-      return count;
-    } catch (error) {
-      console.error('Error fetching new edital signals count:', error);
-      return null;
-    }
-  }, []);
-
   useEffect(() => {
     if (!authStatus.authenticated) {
-      setEditalNewSignalsCount(null);
+      setPncpSearchJobsCount(null);
       return undefined;
     }
 
     let ignore = false;
     const load = async () => {
       try {
-        const count = await fetchEditalNewSignalsCount();
-        if (!ignore) setEditalNewSignalsCount(count);
+        const count = await fetchPncpSearchJobsCount();
+        if (!ignore) setPncpSearchJobsCount(count);
       } catch (error) {
-        if (!ignore) console.error('Error fetching new edital signals count:', error);
+        if (!ignore) console.error('Error fetching PNCP search jobs count:', error);
       }
     };
     const refreshWhenVisible = () => {
@@ -9395,8 +9527,11 @@ function App() {
   }, [licitacaoSubview]);
 
   // Trava o scroll do body e Esc fecha o modal ativo (nova licitação ou detalhe).
+  // Depend only on open/closed — NOT on the full selectedOpportunity object.
+  // Re-running this on every keystroke was toggling body overflow and blurring inputs.
+  const hasSelectedOpportunityModal = Boolean(selectedOpportunity);
   useEffect(() => {
-    const anyModal = showNewOpportunityForm || Boolean(selectedOpportunity);
+    const anyModal = showNewOpportunityForm || hasSelectedOpportunityModal;
     if (!anyModal) return undefined;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -9406,17 +9541,15 @@ function App() {
         resetNewOpportunityFormState();
         return;
       }
-      if (selectedOpportunity) {
-        setSelectedOpportunity(null);
-        setContactLinkQuery('');
-      }
+      setSelectedOpportunity(null);
+      setContactLinkQuery('');
     };
     window.addEventListener('keydown', onKey);
     return () => {
       document.body.style.overflow = prev;
       window.removeEventListener('keydown', onKey);
     };
-  }, [showNewOpportunityForm, selectedOpportunity, resetNewOpportunityFormState]);
+  }, [showNewOpportunityForm, hasSelectedOpportunityModal, resetNewOpportunityFormState]);
 
   const createOpportunity = async () => {
     if (!newOpportunityForm.titulo.trim()) {
@@ -9745,6 +9878,7 @@ function App() {
       const response = await axios.get('/api/licitacoes/pncp/search/jobs');
       const jobs = Array.isArray(response.data) ? response.data : [];
       setPncpSearchJobs(jobs);
+      setPncpSearchJobsCount(getCurrentPncpSearchJobsCount(jobs));
       return jobs;
     } catch (error) {
       console.error('Error loading PNCP jobs:', error);
@@ -11243,22 +11377,22 @@ function App() {
     }
   };
 
+  const selectedOpportunityIdRef = useRef(null);
+  selectedOpportunityIdRef.current = selectedOpportunity?.id ?? null;
+
   const updateSelectedOpportunity = useCallback(async (changes) => {
-    if (!selectedOpportunity) {
-      return;
-    }
-    const id = selectedOpportunity.id;
-    const next = { ...selectedOpportunity, ...changes };
-    setSelectedOpportunity(next);
+    const id = selectedOpportunityIdRef.current;
+    if (id == null) return;
+    setSelectedOpportunity((prev) => (prev && prev.id === id ? { ...prev, ...changes } : prev));
     setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? { ...item, ...changes } : item)));
     try {
       const response = await axios.put(`/api/licitacoes/opportunities/${id}`, changes);
-      setSelectedOpportunity(response.data);
+      setSelectedOpportunity(prev => (prev && prev.id === id ? response.data : prev));
       setLicitacaoOpportunities(prev => prev.map(item => (item.id === id ? response.data : item)));
     } catch (error) {
       console.error('Error updating licitação opportunity:', error);
     }
-  }, [selectedOpportunity]);
+  }, []);
 
   useEffect(() => {
     if (!selectedOpportunity || !hasItemsDrivingOpportunityValue) {
@@ -11271,7 +11405,13 @@ function App() {
       return;
     }
     updateSelectedOpportunity({ valor_oportunidade: nextValue });
-  }, [selectedOpportunity, hasItemsDrivingOpportunityValue, itemsParticipationTotal, updateSelectedOpportunity]);
+  }, [
+    selectedOpportunity?.id,
+    selectedOpportunity?.valor_oportunidade,
+    hasItemsDrivingOpportunityValue,
+    itemsParticipationTotal,
+    updateSelectedOpportunity,
+  ]);
 
   const deleteSelectedOpportunity = async () => {
     if (!selectedOpportunity) {
@@ -12769,7 +12909,7 @@ function App() {
       label: 'Licitações',
       items: [
         { name: 'Resumo', view: 'Licitações', sub: 'overview', icon: ScaleIcon },
-        { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: MagnifyingGlassIcon, badge: editalNewSignalsCount > 0 ? editalNewSignalsCount : null, badgeLabel: 'sinais novos das watchlists' },
+        { name: 'Busca Editais', view: 'Licitações', sub: 'editais', icon: MagnifyingGlassIcon, badge: pncpSearchJobsCount > 0 ? pncpSearchJobsCount : null, badgeLabel: 'pesquisas correntes' },
         { name: 'Pipeline', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon, badge: operationalLicitacaoCount, badgeLabel: 'oportunidades nas fases operacionais (2–12)' },
         { name: 'Contratos/Resultados', view: 'Licitações', sub: 'resultados', icon: BanknotesIcon },
         { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ViewfinderCircleIcon },
@@ -12783,7 +12923,7 @@ function App() {
         { name: 'Definir Metas', view: 'Definir Metas', icon: PresentationChartBarIcon, adminOnly: true },
       ],
     },
-  ]), [openFunnelLeadCount, editalNewSignalsCount, operationalLicitacaoCount, inboxUnreadCount]);
+  ]), [openFunnelLeadCount, pncpSearchJobsCount, operationalLicitacaoCount, inboxUnreadCount]);
 
   const navigateApp = useCallback((view, sub) => {
     setActiveView(view);
@@ -12814,33 +12954,6 @@ function App() {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   };
-
-  const ProcessSection = ({ id, children }) => {
-    const isActive = processActiveSection === id;
-    return (
-      <section
-        id={id}
-        className={`scroll-mt-3 rounded-[16px] border border-line bg-surf p-4 lg:p-5 ${
-          isActive ? 'border-primary/25' : ''
-        } dark:bg-[#141a28] dark:border-[#232c40]`}
-      >
-        {children}
-      </section>
-    );
-  };
-
-  const ProcessSectionHeader = ({ kicker, title, hint, right }) => (
-    <div className="flex flex-wrap items-end justify-between gap-2">
-      <div className="min-w-0">
-        {kicker && (
-          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2">{kicker}</p>
-        )}
-        {title && <h3 className="mt-0.5 text-[15px] font-semibold text-ink">{title}</h3>}
-        {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
-      </div>
-      {right}
-    </div>
-  );
 
   const processPanel = 'rounded-[12px] border border-line bg-bg2 px-3 py-2.5 dark:bg-[#0e1220]';
 
@@ -14793,10 +14906,10 @@ function App() {
                                           : 'soma por termo (auditoria)'}
                                       </p>
                                     </div>
-                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos editais classificados na lista.">
+                                    <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Soma dos valores dos itens pertinentes (que batem com o termo) dos editais classificados. Não usa o total da licitação.">
                                       <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Valor na lista</p>
                                       <p className="truncate font-mono text-sm font-bold leading-tight text-ink tabular-nums">{formatCompactCurrency(pncpSearchSummary.total_value) || 'R$ 0'}</p>
-                                      <p className="text-[10px] leading-tight text-muted">só classificados</p>
+                                      <p className="text-[10px] leading-tight text-muted">itens pertinentes</p>
                                     </div>
                                     <div className="min-w-0 rounded-md border border-line bg-bg2 px-2 py-1.5" title="Você ocultou · já no board">
                                       <p className="font-mono text-[10px] uppercase tracking-wide text-muted2">Ocultos · pipeline</p>
@@ -17409,13 +17522,11 @@ function App() {
 
               {licitacaoSubview === 'editais_watchlist' && (
                 <EditalWatchlistPage
-                  onNewCountChange={setEditalNewSignalsCount}
                   onImportSignal={async (item, signalId) => {
                     await importPncpLicitacao(item);
                     if (signalId) {
                       try {
                         await axios.put(`/api/licitacoes/editais/signals/${signalId}/status`, { status: 'visto' });
-                        await refreshEditalNewSignalsCount();
                       } catch {}
                     }
                   }}
@@ -21489,10 +21600,9 @@ function App() {
 
                     <div className="flex flex-col gap-5 p-4 sm:p-5">
                     {(() => {
-                      const OP_LIST = [['contains','∋'],['not_contains','∌'],['starts','^'],['ends','$'],['exact','=']];
-                      const OP_TITLES = { contains:'Contém', not_contains:'Não contém', starts:'Começa com', ends:'Termina com', exact:'Igual a' };
                       // Uniform field shell: fixed label row (h-5) + fixed control row (h-9)
                       // so every column lines up across the grid.
+                      // Op controls use module-level RfbOpInput (stable type — keeps focus while typing).
                       const fieldShell = 'flex min-w-0 flex-col gap-1.5';
                       const fieldHead = 'flex h-5 items-center justify-between gap-2';
                       const fieldLabel = 'text-xs font-medium text-muted';
@@ -21500,49 +21610,7 @@ function App() {
                       const fieldSelect = `${select} w-full text-xs`;
                       const sectionHead = 'mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted';
                       const eouBtn = 'shrink-0 text-[11px] font-medium text-primary transition hover:opacity-70';
-                      const OpPills = ({ val, set, compact }) => (
-                        <div className={`flex shrink-0 items-center gap-0.5 ${compact ? '' : 'flex-wrap'}`}>
-                          {OP_LIST.map(([op, sym]) => (
-                            <button key={op} type="button" onClick={() => set(op)} title={OP_TITLES[op]}
-                              className={`h-6 min-w-[22px] rounded-md border px-1 text-[11px] leading-none transition ${val === op ? 'border-primary bg-primary text-white' : 'border-transparent text-muted2 hover:border-line hover:bg-bg2 hover:text-ink'}`}
-                            >{sym}</button>
-                          ))}
-                        </div>
-                      );
-                      const LogicToggle = ({ val, set }) => (
-                        <div className="flex gap-0.5">
-                          {['AND','OR'].map(l => (
-                            <button key={l} type="button" onClick={() => set(l)}
-                              className={`h-6 rounded-md border px-2 text-[11px] font-medium leading-none transition ${val === l ? 'border-primary bg-primary/90 text-white' : 'border-line bg-bg2 text-muted hover:text-ink'}`}
-                            >{l === 'AND' ? 'E' : 'OU'}</button>
-                          ))}
-                        </div>
-                      );
-                      // Ops sit as a left addon inside the same h-9 control — inputs share one baseline.
-                      const OpInput = ({ op, setOp, value, onChange, placeholder }) => (
-                        <div className="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-[11px] border border-line bg-bg2 transition focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/30">
-                          <div className="flex items-center gap-0.5 border-r border-line bg-raise/30 px-1">
-                            <OpPills val={op} set={setOp} compact />
-                          </div>
-                          <input
-                            type="text"
-                            className="min-w-0 flex-1 bg-transparent px-2.5 text-xs text-ink outline-none placeholder:text-muted"
-                            placeholder={placeholder}
-                            value={value}
-                            onChange={onChange}
-                            onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
-                          />
-                        </div>
-                      );
-                      const SecondTerm = ({ logic, setLogic, op, setOp, value, onChange, placeholder }) => (
-                        <div className="mt-1.5 space-y-1.5 rounded-[11px] border border-dashed border-line bg-bg2/60 p-2">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <LogicToggle val={logic} set={setLogic} />
-                            <span className="text-[10px] text-muted2">segundo termo</span>
-                          </div>
-                          <OpInput op={op} setOp={setOp} value={value} onChange={onChange} placeholder={placeholder} />
-                        </div>
-                      );
+                      const rfbSearchEnter = () => handleRfbSearch(1);
                       const natQuery = rfbNatInput.trim().toLowerCase();
                       const filteredNats = natQuery.length >= 1
                         ? rfbNaturezas.filter(n => !rfbFilters.natureza.includes(n.codigo) && (n.codigo.includes(natQuery) || n.descricao.toLowerCase().includes(natQuery))).slice(0, 20)
@@ -21575,19 +21643,21 @@ function App() {
                                     {rfbNomeExpanded ? '− menos' : '+ E/OU'}
                                   </button>
                                 </div>
-                                <OpInput
+                                <RfbOpInput
                                   op={rfbOps.nome}
                                   setOp={op => setRfbOps(p => ({ ...p, nome: op }))}
                                   value={rfbFilters.nome}
                                   onChange={e => setRfbFilters(p => ({ ...p, nome: e.target.value }))}
                                   placeholder="Ex. Farmácia…"
+                                  onEnter={rfbSearchEnter}
                                 />
                                 {rfbNomeExpanded && (
-                                  <SecondTerm
+                                  <RfbSecondTerm
                                     logic={rfbNomeLogic} setLogic={setRfbNomeLogic}
                                     op={rfbNome2Op} setOp={setRfbNome2Op}
                                     value={rfbNome2} onChange={e => setRfbNome2(e.target.value)}
                                     placeholder="Segundo termo…"
+                                    onEnter={rfbSearchEnter}
                                   />
                                 )}
                               </div>
@@ -21599,19 +21669,21 @@ function App() {
                                     {rfbSocioExpanded ? '− menos' : '+ E/OU'}
                                   </button>
                                 </div>
-                                <OpInput
+                                <RfbOpInput
                                   op={rfbOps.socio}
                                   setOp={op => setRfbOps(p => ({ ...p, socio: op }))}
                                   value={rfbFilters.socio}
                                   onChange={e => setRfbFilters(p => ({ ...p, socio: e.target.value }))}
                                   placeholder="Nome do sócio…"
+                                  onEnter={rfbSearchEnter}
                                 />
                                 {rfbSocioExpanded && (
-                                  <SecondTerm
+                                  <RfbSecondTerm
                                     logic={rfbSocioLogic} setLogic={setRfbSocioLogic}
                                     op={rfbSocio2Op} setOp={setRfbSocio2Op}
                                     value={rfbSocio2} onChange={e => setRfbSocio2(e.target.value)}
                                     placeholder="Segundo sócio…"
+                                    onEnter={rfbSearchEnter}
                                   />
                                 )}
                               </div>
@@ -21629,19 +21701,21 @@ function App() {
                                     {rfbEnderecoExpanded ? '− menos' : '+ E/OU'}
                                   </button>
                                 </div>
-                                <OpInput
+                                <RfbOpInput
                                   op={rfbEnderecoOp}
                                   setOp={setRfbEnderecoOp}
                                   value={rfbEndereco}
                                   onChange={e => setRfbEndereco(e.target.value)}
                                   placeholder="Rua, bairro, CEP…"
+                                  onEnter={rfbSearchEnter}
                                 />
                                 {rfbEnderecoExpanded && (
-                                  <SecondTerm
+                                  <RfbSecondTerm
                                     logic={rfbEnderecoLogic} setLogic={setRfbEnderecoLogic}
                                     op={rfbEndereco2Op} setOp={setRfbEndereco2Op}
                                     value={rfbEndereco2} onChange={e => setRfbEndereco2(e.target.value)}
                                     placeholder="Segundo termo…"
+                                    onEnter={rfbSearchEnter}
                                   />
                                 )}
                               </div>
@@ -22475,7 +22549,7 @@ function App() {
                 </aside>
 
                 <main className="min-w-0 space-y-3">
-                  <ProcessSection id="metas-2026">
+                  <ProcessSection id="metas-2026" isActive={processActiveSection === 'metas-2026'}>
                     <ProcessSectionHeader
                       kicker="Motor de receita"
                       title="Metas 2026 — modelo alto volume"
@@ -22570,7 +22644,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="visao-geral">
+                  <ProcessSection id="visao-geral" isActive={processActiveSection === 'visao-geral'}>
                     <ProcessSectionHeader kicker="Visão geral" title="Princípios que guiam o processo" />
                     <div className="mt-3 grid gap-2 md:grid-cols-3">
                       {processBlueprint.pillars.map((pillar) => (
@@ -22587,7 +22661,7 @@ function App() {
                     </ul>
                   </ProcessSection>
 
-                  <ProcessSection id="treinamento-produtos">
+                  <ProcessSection id="treinamento-produtos" isActive={processActiveSection === 'treinamento-produtos'}>
                     <ProcessSectionHeader
                       kicker="Produtos"
                       title="Linha Autel e equivalência por categoria"
@@ -22605,7 +22679,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="icps-aerion">
+                  <ProcessSection id="icps-aerion" isActive={processActiveSection === 'icps-aerion'}>
                     <ProcessSectionHeader kicker="ICPs" title="Quatro perfis prioritários Autel" />
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
                       {processBlueprint.icps.map((icp) => (
@@ -22642,7 +22716,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="guia-sales-command">
+                  <ProcessSection id="guia-sales-command" isActive={processActiveSection === 'guia-sales-command'}>
                     <ProcessSectionHeader
                       kicker="Sales Command"
                       title="Guia da plataforma"
@@ -22733,7 +22807,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="pipeline">
+                  <ProcessSection id="pipeline" isActive={processActiveSection === 'pipeline'}>
                     <ProcessSectionHeader
                       kicker="Pipeline"
                       title="Do lead ao handoff"
@@ -22754,7 +22828,7 @@ function App() {
                     </ol>
                   </ProcessSection>
 
-                  <ProcessSection id="checklist">
+                  <ProcessSection id="checklist" isActive={processActiveSection === 'checklist'}>
                     <ProcessSectionHeader kicker="Checklist" title="Obrigatório antes de avançar" />
                     <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
                       {processBlueprint.checklist.map((item) => (
@@ -22765,7 +22839,7 @@ function App() {
                     </ul>
                   </ProcessSection>
 
-                  <ProcessSection id="venda-consultiva">
+                  <ProcessSection id="venda-consultiva" isActive={processActiveSection === 'venda-consultiva'}>
                     <ProcessSectionHeader kicker="Venda consultiva" title="Script BANT+U (Chris Voss)" />
                     <div className={`${processPanel} mt-3`}>
                       <p className="text-sm font-semibold text-ink">Abertura (~30s)</p>
@@ -22808,7 +22882,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="playbook-operacional">
+                  <ProcessSection id="playbook-operacional" isActive={processActiveSection === 'playbook-operacional'}>
                     <ProcessSectionHeader kicker="Playbook" title="Guia operacional no Sales Command" />
                     <div className="mt-3 grid gap-2 md:grid-cols-3">
                       {processBlueprint.playbook.map((block) => (
@@ -22825,7 +22899,7 @@ function App() {
                   </ProcessSection>
 
                   {processBlueprint.streams.map((stream) => (
-                    <ProcessSection key={stream.id} id={stream.id}>
+                    <ProcessSection key={stream.id} id={stream.id} isActive={processActiveSection === stream.id}>
                       <ProcessSectionHeader
                         kicker={stream.owner}
                         title={stream.title}
@@ -22851,7 +22925,7 @@ function App() {
                     </ProcessSection>
                   ))}
 
-                  <ProcessSection id="rituais">
+                  <ProcessSection id="rituais" isActive={processActiveSection === 'rituais'}>
                     <ProcessSectionHeader kicker="Rituais" title="Cadência comercial" />
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       {processBlueprint.rituals.map((ritual) => (
@@ -22866,7 +22940,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="ferramentas">
+                  <ProcessSection id="ferramentas" isActive={processActiveSection === 'ferramentas'}>
                     <ProcessSectionHeader kicker="Stack" title="Ferramentas e registros" />
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       {processBlueprint.tools.map((tool) => (
@@ -22878,7 +22952,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="erp-sankhya">
+                  <ProcessSection id="erp-sankhya" isActive={processActiveSection === 'erp-sankhya'}>
                     <ProcessSectionHeader kicker="Pós-venda" title="ERP Sankhya" />
                     <ul className="mt-3 divide-y divide-line overflow-hidden rounded-[12px] border border-line">
                       {processBlueprint.erp.map((item) => (
@@ -22910,7 +22984,7 @@ function App() {
                     </div>
                   </ProcessSection>
 
-                  <ProcessSection id="documentacao">
+                  <ProcessSection id="documentacao" isActive={processActiveSection === 'documentacao'}>
                     <ProcessSectionHeader kicker="Anexos" title="Documentação complementar" />
                     <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
                       {processBlueprint.documentation.map((item) => (

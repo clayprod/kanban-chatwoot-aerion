@@ -2731,16 +2731,120 @@ const enqueueWatchlistNotificationsForRecipients = async ({ source, watchlistId,
   return enqueued;
 };
 
+// Prefixo WhatsApp: [EDITAL] [DISPUTA] [PCA] [ATA] [CONTRATO] [AVISO] [RESULTADO] [CHAMAMENTO]
+const resolveWatchlistNotificationTag = (source, row) => {
+  if (source === 'pca') return 'PCA';
+
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const stageId = String(
+    payload.commercial_stage?.id
+    || payload.commercial_stage
+    || payload.legal_stage?.id
+    || ''
+  ).toLowerCase();
+  const tipoNome = normalizeSearchText(payload.tipo?.nome || payload.tipo_nome || '');
+  const tipoId = String(payload.tipo?.id || payload.tipo_id || '');
+  const modalidade = normalizeSearchText(payload.modalidade?.nome || payload.modalidade_licitacao_nome || '');
+  const modoDisputa = normalizeSearchText(payload.modo_disputa?.nome || payload.modo_disputa_nome || '');
+
+  if (stageId === 'contracted' || tipoNome.includes('contrato')) return 'CONTRATO';
+  if (stageId === 'ata_available' || (/\bata\b/.test(tipoNome) && !tipoNome.includes('edital'))) return 'ATA';
+  if (stageId === 'resulted') return 'RESULTADO';
+  if (tipoId === '2' || tipoNome.includes('aviso') || tipoNome.includes('contratacao direta')) return 'AVISO';
+  if (tipoId === '4' || tipoNome.includes('chamamento')) return 'CHAMAMENTO';
+
+  // Aberta a propostas / lances: destaca como disputa (pregão, concorrência, etc.)
+  const openForProposal = stageId === 'open_for_proposal'
+    || Boolean(payload.commercial_stage?.open)
+    || Boolean(payload.prazo_info?.open);
+  const looksLikeDisputa = openForProposal && (
+    modalidade.includes('pregao')
+    || modalidade.includes('concorrencia')
+    || modalidade.includes('leilao')
+    || modoDisputa.includes('aberto')
+    || modoDisputa.includes('fechado')
+    || tipoNome.includes('disputa')
+  );
+  if (looksLikeDisputa) return 'DISPUTA';
+
+  return 'EDITAL';
+};
+
+// Formata datas do PNCP para WhatsApp em pt-BR.
+// - "2026-07-20" / meia-noite → "20/07/2026"
+// - "2026-07-20T09:59" sem fuso → horário de parede (não força UTC)
+// - ISO com Z/offset → converte para America/Sao_Paulo
+const formatWatchlistDateTime = (raw) => {
+  if (raw == null || raw === '') return null;
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return null;
+    return formatWatchlistDateFromUtcInstant(raw);
+  }
+  const text = String(raw).trim();
+  if (!text) return null;
+
+  // YYYY-MM-DD only
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
+
+  // Local wall time without timezone: 2026-07-20T09:59[:ss][.fff]
+  const localWall = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/
+  );
+  if (localWall) {
+    const [, y, m, d, hh, mm] = localWall;
+    if (hh === '00' && mm === '00') return `${d}/${m}/${y}`;
+    return `${d}/${m}/${y} ${hh}:${mm}`;
+  }
+
+  // With explicit timezone (Z or ±hh:mm) → São Paulo
+  const d = new Date(text);
+  if (Number.isNaN(d.getTime())) return text;
+  return formatWatchlistDateFromUtcInstant(d);
+};
+
+const formatWatchlistDateFromUtcInstant = (date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value || '';
+  const day = get('day');
+  const month = get('month');
+  const year = get('year');
+  let hour = get('hour');
+  const minute = get('minute');
+  if (hour === '24') hour = '00';
+  const hasTime = !(hour === '00' && minute === '00');
+  const datePart = `${day}/${month}/${year}`;
+  return hasTime ? `${datePart} ${hour}:${minute}` : datePart;
+};
+
 const buildWatchlistNotificationMessage = (source, row) => {
+  const tag = resolveWatchlistNotificationTag(source, row);
+
   if (source === 'pca') {
+    const mes = row.mes_previsto != null ? String(row.mes_previsto).padStart(2, '0') : null;
+    const ano = row.ano_pca != null ? String(row.ano_pca) : null;
+    const mesPrevisto = mes && ano ? `${mes}/${ano}` : (mes || ano || null);
     const parts = [
-      `Nova oportunidade PCA na watchlist "${row.watchlist_nome || 'Watchlist'}"`,
+      `[${tag}] Nova oportunidade PCA na assinatura "${row.watchlist_nome || 'Assinatura'}"`,
       row.descricao,
       row.orgao_razao_social || row.orgao_cnpj ? `Orgao: ${row.orgao_razao_social || row.orgao_cnpj}` : null,
       row.codigo_unidade ? `UASG: ${row.codigo_unidade}${row.unidade_nome ? ` - ${row.unidade_nome}` : ''}` : null,
       row.valor_total ? `Valor: R$ ${Number(row.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : null,
-      row.mes_previsto ? `Mes previsto: ${row.mes_previsto}/${row.ano_pca || ''}` : null,
-      row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(2)}` : null,
+      mesPrevisto ? `Mes previsto: ${mesPrevisto}` : null,
+      (() => {
+        if (row.score === null || row.score === undefined) return null;
+        const score = scalePcaMatchScore(row.score);
+        const label = getPncpScoreLabel(score);
+        return `Score: ${score} (${label})`;
+      })(),
       row.orgao_cnpj && row.ano_pca ? `PNCP: https://pncp.gov.br/app/pca/${row.orgao_cnpj}/${row.ano_pca}` : null,
     ];
     return parts.filter(Boolean).join('\n');
@@ -2750,13 +2854,36 @@ const buildWatchlistNotificationMessage = (source, row) => {
   const orgao = payload.orgao?.nome || payload.orgao_nome || payload.orgao_cnpj;
   const unidade = payload.unidade?.codigo || payload.unidade_codigo;
   const title = payload.titulo || payload.title || payload.descricao || 'Edital PNCP';
+  const tipoLabel = payload.tipo?.nome || payload.tipo_nome || null;
+  const modalidadeLabel = payload.modalidade?.nome || payload.modalidade_licitacao_nome || null;
+  const dataPublicacao = formatWatchlistDateTime(
+    payload.data_publicacao || payload.data_publicacao_pncp || payload.dataPublicacaoPncp
+  );
+  const dataAbertura = formatWatchlistDateTime(
+    payload.data_inicio_vigencia
+    || payload.data_abertura_proposta
+    || payload.dataAberturaProposta
+    || payload.dataAberturaPropostas
+  );
+  const dataEncerramento = formatWatchlistDateTime(
+    payload.data_fim_vigencia
+    || payload.data_encerramento_proposta
+    || payload.dataEncerramentoProposta
+    || payload.dataEncerramentoPropostas
+  );
+  const prazoRelativo = payload.prazo_info?.label || null;
   const parts = [
-    `Nova oportunidade em edital na watchlist "${row.watchlist_nome || 'Watchlist'}"`,
+    `[${tag}] Nova oportunidade na assinatura "${row.watchlist_nome || 'Assinatura'}"`,
     title,
+    tipoLabel ? `Tipo: ${tipoLabel}` : null,
+    modalidadeLabel ? `Modalidade: ${modalidadeLabel}` : null,
     orgao ? `Orgao: ${orgao}` : null,
     unidade ? `UASG: ${unidade}${payload.unidade?.nome ? ` - ${payload.unidade.nome}` : ''}` : null,
     payload.valor_total_estimado || payload.valor_global ? `Valor: R$ ${Number(payload.valor_total_estimado || payload.valor_global).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : null,
-    payload.prazo_info?.label ? `Prazo: ${payload.prazo_info.label}` : null,
+    dataPublicacao ? `Publicacao: ${dataPublicacao}` : null,
+    dataAbertura ? `Abertura propostas: ${dataAbertura}` : null,
+    dataEncerramento ? `Encerramento: ${dataEncerramento}` : null,
+    prazoRelativo ? `Prazo: ${prazoRelativo}` : null,
     row.score !== null && row.score !== undefined ? `Score: ${Number(row.score).toFixed(2)}` : null,
     payload.url ? `PNCP: ${payload.url}` : null,
   ];
@@ -2775,12 +2902,13 @@ const sendEvolutionTextMessage = async (number, text) => {
   try {
     // Evolution v2 (Baileys) exige { number, text }. O formato legado
     // { textMessage: { text } } responde 400 "requires property text".
+    // Evolution v2 auth: only lowercase `apikey`. Sending both `apikey` and
+    // `ApiKey` makes undici/fetch collapse headers incorrectly and returns 401.
     const response = await fetch(`${baseUrl}/message/sendText/${encodeURIComponent(instance)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: apiKey,
-        ApiKey: apiKey,
       },
       body: JSON.stringify({
         number: String(number || '').replace(/\D/g, ''),
@@ -3109,6 +3237,28 @@ const getPncpScoreLabel = (score) => {
   if (value >= PNCP_SCORE_HIGH_THRESHOLD) return 'Alta aderencia';
   if (value >= PNCP_SCORE_MEDIUM_THRESHOLD) return 'Media aderencia';
   return 'Baixa aderencia';
+};
+
+/**
+ * PCA usa ts_rank (~0–1, + boost opcional). Editais usam 0–100 com faixas 38/68.
+ * Converte rank cru para a mesma escala 0–100 (WhatsApp, badges, labels).
+ * Valores já em 0–100 (score > 2) passam com clamp.
+ */
+const scalePcaMatchScore = (raw) => {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const onHundred = n <= 2 ? n * 100 : n;
+  return Math.max(0, Math.min(100, Math.round(onHundred * 10) / 10));
+};
+
+const decoratePcaScoredRow = (row) => {
+  if (!row || typeof row !== 'object') return row;
+  const score = scalePcaMatchScore(row.score);
+  return {
+    ...row,
+    score,
+    score_label: getPncpScoreLabel(score),
+  };
 };
 
 const removeAcentos = (value = '') => value
@@ -4297,11 +4447,8 @@ const itemHasPncpItemValue = (item) => {
   return Number.isFinite(n) && n > 0;
 };
 
-const itemNeedsPncpValueEnrichment = (item) => {
-  const hasTotal = Boolean(getPncpTotalEstimatedValue(item));
-  const hasItem = itemHasPncpItemValue(item);
-  return !hasTotal || !hasItem;
-};
+/** Precisa enriquecer enquanto faltar valor dos itens pertinentes (não basta total da licitação). */
+const itemNeedsPncpValueEnrichment = (item) => !itemHasPncpItemValue(item);
 
 const getPncpTotalEstimatedValue = (item) => {
   const candidates = [
@@ -4368,13 +4515,14 @@ const applyCachedPncpEnrichment = (items = [], fallbackQuery = '') => items.map(
   return mergePncpDetalheIntoItem(item, cached.value);
 });
 
-// Preenche total da licitação + valor do(s) item(ns) pertinente(s) via API de itens.
+// Preenche valor do(s) item(ns) pertinente(s) via API de itens (+ detalhe como side-effect).
+// Insiste enquanto faltar valor_itens_pertinentes — total da licitação sozinho não dispensa.
 const fillPncpMissingEstimatedValues = async (items = [], {
   limit = 80,
   delayMs = 250,
   rateLimitWaitMs = 0,
   query = '',
-  maxPages = 6,
+  maxPages = 8,
   priority = 'sync',
 } = {}) => {
   const result = [];
@@ -4435,24 +4583,30 @@ const mergePncpDetalheIntoNormalizedItem = (item, detalhe) => ({
 const mergePncpEnrichmentIntoNormalizedItem = (item, enrichment) => {
   if (!enrichment) return item;
   const base = mergePncpDetalheIntoNormalizedItem(item, enrichment);
+  const prevMatched = Number(item?.valor_itens_pertinentes || 0);
+  const nextMatched = Number(enrichment.valor_itens_pertinentes || 0);
+  // Prefere valor pertinente vindo do enrich; se o item já tinha um maior, mantém.
+  const valorItensPertinentes = nextMatched > 0
+    ? (prevMatched > nextMatched ? prevMatched : nextMatched)
+    : (prevMatched > 0 ? prevMatched : (enrichment.valor_itens_pertinentes ?? item?.valor_itens_pertinentes ?? null));
   return {
     ...base,
-    valor_itens_pertinentes: item?.valor_itens_pertinentes ?? enrichment.valor_itens_pertinentes ?? null,
-    itens_pertinentes: Array.isArray(item?.itens_pertinentes) && item.itens_pertinentes.length
-      ? item.itens_pertinentes
-      : (enrichment.itens_pertinentes || []),
-    itens_pertinentes_count: item?.itens_pertinentes_count ?? enrichment.itens_pertinentes_count ?? null,
-    itens_resumo_texto: item?.itens_resumo_texto || enrichment.itens_resumo_texto || '',
-    total_itens: item?.total_itens ?? enrichment.total_itens ?? null,
+    valor_itens_pertinentes: valorItensPertinentes,
+    itens_pertinentes: Array.isArray(enrichment.itens_pertinentes) && enrichment.itens_pertinentes.length
+      ? enrichment.itens_pertinentes
+      : (Array.isArray(item?.itens_pertinentes) ? item.itens_pertinentes : []),
+    itens_pertinentes_count: enrichment.itens_pertinentes_count ?? item?.itens_pertinentes_count ?? null,
+    itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || '',
+    total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
   };
 };
 
-// Enriquecimento da página visível: total da licitação + valor do item pertinente.
+// Enriquecimento da página visível: insiste no valor do item pertinente.
 const fillValuesOnNormalizedPncpItems = async (items = [], {
   limit = 20,
   rateLimitWaitMs = 8000,
   query = '',
-  maxPages = 4,
+  maxPages = 8,
   priority = 'interactive',
 } = {}) => {
   const result = [];
@@ -7286,7 +7440,8 @@ const createPncpSearchSummary = (items = []) => {
   };
 
   for (const item of items) {
-    const value = getPncpBestEstimatedValue(item) || 0;
+    // "Valor na lista" = só itens pertinentes; sem fallback para total da licitação.
+    const value = getPncpRelevantItemsValue(item) || 0;
     summary.total_value += value;
 
     const adherence = Number(item?.score || 0) >= PNCP_SCORE_HIGH_THRESHOLD ? 'alta' : Number(item?.score || 0) >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'media' : 'baixa';
@@ -8041,14 +8196,11 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     }));
 
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;
+    // Ordenação por valor: só itens pertinentes (alinhado ao "Valor na lista").
     const getValueSortValue = (item) => {
-      const estimated = Number(item?.valor_total_estimado);
-      if (Number.isFinite(estimated) && estimated > 0) {
-        return estimated;
-      }
-      const globalValue = Number(item?.valor_global);
-      if (Number.isFinite(globalValue) && globalValue > 0) {
-        return globalValue;
+      const matched = Number(item?.valor_itens_pertinentes);
+      if (Number.isFinite(matched) && matched > 0) {
+        return matched;
       }
       return -1;
     };
@@ -8810,8 +8962,9 @@ const resumePausedPncpSearchJobs = async () => {
   }
 };
 
-// Backfill resumível: completa valores de resultados de deep jobs recentes que
-// ficaram sem valor (orçamento do passe final/rate limit). Roda no cron de 5 min.
+// Backfill resumível: insiste em valor dos itens pertinentes nos resultados de
+// deep jobs recentes (orçamento do passe final / rate limit). Roda no cron de 5 min.
+// Critério: falta value_matched — total da licitação sozinho NÃO basta.
 const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
   if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) {
     return { updated: 0, skipped: 'rate_limited', gate: getPncpGateSnapshot() };
@@ -8825,9 +8978,8 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
         JOIN ${PNCP_SEARCH_JOBS_TABLE} j ON j.id = r.job_id
        WHERE j.updated_at > NOW() - ($1::int * INTERVAL '1 day')
          AND (
-           r.value_estimated IS NULL
-           OR r.value_matched IS NULL
-           OR COALESCE((r.payload->>'valor_total_estimado')::numeric, 0) <= 0
+           r.value_matched IS NULL
+           OR COALESCE(r.value_matched, 0) <= 0
            OR COALESCE((r.payload->>'valor_itens_pertinentes')::numeric, 0) <= 0
          )
        ORDER BY j.updated_at DESC, r.score DESC NULLS LAST
@@ -8836,6 +8988,7 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
     [PNCP_SEARCH_JOB_ARCHIVE_DAYS, effectiveLimit]
   );
   let updated = 0;
+  let matchedFilled = 0;
   for (const row of rows) {
     if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) break;
     if (budget.delayMs > 0 && updated > 0) await sleep(budget.delayMs);
@@ -8844,12 +8997,13 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
     const ids = extractPncpCompraIdentifiers(item);
     if (!ids.cnpj || !ids.ano || !ids.sequencial) continue;
     const q = buildPncpEnrichmentQuery(item, item?.matched_termo || '');
-    const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages: 4, priority: 'bulk' });
+    // maxPages maior: insistir em achar itens pertinentes em compras grandes.
+    const enrichment = await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, q, { maxPages: 8, priority: 'bulk' });
     if (!enrichment) continue;
     const merged = mergePncpEnrichmentIntoNormalizedItem(item, enrichment);
     const estimated = Number(getPncpTotalEstimatedValue(merged) || 0);
     const matched = Number(merged?.valor_itens_pertinentes || 0);
-    if (!(estimated > 0) && !(matched > 0)) continue;
+    // Sem valor de item pertinente ainda: grava o que veio (total/itens) e tenta de novo no próximo ciclo.
     await pool.query(
       `
         UPDATE ${PNCP_SEARCH_JOB_RESULTS_TABLE}
@@ -8870,12 +9024,14 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
       ]
     ).catch(error => console.warn('[PNCP Backfill] update falhou:', error.message));
     updated += 1;
+    if (matched > 0) matchedFilled += 1;
   }
-  return { updated, scanned: rows.length, gate: getPncpGateSnapshot() };
+  return { updated, matched_filled: matchedFilled, scanned: rows.length, gate: getPncpGateSnapshot() };
 };
 
 // Enriquece a página visível sob demanda (valores vêm do detalhe da compra no PNCP,
-// não da /api/search/). Grava de volta no payload para as próximas aberturas.
+// não da /api/search/). Insiste em valor dos itens pertinentes; total sozinho não basta.
+// Grava de volta no payload para as próximas aberturas.
 const enrichPncpJobResultPage = async (job, items = [], { limit = 25 } = {}) => {
   if (!job?.id || !Array.isArray(items) || !items.length) return items;
   if (Date.now() < pncpDetalheRateLimitedUntil || Date.now() < PNCP_GATE.pausedUntil) return items;
@@ -8888,15 +9044,17 @@ const enrichPncpJobResultPage = async (job, items = [], { limit = 25 } = {}) => 
     limit: Math.min(limit, budget.limit, items.length),
     rateLimitWaitMs: budget.rateLimitWaitMs,
     query,
-    maxPages: 4,
+    maxPages: 8,
     priority: 'interactive',
   });
   const improved = enriched.filter((item, idx) => {
     const beforeItem = itemHasPncpItemValue(items[idx]);
-    const beforeTotal = Boolean(getPncpTotalEstimatedValue(items[idx]));
     const afterItem = itemHasPncpItemValue(item);
-    const afterTotal = Boolean(getPncpTotalEstimatedValue(item));
-    return (afterItem && !beforeItem) || (afterTotal && !beforeTotal);
+    // Persistimos se preencheu valor pertinente (é o que entra no "Valor na lista").
+    // Também persiste se só ganhou metadados de itens (total_itens) para não re-fetch cego.
+    const beforeMeta = Number(items[idx]?.total_itens || 0) > 0;
+    const afterMeta = Number(item?.total_itens || 0) > 0;
+    return (afterItem && !beforeItem) || (afterMeta && !beforeMeta);
   });
   if (improved.length) {
     await persistPncpJobResults(job, improved);
@@ -8927,7 +9085,7 @@ const buildDeepSearchItemsSnapshot = async ({
       delayMs: Math.max(enrichDelayMs, budget.delayMs || 120),
       rateLimitWaitMs: budget.rateLimitWaitMs,
       query: qText,
-      maxPages: 6,
+      maxPages: 8,
       priority: 'bulk',
     })
     : cachedItems;
@@ -9128,8 +9286,9 @@ const countPncpJobResults = async (jobId, accountId = null) => {
 };
 
 /**
- * Soma canônica do "Valor na lista": colunas indexadas + fallback no payload
- * (enriquecimento às vezes grava só no JSON antes das colunas atualizarem).
+ * Soma canônica do "Valor na lista": SOMENTE itens pertinentes (value_matched).
+ * Nunca usa total da licitação (value_estimated / valor_global / homologado) —
+ * se faltar valor de item, a linha não entra na soma até o enriquecimento preencher.
  */
 const sumPncpJobResultsValue = async (jobId, accountId = null) => {
   if (!jobId) return 0;
@@ -9138,11 +9297,7 @@ const sumPncpJobResultsValue = async (jobId, accountId = null) => {
     SELECT COALESCE(SUM(
       COALESCE(
         NULLIF(value_matched, 0),
-        NULLIF(value_estimated, 0),
         NULLIF((payload->>'valor_itens_pertinentes')::numeric, 0),
-        NULLIF((payload->>'valor_total_estimado')::numeric, 0),
-        NULLIF((payload->>'valor_global')::numeric, 0),
-        NULLIF((payload->>'valor_total_homologado')::numeric, 0),
         0
       )
     ), 0)::float AS total_value
@@ -9357,7 +9512,8 @@ const persistPncpJobResults = async (job, items = []) => {
 
 const sortPncpJobResults = (items, ordenacao = 'relevancia_desc') => {
   const sorted = [...items];
-  const getValue = (item) => Number(item?.valor_itens_pertinentes || item?.valor_total_estimado || item?.valor_global || 0);
+  // Ordenação por valor usa só itens pertinentes (mesmo critério do "Valor na lista").
+  const getValue = (item) => Number(item?.valor_itens_pertinentes || 0);
   const getDate = (item) => new Date(item?.data_publicacao || item?.data_fim_vigencia || 0).getTime() || 0;
   if (ordenacao === 'valor_desc_data_desc') sorted.sort((a, b) => getValue(b) - getValue(a) || getDate(b) - getDate(a));
   else if (ordenacao === 'valor_asc_data_desc') sorted.sort((a, b) => getValue(a) - getValue(b) || getDate(b) - getDate(a));
@@ -10390,6 +10546,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
         enrichValues: true,
         enrichLimit: 500,
         enrichDelayMs: 100,
+        // maxPages do enrich interno: via fillPncpMissingEstimatedValues default 8
       })
       : { items: [], summary: createPncpSearchSummary([]), query_plan: { mode: 'deep_background', terms } };
     job.status = 'completed';
@@ -10721,9 +10878,10 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
         )
         : { rows: [] };
       let pageItems = rows.map(row => row.payload).filter(Boolean);
-      // Valores não vêm da busca textual do PNCP — completa a página aberta via detalhe.
+      // Valores de item não vêm da busca textual — insiste em enriquecer se faltar
+      // valor_itens_pertinentes (total da licitação sozinho NÃO dispensa o enrich).
       const enrichOnRead = String(req.query.enrich || 'true') !== 'false';
-      if (enrichOnRead && pageItems.some(item => !getPncpBestEstimatedValue(item))) {
+      if (enrichOnRead && pageItems.some(itemNeedsPncpValueEnrichment)) {
         // Prazo curto: com o gate lento (job pesado coletando), responde com o que
         // tem e deixa o enriquecimento terminar em background — ele persiste os
         // valores e a próxima carga da página já os traz.
@@ -13437,7 +13595,10 @@ const matchPcaItens = async ({
              ORDER BY s2.criado_em DESC
              LIMIT 1
            ) AS signal_status,
-           (ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) AS score
+           -- Escala 0–100 (igual editais): ts_rank ~0–1 → *100; boost ILIKE +50 pts.
+           LEAST(100::numeric, ROUND(
+             ((ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) * 100)::numeric
+           , 1)) AS score
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
     WHERE ${where}
@@ -13458,7 +13619,8 @@ const matchPcaItens = async ({
     pool.query(countSql, countParams),
   ]);
 
-  return { items: rowsResult.rows, total: countResult.rows[0]?.total || 0 };
+  const items = rowsResult.rows.map((row) => decoratePcaScoredRow(row));
+  return { items, total: countResult.rows[0]?.total || 0 };
 };
 
 // fetchPncpConsulta com retry (PNCP costuma timeoutar; sem retry o sync inteiro morre na 1ª falha).
@@ -13595,15 +13757,20 @@ const runPcaDailySyncUnlocked = async (opts = {}, onProgress = null) => {
 
   // Nunca avança o cursor se uma página ficou para trás. Assim o próximo ciclo
   // tenta novamente em vez de transformar uma falha transitória em perda de dados.
-  if (paginasComFalha > 0) {
-    throw new Error(`${paginasComFalha} página(s) do PNCP falharam; cursor preservado para nova tentativa`);
-  }
-
-  if (opts.updateCursor !== false) {
+  // Matching das assinaturas roda mesmo com falha parcial: usa o que já está na base.
+  if (paginasComFalha === 0 && opts.updateCursor !== false) {
     await pool.query(
       `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_sync = NOW(), ultimo_data_fim = $1::date WHERE id = 1`,
       [`${dataFim.slice(0, 4)}-${dataFim.slice(4, 6)}-${dataFim.slice(6, 8)}`]
     );
+  } else if (paginasComFalha > 0) {
+    console.warn(
+      `[pca] ${paginasComFalha} página(s) do PNCP falharam; cursor preservado. ` +
+      `planos=${planosUpserted} itens=${itensUpserted} — seguindo com matching das assinaturas.`
+    );
+    await pool.query(
+      `UPDATE ${PCA_SYNC_STATE_TABLE} SET ultimo_sync = NOW() WHERE id = 1`
+    ).catch(() => {});
   }
 
   let matchResult = { signals_inserted: 0 };
@@ -13611,11 +13778,28 @@ const runPcaDailySyncUnlocked = async (opts = {}, onProgress = null) => {
     matchResult = await runPcaWatchlistMatching();
   }
 
+  if (paginasComFalha > 0) {
+    const err = new Error(
+      `${paginasComFalha} página(s) do PNCP falharam; cursor preservado para nova tentativa`
+    );
+    err.partial = {
+      dataInicio,
+      dataFim,
+      planos_upserted: planosUpserted,
+      itens_upserted: itensUpserted,
+      signals_inserted: matchResult.signals_inserted,
+      notifications: matchResult.notifications,
+      paginas_com_falha: paginasComFalha,
+    };
+    throw err;
+  }
+
   return {
     dataInicio, dataFim,
     planos_upserted: planosUpserted,
     itens_upserted: itensUpserted,
     signals_inserted: matchResult.signals_inserted,
+    notifications: matchResult.notifications,
     paginas_com_falha: paginasComFalha,
   };
 };
@@ -13812,11 +13996,11 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
           RETURNING id
         `,
         [watch.account_id, item.plano_id, item.item_id, watch.id,
-         Number(item.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
+         scalePcaMatchScore(item.score), positivos.slice(0, 8), negativos.slice(0, 8)]
       );
       if (r.rowCount > 0) {
         inserted += 1;
-        if (shouldSendWatchlistWhatsappForScore(watch, item.score)) {
+        if (shouldSendWatchlistWhatsappForScore(watch, scalePcaMatchScore(item.score))) {
           await enqueueWatchlistNotificationsForRecipients({
             source: 'pca',
             watchlistId: watch.id,
@@ -14165,7 +14349,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
     );
     const total = countResult.rows.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
     const data = pageResult.rows.map((row) => ({
-      ...row,
+      ...decoratePcaScoredRow(row),
       watchlist_total_count: countsByWatchlist.get(String(row.watchlist_id)) || 0,
     }));
     res.json({ data, total, limit, offset, has_more: offset + data.length < total });

@@ -1,6 +1,7 @@
 import {
   countOpenFunnelLeads,
   countOperationalLicitacoes,
+  getCurrentPncpSearchJobsCount,
   getNewEditalSignalsCount,
 } from './navigationBadges';
 
@@ -24,4 +25,13 @@ test('normaliza a quantidade de sinais novos de editais', () => {
   expect(getNewEditalSignalsCount({ novo: '7' })).toBe(7);
   expect(getNewEditalSignalsCount({ novo: -2 })).toBe(0);
   expect(getNewEditalSignalsCount()).toBe(0);
+});
+
+test('badge de Busca Editais conta pesquisas correntes (jobs PNCP)', () => {
+  expect(getCurrentPncpSearchJobsCount([{ id: 1 }, { id: 2 }, { id: 3 }])).toBe(3);
+  expect(getCurrentPncpSearchJobsCount([])).toBe(0);
+  expect(getCurrentPncpSearchJobsCount(5)).toBe(5);
+  expect(getCurrentPncpSearchJobsCount('4')).toBe(4);
+  expect(getCurrentPncpSearchJobsCount(-1)).toBe(0);
+  expect(getCurrentPncpSearchJobsCount()).toBe(0);
 });

@@ -147,6 +147,28 @@ input[type="search"]::-ms-clear {
   50% { opacity: .85; }
 }
 
+/* Sino de alerta WhatsApp — toque sutil quando ligado (status, não decoração). */
+@keyframes bell-ring {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  5% { transform: rotate(14deg); }
+  10% { transform: rotate(-12deg); }
+  15% { transform: rotate(10deg); }
+  20% { transform: rotate(-8deg); }
+  25% { transform: rotate(5deg); }
+  30% { transform: rotate(0deg); }
+}
+
+.bell-ring {
+  animation: bell-ring 2.4s ease-in-out infinite;
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bell-ring {
+    animation: none;
+  }
+}
+
 :root {
   --scrollbar-track: transparent;
   --scrollbar-thumb: #3a4663;

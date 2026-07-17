@@ -27,3 +27,9 @@ export const countOperationalLicitacoes = (opportunities, licitacaoStages) => (
 export const getNewEditalSignalsCount = stats => (
   Math.max(0, Number(stats?.novo) || 0)
 );
+
+/** Contagem do badge do menu Busca Editais: pesquisas correntes (jobs PNCP). */
+export const getCurrentPncpSearchJobsCount = jobsOrCount => {
+  if (Array.isArray(jobsOrCount)) return Math.max(0, jobsOrCount.length);
+  return Math.max(0, Number(jobsOrCount) || 0);
+};
