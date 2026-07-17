@@ -1979,31 +1979,90 @@ const pollStageChanges = async () => {
       return;
     }
 
-    // Atribuição: o move é creditado ao agente responsável (assignee) da conversa mais
-    // recente do contato. Sem isso todo move via polling fica sem autor e some ao
-    // segmentar o Ritmo por agente. NULL quando a conversa não tem responsável.
+    // Atribuição: prefere o agente responsável (assignee) da conversa mais recente.
+    // Contatos podem estar sem assignee quando a etapa é alterada diretamente no Chatwoot;
+    // nesse caso, usa o único vendedor que enviou mensagem/nota nas últimas 24h. Se mais de
+    // um vendedor atuou, mantém NULL para não creditar o movimento à pessoa errada.
     const changedIds = changed.map(c => c.id);
     const { rows: assigneeRows } = await pool.query(
-      `SELECT DISTINCT ON (contact_id) contact_id, assignee_id
-         FROM conversations
-        WHERE contact_id = ANY($1)
-        ORDER BY contact_id, updated_at DESC`,
+      `SELECT DISTINCT ON (conv.contact_id)
+              conv.contact_id,
+              conv.assignee_id,
+              COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS actor_name
+         FROM conversations conv
+         LEFT JOIN users u ON u.id = conv.assignee_id
+        WHERE conv.contact_id = ANY($1)
+        ORDER BY conv.contact_id, conv.updated_at DESC`,
       [changedIds]
     );
-    const assigneeMap = new Map(assigneeRows.map(row => [row.contact_id, row.assignee_id]));
+    const actorMap = new Map(assigneeRows
+      .filter(row => row.assignee_id != null)
+      .map(row => [row.contact_id, {
+        id: Number(row.assignee_id),
+        name: row.actor_name || null,
+      }]));
+
+    const sellerGroups = await getSellerGroups(CHATWOOT_ACCOUNT_ID);
+    const sellerIdToGroup = new Map();
+    for (const group of sellerGroups) {
+      for (const userId of group.user_ids) sellerIdToGroup.set(Number(userId), group);
+    }
+    const sellerIds = Array.from(sellerIdToGroup.keys());
+    const unassignedIds = changedIds.filter(id => !actorMap.has(id));
+
+    if (unassignedIds.length > 0 && sellerIds.length > 0) {
+      const { rows: recentSellerRows } = await pool.query(
+        `SELECT conv.contact_id,
+                m.sender_id,
+                COALESCE(NULLIF(TRIM(u.display_name), ''), NULLIF(TRIM(u.name), ''), u.email) AS actor_name,
+                MAX(m.created_at) AS last_activity_at
+           FROM messages m
+           INNER JOIN conversations conv ON conv.id = m.conversation_id
+           LEFT JOIN users u ON u.id = m.sender_id
+          WHERE conv.contact_id = ANY($1)
+            AND m.sender_type = 'User'
+            AND m.sender_id = ANY($2::int[])
+            AND m.created_at >= NOW() - INTERVAL '24 hours'
+            AND (
+              (m.message_type = 1 AND COALESCE(m."private", false) = false)
+              OR COALESCE(m."private", false) = true
+            )
+          GROUP BY conv.contact_id, m.sender_id, u.display_name, u.name, u.email
+          ORDER BY conv.contact_id, last_activity_at DESC`,
+        [unassignedIds, sellerIds]
+      );
+
+      const candidatesByContact = new Map();
+      for (const row of recentSellerRows) {
+        const group = sellerIdToGroup.get(Number(row.sender_id));
+        if (!group) continue;
+        const current = candidatesByContact.get(row.contact_id) || new Map();
+        if (!current.has(group.id)) {
+          current.set(group.id, {
+            id: Number(row.sender_id),
+            name: row.actor_name || group.name || null,
+          });
+        }
+        candidatesByContact.set(row.contact_id, current);
+      }
+
+      for (const [contactId, candidates] of candidatesByContact) {
+        if (candidates.size === 1) actorMap.set(contactId, candidates.values().next().value);
+      }
+    }
 
     const inserts = [];
     const values = [];
     let index = 1;
     changed.forEach(({ id, account_id, fromStage, toStage }) => {
-      const actorId = assigneeMap.get(id) ?? null;
-      values.push(id, account_id, fromStage, toStage, 'polling', actorId);
-      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, NOW(), $${index + 4}, $${index + 5})`);
-      index += 6;
+      const actor = actorMap.get(id) || null;
+      values.push(id, account_id, fromStage, toStage, 'polling', actor?.id || null, actor?.name || null);
+      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, NOW(), $${index + 4}, $${index + 5}, $${index + 6})`);
+      index += 7;
     });
 
     await pool.query(
-      `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id) VALUES ${inserts.join(', ')}`,
+      `INSERT INTO ${HISTORY_TABLE} (contact_id, account_id, from_stage, to_stage, changed_at, source, actor_id, actor_name) VALUES ${inserts.join(', ')}`,
       values
     );
 
