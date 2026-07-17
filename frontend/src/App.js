@@ -4682,7 +4682,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity, onSwitchT
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && runSearch()}
-              className="h-full w-full min-w-0 rounded-[11px] bg-transparent pl-10 pr-28 text-sm font-semibold text-ink outline-none placeholder:text-muted"
+              className="h-full w-full min-w-0 rounded-[11px] bg-transparent pl-10 pr-28 text-base sm:text-sm font-semibold text-ink outline-none placeholder:text-muted"
             />
             <button
               type="button"
@@ -13089,13 +13089,13 @@ function App() {
       )}
 
       {showLogin && (
-        <div className="min-h-screen bg-bg text-ink relative overflow-hidden">
+        <div className="min-h-dvh bg-bg text-ink relative overflow-x-clip overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(620px_420px_at_8%_-4%,rgba(124,92,255,.16),transparent_60%),radial-gradient(560px_420px_at_100%_0%,rgba(56,214,230,.10),transparent_55%)]" />
-          <div className="relative mx-auto flex min-h-screen max-w-6xl items-center px-4 py-12 md:px-6">
-            <div className="grid w-full gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
-              <div className="space-y-7">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-[14px] border border-line bg-surf p-2">
+          <div className="relative mx-auto flex min-h-dvh max-w-6xl items-center px-4 py-8 sm:py-12 md:px-6">
+            <div className="grid w-full gap-8 sm:gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+              <div className="space-y-6 sm:space-y-7">
+                <div className="flex items-start gap-3 sm:gap-4">
+                  <div className="flex h-12 w-12 sm:h-[52px] sm:w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-[14px] border border-line bg-surf p-2">
                     <img
                       src="/logo_aerion.png"
                       alt="Aerion Technologies"
@@ -13103,10 +13103,10 @@ function App() {
                     />
                   </div>
                   <div className="min-w-0 pt-0.5">
-                    <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-muted2">
+                    <p className="font-mono text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.16em] text-muted2">
                       Aerion · Sales Command
                     </p>
-                    <h1 className="mt-1.5 font-display text-[32px] font-semibold leading-tight tracking-[-0.02em] text-ink md:text-[36px]">
+                    <h1 className="mt-1.5 font-display text-[26px] sm:text-[32px] font-semibold leading-tight tracking-[-0.02em] text-ink md:text-[36px]">
                       Painel comercial
                     </h1>
                     <p className="mt-2 max-w-md text-sm leading-relaxed text-muted">
@@ -13115,7 +13115,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="hidden sm:grid gap-3 sm:grid-cols-2">
                   {[
                     {
                       icon: QueueListIcon,
@@ -13162,13 +13162,13 @@ function App() {
                 </div>
               </div>
 
-              <div className="rounded-[16px] border border-line bg-surf p-6 md:p-8">
+              <div className="rounded-[16px] border border-line bg-surf p-5 sm:p-6 md:p-8">
                 <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.13em] text-muted2">Acesso</p>
-                <h2 className="mt-1.5 font-display text-[22px] font-semibold tracking-[-0.02em] text-ink">
+                <h2 className="mt-1.5 font-display text-[20px] sm:text-[22px] font-semibold tracking-[-0.02em] text-ink">
                   Entrar no dashboard
                 </h2>
                 <p className="mt-1.5 text-sm text-muted">Use seu e-mail comercial.</p>
-                <form onSubmit={handleLoginSubmit} className="mt-6 space-y-4">
+                <form onSubmit={handleLoginSubmit} className="mt-5 sm:mt-6 space-y-4">
                   <div className="space-y-1.5">
                     <label className="font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2" htmlFor="login-email">
                       E-mail
@@ -13438,7 +13438,7 @@ function App() {
                           // Default / last option: RFB (also when no pipeline hits).
                           runGlobalSearchToRfb();
                         }}
-                        className="h-full w-full rounded-xl bg-transparent pl-9 pr-3 text-sm text-ink outline-none placeholder:text-muted"
+                        className="h-full w-full rounded-xl bg-transparent pl-9 pr-3 text-base sm:text-sm text-ink outline-none placeholder:text-muted"
                         aria-label="Busca global"
                         aria-expanded={globalSearchOpen}
                         aria-controls="global-search-results"
@@ -13744,7 +13744,7 @@ function App() {
                         </div>
                       )}
                     </div>
-                    <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-2 lg:col-span-7 lg:grid-cols-4 xl:col-span-8">
+                    <div className="grid min-w-0 grid-cols-2 gap-2 lg:col-span-7 lg:grid-cols-4 xl:col-span-8">
                       <select
                         value={priorityFilter}
                         onChange={(event) => setPriorityFilter(event.target.value)}
@@ -14333,7 +14333,7 @@ function App() {
                             setPncpAcceptedPositiveTerms(prev => prev.slice(0, -1));
                           }
                         }}
-                        className="h-7 min-w-0 flex-1 basis-[8rem] bg-transparent text-sm font-semibold text-ink outline-none placeholder:text-muted"
+                        className="h-7 min-w-0 flex-1 basis-[8rem] bg-transparent text-base sm:text-sm font-semibold text-ink outline-none placeholder:text-muted"
                       />
                       <button
                         type="button"

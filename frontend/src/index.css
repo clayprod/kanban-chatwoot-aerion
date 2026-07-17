@@ -5,10 +5,34 @@
 @layer base {
   html {
     color-scheme: dark;
+    /* Avoid iOS adjusting text size independently of layout. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   body {
     @apply m-0 bg-surface text-ink antialiased;
+    /* Kill accidental horizontal scroll from wide children on mobile. */
+    overflow-x: clip;
+  }
+
+  /*
+   * iOS Safari auto-zooms focused form controls when computed font-size < 16px.
+   * Enforce 16px on narrow viewports (wins over ad-hoc text-xs / text-sm).
+   */
+  @media (max-width: 767px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):not([type='color']),
+    textarea,
+    select {
+      font-size: 16px !important;
+      line-height: 1.25;
+    }
+
+    /* Compact (h-7/h-8) fields need room for 16px type on touch. */
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='hidden']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']):not([type='color']),
+    select {
+      min-height: 2.5rem;
+    }
   }
 
   /*

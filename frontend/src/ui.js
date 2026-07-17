@@ -22,6 +22,9 @@
  *   Xs            h-7  text-[11px] rounded-lg    — dense card footers
  *   Lg            h-10 text-sm   rounded-[11px]  — modal/footer CTAs
  *   Control       h-[42px]                     — matches search toolbars
+ *
+ * Form controls use text-base on small viewports (≥16px) so iOS Safari does
+ * not auto-zoom on focus. App.css also enforces this globally for overrides.
  */
 
 // --- Shared button primitives ------------------------------------------------
@@ -113,18 +116,18 @@ export const iconBtn =
 // --- Form controls -----------------------------------------------------------
 
 export const input =
-  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 px-3 text-sm text-ink ' +
+  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 px-3 text-base sm:text-sm text-ink ' +
   'placeholder:text-muted transition ' +
   'dark:bg-[#0e1220] dark:text-[#eef1f8] dark:border-[#232c40] dark:placeholder:text-[#8b95ad] ' +
   'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 
 export const select =
-  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 pl-3 pr-8 text-sm text-ink transition ' +
+  'h-9 min-w-0 max-w-full rounded-[11px] border border-line bg-bg2 pl-3 pr-8 text-base sm:text-sm text-ink transition ' +
   'dark:bg-[#0e1220] dark:text-[#eef1f8] dark:border-[#232c40] ' +
   'hover:border-line2 focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
 
 export const textarea =
-  'rounded-[11px] border border-line bg-bg2 px-3 py-2 text-sm text-ink ' +
+  'rounded-[11px] border border-line bg-bg2 px-3 py-2 text-base sm:text-sm text-ink ' +
   'placeholder:text-muted transition ' +
   'dark:bg-[#0e1220] dark:text-[#eef1f8] dark:border-[#232c40] dark:placeholder:text-[#8b95ad] ' +
   'focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:outline-none';
@@ -160,7 +163,8 @@ export const modalOverlay =
   'fixed inset-0 z-modal bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4';
 
 export const modalPanel =
-  'w-full max-w-lg max-h-[min(92dvh,100%)] overflow-y-auto rounded-t-[16px] sm:rounded-[16px] border border-border bg-card p-4 sm:p-5 shadow-lift ' +
+  'w-full max-w-lg max-h-[min(92dvh,100%)] overflow-y-auto rounded-t-[16px] sm:rounded-[16px] border border-border bg-card ' +
+  'p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5 sm:pb-5 shadow-lift ' +
   'dark:bg-[#111827] dark:border-[#1f2937]';
 
 // --- Badges & chips ----------------------------------------------------------

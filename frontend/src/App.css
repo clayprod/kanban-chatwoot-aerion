@@ -344,6 +344,34 @@ html.aerion-shell-lock body {
 .app-shell {
   max-width: 100vw;
   width: 100%;
+  overflow-x: clip;
+}
+
+/* Prevent iOS Safari focus-zoom on form fields (font-size must be ≥ 16px).
+   Mirrors index.css; kept here so custom pages without Tailwind still obey. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="color"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+    line-height: 1.25;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="color"]),
+  select {
+    min-height: 2.5rem;
+  }
+}
+
+/* Touch: remove 300ms tap delay and double-tap zoom on chrome controls. */
+@media (pointer: coarse) {
+  button,
+  a,
+  [role="button"],
+  .tab-button,
+  .scroll-edge-btn {
+    touch-action: manipulation;
+  }
 }
 
 html::-webkit-scrollbar,
@@ -826,10 +854,38 @@ body.theme-dark::-webkit-scrollbar-thumb:hover {
     white-space: normal;
   }
 
+  /* Padding only — never shrink select font below 16px (iOS zoom). */
   .board-filter-select,
   .filter-select {
-    font-size: 12px;
-    padding-left: 0.625rem;
-    padding-right: 1.5rem;
+    min-height: 2.5rem;
+    padding-left: 0.75rem;
+    padding-right: 1.75rem;
+  }
+
+  /* Toolbars / filter grids: stack more cleanly on narrow phones. */
+  .toolbar-filters {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .toolbar-row,
+  .toolbar-meta {
+    gap: 0.5rem;
+  }
+}
+
+/* Phones in landscape / small tablets: keep form rows from overflowing. */
+@media (max-width: 640px) {
+  .funnel-label {
+    flex-wrap: wrap;
+  }
+
+  .kanban-scroll-controls {
+    gap: 0.35rem;
+    padding: 0.3rem 0;
+  }
+
+  .kanban-hscroll-track {
+    height: 22px;
   }
 }
