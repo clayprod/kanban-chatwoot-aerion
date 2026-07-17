@@ -16571,7 +16571,7 @@ function App() {
                                           }}
                                           className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold ${pncpResultScope === 'list' || pncpResultScope === 'pipeline' ? 'border-primary bg-primary/10 text-primary' : 'border-line text-muted hover:bg-surf'}`}
                                         >
-                                          Na lista ({Number(pncpVisibilityCounts.list ?? pncpVisibilityCounts.visible || 0).toLocaleString('pt-BR')})
+                                          Na lista ({Number(pncpVisibilityCounts.list ?? pncpVisibilityCounts.visible ?? 0).toLocaleString('pt-BR')})
                                         </button>
                                         {Number(pncpVisibilityCounts.hidden || 0) > 0 && (
                                           <button
