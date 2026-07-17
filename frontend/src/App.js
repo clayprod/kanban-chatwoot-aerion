@@ -14932,9 +14932,10 @@ function App() {
 
                 <div>
                   <div className="flex flex-wrap items-end justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <h3 className={`${sectionTitle} text-[15px]`}>Minhas buscas</h3>
-                      <p className={subtle}>
+                      {/* Altura fixa 2 linhas: o sufixo “ao vivo” NÃO empurra o grid de cards */}
+                      <p className={`${subtle} mt-0.5 h-8 overflow-hidden leading-4 sm:h-4 sm:truncate`}>
                         Ativas por 15 dias (recoleta diária + botão Rodar de novo, sem apagar o acervo). Depois arquivam, a menos que virem watchlist.
                         {pncpSearchJobs.some(j => isPncpJobLive(j.status)) ? ' · Atualizando status ao vivo…' : ''}
                       </p>
@@ -14982,13 +14983,17 @@ function App() {
                                     {!isSubscribed && finished ? ' · recoleta diária' : ''}
                                   </p>
                                 </div>
-                                <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-                                  {meta.live && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
-                                  {meta.label}
+                                <span
+                                  className={`inline-flex h-5 min-w-[7.5rem] shrink-0 items-center justify-center gap-1 rounded-full border px-2 text-[10px] font-semibold ${meta.className}`}
+                                  title={meta.label}
+                                >
+                                  {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
+                                  <span className="truncate">{meta.label}</span>
                                 </span>
                               </div>
 
-                              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                              {/* Chips em altura fixa (1 linha) — %/arquivo/temporária não empurram o card */}
+                              <div className="mt-2.5 flex h-6 items-center gap-1.5 overflow-hidden">
                                 <span
                                   className={metaChip}
                                   title={jobTotalValue > 0
@@ -15005,52 +15010,67 @@ function App() {
                                 <span className={metaChip}>
                                   Termos: {done}/{termsTotal}
                                 </span>
-                                {live && <span className={metaChip}>{pct}%</span>}
-                                {/* Assinatura/alertas: só o sino no botão — sem chips “Assinatura” / “Alertas · …” */}
-                                {!isSubscribed && (
-                                  <span className={metaChip} title="Busca temporária: 15 dias de recoleta diária, depois arquiva (a menos que vire assinatura).">
-                                    Temporária
-                                  </span>
-                                )}
-                                {archiveMeta && (
-                                  <span
-                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${archiveMeta.className}`}
-                                    title="Buscas sem assinatura são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo."
-                                  >
-                                    {archiveMeta.label}
-                                  </span>
-                                )}
+                                <span
+                                  className={`${metaChip} min-w-[2.25rem] justify-center tabular-nums ${live ? '' : 'invisible'}`}
+                                  aria-hidden={!live}
+                                >
+                                  {live ? `${pct}%` : '0%'}
+                                </span>
+                                <span
+                                  className={`${metaChip} ${isSubscribed ? 'invisible' : ''}`}
+                                  title="Busca temporária: 15 dias de recoleta diária, depois arquiva (a menos que vire assinatura)."
+                                  aria-hidden={isSubscribed}
+                                >
+                                  Temporária
+                                </span>
+                                <span
+                                  className={`inline-flex min-w-[4.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                    archiveMeta ? archiveMeta.className : 'invisible border-transparent'
+                                  }`}
+                                  title={archiveMeta
+                                    ? 'Buscas sem assinatura são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo.'
+                                    : undefined}
+                                  aria-hidden={!archiveMeta}
+                                >
+                                  {archiveMeta?.label || '·'}
+                                </span>
                               </div>
 
-                              <div className="mt-2.5 flex min-h-[1.75rem] flex-1 flex-col gap-1.5">
-                                {(job.terms || []).length > 0 && (
-                                  <div className="flex flex-wrap content-start gap-1">
-                                    {(job.terms || []).slice(0, 6).map(term => (
-                                      <span key={term} className={termChip}>{term}</span>
-                                    ))}
-                                    {(job.terms || []).length > 6 && (
-                                      <span className={metaChip}>+{(job.terms || []).length - 6}</span>
-                                    )}
-                                  </div>
-                                )}
-                                {negativeTerms.length > 0 && (
-                                  <div className="flex flex-wrap content-start gap-1">
-                                    {negativeTerms.slice(0, 4).map(term => (
-                                      <span key={`n-${term}`} className={termChipNeg}>− {term}</span>
-                                    ))}
-                                  </div>
-                                )}
-                                {live && (
-                                  <p className="truncate font-mono text-[10px] text-muted2">
-                                    {job.status === 'paused_rate_limit'
+                              {/* Corpo do card: termos (flex) + linha de status SEMPRE reservada */}
+                              <div className="mt-2.5 flex min-h-[3.25rem] flex-1 flex-col gap-1">
+                                <div className="min-h-[1.5rem] flex-1 overflow-hidden">
+                                  {(job.terms || []).length > 0 && (
+                                    <div className="flex flex-wrap content-start gap-1">
+                                      {(job.terms || []).slice(0, 6).map(term => (
+                                        <span key={term} className={termChip}>{term}</span>
+                                      ))}
+                                      {(job.terms || []).length > 6 && (
+                                        <span className={metaChip}>+{(job.terms || []).length - 6}</span>
+                                      )}
+                                    </div>
+                                  )}
+                                  {negativeTerms.length > 0 && (
+                                    <div className="mt-1 flex flex-wrap content-start gap-1">
+                                      {negativeTerms.slice(0, 4).map(term => (
+                                        <span key={`n-${term}`} className={termChipNeg}>− {term}</span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <p className="h-4 shrink-0 truncate font-mono text-[10px] leading-4 text-muted2">
+                                  {live
+                                    ? (job.status === 'paused_rate_limit'
                                       ? 'Aguardando limite do PNCP — retoma sozinho'
-                                      : <>coletando · <span className="font-display font-semibold uppercase tracking-wide text-muted">{job.progress?.current_term || 'preparando…'}</span></>}
-                                  </p>
-                                )}
+                                      : <>coletando · <span className="font-display font-semibold uppercase tracking-wide text-muted">{job.progress?.current_term || 'preparando…'}</span></>)
+                                    : (finished
+                                      ? (age ? `atualizado ${age}` : 'encerrada')
+                                      : '\u00a0')}
+                                </p>
                               </div>
                             </button>
 
-                            <div className={cardActionBar}>
+                            {/* Ações: slot fixo Parar/Rodar pra não reflow no poll */}
+                            <div className={`${cardActionBar} flex-nowrap`}>
                               <button
                                 type="button"
                                 onClick={() => openPncpSearchJob(job.id)}
@@ -15058,26 +15078,27 @@ function App() {
                               >
                                 Resultados
                               </button>
-                              {live && (
-                                <button
-                                  type="button"
-                                  onClick={() => cancelPncpSearchJob(job.id)}
-                                  title="Para a coleta e mantém os resultados já salvos"
-                                  className={btnSecondaryXs}
-                                >
-                                  <StopIcon className="h-3.5 w-3.5" /> Parar
-                                </button>
-                              )}
-                              {canRerun && (
-                                <button
-                                  type="button"
-                                  onClick={() => rerunPncpSearchJob(job.id)}
-                                  title="Roda a coleta de novo e mantém o que já foi encontrado"
-                                  className={btnSecondaryXs}
-                                >
-                                  <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar de novo
-                                </button>
-                              )}
+                              <div className="flex h-7 w-[6.75rem] shrink-0 items-center">
+                                {live ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelPncpSearchJob(job.id)}
+                                    title="Para a coleta e mantém os resultados já salvos"
+                                    className={`${btnSecondaryXs} w-full justify-center`}
+                                  >
+                                    <StopIcon className="h-3.5 w-3.5" /> Parar
+                                  </button>
+                                ) : canRerun ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => rerunPncpSearchJob(job.id)}
+                                    title="Roda a coleta de novo e mantém o que já foi encontrado"
+                                    className={`${btnSecondaryXs} w-full justify-center`}
+                                  >
+                                    <ArrowPathIcon className="h-3.5 w-3.5" /> Rodar
+                                  </button>
+                                ) : null}
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => convertPncpSearchJobToWatchlist(job.id)}
@@ -15089,7 +15110,7 @@ function App() {
                                   minScore: job.whatsapp_min_score,
                                 })}
                                 aria-label={whatsappAlertActionAria({ subscribed: isSubscribed, alertsOn })}
-                                className={`${btnSecondaryXs} ${isSubscribed ? 'min-w-[2rem] px-2' : ''}`}
+                                className={`${btnSecondaryXs} min-w-[2rem] px-2`}
                               >
                                 <WhatsappAlertActionContent subscribed={isSubscribed} alertsOn={alertsOn} />
                               </button>
@@ -15380,66 +15401,95 @@ function App() {
                               </div>
                             </div>
 
-                            {/* ÚNICO banner de status (pausa/fila/live/erro real). job.error de rate-limit NÃO vira 2º box. */}
-                            {(() => {
-                              const status = String(job?.status || '');
-                              const isPaused = status === 'paused_rate_limit';
-                              const isQueued = status === 'queued';
-                              const isFailed = status === 'failed';
-                              // Pause/quota grava texto técnico em job.error — não exibir cru nesses estados.
-                              const softStatus = isPaused || isQueued || status === 'running' || status === 'cancelling';
-                              const realError = Boolean(job?.error) && (isFailed || !softStatus);
-                              if (!isPaused && !isQueued && !live && !realError) return null;
+                            {/*
+                              Slot de status com altura SEMPRE fixa (1 linha).
+                              Monta sempre — só troca texto/tom. Evita “respirar” a lista.
+                              job.error de rate-limit NÃO vira 2º box.
+                            */}
+                            <div className="mt-1.5 h-[1.625rem] shrink-0">
+                              {(() => {
+                                const status = String(job?.status || '');
+                                const isPaused = status === 'paused_rate_limit';
+                                const isQueued = status === 'queued';
+                                const isFailed = status === 'failed';
+                                const softStatus = isPaused || isQueued || status === 'running' || status === 'cancelling';
+                                const realError = Boolean(job?.error) && (isFailed || !softStatus);
 
-                              const prog = job?.progress || {};
-                              const page = prog.resume_from_page || prog.current_page;
-                              const term = prog.current_term || activePncpJobProgress.currentTerm || '';
-                              const bits = [];
-                              let strong = meta?.label || 'Status';
-                              let tone = 'border-line bg-bg2/50 text-muted';
-                              let titleAttr = realError ? String(job.error) : undefined;
+                                const prog = job?.progress || {};
+                                const page = prog.resume_from_page || prog.current_page;
+                                const term = prog.current_term || activePncpJobProgress.currentTerm || '';
+                                const bits = [];
+                                let strong = '';
+                                let tone = 'border-transparent bg-transparent text-transparent';
+                                let titleAttr;
+                                let show = false;
 
-                              if (isPaused) {
-                                strong = (prog.waiting_gate || prog.bulk_deferred)
-                                  ? 'Pausado: aguardando cota PNCP'
-                                  : 'Pausado: limite do PNCP';
-                                tone = 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200';
-                                const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
-                                if (cd) bits.push(cd);
-                                else bits.push('retoma sozinho');
-                                if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
-                                if (term) bits.push(String(term));
-                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
-                                bits.push('sem recomeçar');
-                              } else if (isQueued) {
-                                strong = prog.waiting_for_heavy
-                                  ? `Na fila (aguardando ${String(prog.waiting_for_heavy).slice(0, 40)})`
-                                  : prog.waiting_gate
-                                    ? 'Na fila: aguardando cota PNCP'
-                                    : 'Na fila do coletor';
-                                tone = 'border-sky-500/30 bg-sky-500/10 text-sky-800 dark:text-sky-200';
-                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
-                              } else if (live) {
-                                strong = status === 'cancelling' ? 'Parando…' : 'Coletando no PNCP';
-                                tone = 'border-primary/25 bg-primary/5 text-muted';
-                                if (term) bits.push(String(term));
-                                if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
-                                bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
-                              } else if (realError) {
-                                strong = 'Erro';
-                                tone = 'border-status-danger/30 bg-status-danger/10 text-status-danger';
-                                bits.push(formatPncpRunError(job.error));
-                              }
+                                if (isPaused) {
+                                  show = true;
+                                  strong = (prog.waiting_gate || prog.bulk_deferred)
+                                    ? 'Pausado: aguardando cota PNCP'
+                                    : 'Pausado: limite do PNCP';
+                                  tone = 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200';
+                                  const cd = formatPncpResumeCountdown(prog.resume_in_ms, job?.updated_at);
+                                  if (cd) bits.push(cd);
+                                  else bits.push('retoma sozinho');
+                                  if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                  if (term) bits.push(String(term));
+                                  bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                                  bits.push('sem recomeçar');
+                                } else if (isQueued) {
+                                  show = true;
+                                  strong = prog.waiting_for_heavy
+                                    ? `Na fila (aguardando ${String(prog.waiting_for_heavy).slice(0, 40)})`
+                                    : prog.waiting_gate
+                                      ? 'Na fila: aguardando cota PNCP'
+                                      : 'Na fila do coletor';
+                                  tone = 'border-sky-500/30 bg-sky-500/10 text-sky-800 dark:text-sky-200';
+                                  bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                                } else if (live) {
+                                  show = true;
+                                  strong = status === 'cancelling' ? 'Parando…' : 'Coletando no PNCP';
+                                  tone = 'border-primary/25 bg-primary/5 text-muted';
+                                  if (term) bits.push(String(term));
+                                  if (page) bits.push(`pág. ${Number(page).toLocaleString('pt-BR')}`);
+                                  bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                                } else if (realError) {
+                                  show = true;
+                                  strong = 'Erro';
+                                  tone = 'border-status-danger/30 bg-status-danger/10 text-status-danger';
+                                  bits.push(formatPncpRunError(job.error));
+                                  titleAttr = String(job.error);
+                                } else if (status === 'completed' || status === 'cancelled') {
+                                  show = true;
+                                  strong = meta?.label || 'Encerrada';
+                                  tone = 'border-line bg-bg2/40 text-muted';
+                                  bits.push(`${listTotal.toLocaleString('pt-BR')} na lista`);
+                                  const ageLabel = formatPncpJobAge(job?.updated_at || job?.completed_at);
+                                  if (ageLabel) bits.push(`atualizado ${ageLabel}`);
+                                }
 
-                              return (
-                                <div className={`mt-1.5 shrink-0 rounded-md border px-2 py-1 text-[11px] leading-snug ${tone}`}>
-                                  <p className="line-clamp-2" title={titleAttr}>
-                                    <strong className="text-ink">{strong}.</strong>
-                                    {bits.length ? <>{' '}{bits.join(' · ')}</> : null}
+                                const fullText = show
+                                  ? `${strong}${bits.length ? `. ${bits.join(' · ')}` : ''}`
+                                  : '';
+
+                                return (
+                                  <p
+                                    className={`h-full truncate rounded-md border px-2 leading-[1.5rem] text-[11px] ${tone}`}
+                                    title={titleAttr || (show ? fullText : undefined)}
+                                    aria-hidden={!show}
+                                  >
+                                    {show ? (
+                                      <>
+                                        <strong className="text-ink">{strong}.</strong>
+                                        {bits.length ? <>{' '}{bits.join(' · ')}</> : null}
+                                      </>
+                                    ) : (
+                                      '\u00a0'
+                                    )}
                                   </p>
-                                </div>
-                              );
-                            })()}
+                                );
+                              })()}
+                            </div>
 
                             {/* Detalhes expandidos: blocos com altura mínima fixa */}
                             {headerExpanded && (
@@ -15546,7 +15596,8 @@ function App() {
                               </div>
                             )}
 
-                            <div className="mt-1.5 flex h-7 flex-wrap items-center gap-1">
+                            {/* Tabs: altura fixa, sem wrap — contagem de Descartados não empurra o body */}
+                            <div className="mt-1.5 flex h-7 items-center gap-1 overflow-x-auto overflow-y-hidden">
                               {[
                                 ['resultados', 'Resultados', null],
                                 ['termos', 'Termos e filtros', null],
@@ -15571,18 +15622,20 @@ function App() {
                                       }
                                     }
                                   }}
-                                  className={`h-7 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
+                                  className={`h-7 shrink-0 rounded-md px-2.5 text-[11px] font-semibold transition sm:text-xs ${pncpJobModalTab === key ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
                                 >
                                   {label}
-                                  {count != null && count > 0 ? (
-                                    <span className="ml-1 font-mono text-[10px] opacity-80">({count.toLocaleString('pt-BR')})</span>
+                                  {count != null ? (
+                                    <span className={`ml-1 inline-block min-w-[1.75rem] font-mono text-[10px] tabular-nums opacity-80 ${count > 0 ? '' : 'invisible'}`}>
+                                      ({Number(count || 0).toLocaleString('pt-BR')})
+                                    </span>
                                   ) : null}
                                 </button>
                               ))}
                               <button
                                 type="button"
                                 onClick={() => setPncpJobHeaderExpanded(v => !v)}
-                                className="ml-auto h-7 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
+                                className="ml-auto h-7 shrink-0 rounded-md px-2 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
                               >
                                 {headerExpanded ? 'Recolher ▴' : 'Detalhes ▾'}
                               </button>
