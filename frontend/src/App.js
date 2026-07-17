@@ -1639,20 +1639,11 @@ const TeamPaceCard = ({
             ))}
           </select>
         </div>
-        <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end justify-between gap-2">
           {onPeriodChange && (
             <div className="min-w-0 flex-1">
-              <label className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Período</label>
-              <select
-                value={period}
-                onChange={(e) => onPeriodChange(e.target.value)}
-                className={`${select} h-9 w-full min-w-[7.5rem] text-xs`}
-                aria-label="Período do ritmo"
-              >
-                {PACE_PERIODS.map((p) => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-wide text-muted">Período</span>
+              <PacePeriodToggle value={period} onChange={onPeriodChange} />
             </div>
           )}
           {onMetricChange && (
@@ -1912,6 +1903,42 @@ const MetricToggle = ({ value, onChange, className = '' }) => (
         {label}
       </button>
     ))}
+  </div>
+);
+
+/** Chave seletora do ritmo: Hoje / Semana / Mês / Trimestre / Ano. */
+const PacePeriodToggle = ({ value, onChange, className = '' }) => (
+  <div
+    className={`inline-flex w-full max-w-full flex-wrap items-center gap-0.5 rounded-xl border border-line bg-bg2 p-1 ${className}`}
+    role="group"
+    aria-label="Período do ritmo"
+  >
+    {PACE_PERIODS.map((p) => {
+      const shortLabel = (
+        p.value === 'week' ? 'Sem'
+          : p.value === 'month' ? 'Mês'
+            : p.value === 'quarter' ? 'Trim'
+              : p.value === 'year' ? 'Ano'
+                : 'Hoje'
+      );
+      const active = value === p.value;
+      return (
+        <button
+          key={p.value}
+          type="button"
+          onClick={() => onChange(p.value)}
+          title={p.label}
+          aria-pressed={active}
+          className={`h-7 min-w-0 flex-1 rounded-[9px] px-1.5 text-[10px] font-semibold transition sm:text-[11px] sm:px-2 ${
+            active
+              ? 'bg-[linear-gradient(135deg,#7c5cff,#5a3ff0)] text-white shadow-sm'
+              : 'text-muted hover:text-ink'
+          }`}
+        >
+          {shortLabel}
+        </button>
+      );
+    })}
   </div>
 );
 
@@ -9534,6 +9561,8 @@ function App() {
   const closePncpSearchJobModal = () => {
     setPncpJobModalOpen(false);
     setPncpJobFiltersEditing(false);
+    // Nunca deixe o botão "Iniciar busca" preso ao lifecycle do job/modal.
+    setPncpSearchLoading(false);
   };
 
   const applyPncpJobFiltersAndRerun = async () => {
@@ -9549,7 +9578,6 @@ function App() {
         },
       });
       setPncpJobFiltersEditing(false);
-      setPncpSearchLoading(true);
       await openPncpSearchJob(activePncpSearchJobId, { refreshJobs: true, openModal: true });
       await loadPncpSearchJobs();
     } catch (error) {
@@ -9796,9 +9824,11 @@ function App() {
   };
 
   const runPncpSearch = async (page = 1, overrides = {}) => {
+    // Loading só cobre o POST de criação — o job roda em background nos cards.
+    // Antes, loading ficava true até o job terminar no modal; fechar o popup
+    // deixava "Iniciar busca" travado em "Iniciando…" até recarregar a página.
     setPncpSearchLoading(true);
     const effectiveFilters = { ...pncpSearchFilters, ...overrides };
-    let startedJob = false;
     try {
       const response = await axios.post('/api/licitacoes/pncp/search/deep-start', {
         filters: {
@@ -9824,7 +9854,6 @@ function App() {
         suggested_negative_terms: pncpSuggestedTerms.negativos || [],
       });
       const jobId = response.data?.job_id;
-      startedJob = Boolean(jobId);
       setActivePncpSearchJobId(jobId || null);
       if (jobId) {
         try {
@@ -9858,9 +9887,9 @@ function App() {
       }
     } catch (error) {
       console.error('Error searching PNCP:', error);
-      setPncpSearchLoading(false);
+      alert(`Erro ao iniciar busca: ${error.response?.data?.error || error.message}`);
     } finally {
-      if (!startedJob) setPncpSearchLoading(false);
+      setPncpSearchLoading(false);
     }
   };
 
@@ -10632,6 +10661,7 @@ function App() {
   }, [pncpDeleteJobConfirm, pncpDeleteJobBusy]);
 
   // Poll detalhado só com o popup aberto — resultados e progresso ao vivo.
+  // Não mexe em pncpSearchLoading: esse flag é só do POST "Iniciar busca".
   useEffect(() => {
     if (!activePncpSearchJobId || !pncpJobModalOpen) return undefined;
     let stopped = false;
@@ -10667,14 +10697,15 @@ function App() {
         )));
         const status = response.data?.status;
         if (['completed', 'failed', 'cancelled'].includes(status)) {
-          setPncpSearchLoading(false);
           loadPncpSearchJobs();
           return;
         }
-        setPncpSearchLoading(true);
         setTimeout(tick, status === 'paused_rate_limit' ? 15000 : 1800);
       } catch (error) {
-        if (!stopped) setPncpSearchLoading(false);
+        // Erro de poll não deve travar o formulário de nova busca.
+        if (!stopped) {
+          console.warn('PNCP job poll failed:', error?.message || error);
+        }
       }
     };
     tick();

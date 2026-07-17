@@ -19,6 +19,7 @@ import argparse
 import requests
 import psycopg2
 import psycopg2.extras
+from psycopg2 import sql
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
@@ -260,6 +261,23 @@ def swap_staging_tables(conn, staged_tables):
         # Drop das tabelas _old (fora do bloco crítico mas ainda no mesmo commit)
         for t in staged_tables:
             cur.execute(f'DROP TABLE {t}_old CASCADE')
+        # Índices não mudam de nome quando a tabela é renomeada. Normaliza os
+        # índices da staging depois de liberar os nomes da tabela antiga; sem isso,
+        # o próximo ciclo encontra idx_*_new já ocupado e pula a criação do índice.
+        for t in staged_tables:
+            cur.execute(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = %s",
+                (t,),
+            )
+            for (index_name,) in cur.fetchall():
+                if not index_name.endswith('_new'):
+                    continue
+                cur.execute(
+                    sql.SQL('ALTER INDEX {} RENAME TO {}').format(
+                        sql.Identifier(index_name),
+                        sql.Identifier(index_name[:-4]),
+                    )
+                )
         # Limpa staging de tabelas que não foram usadas
         for t in ALL_RFB_TABLES:
             if t not in staged_tables:
@@ -320,6 +338,7 @@ def create_indexes(conn, suffix=''):
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf{s}        ON rfb_estabelecimentos{s}(uf)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_municipio{s} ON rfb_estabelecimentos{s}(municipio)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae{s}      ON rfb_estabelecimentos{s}(cnae_fiscal_principal)',
+        f"CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae_sec_arr{s} ON rfb_estabelecimentos{s} USING gin(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ','))",
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao{s}  ON rfb_estabelecimentos{s}(situacao_cadastral)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte{s}     ON rfb_empresas{s}(porte_da_empresa)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico{s} ON rfb_socios{s}(cnpj_basico)',
