@@ -8530,11 +8530,14 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
   const preserveResults = Object.prototype.hasOwnProperty.call(opts, 'preserveResults')
     ? Boolean(opts.preserveResults)
     : (job.preserve_results !== false);
+  // incrementalRefresh: recoleta diária — só sonda primeiras páginas (não re-lê universo).
+  const incrementalRefresh = Boolean(opts.incrementalRefresh);
   const nextJob = {
     ...job,
     status: 'queued',
     error: null,
     preserve_results: preserveResults,
+    incremental_refresh: incrementalRefresh,
     // Não reseta started_at: o countdown de arquivamento conta desde a criação.
     started_at: job.started_at ? new Date(job.started_at).getTime() : Date.now(),
     updated_at: Date.now(),
@@ -8545,6 +8548,8 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
       waiting_for_heavy: PNCP_HEAVY_JOB.current || null,
       heavy: getPncpHeavyJobSnapshot(),
       gate: getPncpGateSnapshot(),
+      incremental_refresh: incrementalRefresh,
+      incremental_pages: incrementalRefresh ? PNCP_DEEP_INCREMENTAL_PAGES : null,
     },
   };
   PNCP_DEEP_SEARCH_JOBS.set(job.id, nextJob);
@@ -8600,7 +8605,12 @@ const runDailyPncpSearchJobRefresh = async ({ limit = 8 } = {}) => {
       skipped += 1;
       continue;
     }
-    const ok = await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
+    // incrementalRefresh: NÃO revarre o universo já esgotado — só primeiras páginas.
+    const ok = await startPersistedPncpSearchJob(job, {
+      force: true,
+      preserveResults: true,
+      incrementalRefresh: true,
+    });
     if (ok) started += 1;
     else skipped += 1;
   }
@@ -9070,6 +9080,8 @@ const loadPncpJobResultKeys = async (jobId) => {
 
 const PNCP_TERM_RUN_DONE_STOPS = new Set([
   'total_reached', 'short_page', 'empty_page', 'target_reached', 'max_pages',
+  // Probe diário concluído — não reabre o universo inteiro no próximo refresh.
+  'incremental_probe_done',
 ]);
 // slice_yield = cedeu a vez no rodízio (ainda não terminou o universo do termo).
 const PNCP_TERM_RUN_RESUME_STOPS = new Set([
@@ -9078,6 +9090,9 @@ const PNCP_TERM_RUN_RESUME_STOPS = new Set([
 // Páginas por fatia no rodízio: evita um termo com 4k+ resultados monopolizar a fila
 // e deixar correlatos (uav, rpa…) eternamente "aguardando vez".
 const PNCP_DEEP_PAGES_PER_SLICE = Math.max(3, Math.min(15, Number(process.env.PNCP_DEEP_PAGES_PER_SLICE) || 6));
+// Recoleta diária de job já completo: só as primeiras N páginas de cada termo
+// (novidades costumam aparecer no topo do índice). Nunca revarre 4k+ páginas.
+const PNCP_DEEP_INCREMENTAL_PAGES = Math.max(1, Math.min(10, Number(process.env.PNCP_DEEP_INCREMENTAL_PAGES) || 3));
 
 const getPreviousTermRun = (termRuns = [], term = '') => {
   const needle = normalizeSearchText(term);
@@ -9444,17 +9459,31 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
   const termRuns = [];
   let lastSnapshotAt = 0;
   let classifiedBaseline = 0;
-  // Checkpoint: NÃO re-pede páginas já lidas. Ativo quando há progresso parcial
-  // (rate limit / slice_yield / erro) OU páginas concluídas em frentes incompletas.
-  // Reexecução de job 100% done (recoleta diária) recomeça do zero, mas UPSERT
-  // preserva a lista classificada — só gasta cota PNCP em páginas novas/repetidas.
+  // Checkpoint: NÃO re-pede páginas já lidas quando há progresso prévio.
+  // Inclui jobs 100% done — a recoleta diária usa incremental (primeiras N págs),
+  // não recomeça do zero o universo inteiro.
   const checkpointMode = Boolean(preserveResults && priorTermRuns.some((r) => {
     if (!r || r.source === 'pncp_consulta_complement') return false;
     if (PNCP_TERM_RUN_RESUME_STOPS.has(r.stop_reason)) return true;
+    if (PNCP_TERM_RUN_DONE_STOPS.has(r.stop_reason)) return true;
     const pages = Number(r.pages_completed || 0);
-    if (pages > 0 && !PNCP_TERM_RUN_DONE_STOPS.has(r.stop_reason)) return true;
+    if (pages > 0) return true;
+    if (Number(r.items_collected || 0) > 0) return true;
     return false;
   }));
+  // Recoleta diária / flag explícita: só sonda as primeiras páginas de termos já
+  // esgotados (novidades no topo do índice). Retomada mid-job NÃO usa isto.
+  const incrementalRefresh = Boolean(
+    preserveResults
+    && checkpointMode
+    && (job.incremental_refresh || job.progress?.incremental_refresh)
+  );
+  // Consome a flag para não grudar em restarts seguintes.
+  job.incremental_refresh = false;
+  if (job.progress) {
+    job.progress.incremental_refresh = incrementalRefresh;
+    job.progress.incremental_pages = incrementalRefresh ? PNCP_DEEP_INCREMENTAL_PAGES : null;
+  }
   try {
     if (!preserveResults) {
       // Troca de filtros: zera para o total do card/popup refletir só o novo conjunto.
@@ -9483,9 +9512,83 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
         && PNCP_TERM_RUN_DONE_STOPS.has(prevStop)
         && (prevPages > 0 || prevItems > 0 || prevStop === 'empty_page')
       );
+      // Termo já esgotado + recoleta diária: só primeiras N páginas (não re-lê 1..60).
+      if (legitDone && incrementalRefresh) {
+        return {
+          term,
+          index,
+          done: false,
+          page: 1,
+          zeroUniqueStreak: 0,
+          incrementalOnly: true,
+          incrementalPageCap: PNCP_DEEP_INCREMENTAL_PAGES,
+          priorHighWaterPages: prevPages,
+          priorDoneStop: prevStop && prevStop !== 'incremental_probe_done' ? prevStop : 'total_reached',
+          run: {
+            term,
+            source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
+            endpoint: 'pncp_search',
+            pages_requested: Number(prev.pages_requested || prevPages || 0),
+            pages_completed: prevPages,
+            total_reported: Number(prev.total_reported || 0),
+            items_collected: prevItems,
+            unique_new: Number(prev.unique_new || 0),
+            duplicates_skipped: Number(prev.duplicates_skipped || 0),
+            classified_added: Number(prev.classified_added || 0),
+            observed_page_size: prev.observed_page_size || null,
+            max_pages: PNCP_DEEP_INCREMENTAL_PAGES,
+            target_items: Number.MAX_SAFE_INTEGER,
+            budget_reason: 'incremental_daily',
+            errors: Array.isArray(prev?.errors) ? [...prev.errors].slice(-8) : [],
+            stop_reason: null,
+            duration_ms: Number(prev?.duration_ms || 0),
+            resumed_from_page: null,
+            next_page: 1,
+            slices: Number(prev?.slices || 0),
+            incremental_probe: true,
+            prior_pages_completed: prevPages,
+          },
+        };
+      }
+      // Termo já esgotado em retomada normal: não toca de novo.
+      if (legitDone) {
+        return {
+          term,
+          index,
+          done: true,
+          page: Math.max(1, prevPages + 1),
+          zeroUniqueStreak: 0,
+          incrementalOnly: false,
+          incrementalPageCap: null,
+          priorHighWaterPages: prevPages,
+          priorDoneStop: prevStop,
+          run: {
+            term,
+            source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
+            endpoint: 'pncp_search',
+            pages_requested: Number(prev.pages_requested || prevPages || 0),
+            pages_completed: prevPages,
+            total_reported: Number(prev.total_reported || 0),
+            items_collected: prevItems,
+            unique_new: Number(prev.unique_new || 0),
+            duplicates_skipped: Number(prev.duplicates_skipped || 0),
+            classified_added: Number(prev.classified_added || 0),
+            observed_page_size: prev.observed_page_size || null,
+            max_pages: maxPagesPerTerm,
+            target_items: Number.MAX_SAFE_INTEGER,
+            budget_reason: 'rodizio_fatias',
+            errors: Array.isArray(prev?.errors) ? [...prev.errors].slice(-8) : [],
+            stop_reason: prevStop || 'total_reached',
+            duration_ms: Number(prev?.duration_ms || 0),
+            resumed_from_page: null,
+            next_page: null,
+            slices: Number(prev?.slices || 0),
+            resumed_skip: true,
+          },
+        };
+      }
       const shouldResume = Boolean(
         prev
-        && !legitDone
         && (
           PNCP_TERM_RUN_RESUME_STOPS.has(prevStop)
           || prevPages > 0
@@ -9499,9 +9602,13 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       return {
         term,
         index,
-        done: legitDone,
+        done: false,
         page,
         zeroUniqueStreak: 0,
+        incrementalOnly: false,
+        incrementalPageCap: null,
+        priorHighWaterPages: shouldResume ? prevPages : 0,
+        priorDoneStop: null,
         run: {
           term,
           source: index === 0 ? 'original_deep' : 'ai_or_alias_deep',
@@ -9518,7 +9625,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           target_items: Number.MAX_SAFE_INTEGER,
           budget_reason: 'rodizio_fatias',
           errors: Array.isArray(prev?.errors) ? [...prev.errors].slice(-8) : [],
-          stop_reason: legitDone ? (prevStop || 'total_reached') : (shouldResume ? prevStop : null),
+          stop_reason: shouldResume ? prevStop : null,
           duration_ms: Number(prev?.duration_ms || 0),
           resumed_from_page: shouldResume && page > 1 ? page : null,
           next_page: shouldResume ? page : null,
@@ -9727,13 +9834,30 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
     console.log(
       `[PNCP Deep Search] job ${jobId} rodízio: ${states.length} termo(s), ` +
       `${PNCP_DEEP_PAGES_PER_SLICE} pág/fatia, checkpoint=${checkpointMode}, ` +
+      `incremental=${incrementalRefresh}${incrementalRefresh ? ` (probe ${PNCP_DEEP_INCREMENTAL_PAGES} pág/termo)` : ''}, ` +
       `preserve=${preserveResults}, lista=${job.total}`
     );
 
     // Fatia inicial de consulta/proposta: enche a lista com abertos cedo.
+    // Em recoleta incremental: só sonda o começo (não continua da pág. 40+).
     if (shouldApplyReceivingProposalLocally && !complementDone) {
-      const early = await runComplementSlice(states, 'early');
+      if (incrementalRefresh) {
+        complementPage = 1;
+        if (complementRun) {
+          complementRun = { ...complementRun, stop_reason: null, next_page: 1 };
+          liveComplementRun = complementRun;
+        }
+      }
+      const early = await runComplementSlice(states, incrementalRefresh ? 'incremental' : 'early');
       if (early?.paused) return;
+      if (incrementalRefresh) {
+        // Uma fatia de complemento basta no daily; não esgota o endpoint de data.
+        complementDone = true;
+        if (complementRun && !PNCP_TERM_RUN_DONE_STOPS.has(complementRun.stop_reason)) {
+          complementRun.stop_reason = 'incremental_probe_done';
+          liveComplementRun = complementRun;
+        }
+      }
     }
 
     // Loop de rodízio até todos terminarem ou rate-limit.
@@ -9785,9 +9909,15 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           );
         }
 
+        const pageCap = st.incrementalOnly
+          ? Math.min(maxPagesPerTerm, Number(st.incrementalPageCap || PNCP_DEEP_INCREMENTAL_PAGES))
+          : maxPagesPerTerm;
+        const sliceCap = st.incrementalOnly
+          ? pageCap
+          : PNCP_DEEP_PAGES_PER_SLICE;
         while (
-          pagesThisSlice < PNCP_DEEP_PAGES_PER_SLICE
-          && st.page <= maxPagesPerTerm
+          pagesThisSlice < sliceCap
+          && st.page <= pageCap
           && !st.done
         ) {
           if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
@@ -9816,7 +9946,12 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
             break;
           }
 
-          run.pages_completed = page;
+          // Probe incremental: mantém high-water de páginas do varredura completa.
+          if (st.incrementalOnly) {
+            run.pages_completed = Math.max(Number(st.priorHighWaterPages || 0), Number(run.pages_completed || 0), page);
+          } else {
+            run.pages_completed = page;
+          }
           st.page = page;
           const items = Array.isArray(data?.items) ? data.items : [];
           if (page === 1 || !totalFromApi) {
@@ -9845,7 +9980,13 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
             rawItems.push({ ...item, __matched_termo: st.term });
             newUnique += 1;
           });
-          run.items_collected += items.length;
+          // Probe diário: não reinfla items_collected com páginas já contadas no varredura.
+          // Parte de prevItems e só soma chaves novas desta sonda.
+          if (st.incrementalOnly) {
+            run.items_collected = Number(run.items_collected || 0) + newUnique;
+          } else {
+            run.items_collected += items.length;
+          }
           run.unique_new = Number(run.unique_new || 0) + newUnique;
           run.duplicates_skipped = Number(run.duplicates_skipped || 0) + dups;
           if (newUnique === 0) st.zeroUniqueStreak = Number(st.zeroUniqueStreak || 0) + 1;
@@ -9860,6 +10001,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           job.progress.new_unique_last_page = newUnique;
           job.progress.current_term_unique_new = run.unique_new;
           job.progress.current_term_duplicates = run.duplicates_skipped;
+          job.progress.incremental_probe = Boolean(st.incrementalOnly);
           job.updated_at = Date.now();
 
           if (
@@ -9871,17 +10013,27 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           }
 
           if (items.length < observedPageSize) {
-            run.stop_reason = 'short_page';
+            run.stop_reason = st.incrementalOnly
+              ? (st.priorDoneStop || 'incremental_probe_done')
+              : 'short_page';
             st.done = true;
             break;
           }
-          if (totalFromApi > 0 && run.items_collected >= totalFromApi) {
+          if (!st.incrementalOnly && totalFromApi > 0 && run.items_collected >= totalFromApi) {
             run.stop_reason = 'total_reached';
             st.done = true;
             break;
           }
+          // Probe diário: esgotou as N primeiras páginas → fim (não continua o universo).
+          if (st.incrementalOnly && page >= pageCap) {
+            run.stop_reason = st.priorDoneStop || 'incremental_probe_done';
+            run.next_page = null;
+            st.done = true;
+            break;
+          }
           // Overlap alto: 3 páginas seguidas sem único novo → cede a vez (não marca done).
-          if (st.zeroUniqueStreak >= 3 && pagesThisSlice >= 2) {
+          // No probe incremental, zero unique é esperado (já vistos) — não aborta cedo.
+          if (!st.incrementalOnly && st.zeroUniqueStreak >= 3 && pagesThisSlice >= 2) {
             run.stop_reason = 'slice_yield';
             st.page = page + 1;
             run.next_page = st.page;
@@ -9890,7 +10042,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           st.page = page + 1;
           run.next_page = st.page;
           // Folga entre páginas (além do gap do gate).
-          if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && pagesThisSlice < PNCP_DEEP_PAGES_PER_SLICE) {
+          if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && pagesThisSlice < sliceCap) {
             const pagePause = Math.min(1500, Math.max(250, Math.round(PNCP_GATE.gapMs * 0.4)));
             if (pagePause > 0) await sleep(pagePause);
           }
@@ -10039,6 +10191,10 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
 
     // Complemento final: esgota páginas restantes da consulta (já intercalado antes).
     // Não recomeça do zero — continua de complementPage / priorRun.
+    // Incremental diário: já sondou uma fatia no early — não esgota o endpoint.
+    if (incrementalRefresh) {
+      complementDone = true;
+    }
     if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && !complementDone) {
       let complementGuard = 0;
       while (!complementDone && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && complementGuard < 25) {
