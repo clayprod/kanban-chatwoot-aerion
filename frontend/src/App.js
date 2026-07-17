@@ -7234,6 +7234,8 @@ function App() {
   const [pncpResultScope, setPncpResultScope] = useState('list');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
   const [pncpJobResultsPageSize, setPncpJobResultsPageSize] = useState(25);
+  // Preferência de ordenação da lista do modal (independente do form de nova busca).
+  const [pncpJobResultsOrdenacao, setPncpJobResultsOrdenacao] = useState('relevancia_desc');
   const [pncpDebugControlId, setPncpDebugControlId] = useState('');
   const [pncpImportingId, setPncpImportingId] = useState(null);
   const [isPncpImportDraft, setIsPncpImportDraft] = useState(false);
@@ -7247,16 +7249,20 @@ function App() {
   const [pncpVisibilityBusyId, setPncpVisibilityBusyId] = useState(null);
   // Evita re-disparar migração localStorage→DB no mesmo job (falha de rede não deve loopar).
   const pncpLegacyDiscardSyncedRef = useRef(new Set());
-  // Poll do modal captura closure antigo — refs garantem scope/página atuais (ex.: aba Descartados).
+  // Poll do modal captura closure antigo — refs garantem scope/página/ordenação atuais.
+  // Atualizar o ref *antes* do request (não só no response) evita o poll live sobrescrever
+  // a página/classificação enquanto o usuário navega a lista.
   const pncpResultScopeRef = useRef(pncpResultScope);
   const pncpJobResultsPageRef = useRef(pncpJobResultsPage);
   const pncpJobResultsPageSizeRef = useRef(pncpJobResultsPageSize);
+  const pncpJobResultsOrdenacaoRef = useRef(pncpJobResultsOrdenacao);
   const pncpJobModalTabRef = useRef(pncpJobModalTab);
   // Descarta respostas fora de ordem (poll list vs clique em Descartados).
   const pncpResultsLoadSeqRef = useRef(0);
   useEffect(() => { pncpResultScopeRef.current = pncpResultScope; }, [pncpResultScope]);
   useEffect(() => { pncpJobResultsPageRef.current = pncpJobResultsPage; }, [pncpJobResultsPage]);
   useEffect(() => { pncpJobResultsPageSizeRef.current = pncpJobResultsPageSize; }, [pncpJobResultsPageSize]);
+  useEffect(() => { pncpJobResultsOrdenacaoRef.current = pncpJobResultsOrdenacao; }, [pncpJobResultsOrdenacao]);
   useEffect(() => { pncpJobModalTabRef.current = pncpJobModalTab; }, [pncpJobModalTab]);
   const [showPncpHidden, setShowPncpHidden] = useState(false);
   const [pncpOutcomeFilters, setPncpOutcomeFilters] = useState({
@@ -10125,19 +10131,40 @@ function App() {
 
   const loadPncpJobResults = async (jobId, page = 1, overrides = {}) => {
     if (!jobId) return null;
-    const effectivePage = Math.max(1, Number(page) || 1);
+    // fromPoll: só alimenta a lista com a visualização atual (refs). Não pode
+    // “puxar” página/ordenação/tamanho de volta ao default enquanto o user navega.
+    const fromPoll = Boolean(overrides.fromPoll);
     // list = disponíveis (sem pipeline); pipeline = já no board; hidden = Descartados.
-    // Preferir override explícito; senão refs (poll não fica preso no scope do open).
     const rawScope = overrides.scope != null
       ? overrides.scope
       : (pncpJobModalTabRef.current === 'descartados'
         ? 'hidden'
         : (pncpResultScopeRef.current || pncpResultScope || 'list'));
     const effectiveScope = normalizePncpResultScope(rawScope);
+    const effectivePage = fromPoll
+      ? Math.max(1, Number(pncpJobResultsPageRef.current || 1) || 1)
+      : Math.max(1, Number(page) || 1);
     const effectiveTam = Math.max(
       5,
-      Math.min(100, Number(overrides.tam || pncpJobResultsPageSizeRef.current || pncpJobResultsPageSize || 25) || 25)
+      Math.min(100, Number(
+        overrides.tam != null
+          ? overrides.tam
+          : (pncpJobResultsPageSizeRef.current || pncpJobResultsPageSize || 25)
+      ) || 25)
     );
+    const effectiveOrdenacao = String(
+      overrides.ordenacao
+      || pncpJobResultsOrdenacaoRef.current
+      || pncpJobResultsOrdenacao
+      || 'relevancia_desc'
+    );
+    // Intenção do usuário grava nos refs *antes* do await, para o poll não vencer a corrida.
+    if (!fromPoll) {
+      pncpJobResultsPageRef.current = effectivePage;
+      pncpJobResultsPageSizeRef.current = effectiveTam;
+      pncpJobResultsOrdenacaoRef.current = effectiveOrdenacao;
+      if (overrides.scope != null) pncpResultScopeRef.current = effectiveScope;
+    }
     // Token anti-corrida: resposta antiga (ex.: poll em list) não sobrescreve Descartados.
     const loadSeq = ++pncpResultsLoadSeqRef.current;
     let response;
@@ -10146,7 +10173,7 @@ function App() {
         params: {
           pagina: effectivePage,
           tam: effectiveTam,
-          ordenacao: overrides.ordenacao || pncpSearchFilters.ordenacao,
+          ordenacao: effectiveOrdenacao,
           scope: effectiveScope,
         },
       });
@@ -10156,19 +10183,19 @@ function App() {
     }
     // Outra carga mais nova já partiu (troca de aba / novo poll).
     if (loadSeq !== pncpResultsLoadSeqRef.current) return null;
-    // Scope da UI mudou no meio do request — descarta payload incompatível.
+    // Preferências da UI mudaram no meio do request — descarta payload incompatível
+    // (ex.: poll da pág. 1 não pode sobrescrever a pág. 3 que o usuário acabou de abrir).
     const desiredScope = getDesiredPncpResultScope();
     if (effectiveScope !== desiredScope) return null;
+    if (effectivePage !== Math.max(1, Number(pncpJobResultsPageRef.current || 1) || 1)) return null;
+    if (effectiveTam !== Math.max(5, Math.min(100, Number(pncpJobResultsPageSizeRef.current || 25) || 25))) return null;
+    if (effectiveOrdenacao !== String(pncpJobResultsOrdenacaoRef.current || 'relevancia_desc')) return null;
 
     const payload = response.data || {};
     const total = Number(payload.total || 0);
     const visCounts = payload.visibility_counts || null;
+    // NÃO reescrever pageSize/ordenacao a partir do payload — preferência é do usuário.
     setPncpJobResultsPage(effectivePage);
-    pncpJobResultsPageRef.current = effectivePage;
-    if (Number(payload.tamanhoPagina || effectiveTam) !== (pncpJobResultsPageSizeRef.current || pncpJobResultsPageSize)) {
-      setPncpJobResultsPageSize(Number(payload.tamanhoPagina || effectiveTam));
-      pncpJobResultsPageSizeRef.current = Number(payload.tamanhoPagina || effectiveTam);
-    }
     const loadedItems = (Array.isArray(payload.items) ? payload.items : []).map(item => (
       item && typeof item === 'object' && effectiveScope === 'hidden'
         ? { ...item, __from_hidden_scope: true, __visibility_db: item.__visibility_db || 'hidden' }
@@ -10183,7 +10210,8 @@ function App() {
         ? total
         : (total || Number(visCounts?.list ?? visCounts?.visible ?? prev.total ?? 0)),
       pagina: Number(payload.pagina || effectivePage),
-      tamanhoPagina: Number(payload.tamanhoPagina || effectiveTam),
+      // Mantém o tamanho escolhido pelo usuário; payload só confirma a página servida.
+      tamanhoPagina: effectiveTam,
       totalPaginas: Number(payload.totalPaginas || 1),
       summary: payload.summary || prev.summary || null,
       // Contagens canônicas do banco (não da página de 25 itens).
@@ -10259,6 +10287,10 @@ function App() {
       pncpJobModalTabRef.current = 'resultados';
       setPncpJobResultsPage(1);
       pncpJobResultsPageRef.current = 1;
+      // Ordenação inicial do job (ou default); o user pode mudar depois sem o poll resetar.
+      const initialOrdenacao = response.data?.filters?.ordenacao || 'relevancia_desc';
+      setPncpJobResultsOrdenacao(initialOrdenacao);
+      pncpJobResultsOrdenacaoRef.current = initialOrdenacao;
       setPncpJobFiltersEditing(false);
       seedPncpJobFilterDraft(response.data?.filters || {});
       applyPncpJobSnapshot(response.data, { resetScope: true });
@@ -11421,9 +11453,11 @@ function App() {
         const response = await axios.get(`/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}`);
         if (stopped) return;
         applyPncpJobSnapshot(response.data);
-        const pollScope = getDesiredPncpResultScope();
-        const pollPage = Math.max(1, Number(pncpJobResultsPageRef.current || 1) || 1);
-        await loadPncpJobResults(activePncpSearchJobId, pollPage, { scope: pollScope });
+        // Live feed: reusa página / tamanho / classificação atuais — não reseta a vista.
+        await loadPncpJobResults(activePncpSearchJobId, pncpJobResultsPageRef.current || 1, {
+          fromPoll: true,
+          scope: getDesiredPncpResultScope(),
+        });
         if (stopped) return;
         const polledRuns = response.data?.term_runs
           || response.data?.query_plan?.term_runs
@@ -16519,13 +16553,21 @@ function App() {
                                       onChange={(event) => setPncpResultLocalQuery(event.target.value)}
                                     />
                                     <select
-                                      value={pncpSearchFilters.ordenacao}
+                                      value={pncpJobResultsOrdenacao}
                                       onChange={(event) => {
                                         const ordenacao = event.target.value;
-                                        setPncpSearchFilters(prev => ({ ...prev, ordenacao }));
-                                        if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { ordenacao });
+                                        // Ref antes do await — poll live não pode reverter a classificação.
+                                        setPncpJobResultsOrdenacao(ordenacao);
+                                        pncpJobResultsOrdenacaoRef.current = ordenacao;
+                                        setPncpJobResultsPage(1);
+                                        pncpJobResultsPageRef.current = 1;
+                                        if (activePncpSearchJobId) {
+                                          loadPncpJobResults(activePncpSearchJobId, 1, { ordenacao });
+                                        }
                                       }}
                                       className={`${select} filter-select h-7 text-xs`}
+                                      title="Classificação da lista"
+                                      aria-label="Classificação"
                                     >
                                       <option value="relevancia_desc">Maior aderência</option>
                                       <option value="valor_desc_data_desc">Maior valor</option>
@@ -16537,7 +16579,11 @@ function App() {
                                       value={pncpJobResultsPageSize}
                                       onChange={(event) => {
                                         const tam = Math.max(5, Math.min(100, Number(event.target.value) || 25));
+                                        // Ref antes do await — poll live não pode reverter o tamanho da página.
                                         setPncpJobResultsPageSize(tam);
+                                        pncpJobResultsPageSizeRef.current = tam;
+                                        setPncpJobResultsPage(1);
+                                        pncpJobResultsPageRef.current = 1;
                                         if (activePncpSearchJobId) {
                                           loadPncpJobResults(activePncpSearchJobId, 1, { tam });
                                         }
@@ -16769,7 +16815,12 @@ function App() {
                                   <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                                     <button
                                       type="button"
-                                      onClick={() => loadPncpJobResults(activePncpSearchJobId, pncpSearchResults.pagina - 1)}
+                                      onClick={() => {
+                                        const next = Math.max(1, Number(pncpSearchResults.pagina || 1) - 1);
+                                        setPncpJobResultsPage(next);
+                                        pncpJobResultsPageRef.current = next;
+                                        loadPncpJobResults(activePncpSearchJobId, next);
+                                      }}
                                       disabled={pncpSearchResults.pagina <= 1}
                                       className="h-8 rounded-lg border border-line px-3 text-xs font-semibold disabled:opacity-50 hover:bg-bg2"
                                     >
@@ -16782,7 +16833,12 @@ function App() {
                                     </span>
                                     <button
                                       type="button"
-                                      onClick={() => loadPncpJobResults(activePncpSearchJobId, pncpSearchResults.pagina + 1)}
+                                      onClick={() => {
+                                        const next = Math.max(1, Number(pncpSearchResults.pagina || 1) + 1);
+                                        setPncpJobResultsPage(next);
+                                        pncpJobResultsPageRef.current = next;
+                                        loadPncpJobResults(activePncpSearchJobId, next);
+                                      }}
                                       disabled={pncpSearchResults.pagina >= pncpSearchResults.totalPaginas}
                                       className="h-8 rounded-lg border border-line px-3 text-xs font-semibold disabled:opacity-50 hover:bg-bg2"
                                     >
