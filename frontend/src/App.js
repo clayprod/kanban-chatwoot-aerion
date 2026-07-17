@@ -14276,9 +14276,20 @@ function App() {
                         accent: 'text-primary',
                       },
                       {
-                        label: 'Recurso em 3 d.ú.',
-                        value: licSummary?.due_recurso_3bd ?? licSummary?.due_48h ?? 0,
-                        sub: 'prazo PNCP · dias úteis BR',
+                        label: 'Prazos em 3 d.ú.',
+                        value: licSummary?.due_critical_3bd
+                          ?? licSummary?.due_48h
+                          ?? 0,
+                        sub: (() => {
+                          const parts = [];
+                          const imp = Number(licSummary?.due_impugnacao_3bd) || 0;
+                          const prop = Number(licSummary?.due_proposta_3bd) || 0;
+                          const rec = Number(licSummary?.due_recurso_3bd) || 0;
+                          if (imp) parts.push(`${imp} impug.`);
+                          if (prop) parts.push(`${prop} prop.`);
+                          if (rec) parts.push(`${rec} rec.`);
+                          return parts.length ? parts.join(' · ') : 'impugnação · proposta · recurso';
+                        })(),
                         icon: ChartBarIcon,
                         glow: 'rgba(255,93,114,.35)',
                         accent: 'text-status-danger',
@@ -14419,7 +14430,8 @@ function App() {
                       <div className={`${card} p-4`}>
                         <h3 className={`${sectionTitle} text-base mb-3`}>Prazos críticos</h3>
                         <p className={`${subtle} mb-3`}>
-                          Vencimento = prazo de proposta. Recurso = 3 dias úteis BR (PNCP). Proposta vencida: Ativo → Perdido; Suspenso → Monitoramento de Edital.
+                          Impugnação = 3 d.ú. antes do fim da proposta (Lei 14.133 art. 164), mesmo sem data preenchida.
+                          Recurso pós-julgamento só conta se a data estiver no card. Proposta vencida: Ativo → Perdido; Suspenso → Monitoramento.
                         </p>
                         <div className="space-y-2">
                           <button
@@ -14431,24 +14443,144 @@ function App() {
                               {licSummary?.due_today ?? 0}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-[13px] font-semibold text-ink dark:text-white">Vence hoje</p>
-                              <p className={subtle}>Prazo de proposta / vencimento</p>
+                              <p className="text-[13px] font-semibold text-ink dark:text-white">Proposta vence hoje</p>
+                              <p className={subtle}>Fim do recebimento de proposta</p>
                             </div>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setLicitacaoSubview('board')}
-                            className="w-full flex items-center gap-3 rounded-[12px] bg-status-warning/[0.08] border border-status-warning/20 p-2.5 text-left transition hover:bg-status-warning/[0.12]"
-                          >
-                            <span className="h-9 w-9 rounded-[10px] bg-status-warning/15 text-status-warning flex items-center justify-center shrink-0 font-bold text-sm tabular-nums">
-                              {licSummary?.due_recurso_3bd ?? licSummary?.due_48h ?? 0}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-[13px] font-semibold text-ink dark:text-white">Recurso em 3 dias úteis</p>
-                              <p className={subtle}>Calendário nacional BR · PNCP</p>
-                            </div>
-                          </button>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {[
+                              {
+                                n: licSummary?.due_impugnacao_3bd ?? 0,
+                                label: 'Impugnação',
+                                tip: '3 d.ú. antes da proposta',
+                                tone: 'warning',
+                              },
+                              {
+                                n: licSummary?.due_proposta_3bd ?? 0,
+                                label: 'Proposta',
+                                tip: 'Em até 3 d.ú.',
+                                tone: 'danger',
+                              },
+                              {
+                                n: licSummary?.due_recurso_3bd ?? 0,
+                                label: 'Recurso',
+                                tip: 'Data no card',
+                                tone: 'primary',
+                              },
+                            ].map((cell) => (
+                              <div
+                                key={cell.label}
+                                className={`rounded-[10px] border px-2 py-2 text-center ${
+                                  cell.tone === 'warning'
+                                    ? 'border-status-warning/25 bg-status-warning/[0.07]'
+                                    : cell.tone === 'danger'
+                                      ? 'border-status-danger/25 bg-status-danger/[0.07]'
+                                      : 'border-primary/20 bg-primary/[0.06]'
+                                }`}
+                                title={cell.tip}
+                              >
+                                <p className={`font-mono text-[16px] font-bold tabular-nums leading-none ${
+                                  cell.tone === 'warning' ? 'text-status-warning'
+                                    : cell.tone === 'danger' ? 'text-status-danger'
+                                      : 'text-primary'
+                                }`}>{cell.n}</p>
+                                <p className="mt-1 text-[10px] font-semibold text-ink dark:text-white leading-tight">{cell.label}</p>
+                                <p className="mt-0.5 text-[9px] text-muted leading-tight">{cell.tip}</p>
+                              </div>
+                            ))}
+                          </div>
                         </div>
+
+                        {(() => {
+                          const upcoming = Array.isArray(licSummary?.upcoming_deadlines)
+                            ? licSummary.upcoming_deadlines
+                            : [];
+                          const formatShort = (iso) => {
+                            if (!iso) return '—';
+                            try {
+                              return new Date(iso).toLocaleDateString('pt-BR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              });
+                            } catch {
+                              return '—';
+                            }
+                          };
+                          const kindClass = (kind) => {
+                            if (kind === 'impugnacao') return 'border-status-warning/30 bg-status-warning/10 text-status-warning';
+                            if (kind === 'proposta') return 'border-status-danger/30 bg-status-danger/10 text-status-danger';
+                            if (kind === 'recurso') return 'border-primary/30 bg-primary/10 text-primary';
+                            return 'border-line bg-bg2 text-muted';
+                          };
+                          const kindLabel = (kind) => {
+                            if (kind === 'impugnacao') return 'Impug.';
+                            if (kind === 'proposta') return 'Proposta';
+                            if (kind === 'recurso') return 'Recurso';
+                            return kind || 'Prazo';
+                          };
+                          if (upcoming.length === 0) {
+                            return (
+                              <div className={`${subtle} mt-3 rounded-[10px] border border-dashed border-line px-3 py-2.5 text-[12px]`}>
+                                Nenhum prazo nos próximos 3 dias úteis.
+                                {Number(licSummary?.deadline_stats?.open_with_proposal) > 0 ? (
+                                  <span className="block mt-1 text-[11px]">
+                                    Há {licSummary.deadline_stats.open_with_proposal} oportunidade(s) com fim de proposta —
+                                    a impugnação só entra no KPI quando estiver a ≤3 d.ú. do limite (3 d.ú. antes da proposta).
+                                  </span>
+                                ) : (
+                                  <span className="block mt-1 text-[11px]">
+                                    Preencha o fim da proposta no card para calcular a impugnação automaticamente.
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="mt-3 space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
+                              {upcoming.map((item) => (
+                                <button
+                                  key={`${item.id}-${item.kind}-${item.date}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setLicitacaoSubview('board');
+                                    // Abre o card se a oportunidade já estiver carregada.
+                                    const match = (licitacaoOpportunities || []).find((o) => o.id === item.id);
+                                    if (match) setSelectedOpportunity(match);
+                                  }}
+                                  className="w-full rounded-[10px] border border-line bg-bg2/60 px-2.5 py-2 text-left transition hover:border-primary/35 hover:bg-bg2"
+                                >
+                                  <div className="flex items-start gap-2">
+                                    <span className={`mt-0.5 shrink-0 rounded-md border px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ${kindClass(item.kind)}`}>
+                                      {kindLabel(item.kind)}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[12.5px] font-semibold text-ink dark:text-white truncate">
+                                        {item.numero_edital ? `Edital ${item.numero_edital}` : (item.titulo || `Oportunidade #${item.id}`)}
+                                      </p>
+                                      {item.numero_edital && item.titulo ? (
+                                        <p className="text-[11px] text-muted truncate">{item.titulo}</p>
+                                      ) : null}
+                                      <p className="mt-0.5 text-[11px] text-ink/80 dark:text-white/80">
+                                        {item.label}
+                                        <span className="text-muted"> · {formatShort(item.date)}</span>
+                                        {item.business_days_left === 0 ? (
+                                          <span className="ml-1 font-semibold text-status-danger">hoje</span>
+                                        ) : item.business_days_left != null ? (
+                                          <span className="ml-1 text-muted">em {item.business_days_left} d.ú.</span>
+                                        ) : null}
+                                      </p>
+                                      {item.reason ? (
+                                        <p className="mt-0.5 text-[10.5px] text-muted leading-snug">{item.reason}</p>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className={`${card} p-4 flex-1 flex flex-col`}>
@@ -17107,6 +17239,30 @@ function App() {
                           <div className="min-w-0">
                             <label className="mb-1 block text-xs font-medium text-status-danger">Fim da proposta</label>
                             <input type="datetime-local" className={`${input} w-full border-status-danger/30 text-sm`} value={selectedOpportunity.data_envio_proposta_limite ? new Date(selectedOpportunity.data_envio_proposta_limite).toISOString().slice(0, 16) : ''} onChange={(event) => updateSelectedOpportunity({ data_envio_proposta_limite: event.target.value || null })} />
+                          </div>
+                          <div className="min-w-0">
+                            <label className="mb-1 block text-xs font-medium text-status-warning">Impugnação (limite)</label>
+                            <input
+                              type="datetime-local"
+                              className={`${input} w-full border-status-warning/30 text-sm`}
+                              value={selectedOpportunity.data_impugnacao_limite ? new Date(selectedOpportunity.data_impugnacao_limite).toISOString().slice(0, 16) : ''}
+                              onChange={(event) => updateSelectedOpportunity({ data_impugnacao_limite: event.target.value || null })}
+                            />
+                            <p className="mt-1 text-[10px] text-muted leading-snug">
+                              Se vazio, o resumo usa 3 d.ú. antes do fim da proposta (art. 164).
+                            </p>
+                          </div>
+                          <div className="min-w-0">
+                            <label className="mb-1 block text-xs font-medium text-muted">Recurso (pós-julgamento)</label>
+                            <input
+                              type="datetime-local"
+                              className={`${input} w-full text-sm`}
+                              value={selectedOpportunity.data_recurso_limite ? new Date(selectedOpportunity.data_recurso_limite).toISOString().slice(0, 16) : ''}
+                              onChange={(event) => updateSelectedOpportunity({ data_recurso_limite: event.target.value || null })}
+                            />
+                            <p className="mt-1 text-[10px] text-muted leading-snug">
+                              Preencher após o julgamento — não é calculado sozinho.
+                            </p>
                           </div>
                           <div className="min-w-0">
                             <label className="mb-1 block text-xs font-medium text-muted">Assinatura da ata</label>

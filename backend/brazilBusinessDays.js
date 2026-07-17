@@ -177,6 +177,205 @@ function brazilBusinessDaysDeadlineWindow(n = 3, now = new Date()) {
   };
 }
 
+function parseMaybeDate(value) {
+  if (value == null || value === '') return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Limite efetivo de impugnação ao edital (Lei 14.133 art. 164):
+ * usa `data_impugnacao_limite` se preenchida; senão, fim do 3º dia útil
+ * **antes** do dia civil do prazo de envio de proposta.
+ *
+ * Ex.: proposta em 22/07 (ter) → impugnação até 17/07 (sex), se não houver feriado.
+ */
+function effectiveImpugnacaoDeadline(dataImpugnacaoLimite, dataEnvioPropostaLimite) {
+  const explicit = parseMaybeDate(dataImpugnacaoLimite);
+  if (explicit) return explicit;
+  const proposal = parseMaybeDate(dataEnvioPropostaLimite);
+  if (!proposal) return null;
+  const proposalDay = startOfDaySaoPaulo(proposal);
+  const thirdBusinessDayBefore = addBrazilBusinessDays(proposalDay, -3);
+  return endOfDaySaoPaulo(thirdBusinessDayBefore);
+}
+
+/** true se `date` cai na janela [startToday, endInclusive] (inclusive). */
+function isDateInDeadlineWindow(date, window) {
+  const d = parseMaybeDate(date);
+  if (!d || !window?.startToday || !window?.endInclusive) return false;
+  const t = d.getTime();
+  return t >= window.startToday.getTime() && t <= window.endInclusive.getTime();
+}
+
+/** true se o prazo cai no dia civil de hoje (America/Sao_Paulo). */
+function isDateTodaySaoPaulo(date, now = new Date()) {
+  const d = parseMaybeDate(date);
+  if (!d) return false;
+  return ymdInTimeZone(d, TZ).key === ymdInTimeZone(now, TZ).key;
+}
+
+/**
+ * Quantos dias úteis restam até o dia civil do prazo (0 = hoje / já no dia).
+ * Retorna null se prazo inválido; negativo se já passou o dia do prazo.
+ */
+function businessDaysUntilDeadline(deadline, now = new Date()) {
+  const d = parseMaybeDate(deadline);
+  if (!d) return null;
+  const target = startOfDaySaoPaulo(d);
+  const today = startOfDaySaoPaulo(now);
+  if (target.getTime() === today.getTime()) return 0;
+  if (target.getTime() < today.getTime()) {
+    let n = 0;
+    let cursor = target;
+    while (cursor.getTime() < today.getTime()) {
+      cursor = addBrazilCalendarDays(cursor, 1);
+      if (isBrazilBusinessDay(cursor) && cursor.getTime() <= today.getTime()) n += 1;
+      if (n > 400) break;
+    }
+    return -n;
+  }
+  let n = 0;
+  let cursor = today;
+  while (cursor.getTime() < target.getTime()) {
+    cursor = addBrazilCalendarDays(cursor, 1);
+    if (isBrazilBusinessDay(cursor)) n += 1;
+    if (n > 400) break;
+  }
+  return n;
+}
+
+/**
+ * Analisa prazos críticos do pipeline de licitações.
+ *
+ * - proposta: data_envio_proposta_limite
+ * - impugnação: explícita ou 3 d.ú. antes da proposta (art. 164)
+ * - recurso: data_recurso_limite (pós-julgamento; só se preenchida)
+ *
+ * @param {Array<object>} rows oportunidades abertas (id, titulo, numero_edital, datas…)
+ * @param {Date} [now]
+ */
+function analyzeLicitacaoDeadlineSummary(rows, now = new Date()) {
+  const window = brazilBusinessDaysDeadlineWindow(3, now);
+  const list = Array.isArray(rows) ? rows : [];
+  const upcoming = [];
+  const criticalIds = new Set();
+  let dueToday = 0;
+  let dueProposta3bd = 0;
+  let dueImpugnacao3bd = 0;
+  let dueRecurso3bd = 0;
+  let missingRecursoField = 0;
+  let withProposal = 0;
+
+  for (const row of list) {
+    const id = row.id;
+    const proposta = parseMaybeDate(row.data_envio_proposta_limite);
+    const recurso = parseMaybeDate(row.data_recurso_limite);
+    const impugnacaoExplicit = Boolean(parseMaybeDate(row.data_impugnacao_limite));
+    const impugnacao = effectiveImpugnacaoDeadline(
+      row.data_impugnacao_limite,
+      row.data_envio_proposta_limite
+    );
+
+    if (proposta) withProposal += 1;
+    if (!recurso) missingRecursoField += 1;
+
+    const base = {
+      id,
+      titulo: row.titulo || null,
+      numero_edital: row.numero_edital || null,
+      fase: row.fase || null,
+      status: row.status || null,
+      valor_oportunidade: row.valor_oportunidade != null ? Number(row.valor_oportunidade) : null,
+    };
+
+    if (proposta && isDateTodaySaoPaulo(proposta, now)) {
+      dueToday += 1;
+    }
+
+    if (proposta && isDateInDeadlineWindow(proposta, window)) {
+      dueProposta3bd += 1;
+      criticalIds.add(id);
+      const bdLeft = businessDaysUntilDeadline(proposta, now);
+      upcoming.push({
+        ...base,
+        kind: 'proposta',
+        label: bdLeft === 0 ? 'Proposta vence hoje' : 'Proposta em até 3 d.ú.',
+        date: proposta.toISOString(),
+        business_days_left: bdLeft,
+        reason: 'Prazo de envio de proposta / fim do recebimento',
+        source: 'data_envio_proposta_limite',
+      });
+    }
+
+    // Impugnação só é relevante enquanto a proposta ainda não passou.
+    const proposalStillOpen = !proposta || proposta.getTime() >= window.startToday.getTime();
+    if (impugnacao && proposalStillOpen && isDateInDeadlineWindow(impugnacao, window)) {
+      dueImpugnacao3bd += 1;
+      criticalIds.add(id);
+      const bdLeft = businessDaysUntilDeadline(impugnacao, now);
+      upcoming.push({
+        ...base,
+        kind: 'impugnacao',
+        label: bdLeft === 0 ? 'Último dia útil de impugnação' : 'Impugnação em até 3 d.ú.',
+        date: impugnacao.toISOString(),
+        business_days_left: bdLeft,
+        reason: impugnacaoExplicit
+          ? 'Data de impugnação preenchida na oportunidade'
+          : (proposta
+            ? `3 dias úteis antes do fim da proposta (${ymdInTimeZone(proposta, TZ).key.split('-').reverse().join('/')}) — Lei 14.133 art. 164`
+            : '3 dias úteis antes do fim da proposta — Lei 14.133 art. 164'),
+        source: impugnacaoExplicit ? 'data_impugnacao_limite' : 'computed_from_proposta',
+        proposta_limite: proposta ? proposta.toISOString() : null,
+      });
+    }
+
+    if (recurso && isDateInDeadlineWindow(recurso, window)) {
+      dueRecurso3bd += 1;
+      criticalIds.add(id);
+      const bdLeft = businessDaysUntilDeadline(recurso, now);
+      upcoming.push({
+        ...base,
+        kind: 'recurso',
+        label: bdLeft === 0 ? 'Recurso vence hoje' : 'Recurso em até 3 d.ú.',
+        date: recurso.toISOString(),
+        business_days_left: bdLeft,
+        reason: 'Prazo de recurso (pós-julgamento) preenchido na oportunidade',
+        source: 'data_recurso_limite',
+      });
+    }
+  }
+
+  upcoming.sort((a, b) => {
+    const da = new Date(a.date).getTime() - new Date(b.date).getTime();
+    if (da !== 0) return da;
+    return String(a.kind).localeCompare(String(b.kind));
+  });
+
+  return {
+    due_today: dueToday,
+    due_proposta_3bd: dueProposta3bd,
+    due_impugnacao_3bd: dueImpugnacao3bd,
+    due_recurso_3bd: dueRecurso3bd,
+    /** Oportunidades únicas com qualquer prazo crítico na janela de 3 d.ú. */
+    due_critical_3bd: criticalIds.size,
+    /** Alias legado (antes = só recurso; agora = críticos unificados). */
+    due_48h: criticalIds.size,
+    upcoming_deadlines: upcoming,
+    stats: {
+      open_with_proposal: withProposal,
+      open_missing_recurso_field: missingRecursoField,
+      open_count: list.length,
+    },
+    window: {
+      business_days: window.n,
+      start: window.startToday.toISOString(),
+      end: window.endInclusive.toISOString(),
+      nth_business_day: window.nthBusinessDay.toISOString(),
+    },
+  };
+}
+
 module.exports = {
   TZ,
   easterSunday,
@@ -187,4 +386,10 @@ module.exports = {
   endOfDaySaoPaulo,
   brazilBusinessDaysDeadlineWindow,
   ymdInTimeZone,
+  parseMaybeDate,
+  effectiveImpugnacaoDeadline,
+  isDateInDeadlineWindow,
+  isDateTodaySaoPaulo,
+  businessDaysUntilDeadline,
+  analyzeLicitacaoDeadlineSummary,
 };

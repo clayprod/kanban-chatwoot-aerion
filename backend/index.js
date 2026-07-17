@@ -18,9 +18,7 @@ const {
   getVapidConfig,
 } = require('./notifications');
 const {
-  brazilBusinessDaysDeadlineWindow,
-  startOfDaySaoPaulo,
-  endOfDaySaoPaulo,
+  analyzeLicitacaoDeadlineSummary,
 } = require('./brazilBusinessDays');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
@@ -15286,12 +15284,9 @@ app.get('/api/licitacoes/overview/summary', async (req, res) => {
     });
 
     // KPIs de cima: só pipeline operacional 2–12 (sem PCA).
-    // Prazo de recurso (PNCP): janela de 3 dias úteis no calendário nacional BR.
+    // Prazos críticos (3 d.ú. BR): proposta, impugnação (art. 164 auto ou explícita) e recurso.
     const openSql = getLicitacaoOpenPipelineSql('');
     const statusNorm = `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo'))`;
-    const recursoWindow = brazilBusinessDaysDeadlineWindow(3);
-    const startToday = startOfDaySaoPaulo();
-    const endToday = endOfDaySaoPaulo();
     const { rows } = await pool.query(
       `
         SELECT
@@ -15311,35 +15306,27 @@ app.get('/api/licitacoes/overview/summary', async (req, res) => {
           ), 0)::float AS suspenso_value,
           COUNT(*) FILTER (WHERE status = 'ganho')::int AS won_count,
           COUNT(*) FILTER (WHERE status = 'perdido' OR status = 'nao_atendido')::int AS lost_count,
-          COUNT(*) FILTER (
-            WHERE ${openSql}
-              AND data_recurso_limite IS NOT NULL
-              AND data_recurso_limite >= $2
-              AND data_recurso_limite <= $3
-          )::int AS due_recurso_3bd,
-          -- "Vence hoje" = vencimento real (prazo de proposta), não recurso.
-          COUNT(*) FILTER (
-            WHERE ${openSql}
-              AND data_envio_proposta_limite IS NOT NULL
-              AND data_envio_proposta_limite >= $4
-              AND data_envio_proposta_limite <= $5
-          )::int AS due_today,
           COALESCE(SUM(comissao_valor_previsto), 0) AS comissao_prevista,
           COALESCE(SUM(comissao_valor_real) FILTER (WHERE status_comissao = 'pago'), 0) AS comissao_paga
         FROM ${LICITACAO_TABLE}
         WHERE account_id = $1
       `,
-      [
-        accountId,
-        startToday.toISOString(),
-        recursoWindow.endInclusive.toISOString(),
-        startToday.toISOString(),
-        endToday.toISOString(),
-      ]
+      [accountId]
     );
+    const { rows: openRows } = await pool.query(
+      `
+        SELECT
+          id, titulo, numero_edital, fase, status, valor_oportunidade,
+          data_envio_proposta_limite, data_impugnacao_limite, data_recurso_limite,
+          data_esclarecimento_limite
+        FROM ${LICITACAO_TABLE}
+        WHERE account_id = $1
+          AND ${openSql}
+      `,
+      [accountId]
+    );
+    const deadlines = analyzeLicitacaoDeadlineSummary(openRows);
     const row = rows[0] || {};
-    const dueRecurso3bd = Number(row.due_recurso_3bd) || 0;
-    const dueToday = Number(row.due_today) || 0;
     res.json({
       opportunities_count: Number(row.opportunities_count) || 0,
       total_value: Number(row.total_value) || 0,
@@ -15355,19 +15342,26 @@ app.get('/api/licitacoes/overview/summary', async (req, res) => {
       },
       won_count: Number(row.won_count) || 0,
       lost_count: Number(row.lost_count) || 0,
-      // Recurso (PNCP): 3 dias úteis BR.
-      due_recurso_3bd: dueRecurso3bd,
       // Vencimento real (proposta) no dia de hoje.
-      due_today: dueToday,
-      // Alias: KPI antigo "48h" → agora recurso 3 d.ú.
-      due_48h: dueRecurso3bd,
+      due_today: deadlines.due_today,
+      due_proposta_3bd: deadlines.due_proposta_3bd,
+      due_impugnacao_3bd: deadlines.due_impugnacao_3bd,
+      // Recurso pós-julgamento (só se data_recurso_limite preenchida).
+      due_recurso_3bd: deadlines.due_recurso_3bd,
+      // Oportunidades únicas com qualquer prazo crítico na janela.
+      due_critical_3bd: deadlines.due_critical_3bd,
+      // Alias legado (KPI antigo "48h" / "recurso 3 d.ú.").
+      due_48h: deadlines.due_critical_3bd,
       overdue_count: 0,
       comissao_prevista: row.comissao_prevista,
       comissao_paga: row.comissao_paga,
+      upcoming_deadlines: deadlines.upcoming_deadlines,
+      deadline_stats: deadlines.stats,
       recurso_window: {
-        business_days: 3,
-        end: recursoWindow.endInclusive.toISOString(),
-        nth_business_day: recursoWindow.nthBusinessDay.toISOString(),
+        business_days: deadlines.window.business_days,
+        start: deadlines.window.start,
+        end: deadlines.window.end,
+        nth_business_day: deadlines.window.nth_business_day,
       },
     });
   } catch (error) {
@@ -18658,12 +18652,10 @@ const registerBackgroundSchedules = () => {
     try {
       const result = await emitDeadlineDigest(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
-        // Digest de recurso: pipeline operacional (sem PCA) + 3 dias úteis BR.
+        // Digest de prazos: pipeline operacional (sem PCA) + 3 dias úteis BR.
         getLicitacaoOpenPipelineSql: getLicitacaoOperationalPipelineSql,
         runExpiredLicitacaoProposalMove,
-        brazilBusinessDaysDeadlineWindow,
-        startOfDaySaoPaulo,
-        endOfDaySaoPaulo,
+        analyzeLicitacaoDeadlineSummary,
       });
       if (result.created > 0 || result.pushed > 0) {
         console.log('[notifications] deadline digest:', result);

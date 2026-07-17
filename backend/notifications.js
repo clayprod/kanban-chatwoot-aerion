@@ -133,8 +133,8 @@ const NOTIFICATION_TYPE_CATALOG = {
   'pipeline.due_48h': {
     type: 'pipeline.due_48h',
     category: 'licitacoes',
-    label: 'Prazo de recurso em 3 dias úteis',
-    description: 'Oportunidades com data limite de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
+    label: 'Prazos críticos em 3 dias úteis',
+    description: 'Oportunidades com proposta, impugnação (3 d.ú. antes do edital) ou recurso nos próximos 3 dias úteis (calendário nacional BR).',
     channels: ['in_app', 'push'],
   },
   'pipeline.due_today': {
@@ -638,9 +638,7 @@ const emitDeadlineDigest = async (pool, {
   accountId = 2,
   getLicitacaoOpenPipelineSql,
   runExpiredLicitacaoProposalMove,
-  brazilBusinessDaysDeadlineWindow,
-  startOfDaySaoPaulo,
-  endOfDaySaoPaulo,
+  analyzeLicitacaoDeadlineSummary,
 }) => {
   const dayKey = new Date().toISOString().slice(0, 10);
 
@@ -653,53 +651,36 @@ const emitDeadlineDigest = async (pool, {
     }
   }
 
-  // Prazo de recurso (PNCP), 3 dias úteis no calendário nacional BR.
+  // Prazos críticos em 3 d.ú. BR: proposta, impugnação (art. 164) e recurso.
   const openSql = typeof getLicitacaoOpenPipelineSql === 'function'
     ? getLicitacaoOpenPipelineSql()
     : `LOWER(COALESCE(NULLIF(TRIM(status), ''), 'ativo')) IN ('ativo', 'suspenso')
        AND NULLIF(substring(COALESCE(fase, '') from '^[0-9]+'), '')::int BETWEEN 2 AND 12`;
 
-  const windowFn = typeof brazilBusinessDaysDeadlineWindow === 'function'
-    ? brazilBusinessDaysDeadlineWindow
-    : null;
-  const startTodayFn = typeof startOfDaySaoPaulo === 'function' ? startOfDaySaoPaulo : null;
-  const endTodayFn = typeof endOfDaySaoPaulo === 'function' ? endOfDaySaoPaulo : null;
-
-  let dueRecurso3bd = 0;
+  let dueCritical3bd = 0;
   let dueToday = 0;
+  let dueImpugnacao3bd = 0;
+  let dueRecurso3bd = 0;
+  let dueProposta3bd = 0;
 
-  if (windowFn && startTodayFn && endTodayFn) {
-    const win = windowFn(3);
-    const startToday = startTodayFn();
-    const endToday = endTodayFn();
+  if (typeof analyzeLicitacaoDeadlineSummary === 'function') {
     const { rows } = await pool.query(
       `
         SELECT
-          COUNT(*) FILTER (
-            WHERE ${openSql}
-              AND data_recurso_limite IS NOT NULL
-              AND data_recurso_limite >= $2
-              AND data_recurso_limite <= $3
-          )::int AS due_recurso_3bd,
-          COUNT(*) FILTER (
-            WHERE ${openSql}
-              AND data_envio_proposta_limite IS NOT NULL
-              AND data_envio_proposta_limite >= $4
-              AND data_envio_proposta_limite <= $5
-          )::int AS due_today
+          id, titulo, numero_edital, fase, status, valor_oportunidade,
+          data_envio_proposta_limite, data_impugnacao_limite, data_recurso_limite
         FROM licitacao_opportunities
         WHERE account_id = $1
+          AND ${openSql}
       `,
-      [
-        accountId,
-        startToday.toISOString(),
-        win.endInclusive.toISOString(),
-        startToday.toISOString(),
-        endToday.toISOString(),
-      ]
+      [accountId]
     );
-    dueRecurso3bd = Number(rows[0]?.due_recurso_3bd) || 0;
-    dueToday = Number(rows[0]?.due_today) || 0;
+    const deadlines = analyzeLicitacaoDeadlineSummary(rows);
+    dueCritical3bd = Number(deadlines.due_critical_3bd) || 0;
+    dueToday = Number(deadlines.due_today) || 0;
+    dueImpugnacao3bd = Number(deadlines.due_impugnacao_3bd) || 0;
+    dueRecurso3bd = Number(deadlines.due_recurso_3bd) || 0;
+    dueProposta3bd = Number(deadlines.due_proposta_3bd) || 0;
   }
 
   let created = 0;
@@ -717,13 +698,25 @@ const emitDeadlineDigest = async (pool, {
     created += r.created;
     pushed += r.pushed;
   }
-  if (dueRecurso3bd > 0) {
+  if (dueCritical3bd > 0) {
+    const parts = [];
+    if (dueImpugnacao3bd > 0) parts.push(`${dueImpugnacao3bd} impugnação`);
+    if (dueProposta3bd > 0) parts.push(`${dueProposta3bd} proposta`);
+    if (dueRecurso3bd > 0) parts.push(`${dueRecurso3bd} recurso`);
+    const detail = parts.length ? parts.join(' · ') : 'proposta, impugnação ou recurso';
     const r = await notifyAccountUsers(pool, {
       accountId,
       type: 'pipeline.due_48h',
-      title: `${dueRecurso3bd} licitação${dueRecurso3bd === 1 ? '' : 'ões'} com recurso em 3 dias úteis`,
-      body: 'Prazo de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
-      data: { view: 'Licitações', sub: 'overview', count: dueRecurso3bd },
+      title: `${dueCritical3bd} licitação${dueCritical3bd === 1 ? '' : 'ões'} com prazo em 3 dias úteis`,
+      body: `Prazos críticos (calendário nacional BR): ${detail}.`,
+      data: {
+        view: 'Licitações',
+        sub: 'overview',
+        count: dueCritical3bd,
+        due_impugnacao_3bd: dueImpugnacao3bd,
+        due_proposta_3bd: dueProposta3bd,
+        due_recurso_3bd: dueRecurso3bd,
+      },
       dedupeKey: `account:${accountId}:day:${dayKey}`,
     });
     created += r.created;
@@ -731,9 +724,12 @@ const emitDeadlineDigest = async (pool, {
   }
   return {
     overdue: 0,
-    due48: dueRecurso3bd,
+    due48: dueCritical3bd,
     dueToday,
+    due_critical_3bd: dueCritical3bd,
     due_recurso_3bd: dueRecurso3bd,
+    due_impugnacao_3bd: dueImpugnacao3bd,
+    due_proposta_3bd: dueProposta3bd,
     created,
     pushed,
   };

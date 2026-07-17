@@ -109,8 +109,8 @@ export const NOTIFICATION_TYPES = [
   {
     type: 'pipeline.due_48h',
     category: 'licitacoes',
-    label: 'Prazo de recurso em 3 dias úteis',
-    description: 'Oportunidades com data limite de recurso (PNCP) nos próximos 3 dias úteis (calendário nacional BR).',
+    label: 'Prazos críticos em 3 dias úteis',
+    description: 'Oportunidades com proposta, impugnação (3 d.ú. antes do edital) ou recurso nos próximos 3 dias úteis (calendário nacional BR).',
   },
   {
     type: 'pipeline.due_today',
