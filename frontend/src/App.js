@@ -19122,6 +19122,9 @@ function App() {
                                         const proposalGroups = groupRequirementsBySection(proposalReqs);
                                         const proposalCounts = countRequirementStatuses(proposalReqs);
                                         const proposalSectionCount = proposalGroups.filter((g) => g.secao).length;
+                                        const hasEvaluated = proposalReqs.some((req) => (
+                                          req.status === 'ok' || req.status === 'nao_ok'
+                                        ));
 
                                         return (
                                           <>
