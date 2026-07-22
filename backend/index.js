@@ -18507,7 +18507,7 @@ Modelo de canal: revendas/integradores; não concorre em serviço final; licita�
 
 let trendsIntelMemory = null; // { dayKey, payload, updatedAt }
 let trendsIntelRefreshRunning = false;
-const TRENDS_MEDIA_VERSION = 3;
+const TRENDS_MEDIA_VERSION = 4;
 
 const brDayKey = (date = new Date()) => {
   // America/Sao_Paulo as YYYY-MM-DD without external deps
@@ -18638,8 +18638,10 @@ const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
       limit: 12,
       concurrency: 3,
     });
-    const enrichedPictures = trendsWithPictures.slice(0, 12).filter((item) => item.picture).length;
-    console.log(`[trends-intel] news previews=${enrichedPictures}/${Math.min(trends.length, 12)}`);
+    const previewPictures = trendsWithPictures.slice(0, 12).map((item) => item.picture).filter(Boolean);
+    const enrichedPictures = previewPictures.length;
+    const uniquePictures = new Set(previewPictures).size;
+    console.log(`[trends-intel] news previews=${enrichedPictures}/${Math.min(trends.length, 12)} unique=${uniquePictures}`);
     return {
       geo: TRENDS_GEO,
       source: 'google_news_sector',

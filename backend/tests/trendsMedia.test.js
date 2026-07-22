@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const {
   extractRssImage,
   extractHtmlPreviewImage,
+  isGenericGoogleNewsImage,
+  resolveGoogleNewsArticleUrl,
+  fetchArticlePreviewImage,
   enrichNewsPictures,
   combineTrendsFeeds,
 } = require('../trendsMedia');
@@ -16,6 +19,10 @@ test('extrai imagens dos campos usados pelo RSS do Google Trends', () => {
     extractRssImage('<media:thumbnail url="https://img.example/thumb.jpg" />'),
     'https://img.example/thumb.jpg'
   );
+  assert.equal(
+    extractRssImage('<media:thumbnail url="https://lh3.googleusercontent.com/J6_coFbogxhRI9iM864NL_liGXvsQp2AupsKei7z0cNNfDvGUmWUy20nuUhkREQyrpY4bEeIBuc=s0-w300" />'),
+    null
+  );
 });
 
 test('extrai og:image independentemente da ordem dos atributos', () => {
@@ -27,6 +34,62 @@ test('extrai og:image independentemente da ordem dos atributos', () => {
     extractHtmlPreviewImage('<meta name="twitter:image" content="https://img.example/social.jpg">'),
     'https://img.example/social.jpg'
   );
+});
+
+test('identifica o thumbnail genérico do Google News', () => {
+  assert.equal(
+    isGenericGoogleNewsImage('https://lh3.googleusercontent.com/J6_coFbogxhRI9iM864NL_liGXvsQp2AupsKei7z0cNNfDvGUmWUy20nuUhkREQyrpY4bEeIBuc=s0-w300'),
+    true
+  );
+  assert.equal(isGenericGoogleNewsImage('https://publisher.example/real-cover.jpg'), false);
+});
+
+test('resolve o link intermediário do Google News para a matéria original', async () => {
+  const requested = [];
+  const decodedUrl = 'https://publisher.example/story';
+  const rpcLine = JSON.stringify([['wrb.fr', 'Fbv4je', JSON.stringify([null, decodedUrl])]]);
+  const fetchImpl = async (url) => {
+    requested.push(String(url));
+    if (String(url).includes('/batchexecute')) return new Response(`)]}'\n\n${rpcLine}\n`, { status: 200 });
+    return new Response('<c-wiz><div data-n-a-sg="signature" data-n-a-ts="123456"></div></c-wiz>', { status: 200 });
+  };
+
+  const resolved = await resolveGoogleNewsArticleUrl(
+    'https://news.google.com/rss/articles/article-id?oc=5',
+    { fetchImpl }
+  );
+
+  assert.equal(resolved, decodedUrl);
+  assert.equal(requested.length, 2);
+});
+
+test('busca og:image no publisher, não na página genérica do Google News', async () => {
+  const requested = [];
+  const decodedUrl = 'https://publisher.example/story';
+  const rpcLine = JSON.stringify([['wrb.fr', 'Fbv4je', JSON.stringify([null, decodedUrl])]]);
+  const fetchImpl = async (url) => {
+    requested.push(String(url));
+    if (String(url).includes('/batchexecute')) return new Response(`)]}'\n\n${rpcLine}\n`, { status: 200 });
+    if (String(url) === decodedUrl) {
+      return new Response('<head><meta property="og:image" content="/real-cover.jpg"></head>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
+    return new Response('<div data-n-a-sg="signature" data-n-a-ts="123456"></div>', { status: 200 });
+  };
+
+  const picture = await fetchArticlePreviewImage(
+    'https://news.google.com/rss/articles/article-id?oc=5',
+    { fetchImpl }
+  );
+
+  assert.equal(picture, 'https://publisher.example/real-cover.jpg');
+  assert.deepEqual(requested, [
+    'https://news.google.com/rss/articles/article-id',
+    'https://news.google.com/_/DotsSplashUi/data/batchexecute',
+    decodedUrl,
+  ]);
 });
 
 test('enriquece apenas os itens sem imagem usando o preview da matéria', async () => {

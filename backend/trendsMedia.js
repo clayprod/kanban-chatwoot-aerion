@@ -15,6 +15,20 @@ const extractXmlTag = (block, tag) => {
 
 const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || '').trim());
 
+const isGoogleNewsArticleUrl = (value) => {
+  try {
+    const url = new URL(String(value || ''));
+    return url.hostname === 'news.google.com' && /\/(?:rss\/)?articles?\//i.test(url.pathname);
+  } catch (_) {
+    return false;
+  }
+};
+
+const isGenericGoogleNewsImage = (value) => (
+  /lh3\.googleusercontent\.com\/J6_coFbogxhRI9iM864NL_liGXvsQp2AupsKei7z0cNNfDvGUmWUy20nuUhkREQyrpY4bEeIBuc/i
+    .test(String(value || ''))
+);
+
 const extractRssImage = (block = '') => {
   const source = String(block);
   const direct = source.match(/<(?:media:content|media:thumbnail|enclosure)\b[^>]*\burl=["']([^"']+)["']/i);
@@ -25,7 +39,7 @@ const extractRssImage = (block = '') => {
   const description = extractXmlTag(source, 'description');
   const embedded = description.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
   const value = decodeXmlEntities(direct?.[1] || tagged || embedded?.[1] || '');
-  return isHttpUrl(value) ? value : null;
+  return isHttpUrl(value) && !isGenericGoogleNewsImage(value) ? value : null;
 };
 
 const extractHtmlPreviewImage = (html = '', baseUrl = '') => {
@@ -67,6 +81,73 @@ const readResponsePrefix = async (response, maxBytes = 768 * 1024) => {
   return text;
 };
 
+const resolveGoogleNewsArticleUrl = async (articleUrl, {
+  fetchImpl = fetch,
+  signal,
+} = {}) => {
+  if (!isGoogleNewsArticleUrl(articleUrl)) return null;
+  try {
+    const parsed = new URL(articleUrl);
+    const articleId = parsed.pathname.split('/').filter(Boolean).at(-1);
+    if (!articleId) return null;
+
+    const pageResponse = await fetchImpl(`https://news.google.com/rss/articles/${articleId}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AerionSalesCommand/1.0; +https://aerion.com.br)',
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+      },
+      signal,
+    });
+    if (!pageResponse.ok) return null;
+    const pageHtml = await pageResponse.text();
+    const signature = pageHtml.match(/data-n-a-sg=["']([^"']+)/i)?.[1];
+    const timestamp = pageHtml.match(/data-n-a-ts=["']([^"']+)/i)?.[1];
+    if (!signature || !timestamp) return null;
+
+    const rpcArguments = [
+      'garturlreq',
+      [['X', 'X', ['X', 'X'], null, null, 1, 1, 'BR:pt-419', null, 1, null, null, null, null, null, 0, 1], 'X', 'X', 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0],
+      articleId,
+      Number(timestamp),
+      signature,
+    ];
+    const body = new URLSearchParams({
+      'f.req': JSON.stringify([[['Fbv4je', JSON.stringify(rpcArguments), null, 'generic']]]),
+    });
+    const rpcResponse = await fetchImpl('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        Origin: 'https://news.google.com',
+        Referer: 'https://news.google.com/',
+        'User-Agent': 'Mozilla/5.0 (compatible; AerionSalesCommand/1.0; +https://aerion.com.br)',
+      },
+      body,
+      signal,
+    });
+    if (!rpcResponse.ok) return null;
+    const rpcText = await rpcResponse.text();
+    for (const line of rpcText.split('\n')) {
+      if (!line.trimStart().startsWith('[[')) continue;
+      let rows;
+      try {
+        rows = JSON.parse(line);
+      } catch (_) {
+        continue;
+      }
+      const result = rows.find((row) => row?.[1] === 'Fbv4je');
+      if (!result?.[2]) continue;
+      try {
+        const resolved = JSON.parse(result[2])?.[1];
+        if (isHttpUrl(resolved) && !isGoogleNewsArticleUrl(resolved)) return resolved;
+      } catch (_) { /* ignore malformed RPC payload */ }
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+};
+
 const fetchArticlePreviewImage = async (articleUrl, {
   fetchImpl = fetch,
   timeoutMs = 10000,
@@ -75,7 +156,11 @@ const fetchArticlePreviewImage = async (articleUrl, {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(articleUrl, {
+    const previewUrl = isGoogleNewsArticleUrl(articleUrl)
+      ? await resolveGoogleNewsArticleUrl(articleUrl, { fetchImpl, signal: controller.signal })
+      : articleUrl;
+    if (!isHttpUrl(previewUrl)) return null;
+    const response = await fetchImpl(previewUrl, {
       redirect: 'follow',
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; AerionSalesCommand/1.0; +https://aerion.com.br)',
@@ -87,7 +172,8 @@ const fetchArticlePreviewImage = async (articleUrl, {
     const contentType = String(response.headers?.get?.('content-type') || '');
     if (contentType && !/html|xhtml/i.test(contentType)) return null;
     const html = await readResponsePrefix(response);
-    return extractHtmlPreviewImage(html, response.url || articleUrl);
+    const picture = extractHtmlPreviewImage(html, response.url || previewUrl);
+    return picture && !isGenericGoogleNewsImage(picture) ? picture : null;
   } catch (_) {
     return null;
   } finally {
@@ -161,6 +247,9 @@ module.exports = {
   extractXmlTag,
   extractRssImage,
   extractHtmlPreviewImage,
+  isGoogleNewsArticleUrl,
+  isGenericGoogleNewsImage,
+  resolveGoogleNewsArticleUrl,
   fetchArticlePreviewImage,
   enrichNewsPictures,
   combineTrendsFeeds,
