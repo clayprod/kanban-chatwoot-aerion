@@ -411,8 +411,13 @@ const rerankPncpItems = async (items, queryText, { timeoutMs = 2500, topN = 60 }
 
   const doRerank = async () => {
     const sorted = [...items].sort((a, b) => (b.score || 0) - (a.score || 0));
-    const top = sorted.slice(0, topN);
-    const rest = sorted.slice(topN);
+    // Itens sem NENHUMA evidência textual estão travados em 37 independente do
+    // embedding (ver decoratePncpSearchItem) — embedá-los é gasto sem efeito.
+    // Fora do orçamento de topN, mantém score/posição intactos.
+    const eligible = sorted.filter((it) => it.evidencia_textual && it.evidencia_textual !== 'nenhuma');
+    const ineligible = sorted.filter((it) => !it.evidencia_textual || it.evidencia_textual === 'nenhuma');
+    const top = eligible.slice(0, topN);
+    const rest = [...eligible.slice(topN), ...ineligible];
 
     const texts = top.map((item) => {
       const titulo = item.titulo || '';
