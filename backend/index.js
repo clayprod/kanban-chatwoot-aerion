@@ -22,6 +22,12 @@ const {
 const {
   analyzeLicitacaoDeadlineSummary,
 } = require('./brazilBusinessDays');
+const {
+  decodeXmlEntities,
+  extractXmlTag,
+  extractRssImage,
+  enrichNewsPictures,
+} = require('./trendsMedia');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -17875,6 +17881,7 @@ Modelo de canal: revendas/integradores; não concorre em serviço final; licita�
 
 let trendsIntelMemory = null; // { dayKey, payload, updatedAt }
 let trendsIntelRefreshRunning = false;
+const TRENDS_MEDIA_VERSION = 2;
 
 const brDayKey = (date = new Date()) => {
   // America/Sao_Paulo as YYYY-MM-DD without external deps
@@ -17885,30 +17892,6 @@ const brDayKey = (date = new Date()) => {
     day: '2-digit',
   });
   return fmt.format(date);
-};
-
-const decodeXmlEntities = (value = '') => String(value)
-  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-  .replace(/&quot;/g, '"')
-  .replace(/&apos;/g, "'")
-  .replace(/&lt;/g, '<')
-  .replace(/&gt;/g, '>')
-  .replace(/&amp;/g, '&')
-  .trim();
-
-const extractXmlTag = (block, tag) => {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i');
-  const m = block.match(re);
-  return m ? decodeXmlEntities(m[1]) : '';
-};
-
-const extractRssImage = (block = '') => {
-  const source = String(block);
-  const direct = source.match(/<(?:media:content|media:thumbnail|enclosure)\b[^>]*\burl=["']([^"']+)["']/i);
-  const description = extractXmlTag(source, 'description');
-  const embedded = description.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
-  const value = decodeXmlEntities(direct?.[1] || embedded?.[1] || '');
-  return /^https?:\/\//i.test(value) ? value : null;
 };
 
 const parseGoogleTrendsRss = (xml = '') => {
@@ -18025,6 +18008,12 @@ const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
       if (trends.length >= 20) break;
     }
     if (!trends.length) throw new Error('Google News setorial vazio');
+    const trendsWithPictures = await enrichNewsPictures(trends, {
+      limit: 12,
+      concurrency: 3,
+    });
+    const enrichedPictures = trendsWithPictures.slice(0, 12).filter((item) => item.picture).length;
+    console.log(`[trends-intel] news previews=${enrichedPictures}/${Math.min(trends.length, 12)}`);
     return {
       geo: TRENDS_GEO,
       source: 'google_news_sector',
@@ -18032,7 +18021,7 @@ const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
       timeframe: 'news-7d',
       seeds: list,
       by_seed: { _query: query },
-      trends,
+      trends: trendsWithPictures,
     };
   } finally {
     clearTimeout(timeout);
@@ -19371,14 +19360,15 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
   // Cache genérico do país (RSS) não serve se queremos radar setorial por seeds — regenera 1×.
   const cacheIsUsableSector = (meta) => {
     if (!TRENDS_SEEDS.length) return true;
-    return isSectorTrendsSource(meta?.source);
+    return isSectorTrendsSource(meta?.source)
+      && Number(meta?.mediaVersion || 0) >= TRENDS_MEDIA_VERSION;
   };
 
   if (!force && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
     if (cacheIsUsableSector(trendsIntelMemory.payload.meta)) {
       return serveCached(trendsIntelMemory.payload, 'memory');
     }
-    console.log('[trends-intel] cache memória é RSS geral — regenerando setorial');
+    console.log('[trends-intel] cache memória desatualizado — regenerando radar setorial');
   }
 
   if (!force) {
@@ -19405,7 +19395,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       return payload;
     }
     if (fromDb && !cacheIsUsableSector(fromDb.meta)) {
-      console.log('[trends-intel] cache DB é RSS geral — regenerando setorial');
+      console.log('[trends-intel] cache DB desatualizado — regenerando radar setorial');
     }
   }
 
@@ -19451,6 +19441,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
         by_seed: trendsPayload.by_seed || {},
         pytrends_error: trendsPayload.pytrends_error || null,
         partial_errors: trendsPayload.partial_errors || [],
+        mediaVersion: TRENDS_MEDIA_VERSION,
         ai,
         updatedAt: new Date().toISOString(),
         dailyCache: true,
@@ -19497,7 +19488,11 @@ const loadTrendsIntelCacheOnly = async () => {
     }
   }
 
-  if (!raw || (TRENDS_SEEDS.length && !isSectorTrendsSource(raw.meta?.source))) return null;
+  if (
+    !raw
+    || (TRENDS_SEEDS.length && !isSectorTrendsSource(raw.meta?.source))
+    || Number(raw.meta?.mediaVersion || 0) < TRENDS_MEDIA_VERSION
+  ) return null;
   const intel = await reSanitizeCachedIntel(raw.intel, raw.trends);
   const payload = {
     day: raw.day || raw.dayKey || dayKey,
@@ -19880,6 +19875,8 @@ const createRFBTables = async () => {
       `CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem ON rfb_estabelecimentos(cnpj_ordem)`,
       `CREATE INDEX IF NOT EXISTS idx_rfb_est_basico ON rfb_estabelecimentos(cnpj_basico)`,
       `CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico ON rfb_socios(cnpj_basico)`,
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_emp_capital_desc
+         ON rfb_empresas ((NULLIF(replace(replace(capital_social,'.',''),',','.'), '')::NUMERIC) DESC NULLS LAST, cnpj_basico)`,
     ];
     for (const idx of criticalIndexes) {
       const name = idx.match(/idx_rfb_\w+/)?.[0] || '?';
@@ -19897,6 +19894,27 @@ const createRFBTables = async () => {
 let _rfbMunicipiosCache = null;
 let _rfbCnaesCache = null;
 let _rfbNaturezasCache = null;
+let _rfbCapitalIndexStatusCache = { checkedAt: 0, exists: false, ready: false };
+
+const getRfbCapitalIndexStatus = async ({ force = false } = {}) => {
+  if (!force && Date.now() - _rfbCapitalIndexStatusCache.checkedAt < 60000) {
+    return _rfbCapitalIndexStatusCache;
+  }
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*) > 0 AS exists,
+      COALESCE(BOOL_AND(i.indisready AND i.indisvalid), false) AS ready
+    FROM pg_class idx
+    JOIN pg_index i ON i.indexrelid = idx.oid
+    WHERE idx.relname = 'idx_rfb_emp_capital_desc'
+  `);
+  _rfbCapitalIndexStatusCache = {
+    checkedAt: Date.now(),
+    exists: Boolean(rows[0]?.exists),
+    ready: Boolean(rows[0]?.ready),
+  };
+  return _rfbCapitalIndexStatusCache;
+};
 
 // GET /api/rfb/status
 app.get('/api/rfb/status', async (req, res) => {
@@ -19904,7 +19922,7 @@ app.get('/api/rfb/status', async (req, res) => {
     // COUNT(*) em tabelas grandes é muito lento — usar estimativa do catálogo do PG
     const fastCount = (table) =>
       pool.query(`SELECT reltuples::BIGINT AS count FROM pg_class WHERE relname = $1`, [table]);
-    const [logRow, empCount, estCount, simCount, socCount, cnaeCount, munCount] = await Promise.all([
+    const [logRow, empCount, estCount, simCount, socCount, cnaeCount, munCount, capitalIndex] = await Promise.all([
       pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
       fastCount('rfb_empresas'),
       fastCount('rfb_estabelecimentos'),
@@ -19912,6 +19930,7 @@ app.get('/api/rfb/status', async (req, res) => {
       fastCount('rfb_socios'),
       pool.query(`SELECT COUNT(*) FROM rfb_cnaes`),
       pool.query(`SELECT COUNT(*) FROM rfb_municipios`),
+      getRfbCapitalIndexStatus({ force: true }),
     ]);
     const last = logRow.rows[0];
     const empresas = parseInt(empCount.rows[0].count, 10);
@@ -19927,6 +19946,12 @@ app.get('/api/rfb/status', async (req, res) => {
         simples: parseInt(simCount.rows[0].count, 10),
         cnaes: parseInt(cnaeCount.rows[0].count, 10),
         municipios: parseInt(munCount.rows[0].count, 10),
+      },
+      indexes: {
+        capital_social_order: {
+          exists: capitalIndex.exists,
+          ready: capitalIndex.ready,
+        },
       },
     });
   } catch (err) {
@@ -20194,10 +20219,16 @@ app.get('/api/rfb/search', async (req, res) => {
       capital_min = '', capital_max = '',
       abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
-      order_by = 'razao_social',
+      order_by = 'capital_desc',
       known_total = '',  // client passes cached total on page>1 to skip count query
+      known_total_progressive = 'false',
     } = req.query;
 
+    // Durante a primeira criação CONCURRENTLY, mantém a busca disponível com a
+    // ordenação local antiga. A ordenação global só entra quando o índice está válido.
+    const capitalIndexStatus = order_by === 'capital_desc'
+      ? await getRfbCapitalIndexStatus()
+      : { exists: false, ready: false };
     const limit  = Math.min(Math.max(parseInt(page_size, 10) || 10, 1), 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
@@ -20638,10 +20669,10 @@ app.get('/api/rfb/search', async (req, res) => {
     const usesProgressiveTotal = hasCombinedHeavyFilters || hasBroadCnaeSearch || cnaeInlineProgressive;
 
     // Ordenação
-    // Progressive path: SEM ORDER BY — permite early-stop no índice de CNAE.
-    // ORDER BY e.cnpj_basico forçava coletar/ordenar todos os matches do filtro antes
-    // do LIMIT (timeout com porte/capital seletivos sobre CNAEs grandes).
-    // Com CTE de nome/sócio materializado (~dezenas de K), ORDER BY SQL é seguro.
+    // Capital decrescente é a ordenação comercial padrão e precisa ser global, não
+    // apenas dentro da página. O índice de expressão idx_rfb_emp_capital_desc permite
+    // ao planner percorrer empresas do maior capital para o menor e encerrar no LIMIT.
+    // As demais ordenações continuam evitando full sort nos caminhos progressivos.
     const ORDER_MAP = {
       razao_social:  'emp.razao_social NULLS LAST',
       nome_fantasia: 'e.nome_fantasia NULLS LAST',
@@ -20652,9 +20683,11 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_desc: 'e.data_de_inicio_da_atividade DESC NULLS LAST',
       abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
-    const useSqlOrder = !usesProgressiveTotal && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0);
+    const useSqlOrder = order_by === 'capital_desc'
+      ? capitalIndexStatus.ready
+      : (!usesProgressiveTotal && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0));
     const sqlOrderClause = useSqlOrder
-      ? (ORDER_MAP[order_by] || 'emp.razao_social NULLS LAST')
+      ? `${ORDER_MAP[order_by] || ORDER_MAP.capital_desc}, emp.cnpj_basico, e.cnpj_ordem`
       : null;
 
     let allCtes  = [...nomeCtes, ...cnaeCtes, ...endCtes, ...socioCtes];
@@ -20676,7 +20709,7 @@ app.get('/api/rfb/search', async (req, res) => {
     const ctePrefix = allCtes.length > 0 ? `WITH ${allCtes.join(',\n')}` : '';
     // hasNarrowFilter → LATERAL força nested loop: N lookups pontuais via idx_rfb_emp_basico
     // em vez de hash join + seq scan de 67M linhas de rfb_empresas.
-    const rfbEmpJoin = hasNarrowFilter
+    const rfbEmpJoin = hasNarrowFilter && !useSqlOrder
       ? `JOIN LATERAL (SELECT razao_social, capital_social, porte_da_empresa, natureza_juridica FROM rfb_empresas WHERE cnpj_basico = e.cnpj_basico LIMIT 1) emp ON true`
       : `JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico`;
     const baseQuery = `
@@ -20751,8 +20784,11 @@ app.get('/api/rfb/search', async (req, res) => {
     // Se o cliente já tem o total (paginação page>1), pula a query de count para economizar
     // ~12s em buscas filtradas (ELG+SC etc.). O total não muda entre páginas.
     const cachedTotal    = known_total !== '' ? parseInt(known_total, 10) : NaN;
+    const cachedProgressive = known_total_progressive === 'true';
     const skipCount      = (!isNaN(cachedTotal) && cachedTotal >= 0) || usesProgressiveTotal;
-    const queryLimit     = usesProgressiveTotal ? limit + 1 : limit;
+    // Sempre busca uma linha extra. Assim has_more vem dos dados reais e a paginação
+    // nunca para artificialmente em 100 ou 10.000 resultados.
+    const queryLimit     = limit + 1;
     const countQueryFull = skipCount ? null : `${ctePrefix} SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`;
 
     let dataRows, countRow;
@@ -20782,14 +20818,19 @@ app.get('/api/rfb/search', async (req, res) => {
       }
     }
 
-    const hasMoreRows = usesProgressiveTotal && dataRows.rows.length > limit;
+    const hasMoreRows = dataRows.rows.length > limit;
     if (hasMoreRows) dataRows.rows = dataRows.rows.slice(0, limit);
-    // Progressive: total é limite inferior (não contagem exata). has_more=true significa
-    // "há mais do que total-1". Nunca fingimos que 101 é o universo completo.
-    if (usesProgressiveTotal) {
+    // COUNT é limitado a 10.001 para proteger buscas enormes. Ao atingir esse teto,
+    // o total vira progressivo, mas a navegação continua até a última linha.
+    const countedTotal = parseInt(countRow.rows[0].count, 10) || 0;
+    let responseProgressive = usesProgressiveTotal || cachedProgressive || (!skipCount && countedTotal >= 10001);
+    if (responseProgressive && hasMoreRows) {
       const visibleTotal = offset + dataRows.rows.length + (hasMoreRows ? 1 : 0);
-      const currentTotal = parseInt(countRow.rows[0].count, 10) || 0;
-      countRow.rows[0].count = String(Math.max(currentTotal, visibleTotal));
+      countRow.rows[0].count = String(Math.max(countedTotal, visibleTotal));
+    } else if (!hasMoreRows) {
+      // Chegou ao fim: agora o offset + a página formam um total exato.
+      countRow.rows[0].count = String(offset + dataRows.rows.length);
+      responseProgressive = false;
     }
 
     // Deriva primeiro_socio de socios_nomes (evita segunda subquery no PG)
@@ -20824,9 +20865,13 @@ app.get('/api/rfb/search', async (req, res) => {
       total: resolvedTotal,
       page: parseInt(page, 10) || 1,
       page_size: limit,
-      // progressive=true: total é mínimo conhecido; não rode COUNT(*) no universo (timeout).
-      progressive: usesProgressiveTotal,
-      has_more: usesProgressiveTotal ? hasMoreRows : resolvedTotal > offset + dataRows.rows.length,
+      // progressive=true: total é mínimo conhecido; resultados continuam paginados sem corte.
+      progressive: responseProgressive,
+      has_more: hasMoreRows,
+      order_scope: order_by === 'capital_desc'
+        ? (capitalIndexStatus.ready ? 'global' : 'page_fallback')
+        : (useSqlOrder ? 'global' : 'page'),
+      capital_index_ready: capitalIndexStatus.ready,
     };
     if (cnaeSecondarySkippedNoGeo) {
       // UI pode avisar: CNAE secundário exige UF/município em buscas nacionais.

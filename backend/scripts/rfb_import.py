@@ -341,6 +341,7 @@ def create_indexes(conn, suffix=''):
         f"CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae_sec_arr{s} ON rfb_estabelecimentos{s} USING gin(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ','))",
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao{s}  ON rfb_estabelecimentos{s}(situacao_cadastral)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte{s}     ON rfb_empresas{s}(porte_da_empresa)',
+        f"CREATE INDEX IF NOT EXISTS idx_rfb_emp_capital_desc{s} ON rfb_empresas{s} ((NULLIF(replace(replace(capital_social,'.',''),',','.'), '')::NUMERIC) DESC NULLS LAST, cnpj_basico)",
         f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico{s} ON rfb_socios{s}(cnpj_basico)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao{s}     ON rfb_empresas{s}(razao_social text_pattern_ops)',
         f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_nome{s}   ON rfb_socios{s}(nome_do_socio text_pattern_ops)',

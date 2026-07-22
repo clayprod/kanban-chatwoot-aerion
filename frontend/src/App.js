@@ -7791,10 +7791,16 @@ function App() {
   const [rfbProgressive, setRfbProgressive] = useState(false);
   const [rfbPage, setRfbPage] = useState(1);
   const [rfbPageSize, setRfbPageSize] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.pageSize || 10; } catch { return 10; } });
-  const [rfbOrderBy, setRfbOrderBy] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.orderBy || 'razao_social'; } catch { return 'razao_social'; } });
+  const [rfbOrderBy, setRfbOrderBy] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rfb_search') || '{}');
+      return saved.orderVersion === 2 ? (saved.orderBy || 'capital_desc') : 'capital_desc';
+    } catch { return 'capital_desc'; }
+  });
   const [rfbLoading, setRfbLoading] = useState(false);
   const [rfbHasSearched, setRfbHasSearched] = useState(false);
   const [rfbError, setRfbError] = useState(null);
+  const [rfbOrderScope, setRfbOrderScope] = useState('global');
   const rfbCacheRef = useRef({ results: [], total: 0, key: null });
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
   const [rfbCnaes, setRfbCnaes] = useState([]);
@@ -8631,7 +8637,7 @@ function App() {
     if (mei) params.set('mei', mei);
     if (simples) params.set('simples', simples);
     params.set('page', 1);
-    params.set('page_size', 100);
+    params.set('page_size', rfbPageSize);
     params.set('order_by', rfbOrderBy);
 
     setRfbShowFilters(false);
@@ -8641,14 +8647,20 @@ function App() {
       const response = await axios.get(`/api/rfb/search?${params}`);
       const results = response.data?.results || [];
       const total = response.data?.total || 0;
-      rfbCacheRef.current = { results, total, key: null };
-      setRfbResults(results.slice(0, rfbPageSize));
+      const hasMore = Boolean(response.data?.has_more);
+      const progressive = Boolean(response.data?.progressive);
+      rfbCacheRef.current = { results, total, key: null, hasMore, progressive };
+      setRfbResults(results);
       setRfbTotal(total);
+      setRfbHasMore(hasMore);
+      setRfbProgressive(progressive);
+      setRfbOrderScope(response.data?.order_scope || 'global');
       try {
         localStorage.setItem('rfb_search', JSON.stringify({
           filters: nextFilters,
           ops: nextOps,
           orderBy: rfbOrderBy,
+          orderVersion: 2,
           pageSize: rfbPageSize,
           capitalRange,
           aberturaRange,
@@ -8666,7 +8678,10 @@ function App() {
       setRfbError(status === 504 ? 'Tempo limite excedido — refine o perfil e tente novamente.' : message);
       setRfbResults([]);
       setRfbTotal(0);
-      rfbCacheRef.current = { results: [], total: 0, key: null };
+      setRfbHasMore(false);
+      setRfbProgressive(false);
+      setRfbOrderScope('global');
+      rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
     } finally {
       setRfbLoading(false);
     }
@@ -23174,23 +23189,6 @@ function App() {
             // ── Search ────────────────────────────────────────────────────
             // Normaliza acentos para usar índice pg_trgm no backend
             const stripAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            // Lote inicial em memória. Buscas amplas (CNAE nacional) usam total progressivo:
-            // o backend NÃO conta o universo (timeout); devolve has_more + total mínimo.
-            // Páginas além do cache buscam no servidor — não é "só 100 no banco".
-            const RFB_CACHE_SIZE = 100;
-            const sortRfbResults = (arr, ob) => {
-              const r = [...arr];
-              const cap = v => parseFloat(String(v || 0).replace(/\./g, '').replace(',', '.')) || 0;
-              if (ob === 'razao_social')  return r.sort((a, b) => (a.razao_social  || '').localeCompare(b.razao_social  || '', 'pt-BR'));
-              if (ob === 'nome_fantasia') return r.sort((a, b) => (a.nome_fantasia || '').localeCompare(b.nome_fantasia || '', 'pt-BR'));
-              if (ob === 'uf')            return r.sort((a, b) => (a.uf            || '').localeCompare(b.uf            || '', 'pt-BR'));
-              if (ob === 'situacao')      return r.sort((a, b) => (a.situacao_cadastral || '').localeCompare(b.situacao_cadastral || '', 'pt-BR'));
-              if (ob === 'capital_desc')  return r.sort((a, b) => cap(b.capital_social) - cap(a.capital_social));
-              if (ob === 'capital_asc')   return r.sort((a, b) => cap(a.capital_social) - cap(b.capital_social));
-              if (ob === 'abertura_desc') return r.sort((a, b) => (b.data_de_inicio_da_atividade || '').localeCompare(a.data_de_inicio_da_atividade || ''));
-              if (ob === 'abertura_asc')  return r.sort((a, b) => (a.data_de_inicio_da_atividade || '').localeCompare(b.data_de_inicio_da_atividade || ''));
-              return r;
-            };
             const buildFilterParams = (snap) => {
               const f = snap?.filters || rfbFilters;
               const ops = snap?.ops || rfbOps;
@@ -23253,87 +23251,48 @@ function App() {
               const fp = buildFilterParams(filterSnap);
               const filterKey = fp.toString();
               const cache = rfbCacheRef.current;
-              const start = (pg - 1) * ps;
               setRfbHasSearched(true);
               setRfbError(null);
-
-              // Serve from cache when filters unchanged and page is within cached batch
-              if (cache.key === filterKey && cache.results.length > 0 && start < cache.results.length) {
-                const sorted = sortRfbResults(cache.results, ob);
-                setRfbResults(sorted.slice(start, start + ps));
-                setRfbTotal(cache.total);
-                setRfbHasMore(Boolean(cache.hasMore));
-                setRfbProgressive(Boolean(cache.progressive));
-                setRfbPage(pg);
-                return;
-              }
 
               setRfbLoading(true);
               try {
                 const params = new URLSearchParams(fp);
-                if (cache.key === filterKey && start >= cache.results.length) {
-                  // Beyond cache — busca no servidor. Se for a próxima fatia contígua, anexa ao cache.
-                  params.set('page', pg);
-                  params.set('page_size', ps);
-                  params.set('order_by', ob);
-                  if (cache.total > 0 && !cache.hasMore) params.set('known_total', cache.total);
-                  const res = await axios.get(`/api/rfb/search?${params}`);
-                  const batch = res.data.results || [];
-                  const nextHasMore = Boolean(res.data.has_more);
-                  const nextProgressive = Boolean(res.data.progressive) || Boolean(cache.progressive);
-                  const contiguous = start === cache.results.length;
-                  const merged = contiguous ? [...cache.results, ...batch] : cache.results;
-                  const nextTotal = Math.max(
-                    Number(res.data.total) || 0,
-                    (contiguous ? merged.length : start + batch.length) + (nextHasMore ? 1 : 0),
-                    cache.total || 0,
-                  );
-                  rfbCacheRef.current = {
-                    results: merged,
-                    total: nextTotal,
-                    key: filterKey,
-                    hasMore: nextHasMore,
-                    progressive: nextProgressive,
-                  };
-                  setRfbResults(batch);
-                  setRfbTotal(nextTotal);
-                  setRfbHasMore(nextHasMore);
-                  setRfbProgressive(nextProgressive);
-                  setRfbPage(pg);
-                } else {
-                  // New filters — fetch full cache batch
-                  params.set('page', 1);
-                  params.set('page_size', RFB_CACHE_SIZE);
-                  params.set('order_by', 'razao_social');
-                  const res = await axios.get(`/api/rfb/search?${params}`);
-                  const all   = res.data.results || [];
-                  const hasMore = Boolean(res.data.has_more);
-                  const progressive = Boolean(res.data.progressive);
-                  const total = Math.max(Number(res.data.total) || 0, all.length + (hasMore ? 1 : 0));
-                  rfbCacheRef.current = { results: all, total, key: filterKey, hasMore, progressive };
-                  const sorted = sortRfbResults(all, ob);
-                  setRfbResults(sorted.slice(start, start + ps));
-                  setRfbTotal(total);
-                  setRfbHasMore(hasMore);
-                  setRfbProgressive(progressive);
-                  setRfbPage(pg);
-                  try {
-                    localStorage.setItem('rfb_search', JSON.stringify({
-                      filters: filterSnap?.filters || rfbFilters,
-                      ops: filterSnap?.ops || rfbOps,
-                      orderBy: ob,
-                      pageSize: ps,
-                      capitalRange: filterSnap?.capitalRange || rfbCapitalRange,
-                      aberturaRange: filterSnap?.aberturaRange || rfbAberturaRange,
-                      endereco: filterSnap?.endereco != null ? filterSnap.endereco : rfbEndereco,
-                      enderecoOp: filterSnap?.enderecoOp || rfbEnderecoOp,
-                      simples: filterSnap?.simples != null ? filterSnap.simples : rfbSimples,
-                      mei: filterSnap?.mei != null ? filterSnap.mei : rfbMei,
-                      onlyMatriz: filterSnap?.onlyMatriz != null ? filterSnap.onlyMatriz : rfbOnlyMatriz,
-                      cnaeOnlyPrincipal: filterSnap?.cnaeOnlyPrincipal != null ? filterSnap.cnaeOnlyPrincipal : rfbCnaeOnlyPrincipal,
-                    }));
-                  } catch {}
+                params.set('page', pg);
+                params.set('page_size', ps);
+                params.set('order_by', ob);
+                if (cache.key === filterKey && cache.total > 0) {
+                  params.set('known_total', cache.total);
+                  params.set('known_total_progressive', cache.progressive ? 'true' : 'false');
                 }
+                const res = await axios.get(`/api/rfb/search?${params}`);
+                const results = res.data.results || [];
+                const hasMore = Boolean(res.data.has_more);
+                const progressive = Boolean(res.data.progressive);
+                const total = Number(res.data.total) || 0;
+                rfbCacheRef.current = { results, total, key: filterKey, hasMore, progressive };
+                setRfbResults(results);
+                setRfbTotal(total);
+                setRfbHasMore(hasMore);
+                setRfbProgressive(progressive);
+                setRfbOrderScope(res.data?.order_scope || 'global');
+                setRfbPage(pg);
+                try {
+                  localStorage.setItem('rfb_search', JSON.stringify({
+                    filters: filterSnap?.filters || rfbFilters,
+                    ops: filterSnap?.ops || rfbOps,
+                    orderBy: ob,
+                    orderVersion: 2,
+                    pageSize: ps,
+                    capitalRange: filterSnap?.capitalRange || rfbCapitalRange,
+                    aberturaRange: filterSnap?.aberturaRange || rfbAberturaRange,
+                    endereco: filterSnap?.endereco != null ? filterSnap.endereco : rfbEndereco,
+                    enderecoOp: filterSnap?.enderecoOp || rfbEnderecoOp,
+                    simples: filterSnap?.simples != null ? filterSnap.simples : rfbSimples,
+                    mei: filterSnap?.mei != null ? filterSnap.mei : rfbMei,
+                    onlyMatriz: filterSnap?.onlyMatriz != null ? filterSnap.onlyMatriz : rfbOnlyMatriz,
+                    cnaeOnlyPrincipal: filterSnap?.cnaeOnlyPrincipal != null ? filterSnap.cnaeOnlyPrincipal : rfbCnaeOnlyPrincipal,
+                  }));
+                } catch {}
               } catch (e) {
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
@@ -23347,6 +23306,7 @@ function App() {
                 setRfbTotal(0);
                 setRfbHasMore(false);
                 setRfbProgressive(false);
+                setRfbOrderScope('global');
                 rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
               } finally { setRfbLoading(false); }
             };
@@ -23426,7 +23386,9 @@ function App() {
               setRfbTotal(0);
               setRfbHasMore(false);
               setRfbProgressive(false);
+              setRfbOrderScope('global');
               setRfbPage(1);
+              setRfbOrderBy('capital_desc');
               setRfbError(null);
               setLeadImportStatus(null);
               setRfbHasSearched(false);
@@ -23443,9 +23405,9 @@ function App() {
             const rfbTotalLabel = rfbTotal <= 0
               ? '0'
               : rfbTotal >= 10001
-                ? '+10.000'
+                ? 'mais de 10.000'
                 : rfbHasMore
-                  ? `${Math.max(rfbTotal - 1, rfbResults.length || 0).toLocaleString('pt-BR')}+`
+                  ? `mais de ${Math.max(rfbTotal - 1, rfbResults.length || 0).toLocaleString('pt-BR')}`
                   : rfbTotal.toLocaleString('pt-BR');
 
             // CNAE dropdown — separado para "contém" (cnae) e "não contém" (cnaeNot)
@@ -24263,7 +24225,7 @@ function App() {
                         </button>
                         {rfbResults.length > 0 && (
                           <span className="font-mono text-xs text-muted lg:justify-self-end">
-                            {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}{rfbHasMore ? ' (mín.)' : ''}
+                            {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}
                           </span>
                         )}
                       </div>
@@ -24296,7 +24258,7 @@ function App() {
                           <h3 className="text-sm font-semibold text-ink">Filtros de busca</h3>
                           {rfbResults.length > 0 && (
                             <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-primary">
-                              {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}{rfbHasMore ? ' (mín.)' : ''}
+                              {rfbTotalLabel} resultado{rfbTotal !== 1 ? 's' : ''}
                             </span>
                           )}
                         </div>
@@ -24872,13 +24834,20 @@ function App() {
                       <div className="rounded-2xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">{rfbError}</div>
                     )}
 
-                    {/* 10K limit warning */}
-                    {rfbTotal >= 10001 && rfbResults.length > 0 && (
+                    {rfbOrderBy === 'capital_desc' && rfbOrderScope === 'page_fallback' && rfbResults.length > 0 && (
+                      <div className="flex items-start gap-2 rounded-[12px] border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning" role="status">
+                        <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 3a9 9 0 110 18 9 9 0 010-18z"/></svg>
+                        <span>O índice de capital está sendo preparado. A busca continua disponível, mas a ordenação global será ativada assim que ele terminar.</span>
+                      </div>
+                    )}
+
+                    {/* Em universos grandes o total é progressivo, mas a paginação não é cortada. */}
+                    {rfbTotal >= 10001 && rfbProgressive && rfbHasMore && rfbResults.length > 0 && (
                       <div className="rounded-2xl border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning flex items-start gap-2">
                         <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                         <div>
                           <div className="font-medium">Mais de 10.000 resultados</div>
-                          <div className="text-xs opacity-90 mt-0.5">A busca foi limitada. Adicione filtros (CNAE, sócio, capital, abertura, endereço…) para refinar e ver resultados mais relevantes.</div>
+                          <div className="text-xs opacity-90 mt-0.5">Você pode continuar navegando sem corte. O total exato só é fechado ao chegar à última página; refine os filtros apenas se quiser uma lista mais específica.</div>
                         </div>
                       </div>
                     )}
@@ -24888,10 +24857,10 @@ function App() {
                       <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 text-sm text-ink flex items-start gap-2">
                         <svg className="w-4 h-4 flex-shrink-0 mt-0.5 text-primary" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z"/></svg>
                         <div>
-                          <div className="font-medium text-primary">Há mais resultados além desta página</div>
+                          <div className="font-medium text-primary">Busca paginada, sem limite de 100 resultados</div>
                           <div className="text-xs text-muted mt-0.5">
-                            Em buscas amplas (ex.: CNAE nacional) o total exato não é contado para evitar timeout — usamos o índice e paginamos.
-                            Use <strong className="text-ink">Próximo</strong> para carregar mais, ou filtre por <strong className="text-ink">UF</strong> para contagem completa e CNAE secundário.
+                            Em buscas amplas, o total exato não é calculado de uma vez para manter a resposta rápida.
+                            Use <strong className="text-ink">Próximo</strong> para continuar; {rfbOrderScope === 'global' ? 'a ordenação por capital considera toda a base, não só a página atual.' : 'a ordenação global será ativada quando o índice terminar de ser preparado.'}
                           </div>
                         </div>
                       </div>
@@ -24903,7 +24872,6 @@ function App() {
                         <span className="min-w-0 text-muted">
                           Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbHasMore ? Number.MAX_SAFE_INTEGER : rfbTotal, ((rfbPage - 1) * rfbPageSize) + rfbResults.length)}</span>
                           {' '}de <span className="font-semibold text-ink">{rfbTotalLabel}</span> resultados
-                          {rfbHasMore ? <span className="text-muted2"> (mínimo conhecido)</span> : null}
                         </span>
                         <div className="toolbar-filters toolbar-filters--2 min-w-0 sm:justify-self-end sm:w-auto sm:min-w-[18rem]">
                           <select
@@ -24912,11 +24880,11 @@ function App() {
                             onChange={e => { const v = e.target.value; setRfbOrderBy(v); handleRfbSearch(1, null, v); }}
                             aria-label="Ordenar resultados"
                           >
+                            <option value="capital_desc">Capital: maior primeiro (padrão)</option>
                             <option value="razao_social">Ordenar: Razão Social</option>
                             <option value="nome_fantasia">Ordenar: Nome Fantasia</option>
                             <option value="uf">Ordenar: UF</option>
                             <option value="situacao">Ordenar: Situação</option>
-                            <option value="capital_desc">Capital: maior primeiro</option>
                             <option value="capital_asc">Capital: menor primeiro</option>
                             <option value="abertura_desc">Mais recentes</option>
                             <option value="abertura_asc">Mais antigas</option>
