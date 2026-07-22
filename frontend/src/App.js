@@ -5387,7 +5387,10 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     const key = `promote:${item.item_id}`;
     setItemBusy(prev => ({ ...prev, [key]: true }));
     try {
-      await axios.post('/api/licitacoes/pca/signals/promote-item', { item_id: item.item_id });
+      await axios.post('/api/licitacoes/pca/signals/promote-item', {
+        item_id: item.item_id,
+        feedback_context: { query: q?.trim?.() || null },
+      });
       // Item promovido sai da busca (já está no pipeline).
       setItems(prev => prev.filter(it => String(it.item_id) !== String(item.item_id)));
       setTotal(prev => Math.max(0, Number(prev || 0) - 1));
@@ -5403,7 +5406,10 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     const key = `status:${item.item_id}:${status}`;
     setItemBusy(prev => ({ ...prev, [key]: true }));
     try {
-      await axios.put(`/api/licitacoes/pca/items/${item.item_id}/status`, { status });
+      await axios.put(`/api/licitacoes/pca/items/${item.item_id}/status`, {
+        status,
+        feedback_context: { query: q?.trim?.() || null },
+      });
       updateItemLocal(item.item_id, { signal_status: status });
     } catch (e) {
       alert(`Erro ao atualizar status: ${e.response?.data?.error || e.message}`);
@@ -6744,21 +6750,24 @@ function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onCh
     }
   };
 
-  const act = async (id, kind) => {
+  const act = async (id, kind, signal = null) => {
     setBusy(prev => ({ ...prev, [id]: true }));
+    const feedbackContext = signal?.watchlist_nome
+      ? { query: null, watchlist: signal.watchlist_nome }
+      : { query: null };
     try {
       if (kind === 'promote') {
-        await axios.post(`/api/licitacoes/pca/signals/${id}/promote`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/promote`, { feedback_context: feedbackContext });
         onPromoted && onPromoted();
       } else if (kind === 'unpromote') {
-        await axios.post(`/api/licitacoes/pca/signals/${id}/unpromote`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/unpromote`, { feedback_context: feedbackContext });
       } else if (kind === 'dismiss') {
-        await axios.post(`/api/licitacoes/pca/signals/${id}/dismiss`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/dismiss`, { feedback_context: feedbackContext });
       } else if (kind === 'seen') {
-        await axios.post(`/api/licitacoes/pca/signals/${id}/seen`);
+        await axios.post(`/api/licitacoes/pca/signals/${id}/seen`, { feedback_context: feedbackContext });
       } else if (kind === 'to_novo' || kind === 'to_visto' || kind === 'to_descartado') {
         const status = kind.replace('to_', '');
-        await axios.put(`/api/licitacoes/pca/signals/${id}/status`, { status });
+        await axios.put(`/api/licitacoes/pca/signals/${id}/status`, { status, feedback_context: feedbackContext });
       }
       await load();
       onChanged?.();
@@ -6824,29 +6833,29 @@ function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onCh
                 <>
                   {s.status !== 'novo' && (
                     <button type="button" disabled={busy[s.id]}
-                      onClick={() => act(s.id, 'to_novo')}
+                      onClick={() => act(s.id, 'to_novo', s)}
                       className={btnSecondarySm}>Novo</button>
                   )}
                   {s.status !== 'visto' && (
                     <button type="button" disabled={busy[s.id]}
-                      onClick={() => act(s.id, 'to_visto')}
+                      onClick={() => act(s.id, 'to_visto', s)}
                       className={btnSecondarySm}>Visto</button>
                   )}
                   {s.status !== 'descartado' && (
                     <button type="button" disabled={busy[s.id]}
-                      onClick={() => act(s.id, 'to_descartado')}
+                      onClick={() => act(s.id, 'to_descartado', s)}
                       className={btnSecondarySm}>Descartar</button>
                   )}
                 </>
               )}
               {statusFilter === 'novo' && (
                 <button type="button" disabled={busy[s.id]}
-                  onClick={() => act(s.id, 'promote')}
+                  onClick={() => act(s.id, 'promote', s)}
                   className={btnPrimarySm}>Promover</button>
               )}
               {statusFilter === 'promovido' && (
                 <button type="button" disabled={busy[s.id]}
-                  onClick={() => act(s.id, 'unpromote')}
+                  onClick={() => act(s.id, 'unpromote', s)}
                   className={btnSecondarySm}>Despromover</button>
               )}
             </div>
@@ -12447,7 +12456,17 @@ function App() {
       try {
         const response = await axios.patch(
           `/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}/results/visibility`,
-          { item, item_id: itemId, result_key: item.__result_key || undefined, visibility: 'hidden' }
+          {
+            item,
+            item_id: itemId,
+            result_key: item.__result_key || undefined,
+            visibility: 'hidden',
+            feedback_context: {
+              query: String(pncpSearchFilters.q || '').trim() || item.matched_termo || null,
+              matched_term: item.matched_termo || null,
+              score: item.score ?? null,
+            },
+          }
         );
         const visCounts = response.data?.visibility_counts;
         if (visCounts) {
@@ -12514,7 +12533,17 @@ function App() {
       try {
         const response = await axios.patch(
           `/api/licitacoes/pncp/search/deep/${activePncpSearchJobId}/results/visibility`,
-          { item, item_id: itemId, result_key: item.__result_key || undefined, visibility: 'visible' }
+          {
+            item,
+            item_id: itemId,
+            result_key: item.__result_key || undefined,
+            visibility: 'visible',
+            feedback_context: {
+              query: String(pncpSearchFilters.q || '').trim() || item.matched_termo || null,
+              matched_term: item.matched_termo || null,
+              score: item.score ?? null,
+            },
+          }
         );
         const visCounts = response.data?.visibility_counts;
         if (visCounts) {

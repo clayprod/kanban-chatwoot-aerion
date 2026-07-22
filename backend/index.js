@@ -30,6 +30,16 @@ const {
   closeContactReminder,
   processContactFollowups,
 } = require('./contactFollowups');
+const { recordSearchFeedback, recordSearchFeedbackBatch, initFeedback, getFeedbackStats } = require('./feedback');
+const {
+  initEmbeddings,
+  isEmbeddingsEnabled,
+  rerankPncpItems,
+  embedQuery,
+  knnPcaItens,
+  runPcaEmbedBackfillBatch,
+  getEmbeddingsStats,
+} = require('./embeddings');
 const {
   decodeXmlEntities,
   extractXmlTag,
@@ -1917,7 +1927,9 @@ const migrateLicitacaoFases = async () => {
   }
 };
 
-let pollingInProgress = false;
+// Promise compartilhada: chamadas simultâneas (cron + Overview) aguardam a mesma
+// sincronização em vez de uma delas calcular o ritmo com o histórico ainda antigo.
+let pollingInProgress = null;
 
 const createHistoryTable = async () => {
   await pool.query(`
@@ -1987,14 +1999,17 @@ const seedHistorySnapshot = async () => {
 
 const pollStageChanges = async () => {
   if (pollingInProgress) {
-    return;
+    return pollingInProgress;
   }
-  pollingInProgress = true;
+  let finishPolling;
+  pollingInProgress = new Promise((resolve) => {
+    finishPolling = resolve;
+  });
   try {
     const { rows: contacts } = await pool.query(`
-      SELECT id, account_id, custom_attributes
+      SELECT id, account_id, custom_attributes, updated_at
       FROM contacts
-      WHERE updated_at >= NOW() - INTERVAL '1 hour'
+      WHERE updated_at >= NOW() - INTERVAL '24 hours'
     `);
 
     if (contacts.length === 0) {
@@ -2020,7 +2035,16 @@ const pollStageChanges = async () => {
       if (fromStage === toStage) {
         return;
       }
-      changed.push({ id: contact.id, account_id: contact.account_id, fromStage, toStage });
+      changed.push({
+        id: contact.id,
+        account_id: contact.account_id,
+        fromStage,
+        toStage,
+        // A captura pode acontecer alguns segundos depois da alteração no Chatwoot.
+        // Preserva o instante da mudança em vez do instante do polling, inclusive
+        // quando a transição cruza a meia-noite ou outro corte do ritmo.
+        changedAt: contact.updated_at || new Date(),
+      });
     });
 
     if (changed.length === 0) {
@@ -2102,11 +2126,11 @@ const pollStageChanges = async () => {
     const inserts = [];
     const values = [];
     let index = 1;
-    changed.forEach(({ id, account_id, fromStage, toStage }) => {
+    changed.forEach(({ id, account_id, fromStage, toStage, changedAt }) => {
       const actor = actorMap.get(id) || null;
-      values.push(id, account_id, fromStage, toStage, 'polling', actor?.id || null, actor?.name || null);
-      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, NOW(), $${index + 4}, $${index + 5}, $${index + 6})`);
-      index += 7;
+      values.push(id, account_id, fromStage, toStage, changedAt, 'polling', actor?.id || null, actor?.name || null);
+      inserts.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3}, $${index + 4}, $${index + 5}, $${index + 6}, $${index + 7})`);
+      index += 8;
     });
 
     await pool.query(
@@ -2137,7 +2161,48 @@ const pollStageChanges = async () => {
   } catch (err) {
     console.error('Error polling stage changes:', err);
   } finally {
-    pollingInProgress = false;
+    pollingInProgress = null;
+    finishPolling();
+  }
+};
+
+// Suporte a busca vetorial (pgvector) para itens do PCA — opcional e gated:
+// se a extensão não estiver disponível no Postgres (ex.: RDS sem allowlist),
+// segue tudo em modo lexical puro, sem erro fatal.
+let pcaVectorAvailable = false;
+const initPcaVectorSupport = async () => {
+  try {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+    await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS embedding vector(1536)`);
+    await pool.query(`ALTER TABLE ${PCA_ITENS_TABLE} ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
+    pcaVectorAvailable = true;
+    console.log('[pca-vector] pgvector disponível');
+  } catch (e) {
+    pcaVectorAvailable = false;
+    console.log('[pca-vector] pgvector indisponível — busca vetorial desativada:', e.message);
+    return;
+  }
+
+  if (process.env.PCA_VECTOR_INDEX === '1' && pcaVectorAvailable) {
+    // Índice HNSW pode levar bastante tempo em tabelas grandes; roda fora do
+    // caminho de boot (5 min de atraso) numa conexão dedicada e fora de transação.
+    setTimeout(async () => {
+      let idxClient = null;
+      try {
+        console.log('[pca-vector] iniciando criação do índice HNSW (idx_pca_itens_embedding_hnsw)...');
+        idxClient = await pool.connect();
+        await idxClient.query("SET maintenance_work_mem = '512MB'");
+        await idxClient.query(
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pca_itens_embedding_hnsw
+             ON ${PCA_ITENS_TABLE} USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)`
+        );
+        console.log('[pca-vector] índice HNSW criado com sucesso.');
+      } catch (idxError) {
+        console.warn('[pca-vector] falha ao criar índice HNSW:', idxError.message);
+      } finally {
+        if (idxClient) idxClient.release();
+      }
+    }, 5 * 60 * 1000).unref();
   }
 };
 
@@ -4171,18 +4236,26 @@ const parsePncpCompraControlNumber = (value = '') => {
 // regridem, mesmo com o DB vazio); a tabela search_allowlist_terms adiciona
 // termos por curadoria/feedback. Uma vertical casa uma busca quando TODOS os
 // tokens do nome da vertical aparecem na query (ex.: "suporte monitor").
+const DRONE_ALLOWLIST_TERMS = [
+  'vant', 'rpa', 'uav', 'quadricoptero', 'aeronave remotamente pilotada',
+  'aeronave nao tripulada', 'multirrotor', 'veiculo aereo nao tripulado', 'arp',
+  'aeronaves remotamente pilotadas', 'aeronaves nao tripuladas', 'uas', 'vants', 'rpas',
+];
+
 const HARDCODED_ALLOWLIST_SEED = [
   {
     vertical: 'drone',
-    termos: [
-      'vant', 'rpa', 'uav', 'quadricoptero', 'aeronave remotamente pilotada',
-      'aeronave nao tripulada', 'multirrotor', 'veiculo aereo nao tripulado', 'arp',
-      'aeronaves remotamente pilotadas', 'aeronaves nao tripuladas', 'uas', 'vants', 'rpas',
-    ],
+    termos: DRONE_ALLOWLIST_TERMS,
   },
   {
     vertical: 'suporte monitor',
     termos: ['ergonomia', 'nr17', 'suporte articulado', 'braco articulado', 'suporte de tela', 'material de escritorio'],
+  },
+  {
+    // Marca de drones (caso Aerion): busca por marca herda a vertical inteira —
+    // o edital nunca escreve "autel", mas escreve "drone"/"vant"/"rpa".
+    vertical: 'autel',
+    termos: ['drone', 'autel robotics', 'evo max', 'evo lite', 'evo ii', 'dragonfish', 'autel alpha', ...DRONE_ALLOWLIST_TERMS],
   },
 ];
 
@@ -4242,12 +4315,13 @@ const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
   const terms = [];
 
-  // Semente hardcoded (nunca regride).
-  if (q.includes('drone')) {
-    terms.push(...HARDCODED_ALLOWLIST_SEED[0].termos);
-  }
-  if (q.includes('suporte') && q.includes('monitor')) {
-    terms.push(...HARDCODED_ALLOWLIST_SEED[1].termos);
+  // Semente hardcoded (nunca regride): vertical casa quando todos os tokens do
+  // nome aparecem na query (drone→'drone', autel→'autel', 'suporte monitor'→ambos).
+  for (const { vertical, termos } of HARDCODED_ALLOWLIST_SEED) {
+    const tokens = vertical.split(/\s+/).filter(Boolean);
+    if (tokens.length && tokens.every((tok) => q.includes(tok))) {
+      terms.push(...termos);
+    }
   }
 
   // Curadoria/feedback via DB (mesclado e deduplicado).
@@ -5114,8 +5188,13 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
         // para não ficar só com o total da licitação.
         if (!pertinentes.length && itens.length === 1) {
           pertinentes = itens;
-        } else if (!pertinentes.length && itens.length > 0 && itens.length <= 5) {
-          // Poucos itens: se a query casa no objeto da compra, considera todos com valor.
+        } else if (
+          !pertinentes.length && itens.length > 0 && itens.length <= 5
+          // Só assume "todos pertinentes" se ao menos um token da busca aparece no
+          // texto dos itens — senão fabricava pertinência para compra sem relação
+          // (ex.: busca por marca "autel" trazendo cirurgia cardíaca com 122M).
+          && containsAnyTermStrictFlexible(itensResumoTexto, tokenizeSearchTerms(normalizedQuery))
+        ) {
           pertinentes = itens.filter(item => Number(item?.valorTotal) > 0);
         }
         const totalPertinente = pertinentes.reduce((sum, item) => {
@@ -5810,7 +5889,37 @@ const shouldExcludeByNegativeTerms = (item, query, positiveTerms = [], negativeT
   return !hasExactQuery && !hasPositiveMatch && tokenMatches < Math.min(2, Math.max(1, queryTokens.length));
 };
 
-const pncpItemHasSemanticEvidence = (item, query, positiveTerms = []) => {
+// Termos curados "fortes" para uma busca: allowlist direta da query + verticais
+// ATIVADAS pelos correlatos da IA. Ex.: busca "autel" → IA gera "drone"/"vant" →
+// a vertical drone ativa e todos os seus termos curados viram evidência forte.
+const getCuratedStrongTerms = (query = '', positiveTerms = []) => {
+  const strong = new Set(getQuerySpecificAllowlist(query).map((t) => normalizeSearchText(t)));
+  const correlatosNorm = new Set(
+    (positiveTerms || []).map((t) => normalizeSearchText(t)).filter(Boolean)
+  );
+  const considerVertical = (verticalName, termos) => {
+    const vNorm = normalizeSearchText(verticalName);
+    const termosNorm = termos.map((t) => normalizeSearchText(t)).filter(Boolean);
+    const activated = correlatosNorm.has(vNorm) || termosNorm.some((t) => correlatosNorm.has(t));
+    if (activated) termosNorm.forEach((t) => strong.add(t));
+  };
+  for (const { vertical, termos } of HARDCODED_ALLOWLIST_SEED) considerVertical(vertical, termos);
+  for (const [vertical, termos] of ALLOWLIST_CACHE.byVertical) {
+    considerVertical(vertical, termos.map((x) => x.termo));
+  }
+  return strong;
+};
+
+/**
+ * Tiering de evidência semântica. Correlato genérico de UMA palavra fora da
+ * curadoria não prova aderência sozinho — busca por "autel" não pode aceitar um
+ * edital de cirurgia cardíaca só porque "câmera"/"monitoramento" colidem.
+ *  - strong: termo original (ou token dele), frase técnica adjacente (>=2
+ *    palavras) ou termo curado (allowlist/vertical ativada).
+ *  - weak: só correlatos genéricos de 1 palavra casaram.
+ *  - none: nada casou.
+ */
+const classifyPncpSemanticEvidence = (item, query, positiveTerms = []) => {
   const text = [
     item?.title,
     item?.titulo,
@@ -5819,9 +5928,43 @@ const pncpItemHasSemanticEvidence = (item, query, positiveTerms = []) => {
     item?.itens_resumo_texto,
     item?.__itens_resumo_texto,
   ].filter(Boolean).join(' ');
-  const terms = mergeUniqueTerms([query], positiveTerms, getQuerySpecificAllowlist(query));
-  return containsAnyTermStrictFlexible(text, terms);
+
+  if (query && containsTermStrictFlexible(text, query)) {
+    return { level: 'strong', reason: 'termo_original', matched: query };
+  }
+  const queryTokens = tokenizeSearchTerms(query);
+  if (queryTokens.length > 1) {
+    const tokenHit = queryTokens.find((tok) => containsTermStrictFlexible(text, tok));
+    if (tokenHit) return { level: 'strong', reason: 'token_da_busca', matched: tokenHit };
+  }
+
+  const curated = getCuratedStrongTerms(query, positiveTerms);
+  const weakMatches = [];
+  for (const term of positiveTerms || []) {
+    if (!term || !containsTermStrictFlexible(text, term)) continue;
+    const isPhrase = tokenizeSearchTerms(term).length >= 2;
+    if (isPhrase || curated.has(normalizeSearchText(term))) {
+      return { level: 'strong', reason: isPhrase ? 'frase_tecnica' : 'termo_curado', matched: term };
+    }
+    weakMatches.push(term);
+  }
+  // Allowlist direta que não veio nos correlatos (ex.: 'vant' curado p/ autel).
+  for (const term of curated) {
+    if (containsTermStrictFlexible(text, term)) {
+      return { level: 'strong', reason: 'termo_curado', matched: term };
+    }
+  }
+
+  if (weakMatches.length) {
+    return { level: 'weak', reason: 'correlato_generico', matched: weakMatches[0], weak_matches: weakMatches };
+  }
+  return { level: 'none', reason: null, matched: null };
 };
+
+// Recall: só evidência FORTE mantém o item quando a IA expandiu a busca.
+const pncpItemHasSemanticEvidence = (item, query, positiveTerms = []) => (
+  classifyPncpSemanticEvidence(item, query, positiveTerms).level === 'strong'
+);
 
 const getTermosCorrelatos = async (termo) => {
   if (!termo || termo.length < 3) {
@@ -5878,6 +6021,23 @@ app.get('/api/licitacoes/termos-correlatos', async (req, res) => {
   } catch (error) {
     console.error('Error getting termos correlatos:', error);
     res.status(500).json({ error: 'Erro ao buscar termos correlatos', details: error.message });
+  }
+});
+
+// Saúde/monitoramento do módulo de inteligência de busca (embeddings + feedback + pgvector).
+app.get('/api/licitacoes/search-intel/stats', async (req, res) => {
+  try {
+    res.json({
+      embeddings: getEmbeddingsStats(),
+      feedback: await getFeedbackStats(),
+      pca_vector: {
+        available: pcaVectorAvailable,
+        search_enabled: process.env.PCA_VECTOR_SEARCH === '1',
+        backfill_enabled: process.env.PCA_EMBED_BACKFILL === '1',
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao obter estatísticas de search-intel', details: error.message });
   }
 });
 
@@ -6496,6 +6656,10 @@ app.get('/api/overview/recent-actions', async (req, res) => {
  */
 app.get('/api/overview/funnel-pace', async (req, res) => {
   try {
+    // Mudanças feitas diretamente no Chatwoot não passam pelo endpoint do kanban.
+    // Sincroniza antes de calcular para o card não depender do cron horário.
+    await pollStageChanges();
+
     const accountId = CHATWOOT_ACCOUNT_ID;
     const agentIdRaw = req.query.agent_id;
     const agentId = agentIdRaw != null && String(agentIdRaw).trim() !== ''
@@ -8930,6 +9094,27 @@ const decoratePncpSearchItem = (item, context = {}) => {
     && containsTermStrictFlexible(`${item?.titulo || ''} ${item?.descricao || ''}`, matchedTerm);
   const contractFocusMatch = classifyContractFocusMatch(item, context.contractFocus || 'aquisicao');
 
+  // Tiering de evidência textual (espelha classifyPncpSemanticEvidence):
+  //  - forte: termo original, frase técnica adjacente ou termo curado — pode
+  //    chegar a "alta aderência".
+  //  - fraca: só correlato genérico de 1 palavra ("câmera") — teto 55, nunca alta.
+  //  - nenhuma: sinais comerciais não criam aderência — teto 37 (baixa).
+  const curatedStrongTerms = getCuratedStrongTerms(qText, positiveTerms);
+  const matchedCuratedTokens = matchedPositiveTokens.filter((tok) => curatedStrongTerms.has(tok));
+  const matchedTermIsStrong = matchedByTechnicalTerm && (
+    tokenizeSearchTerms(matchedTerm).length >= 2
+    || curatedStrongTerms.has(normalizeSearchText(matchedTerm))
+  );
+  const strongEvidence = Boolean(
+    (qText && (containsTermStrictFlexible(item?.titulo || '', qText) || containsTermStrictFlexible(item?.descricao || '', qText)))
+    || matchedTermIsStrong
+    || matchedQueryTokens.length > 0
+    || matchedPositivePhrases.length > 0
+    || matchedCuratedTokens.length > 0
+  );
+  const weakEvidence = !strongEvidence && (matchedPositiveTokens.length > 0 || matchedByTechnicalTerm);
+  const hasTextMatch = strongEvidence || weakEvidence;
+
   let score = 25;
   const reasons = [];
   const scoreBreakdown = [{ label: 'Resultado retornado pelo PNCP', value: 25 }];
@@ -8957,10 +9142,12 @@ const decoratePncpSearchItem = (item, context = {}) => {
   if (matchedPositivePhrases.length > 0) {
     addScore(Math.min(16, matchedPositivePhrases.length * 8), `Frase tecnica exata: ${matchedPositivePhrases.slice(0, 2).join(', ')}`);
   }
-  if (itemCount > 0) {
+  // itens "pertinentes" só contam como aderência quando há match textual — senão
+  // é o fallback do enrichment (poucos itens → todos com valor), não pertinência real.
+  if (hasTextMatch && itemCount > 0) {
     addScore(Math.min(14, 7 + itemCount * 2), `${itemCount} item(ns) pertinente(s)`);
   }
-  if (relevantItemsValue) {
+  if (hasTextMatch && relevantItemsValue) {
     addScore(getPncpValueScore(relevantItemsValue, { matchedItems: true }), `Valor dos itens pertinentes: R$ ${relevantItemsValue.toLocaleString('pt-BR')}`);
   }
   if (deadline.urgency === 'ok') {
@@ -8999,6 +9186,25 @@ const decoratePncpSearchItem = (item, context = {}) => {
   }
   if (!reasons.length) reasons.push('Resultado PNCP relacionado aos filtros');
 
+  // Trava de aderência em camadas (espelha a trava correlato-vs-original do PCA):
+  //  - evidência fraca (só correlato genérico) → teto 55, nunca "alta";
+  //  - nenhuma evidência → teto 37 ("baixa"), valor/prazo não criam aderência.
+  if (!strongEvidence) {
+    const capped = weakEvidence ? 55 : PNCP_SCORE_MEDIUM_THRESHOLD - 1;
+    if (score > capped) {
+      scoreBreakdown.push({
+        label: weakEvidence
+          ? 'Teto: só correlato genérico casou (sem termo forte)'
+          : 'Teto: sem aderência textual ao termo buscado',
+        value: capped - score,
+      });
+      reasons.push(weakEvidence
+        ? 'Só correlato genérico casou no objeto'
+        : 'Sem aderência textual ao termo buscado');
+      score = capped;
+    }
+  }
+
   score = Math.max(0, Math.min(100, Math.round(score)));
   return {
     ...item,
@@ -9010,6 +9216,7 @@ const decoratePncpSearchItem = (item, context = {}) => {
     prazo_info: deadline,
     score,
     score_label: score >= PNCP_SCORE_HIGH_THRESHOLD ? 'Alta aderencia' : score >= PNCP_SCORE_MEDIUM_THRESHOLD ? 'Media aderencia' : 'Baixa aderencia',
+    evidencia_textual: strongEvidence ? 'forte' : weakEvidence ? 'fraca' : 'nenhuma',
     score_breakdown: scoreBreakdown,
     match_reasons: reasons.slice(0, 5),
     highlights: {
@@ -9794,6 +10001,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       orgaoFilterRaw,
       unidadeFilterRaw,
     }));
+    allItems = await rerankPncpItems(allItems, qText, { timeoutMs: 2500, topN: 60 });
 
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;
     // Ordenação por valor: só itens pertinentes (alinhado ao "Valor na lista").
@@ -10742,7 +10950,9 @@ const buildDeepSearchItemsSnapshot = async ({
     contractFocus: filters.contract_focus || 'aquisicao',
     orgaoFilterRaw: filters.orgao_cnpj || '',
     unidadeFilterRaw: filters.unidade_codigo || '',
-  })).sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
+  }));
+  items = await rerankPncpItems(items, qText, { timeoutMs: 15000, topN: 60 });
+  items = items.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
   return {
     items,
     summary: createPncpSearchSummary(items),
@@ -13377,6 +13587,28 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/results/visibility', async (r
       return res.status(404).json({ error: 'Resultado nao encontrado neste job' });
     }
 
+    recordSearchFeedback(req, {
+      accountId,
+      source: 'editais_deep',
+      action: updated.visibility,
+      entityKey: updated.result_key,
+      jobId: req.params.jobId,
+      queryText: req.body?.feedback_context?.query || null,
+      matchedTerm: item.matched_termo || item.matched_term || null,
+      score: item.score ?? null,
+      scoreBreakdown: item.score_breakdown || null,
+      evidencia: item.evidencia_textual || null,
+      itemSnapshot: {
+        titulo: item.titulo,
+        descricao: (item.descricao || '').slice(0, 500),
+        orgao: item.orgao?.nome,
+        valor_total_estimado: item.valor_total_estimado,
+        valor_itens_pertinentes: item.valor_itens_pertinentes,
+        uf: item.uf,
+        score_label: item.score_label || null,
+      },
+    }).catch(() => {});
+
     await refreshPncpJobSummaryTotals(job);
     job.updated_at = Date.now();
     if (PNCP_DEEP_SEARCH_JOBS.has(job.id)) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
@@ -14767,13 +14999,15 @@ const runEditalWatchlistMatching = async () => {
         && String(normalized.modo_disputa.id) !== String(filters.modo_disputa_id)) {
         return;
       }
-      const decorated = decoratePncpSearchItem(normalized, {
+      let decorated = decoratePncpSearchItem(normalized, {
         qText: term,
         positiveTerms: positivos,
         negativeTerms: negativos,
         orgaoFilterRaw: filters.orgao_cnpj,
         unidadeFilterRaw: filters.unidade_codigo,
       });
+      const [reranked] = await rerankPncpItems([decorated], term, { timeoutMs: 15000, topN: 1 });
+      decorated = reranked || decorated;
       const r = await pool.query(
         `
           INSERT INTO ${EDITAL_SIGNALS_TABLE}
@@ -15569,7 +15803,25 @@ app.put('/api/licitacoes/editais/signals/:id/status', async (req, res) => {
       [status, promotedId, id, accountId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'sinal nao encontrado' });
-    res.json(rows[0]);
+    const signalRow = rows[0];
+    const signalPayload = signalRow.payload && typeof signalRow.payload === 'object' ? signalRow.payload : {};
+    recordSearchFeedback(req, {
+      accountId,
+      source: 'editais_signal',
+      action: status,
+      entityKey: `edital_signal:${id}`,
+      queryText: req.body?.feedback_context?.query || null,
+      matchedTerm: Array.isArray(signalRow.termos_matched) ? signalRow.termos_matched[0] || null : null,
+      score: signalRow.score ?? null,
+      itemSnapshot: {
+        titulo: signalPayload.titulo,
+        descricao: String(signalPayload.descricao || '').slice(0, 500),
+        orgao: signalPayload.orgao?.nome || signalPayload.orgao,
+        valor_total_estimado: signalPayload.valor_total_estimado,
+        uf: signalPayload.uf,
+      },
+    }).catch(() => {});
+    res.json(signalRow);
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar sinal de edital', details: error.message });
   }
@@ -15582,9 +15834,18 @@ app.post('/api/licitacoes/editais/signals/batch', async (req, res) => {
     const status = ['novo', 'visto', 'promovido', 'descartado'].includes(req.body?.status) ? req.body.status : null;
     if (!ids.length || !status) return res.status(400).json({ error: 'signal_ids/status invalidos' });
     const { rows } = await pool.query(
-      `UPDATE ${EDITAL_SIGNALS_TABLE} SET status = $1 WHERE account_id = $2 AND id = ANY($3::bigint[]) RETURNING id`,
+      `UPDATE ${EDITAL_SIGNALS_TABLE} SET status = $1 WHERE account_id = $2 AND id = ANY($3::bigint[]) RETURNING id, score, termos_matched`,
       [status, accountId, ids]
     );
+    recordSearchFeedbackBatch(req, rows.map((row) => ({
+      accountId,
+      source: 'editais_signal',
+      action: status,
+      entityKey: `edital_signal:${row.id}`,
+      queryText: req.body?.feedback_context?.query || null,
+      matchedTerm: Array.isArray(row.termos_matched) ? row.termos_matched[0] || null : null,
+      score: row.score ?? null,
+    }))).catch(() => {});
     res.json({ updated: rows.length });
   } catch (error) {
     res.status(500).json({ error: 'Erro na acao em lote de sinais de editais', details: error.message });
@@ -16160,7 +16421,144 @@ const matchPcaItens = async ({
       score_breakdown: scoreBreakdown,
     };
   });
-  return { items, total: countResult.rows[0]?.total || 0 };
+  let finalItems = items;
+  let finalTotal = countResult.rows[0]?.total || 0;
+
+  // Busca híbrida (lexical + vetorial) — só entra em jogo se pgvector estiver
+  // disponível e os dois flags de env estiverem ligados. Qualquer falha aqui
+  // cai de volta para o resultado lexical puro, sem afetar a resposta padrão.
+  const vectorOn = pcaVectorAvailable && process.env.PCA_VECTOR_SEARCH === '1' && isEmbeddingsEnabled();
+  if (vectorOn) {
+    try {
+      const queryText = [termoOriginal, ...positivos].filter(Boolean).join(' ').slice(0, 2000);
+      const queryVec = queryText ? await embedQuery(queryText) : null;
+      if (queryVec) {
+        // Reconstrói os mesmos filtros opcionais + exclusões de pipeline usadas
+        // na busca lexical, mas com uma lista de params própria e limpa (knnPcaItens
+        // injeta o vetor e o limit como últimos params, então não dá pra reusar `params`).
+        const vParams = [];
+        let vWhere = '';
+        if (filtros.ano_pca) { vParams.push(toIntOrNull(filtros.ano_pca)); vWhere += ` AND p.ano_pca = $${vParams.length}`; }
+        if (filtros.valor_min) { vParams.push(toNullableNumber(filtros.valor_min)); vWhere += ` AND i.valor_total >= $${vParams.length}`; }
+        if (filtros.valor_max) { vParams.push(toNullableNumber(filtros.valor_max)); vWhere += ` AND i.valor_total <= $${vParams.length}`; }
+        if (filtros.mes_previsto) { vParams.push(toIntOrNull(filtros.mes_previsto)); vWhere += ` AND i.mes_previsto = $${vParams.length}`; }
+        if (filtros.orgao_cnpj) { vParams.push(String(filtros.orgao_cnpj).replace(/\D/g, '')); vWhere += ` AND p.orgao_cnpj = $${vParams.length}`; }
+        if (filtros.unidade_codigo) { vParams.push(String(filtros.unidade_codigo)); vWhere += ` AND p.codigo_unidade = $${vParams.length}`; }
+
+        vParams.push(accountIdNum);
+        const vAccountSignalParam = vParams.length;
+        vWhere += `
+          AND NOT EXISTS (
+            SELECT 1
+              FROM ${PCA_SIGNALS_TABLE} s_pipe
+             WHERE s_pipe.account_id = $${vAccountSignalParam}
+               AND s_pipe.item_id = i.id
+               AND s_pipe.status = 'promovido'
+               AND s_pipe.promovido_para_opportunity_id IS NOT NULL
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM ${LICITACAO_TABLE} o_pipe
+             WHERE o_pipe.account_id = $${vAccountSignalParam}
+               AND o_pipe.metadados->'pca_item_ids' @> to_jsonb(i.id)
+          )`;
+
+        vParams.push(tsNeg);
+        const vTsNegIdx = vParams.length;
+        vWhere += ` AND ($${vTsNegIdx} = '' OR NOT (i.descricao_tsv @@ to_tsquery('portuguese', $${vTsNegIdx})))`;
+
+        const knnRows = await knnPcaItens({ pool, queryVec, whereSql: vWhere, params: vParams, limit: 200 });
+        const relevantKnn = knnRows.filter((row) => Number(row.vector_sim) >= 0.45);
+
+        // Todo item lexical que não teve match vetorial relevante fica marcado como tal.
+        const itemsById = new Map(finalItems.map((it) => [String(it.item_id), it]));
+        for (const it of finalItems) it.match_source = 'lexical';
+
+        if (relevantKnn.length) {
+          const newIds = [];
+          for (const row of relevantKnn) {
+            const idKey = String(row.item_id);
+            const existing = itemsById.get(idKey);
+            if (existing) {
+              const ajuste = Math.round(Math.max(0, Math.min(10, 30 * (row.vector_sim - 0.45))));
+              if (ajuste > 0) {
+                existing.score = Math.min(100, (Number(existing.score) || 0) + ajuste);
+                existing.score_breakdown = [
+                  ...(existing.score_breakdown || []),
+                  { label: 'Similaridade vetorial', value: ajuste },
+                ];
+              }
+              existing.match_source = 'both';
+              existing.vector_similarity = Number(row.vector_sim);
+            } else {
+              newIds.push(row.item_id);
+            }
+          }
+
+          let vectorOnlyItems = [];
+          if (newIds.length) {
+            const { rows: newRows } = await pool.query(
+              `SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
+                      i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
+                      i.futura_contratacao_id, i.futura_contratacao_nome, i.codigo_item_catalogo,
+                      i.classificacao_nome, i.data_estimada_inicio,
+                      p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
+                      p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
+                      p.data_atualizacao, p.responsaveis, p.contatos,
+                      FALSE AS ja_promovido,
+                      NULL::bigint AS promovido_para_opportunity_id,
+                      (
+                        SELECT s2.status
+                        FROM ${PCA_SIGNALS_TABLE} s2
+                        WHERE s2.account_id = $2
+                          AND s2.item_id = i.id
+                        ORDER BY s2.criado_em DESC
+                        LIMIT 1
+                      ) AS signal_status
+                 FROM ${PCA_ITENS_TABLE} i
+                 JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
+                WHERE i.id = ANY($1)`,
+              [newIds, accountIdNum]
+            );
+            const simById = new Map(relevantKnn.map((row) => [String(row.item_id), Number(row.vector_sim)]));
+            vectorOnlyItems = newRows.map((row) => {
+              const sim = simById.get(String(row.item_id)) || 0;
+              const score = Math.max(30, Math.min(55, Math.round(30 + ((sim - 0.45) / 0.30) * 25)));
+              return {
+                ...row,
+                score,
+                score_label: getPncpScoreLabel(score),
+                match_source: 'vector',
+                vector_similarity: sim,
+                termos_matched: [],
+                termos_matched_detalhe: [],
+                score_origem: 'vetorial',
+                catmat_match: false,
+                score_breakdown: [{ label: 'Match semântico (vetorial)', value: score }],
+              };
+            });
+          }
+
+          // A query lexical JÁ paginou no SQL — re-fatiar aqui seria dupla
+          // paginação. Itens vector-only entram só na página 1 (append + sort);
+          // nas demais páginas o vetorial apenas ajusta/anota os itens da página.
+          const paginaNum = Math.max(0, (toIntOrNull(pagina) || 1) - 1);
+          if (paginaNum === 0 && vectorOnlyItems.length) {
+            finalItems = [...finalItems, ...vectorOnlyItems.slice(0, 50)];
+            // total aproximado no modo híbrido
+            finalTotal = (countResult.rows[0]?.total || 0) + vectorOnlyItems.length;
+          }
+          finalItems.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+        }
+      }
+    } catch (error) {
+      console.warn('[pca-vector] falha na busca híbrida, retornando lexical:', error.message);
+      finalItems = items;
+      finalTotal = countResult.rows[0]?.total || 0;
+    }
+  }
+
+  return { items: finalItems, total: finalTotal };
 };
 
 // fetchPncpConsulta com retry (PNCP costuma timeoutar; sem retry o sync inteiro morre na 1ª falha).
@@ -16937,7 +17335,7 @@ app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
   }
 });
 
-const promotePcaSignalToOpportunity = async (signalId, accountId) => {
+const promotePcaSignalToOpportunity = async (signalId, accountId, req = null) => {
   const { rows: sigRows } = await pool.query(
     `
       SELECT s.*, i.descricao, i.valor_total, i.valor_unitario, i.quantidade, i.unidade_medida,
@@ -16952,6 +17350,26 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
   );
   const sig = sigRows[0];
   if (!sig) return null;
+
+  const recordPcaPromoteFeedback = (opp) => {
+    recordSearchFeedback(req, {
+      accountId,
+      source: 'pca',
+      action: 'promovido',
+      entityKey: `pca_item:${sig.item_id}`,
+      queryText: req?.body?.feedback_context?.query || null,
+      matchedTerm: Array.isArray(sig.termos_matched) ? sig.termos_matched[0] || null : null,
+      score: sig.score ?? null,
+      itemSnapshot: {
+        descricao: String(sig.descricao || '').slice(0, 500),
+        valor_total: sig.valor_total,
+        ano_pca: sig.ano_pca,
+        orgao: sig.orgao_razao_social,
+        opportunity_id: opp?.id ?? null,
+      },
+    }).catch(() => {});
+  };
+
   if (sig.promovido_para_opportunity_id) {
     const { rows } = await pool.query(
       `SELECT * FROM ${LICITACAO_TABLE} WHERE id = $1`, [sig.promovido_para_opportunity_id]
@@ -17011,6 +17429,7 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
         WHERE id = $2`,
       [opp.id, signalId]
     );
+    recordPcaPromoteFeedback(opp);
     return opp;
   }
 
@@ -17055,13 +17474,14 @@ const promotePcaSignalToOpportunity = async (signalId, accountId) => {
      WHERE id = $2`,
     [opp.id, sig.id]
   );
+  recordPcaPromoteFeedback(opp);
   return opp;
 };
 
 app.post('/api/licitacoes/pca/signals/:id/promote', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    const opp = await promotePcaSignalToOpportunity(toIntOrNull(req.params.id), accountId);
+    const opp = await promotePcaSignalToOpportunity(toIntOrNull(req.params.id), accountId, req);
     if (!opp) return res.status(404).json({ error: 'signal não encontrado' });
     res.json(opp);
   } catch (error) {
@@ -17083,13 +17503,22 @@ app.post('/api/licitacoes/pca/signals/:id/unpromote', async (req, res) => {
          WHERE id = $1
            AND account_id = $2
            AND status = 'promovido'
-         RETURNING id, status
+         RETURNING id, status, item_id, score, termos_matched
       `,
       [signalId, accountId]
     );
 
     if (!rows[0]) return res.status(404).json({ error: 'signal promovido não encontrado' });
-    res.json({ ...rows[0], note: 'O card já criado no board não foi removido.' });
+    recordSearchFeedback(req, {
+      accountId,
+      source: 'pca',
+      action: 'despromovido',
+      entityKey: rows[0].item_id ? `pca_item:${rows[0].item_id}` : `pca_signal:${signalId}`,
+      queryText: req.body?.feedback_context?.query || null,
+      matchedTerm: Array.isArray(rows[0].termos_matched) ? rows[0].termos_matched[0] || null : null,
+      score: rows[0].score ?? null,
+    }).catch(() => {});
+    res.json({ id: rows[0].id, status: rows[0].status, note: 'O card já criado no board não foi removido.' });
   } catch (error) {
     console.error('Error unpromoting PCA signal:', error);
     res.status(500).json({ error: 'Erro ao despromover signal', details: error.message });
@@ -17319,7 +17748,7 @@ app.post('/api/licitacoes/pca/signals/promote-item', async (req, res) => {
          Array.isArray(req.body?.termos_matched) ? req.body.termos_matched : []]
       );
     const signalId = sigInsert.rows[0]?.id;
-    const opp = await promotePcaSignalToOpportunity(signalId, accountId);
+    const opp = await promotePcaSignalToOpportunity(signalId, accountId, req);
     res.json(opp);
   } catch (error) {
     console.error('Error promoting PCA item:', error);
@@ -17337,11 +17766,33 @@ app.put('/api/licitacoes/pca/items/:itemId/status', async (req, res) => {
     if (!allowed.has(nextStatus)) return res.status(400).json({ error: 'status inválido' });
 
     const { rows: itemRows } = await pool.query(
-      `SELECT plano_id FROM ${PCA_ITENS_TABLE} WHERE id = $1`,
+      `
+        SELECT i.plano_id, i.descricao, i.valor_total, p.ano_pca, p.orgao_razao_social
+          FROM ${PCA_ITENS_TABLE} i
+          JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
+         WHERE i.id = $1
+      `,
       [itemId]
     );
     const planoId = itemRows[0]?.plano_id;
     if (!planoId) return res.status(404).json({ error: 'item não encontrado' });
+    const itemInfo = itemRows[0];
+
+    const recordItemStatusFeedback = () => {
+      recordSearchFeedback(req, {
+        accountId,
+        source: 'pca',
+        action: nextStatus,
+        entityKey: `pca_item:${itemId}`,
+        queryText: req.body?.feedback_context?.query || null,
+        itemSnapshot: {
+          descricao: String(itemInfo.descricao || '').slice(0, 500),
+          valor_total: itemInfo.valor_total,
+          ano_pca: itemInfo.ano_pca,
+          orgao: itemInfo.orgao_razao_social,
+        },
+      }).catch(() => {});
+    };
 
     const { rows: updatedRows } = await pool.query(
       `
@@ -17357,6 +17808,7 @@ app.put('/api/licitacoes/pca/items/:itemId/status', async (req, res) => {
     );
 
     if (updatedRows[0]) {
+      recordItemStatusFeedback();
       return res.json(updatedRows[0]);
     }
 
@@ -17370,6 +17822,7 @@ app.put('/api/licitacoes/pca/items/:itemId/status', async (req, res) => {
       [accountId, planoId, itemId, nextStatus]
     );
 
+    recordItemStatusFeedback();
     res.json(insertedRows[0]);
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar status do item PCA', details: error.message });
@@ -17379,10 +17832,23 @@ app.put('/api/licitacoes/pca/items/:itemId/status', async (req, res) => {
 app.post('/api/licitacoes/pca/signals/:id/dismiss', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await pool.query(
-      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'descartado' WHERE id = $1 AND account_id = $2`,
-      [toIntOrNull(req.params.id), accountId]
+    const signalId = toIntOrNull(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'descartado' WHERE id = $1 AND account_id = $2
+       RETURNING id, item_id, score, termos_matched`,
+      [signalId, accountId]
     );
+    if (rows[0]) {
+      recordSearchFeedback(req, {
+        accountId,
+        source: 'pca',
+        action: 'descartado',
+        entityKey: rows[0].item_id ? `pca_item:${rows[0].item_id}` : `pca_signal:${signalId}`,
+        queryText: req.body?.feedback_context?.query || null,
+        matchedTerm: Array.isArray(rows[0].termos_matched) ? rows[0].termos_matched[0] || null : null,
+        score: rows[0].score ?? null,
+      }).catch(() => {});
+    }
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao dispensar', details: error.message });
@@ -17392,10 +17858,23 @@ app.post('/api/licitacoes/pca/signals/:id/dismiss', async (req, res) => {
 app.post('/api/licitacoes/pca/signals/:id/seen', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await pool.query(
-      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'visto' WHERE id = $1 AND account_id = $2 AND status = 'novo'`,
-      [toIntOrNull(req.params.id), accountId]
+    const signalId = toIntOrNull(req.params.id);
+    const { rows } = await pool.query(
+      `UPDATE ${PCA_SIGNALS_TABLE} SET status = 'visto' WHERE id = $1 AND account_id = $2 AND status = 'novo'
+       RETURNING id, item_id, score, termos_matched`,
+      [signalId, accountId]
     );
+    if (rows[0]) {
+      recordSearchFeedback(req, {
+        accountId,
+        source: 'pca',
+        action: 'visto',
+        entityKey: rows[0].item_id ? `pca_item:${rows[0].item_id}` : `pca_signal:${signalId}`,
+        queryText: req.body?.feedback_context?.query || null,
+        matchedTerm: Array.isArray(rows[0].termos_matched) ? rows[0].termos_matched[0] || null : null,
+        score: rows[0].score ?? null,
+      }).catch(() => {});
+    }
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao marcar como visto', details: error.message });
@@ -17418,13 +17897,22 @@ app.put('/api/licitacoes/pca/signals/:id/status', async (req, res) => {
            SET status = $1
          WHERE id = $2
            AND account_id = $3
-         RETURNING id, status
+         RETURNING id, status, item_id, score, termos_matched
       `,
       [nextStatus, signalId, accountId]
     );
 
     if (!rows[0]) return res.status(404).json({ error: 'signal não encontrado' });
-    res.json(rows[0]);
+    recordSearchFeedback(req, {
+      accountId,
+      source: 'pca',
+      action: nextStatus,
+      entityKey: rows[0].item_id ? `pca_item:${rows[0].item_id}` : `pca_signal:${signalId}`,
+      queryText: req.body?.feedback_context?.query || null,
+      matchedTerm: Array.isArray(rows[0].termos_matched) ? rows[0].termos_matched[0] || null : null,
+      score: rows[0].score ?? null,
+    }).catch(() => {});
+    res.json({ id: rows[0].id, status: rows[0].status });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atualizar status do signal', details: error.message });
   }
@@ -17444,7 +17932,7 @@ app.post('/api/licitacoes/pca/signals/batch', async (req, res) => {
       let promoted = 0;
       const opportunities = [];
       for (const signalId of signalIds) {
-        const opp = await promotePcaSignalToOpportunity(signalId, accountId);
+        const opp = await promotePcaSignalToOpportunity(signalId, accountId, req);
         if (opp) {
           promoted += 1;
           opportunities.push(opp.id);
@@ -17458,16 +17946,26 @@ app.post('/api/licitacoes/pca/signals/batch', async (req, res) => {
       const allowed = new Set(['novo', 'visto', 'descartado']);
       if (!allowed.has(nextStatus)) return res.status(400).json({ error: 'status inválido' });
 
-      const { rowCount } = await pool.query(
+      const { rows: batchRows } = await pool.query(
         `
           UPDATE ${PCA_SIGNALS_TABLE}
              SET status = $1
            WHERE account_id = $2
              AND id = ANY($3::bigint[])
+         RETURNING id, item_id, score, termos_matched
         `,
         [nextStatus, accountId, signalIds]
       );
-      return res.json({ ok: true, affected: rowCount || 0 });
+      recordSearchFeedbackBatch(req, batchRows.map((row) => ({
+        accountId,
+        source: 'pca',
+        action: nextStatus,
+        entityKey: row.item_id ? `pca_item:${row.item_id}` : `pca_signal:${row.id}`,
+        queryText: req.body?.feedback_context?.query || null,
+        matchedTerm: Array.isArray(row.termos_matched) ? row.termos_matched[0] || null : null,
+        score: row.score ?? null,
+      }))).catch(() => {});
+      return res.json({ ok: true, affected: batchRows.length || 0 });
     }
 
     return res.status(400).json({ error: 'action inválida' });
@@ -21588,7 +22086,10 @@ const registerBackgroundSchedules = () => {
   if (backgroundSchedulesRegistered) return;
   backgroundSchedulesRegistered = true;
 
-  cron.schedule('0 * * * *', pollStageChanges);
+  // Captura rapidamente alterações de etapa feitas direto no Chatwoot. O endpoint
+  // do ritmo também sincroniza sob demanda; este cron mantém o histórico atualizado
+  // mesmo quando ninguém está com o Overview aberto.
+  cron.schedule('* * * * *', pollStageChanges);
   cron.schedule('* * * * *', async () => {
     if (!dataLayerReady) return;
     try {
@@ -21758,6 +22259,23 @@ const registerBackgroundSchedules = () => {
     }
   });
 
+  // Backfill incremental de embeddings dos itens do PCA (busca híbrida vetorial).
+  // Gated: só roda com pgvector disponível, flag ligada e embeddings habilitados.
+  let pcaBackfillRunning = false;
+  cron.schedule('* * * * *', async () => {
+    if (!dataLayerReady || pcaBackfillRunning) return;
+    if (process.env.PCA_EMBED_BACKFILL !== '1' || !pcaVectorAvailable || !isEmbeddingsEnabled()) return;
+    pcaBackfillRunning = true;
+    try {
+      const r = await runPcaEmbedBackfillBatch({ pool, batchSize: 500 });
+      if (r.embedded > 0) console.log('[pca-vector] backfill:', r);
+    } catch (e) {
+      console.warn('[pca-vector] backfill erro:', e.message);
+    } finally {
+      pcaBackfillRunning = false;
+    }
+  });
+
   // #8: recarrega o cache de allowlists (curadoria feita por outra réplica).
   cron.schedule('*/10 * * * *', async () => {
     if (!dataLayerReady) return;
@@ -21848,6 +22366,9 @@ const initializeDataLayer = async () => {
   }
 
   await createLicitacaoTables();
+  await initFeedback({ pool });
+  await initEmbeddings({ pool });
+  await initPcaVectorSupport();
   await migrateLicitacaoFases();
   await createTrendsIntelTable();
   await seedHistorySnapshot();
