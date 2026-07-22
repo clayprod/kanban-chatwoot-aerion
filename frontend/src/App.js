@@ -4657,7 +4657,7 @@ const KanbanColumn = memo(function KanbanColumn({
     <div
       ref={setNodeRef}
       data-column-title={title}
-      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
+      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-8rem)] sm:max-h-[calc(100vh-140px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
     >
       <div className="flex flex-col gap-1.5 pb-2 border-b border-border bg-cardAlt sticky top-0 z-10">
         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -4981,7 +4981,7 @@ const LicitacaoColumn = memo(function LicitacaoColumn({
     <div
       ref={setNodeRef}
       data-column-title={title}
-      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100vh-280px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
+      className={`kanban-column w-[var(--kanban-col-w)] max-w-[calc(100vw-2.5rem)] flex-shrink-0 rounded-2xl border border-line bg-bg2 p-2.5 sm:p-3 snap-start flex flex-col min-h-0 max-h-[calc(100dvh-8rem)] sm:max-h-[calc(100vh-140px)] ${isOver ? 'is-over' : ''} ${columnHasSearchFocus ? 'is-search-focus-column' : ''} ${isLostOrAfter ? 'kanban-column-lost' : ''}`}
     >
       <div className="flex flex-col gap-1.5 pb-2 border-b border-line bg-bg2 sticky top-0 z-10">
         <div className="flex min-w-0 items-center justify-between gap-2">
