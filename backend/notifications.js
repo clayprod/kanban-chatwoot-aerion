@@ -13,7 +13,7 @@ const NOTIFICATION_CATEGORIES = {
   funil: {
     id: 'funil',
     label: 'Funil e leads',
-    description: 'Importações B2B, marcos do funil, ganhos/perdas e leads parados.',
+    description: 'Importações B2B, marcos do funil, ganhos/perdas, leads parados e retornos.',
   },
   disparo: {
     id: 'disparo',
@@ -77,6 +77,13 @@ const NOTIFICATION_TYPE_CATALOG = {
     category: 'funil',
     label: 'Leads parados no Inbox',
     description: 'Digest diário de leads no Inbox (Novos) sem avanço.',
+    channels: ['in_app', 'push'],
+  },
+  'funil.followup_due': {
+    type: 'funil.followup_due',
+    category: 'funil',
+    label: 'Retorno de contato',
+    description: 'Quando chega a hora de ligar ou falar novamente com um contato.',
     channels: ['in_app', 'push'],
   },
   // —— Disparo ——
@@ -200,6 +207,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
     'funil.lost': { in_app: true, push: true },
     'funil.milestone': { in_app: true, push: false },
     'funil.stale_inbox': { in_app: true, push: false },
+    'funil.followup_due': { in_app: true, push: true },
     'disparo.started': { in_app: true, push: true },
     'disparo.failed': { in_app: true, push: true },
     'disparo.paused': { in_app: true, push: false },

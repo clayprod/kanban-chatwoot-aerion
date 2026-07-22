@@ -57,6 +57,7 @@ import {
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
   CheckCircleIcon,
+  ClockIcon,
   ExclamationTriangleIcon,
   PrinterIcon,
 } from '@heroicons/react/24/outline';
@@ -103,6 +104,15 @@ import {
 import NotificationsView from './NotificationsView';
 import { registerPushServiceWorker } from './pushClient';
 import { typeLabel } from './notificationCatalog';
+import {
+  compareContactsByOldestInteraction,
+  compareContactsByReminder,
+  formatDateTimeLocalInSaoPaulo,
+  getInteractionPresentation,
+  getReminderPresentation,
+  getReminderPresetValue,
+  saoPauloDateTimeLocalToIso,
+} from './contactFollowups';
 import './App.css';
 
 // Configurar axios para enviar cookies em todas as requisições
@@ -3101,7 +3111,7 @@ const createEmptyOpportunityForm = () => ({
 });
 
 
-const CardPreview = ({ contact }) => {
+const CardPreview = ({ contact, followup }) => {
   if (!contact) {
     return null;
   }
@@ -3137,9 +3147,289 @@ const CardPreview = ({ contact }) => {
           <p className="text-xs font-semibold text-ink mt-2 truncate">{formattedOpportunity}</p>
         )}
       </div>
+      {followup && (
+        <div className="mt-3 space-y-1.5 border-t border-line/70 pt-2 text-[11px] text-muted">
+          <div className="flex items-center gap-1.5">
+            <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{getInteractionPresentation(followup.last_interaction).text}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <ClockIcon className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{getReminderPresentation(followup.reminder).text}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+const ContactCadence = memo(function ContactCadence({
+  contact,
+  followup,
+  loadState,
+  canEdit,
+  onSave,
+  onComplete,
+  onCancel,
+}) {
+  const [open, setOpen] = useState(false);
+  const [dateTime, setDateTime] = useState('');
+  const [note, setNote] = useState('');
+  const [busyAction, setBusyAction] = useState('');
+  const [error, setError] = useState('');
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 336 });
+  const [now, setNow] = useState(() => new Date());
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const dateInputRef = useRef(null);
+  const reminder = followup?.reminder || null;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const reposition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const width = Math.min(336, Math.max(280, window.innerWidth - viewportPadding * 2));
+    const panelHeight = panelRef.current?.getBoundingClientRect().height || 390;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding)
+    );
+    const below = rect.bottom + 8;
+    const top = below + panelHeight <= window.innerHeight - viewportPadding
+      ? below
+      : Math.max(viewportPadding, rect.top - panelHeight - 8);
+    setPosition({ top, left, width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setDateTime(reminder?.due_at ? formatDateTimeLocalInSaoPaulo(reminder.due_at) : getReminderPresetValue('tomorrow'));
+    setNote(reminder?.note || '');
+    setError('');
+    const frame = window.requestAnimationFrame(() => {
+      reposition();
+      window.requestAnimationFrame(reposition);
+      dateInputRef.current?.focus();
+    });
+    const onPointerDown = (event) => {
+      if (panelRef.current?.contains(event.target) || triggerRef.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [open, reminder?.due_at, reminder?.note, reposition]);
+
+  const interactionPresentation = getInteractionPresentation(followup?.last_interaction, now);
+  const reminderPresentation = getReminderPresentation(reminder, now);
+  const reminderTone = reminderPresentation.state === 'overdue' || reminderPresentation.state === 'error'
+    ? 'text-status-danger'
+    : reminderPresentation.state === 'today'
+      ? 'text-status-warning'
+      : reminderPresentation.state === 'empty'
+        ? 'text-primary hover:text-primary/80'
+        : 'text-ink hover:text-primary';
+
+  const runAction = async (action, callback) => {
+    setBusyAction(action);
+    setError('');
+    try {
+      await callback();
+      setOpen(false);
+    } catch (requestError) {
+      setError(requestError?.response?.data?.error || 'Não foi possível atualizar o retorno. Tente novamente.');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const saveReminder = async (event) => {
+    event.preventDefault();
+    const dueAt = saoPauloDateTimeLocalToIso(dateTime);
+    if (!dueAt || new Date(dueAt).getTime() <= Date.now()) {
+      setError('Escolha uma data e hora futuras.');
+      return;
+    }
+    await runAction('save', () => onSave(contact.id, { due_at: dueAt, note: note.trim() }));
+  };
+
+  if (loadState === 'loading') {
+    return (
+      <div className="mt-3 space-y-2 border-t border-line/70 pt-2.5" aria-label="Carregando interações e retorno">
+        <div className="h-3 w-4/5 animate-pulse rounded bg-line/70" />
+        <div className="h-3 w-3/5 animate-pulse rounded bg-line/70" />
+      </div>
+    );
+  }
+
+  if (loadState === 'error') {
+    return (
+      <div className="mt-3 flex items-center gap-1.5 border-t border-line/70 pt-2.5 text-[11px] text-muted" title="Atualize o Board para tentar novamente.">
+        <ExclamationTriangleIcon className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+        <span className="truncate">Cadência indisponível</span>
+      </div>
+    );
+  }
+
+  const popover = open && createPortal(
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label={reminder ? 'Editar retorno' : 'Agendar retorno'}
+      className="fixed z-[120] max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-[14px] border border-line bg-surf p-3.5 shadow-lift dark:bg-[#141a28] dark:border-[#232c40]"
+      style={{ top: position.top, left: position.left, width: position.width }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <form onSubmit={saveReminder} className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h4 className="text-sm font-semibold text-ink">{reminder ? 'Próximo contato' : 'Agendar retorno'}</h4>
+            <p className="mt-0.5 truncate text-[11px] text-muted">{contact.company_name || contact.name}</p>
+          </div>
+          <button
+            type="button"
+            className={`${iconBtn} -mr-1 -mt-1 h-8 w-8 shrink-0`}
+            onClick={() => setOpen(false)}
+            aria-label="Fechar"
+          >
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        </div>
+
+        <fieldset>
+          <legend className="mb-1.5 text-[11px] font-medium text-muted">Atalhos</legend>
+          <div className="grid grid-cols-3 gap-1.5">
+            {[
+              ['hour', '+1 hora'],
+              ['tomorrow', 'Amanhã, 9h'],
+              ['three_days', '+3 dias, 9h'],
+            ].map(([preset, label]) => (
+              <button
+                key={preset}
+                type="button"
+                className={`${btnSecondaryXs} min-w-0 px-1.5`}
+                onClick={() => setDateTime(getReminderPresetValue(preset))}
+              >
+                <span className="truncate">{label}</span>
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <label className="block text-[11px] font-medium text-muted">
+          Data e hora
+          <input
+            ref={dateInputRef}
+            type="datetime-local"
+            value={dateTime}
+            min={formatDateTimeLocalInSaoPaulo(new Date(Date.now() + 60_000))}
+            onChange={(event) => setDateTime(event.target.value)}
+            className={`${input} mt-1 w-full`}
+            required
+          />
+        </label>
+
+        <label className="block text-[11px] font-medium text-muted">
+          Motivo <span className="font-normal text-muted2">(opcional)</span>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value.slice(0, 160))}
+            maxLength={160}
+            rows={2}
+            placeholder="Ex.: ligar sobre a proposta enviada"
+            className={`${textarea} mt-1 w-full resize-none`}
+          />
+          <span className="mt-0.5 block text-right font-mono text-[9px] text-muted2">{note.length}/160</span>
+        </label>
+
+        <div className="rounded-[10px] bg-bg2 px-2.5 py-2 text-[11px] text-muted">
+          Aviso para <span className="font-medium text-ink">{reminder?.assignee_name || contact.agent_name || 'você'}</span> no sino e no push habilitado.
+        </div>
+
+        {error && <p className="text-[11px] text-status-danger" role="alert">{error}</p>}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-3">
+          <div className="flex items-center gap-1.5">
+            {reminder && (
+              <>
+                <button
+                  type="button"
+                  className={btnSecondaryXs}
+                  disabled={Boolean(busyAction)}
+                  onClick={() => runAction('complete', () => onComplete(contact.id))}
+                >
+                  <CheckCircleIcon className="h-3.5 w-3.5" />
+                  {busyAction === 'complete' ? 'Concluindo…' : 'Concluir'}
+                </button>
+                <button
+                  type="button"
+                  className={btnDangerGhost}
+                  disabled={Boolean(busyAction)}
+                  onClick={() => runAction('cancel', () => onCancel(contact.id))}
+                >
+                  {busyAction === 'cancel' ? 'Cancelando…' : 'Cancelar retorno'}
+                </button>
+              </>
+            )}
+          </div>
+          <button type="submit" className={btnPrimaryXs} disabled={Boolean(busyAction)}>
+            {busyAction === 'save' ? 'Salvando…' : reminder ? 'Reagendar' : 'Agendar'}
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body
+  );
+
+  return (
+    <div className="mt-3 space-y-1 border-t border-line/70 pt-2.5">
+      <div
+        className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted"
+        title={interactionPresentation.exact}
+      >
+        <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">{interactionPresentation.text}</span>
+      </div>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={!canEdit}
+        className={`relative flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-lg py-1 text-left text-[11px] font-medium transition hover:bg-bg2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 disabled:cursor-default disabled:hover:bg-transparent ${reminderTone}`}
+        title={!canEdit ? `${reminderPresentation.exact} Sem permissão para editar o Board.` : reminderPresentation.exact}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (canEdit) setOpen((value) => !value);
+        }}
+      >
+        <ClockIcon className="h-3.5 w-3.5 shrink-0" />
+        <span className="shrink-0">{reminderPresentation.text}</span>
+        {reminder?.note && <span className="truncate font-normal text-muted">· {reminder.note}</span>}
+      </button>
+      {popover}
+    </div>
+  );
+});
 
 // Snappy gap animation; layout anim disabled — transforms handle Trello gaps cheaper.
 const SORTABLE_TRANSITION = { duration: 150, easing: 'cubic-bezier(0.25, 1, 0.5, 1)' };
@@ -3214,6 +3504,12 @@ const getLabelChipStyle = (labelColor, isDarkMode) => {
 const KanbanCardBody = memo(function KanbanCardBody({
   contact,
   columnId,
+  followup,
+  followupLoadState,
+  canEditFollowup,
+  onSaveFollowup,
+  onCompleteFollowup,
+  onCancelFollowup,
   showMenu,
   menuLabel,
   onMenuAction,
@@ -3366,6 +3662,15 @@ const KanbanCardBody = memo(function KanbanCardBody({
           <p className="font-mono text-[16px] font-bold text-ink dark:text-[#e5e7eb] mt-2.5 truncate">{formattedOpportunity}</p>
         )}
       </div>
+      <ContactCadence
+        contact={contact}
+        followup={followup}
+        loadState={followupLoadState}
+        canEdit={canEditFollowup}
+        onSave={onSaveFollowup}
+        onComplete={onCompleteFollowup}
+        onCancel={onCancelFollowup}
+      />
       <div className="mt-3 flex flex-wrap gap-1.5 max-w-full">
         {displayPriority && (
           <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border max-w-full truncate ${priorityClass}`}>
@@ -3402,6 +3707,12 @@ const kanbanCardClassName = (isDragging, isSearchFocus = false) =>
 const KanbanCard = memo(function KanbanCard({
   contact,
   columnId,
+  followup,
+  followupLoadState,
+  canEditFollowup,
+  onSaveFollowup,
+  onCompleteFollowup,
+  onCancelFollowup,
   showMenu,
   menuLabel,
   onMenuAction,
@@ -3446,6 +3757,12 @@ const KanbanCard = memo(function KanbanCard({
       <KanbanCardBody
         contact={contact}
         columnId={columnId}
+        followup={followup}
+        followupLoadState={followupLoadState}
+        canEditFollowup={canEditFollowup}
+        onSaveFollowup={onSaveFollowup}
+        onCompleteFollowup={onCompleteFollowup}
+        onCancelFollowup={onCancelFollowup}
         showMenu={showMenu}
         menuLabel={menuLabel}
         onMenuAction={onMenuAction}
@@ -3462,6 +3779,12 @@ const KanbanCard = memo(function KanbanCard({
 const KanbanCardStatic = memo(function KanbanCardStatic({
   contact,
   columnId,
+  followup,
+  followupLoadState,
+  canEditFollowup,
+  onSaveFollowup,
+  onCompleteFollowup,
+  onCancelFollowup,
   showMenu,
   menuLabel,
   onMenuAction,
@@ -3479,6 +3802,12 @@ const KanbanCardStatic = memo(function KanbanCardStatic({
       <KanbanCardBody
         contact={contact}
         columnId={columnId}
+        followup={followup}
+        followupLoadState={followupLoadState}
+        canEditFollowup={canEditFollowup}
+        onSaveFollowup={onSaveFollowup}
+        onCompleteFollowup={onCompleteFollowup}
+        onCancelFollowup={onCancelFollowup}
         showMenu={showMenu}
         menuLabel={menuLabel}
         onMenuAction={onMenuAction}
@@ -3494,7 +3823,7 @@ const KanbanCardStatic = memo(function KanbanCardStatic({
 // the active/hovered column. Other fat columns stay virtualized + static cards.
 const COLUMN_LIST_GAP_PX = 9;
 const COLUMN_VIRTUAL_THRESHOLD = 1; // always window long columns (Inbox, Contato, …)
-const FUNNEL_CARD_ESTIMATE_PX = 152;
+const FUNNEL_CARD_ESTIMATE_PX = 204;
 const LICITACAO_CARD_ESTIMATE_PX = 168;
 
 /** Track vertical overflow + expose up/down scroll helpers (replaces scrollbars with chevrons). */
@@ -3841,6 +4170,10 @@ const RadarTrendsPage = memo(function RadarTrendsPage({
   const trendsSource = String(trendsIntel?.meta?.source || '');
   const isNewsMode = /news_sector|google_news|rss/i.test(trendsSource);
   const isRelatedMode = /pytrends|related/i.test(trendsSource);
+  const relatedTrends = isRelatedMode ? trends : [];
+  const collectedNews = Array.isArray(trendsIntel?.news) ? trendsIntel.news : [];
+  // Compatibilidade com caches antigos, nos quais notícias ocupavam `trends`.
+  const newsItems = collectedNews.length > 0 ? collectedNews : (isNewsMode ? trends : []);
   const itemLink = (item) => {
     const fromNews = (item.news || []).find((news) => news?.url)?.url;
     return fromNews || item.url || item.link || null;
@@ -3874,8 +4207,7 @@ const RadarTrendsPage = memo(function RadarTrendsPage({
       return '';
     }
   };
-  const prioritizedTrends = [...trends].sort((a, b) => Number(Boolean(itemImage(b))) - Number(Boolean(itemImage(a))));
-  const showNewsCards = isNewsMode || prioritizedTrends.some((item) => itemImage(item));
+  const prioritizedNews = [...newsItems].sort((a, b) => Number(Boolean(itemImage(b))) - Number(Boolean(itemImage(a))));
 
   return (
     <div className="mt-5 space-y-4">
@@ -3933,94 +4265,108 @@ const RadarTrendsPage = memo(function RadarTrendsPage({
             </section>
           )}
 
-          {prioritizedTrends.length > 0 && (
+          {prioritizedNews.length > 0 && (
             <section>
               <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <h3 className="text-sm font-semibold text-ink">
-                    {isRelatedMode ? 'Correlatos do setor' : 'Notícias e sinais do mercado'}
-                  </h3>
+                  <h3 className="text-sm font-semibold text-ink">Notícias do setor</h3>
                   <p className="mt-0.5 text-[11px] text-muted">
-                    {showNewsCards ? 'Conteúdos com imagem aparecem primeiro.' : 'Termos relacionados às principais frentes comerciais.'}
+                    RSS atualizado separadamente dos correlatos. Conteúdos com imagem aparecem primeiro.
                   </p>
                 </div>
-                <span className="font-mono text-[10px] text-muted2">{prioritizedTrends.length} sinais</span>
+                <span className="font-mono text-[10px] text-muted2">{prioritizedNews.length} notícias</span>
               </div>
 
-              {showNewsCards ? (
-                <div className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {prioritizedTrends.slice(0, 12).map((item, index) => {
-                    const href = itemLink(item);
-                    const source = itemSource(item);
-                    const picture = itemImage(item);
-                    const title = cleanTitle(item);
-                    const content = (
-                      <>
-                        {picture && (
-                          <div className="aspect-[16/9] overflow-hidden bg-bg2">
-                            <img
-                              src={picture}
-                              alt=""
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                              onError={(event) => { event.currentTarget.parentElement.style.display = 'none'; }}
-                            />
-                          </div>
-                        )}
-                        <div className="flex min-h-0 flex-1 flex-col p-3">
-                          <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted2">
-                            <span className="truncate">{source || `Sinal ${String(index + 1).padStart(2, '0')}`}</span>
-                            {item.pubDate && <span className="shrink-0">{formatNewsDate(item.pubDate)}</span>}
-                          </div>
-                          <h4 className="mt-1.5 line-clamp-3 text-sm font-semibold leading-snug text-ink group-hover:text-primary">
-                            {title}
-                          </h4>
-                          <span className="mt-auto pt-3 text-[11px] font-semibold text-primary">Ir para a matéria ↗</span>
+              <div className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {prioritizedNews.slice(0, 12).map((item, index) => {
+                  const href = itemLink(item);
+                  const source = itemSource(item);
+                  const picture = itemImage(item);
+                  const title = cleanTitle(item);
+                  const content = (
+                    <>
+                      {picture && (
+                        <div className="aspect-[16/9] overflow-hidden bg-bg2">
+                          <img
+                            src={picture}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                            onError={(event) => { event.currentTarget.parentElement.style.display = 'none'; }}
+                          />
                         </div>
-                      </>
-                    );
-                    return href ? (
-                      <a
-                        key={`${item.title}-${index}`}
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2 transition-colors hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                        aria-label={`${title}. Abrir matéria em nova aba`}
-                      >
-                        {content}
-                      </a>
-                    ) : (
-                      <article key={`${item.title}-${index}`} className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2">
-                        {content}
-                      </article>
-                    );
-                  })}
+                      )}
+                      <div className="flex min-h-0 flex-1 flex-col p-3">
+                        <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted2">
+                          <span className="truncate">{source || `Notícia ${String(index + 1).padStart(2, '0')}`}</span>
+                          {item.pubDate && <span className="shrink-0">{formatNewsDate(item.pubDate)}</span>}
+                        </div>
+                        <h4 className="mt-1.5 line-clamp-3 text-sm font-semibold leading-snug text-ink group-hover:text-primary">
+                          {title}
+                        </h4>
+                        {href && <span className="mt-auto pt-3 text-[11px] font-semibold text-primary">Ir para a matéria ↗</span>}
+                      </div>
+                    </>
+                  );
+                  return href ? (
+                    <a
+                      key={`${item.title}-${index}`}
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2 transition-colors hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      aria-label={`${title}. Abrir matéria em nova aba`}
+                    >
+                      {content}
+                    </a>
+                  ) : (
+                    <article key={`${item.title}-${index}`} className="group flex min-h-[11rem] flex-col overflow-hidden rounded-[12px] border border-line bg-bg2">
+                      {content}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {prioritizedNews.length === 0 && trendsIntel?.meta?.news_error && (
+            <section className="rounded-[12px] border border-dashed border-line px-4 py-3" role="status">
+              <h3 className="text-sm font-semibold text-ink">Notícias temporariamente indisponíveis</h3>
+              <p className="mt-1 text-xs text-muted">Os correlatos e as sugestões continuam ativos; o RSS será tentado novamente na próxima coleta.</p>
+            </section>
+          )}
+
+          {relatedTrends.length > 0 && (
+            <section>
+              <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">Correlatos do setor</h3>
+                  <p className="mt-0.5 text-[11px] text-muted">Termos que orientam a leitura comercial e os perfis sugeridos.</p>
                 </div>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {prioritizedTrends.slice(0, 18).map((item) => {
-                    const href = itemLink(item);
-                    const body = (
-                      <>
-                        {item.kind === 'rising' && <span className="font-mono text-[9px] font-semibold text-status-success">↑</span>}
-                        <span className="font-medium">{item.title}</span>
-                        {item.traffic && item.traffic !== 'news' && <span className="font-mono text-[10px] text-muted">{item.traffic}</span>}
-                        {href && <span className="font-mono text-[9px] text-primary/70">↗</span>}
-                      </>
-                    );
-                    const chipClass = 'inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 px-2.5 py-1 text-[11px] text-ink transition-colors hover:border-primary/40 hover:text-primary';
-                    return href ? (
-                      <a key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} href={href} target="_blank" rel="noopener noreferrer" className={chipClass}>
-                        {body}
-                      </a>
-                    ) : (
-                      <span key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} className={chipClass}>{body}</span>
-                    );
-                  })}
-                </div>
-              )}
+                <span className="font-mono text-[10px] text-muted2">{relatedTrends.length} sinais</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {relatedTrends.slice(0, 18).map((item) => {
+                  const href = itemLink(item);
+                  const body = (
+                    <>
+                      {item.kind === 'rising' && <span className="font-mono text-[9px] font-semibold text-status-success">↑</span>}
+                      <span className="font-medium">{item.title}</span>
+                      {item.traffic && item.traffic !== 'news' && <span className="font-mono text-[10px] text-muted">{item.traffic}</span>}
+                      {href && <span className="font-mono text-[9px] text-primary/70">↗</span>}
+                    </>
+                  );
+                  const chipClass = 'inline-flex items-center gap-1.5 rounded-full border border-line bg-bg2 px-2.5 py-1 text-[11px] text-ink transition-colors hover:border-primary/40 hover:text-primary';
+                  return href ? (
+                    <a key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} href={href} target="_blank" rel="noopener noreferrer" className={chipClass}>
+                      {body}
+                    </a>
+                  ) : (
+                    <span key={`${item.seed || ''}-${item.kind || ''}-${item.title}`} className={chipClass}>{body}</span>
+                  );
+                })}
+              </div>
             </section>
           )}
 
@@ -4243,6 +4589,12 @@ const VirtualizedColumnList = memo(function VirtualizedColumnList({
 const KanbanColumn = memo(function KanbanColumn({
   title,
   contacts,
+  followupsByContact,
+  followupLoadState,
+  canEditFollowup,
+  onSaveFollowup,
+  onCompleteFollowup,
+  onCancelFollowup,
   dotClass,
   showMenu,
   menuLabel,
@@ -4282,6 +4634,12 @@ const KanbanColumn = memo(function KanbanColumn({
       const shared = {
         contact,
         columnId: title,
+        followup: followupsByContact?.[String(contact.id)] || null,
+        followupLoadState,
+        canEditFollowup,
+        onSaveFollowup,
+        onCompleteFollowup,
+        onCancelFollowup,
         showMenu,
         menuLabel,
         onMenuAction,
@@ -4292,7 +4650,7 @@ const KanbanColumn = memo(function KanbanColumn({
       };
       return enableSortable ? <KanbanCard {...shared} /> : <KanbanCardStatic {...shared} />;
     },
-    [contacts, title, showMenu, menuLabel, onMenuAction, onMoveToColumn, availableColumns, isDarkMode, enableSortable, focusIdStr]
+    [contacts, title, followupsByContact, followupLoadState, canEditFollowup, onSaveFollowup, onCompleteFollowup, onCancelFollowup, showMenu, menuLabel, onMenuAction, onMoveToColumn, availableColumns, isDarkMode, enableSortable, focusIdStr]
   );
 
   return (
@@ -4823,6 +5181,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
   const [saveWhatsappEnabled, setSaveWhatsappEnabled] = useState(false);
   const [saveWhatsappNumber, setSaveWhatsappNumber] = useState('');
   const [saveWhatsappScoreBand, setSaveWhatsappScoreBand] = useState('all');
+  const [saveCatalogoClasses, setSaveCatalogoClasses] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveNotice, setSaveNotice] = useState(null);
   const [selecionados, setSelecionados] = useState({});
@@ -4998,6 +5357,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
         usar_ia: usarIa,
         valor_minimo: filtros.valor_min ? Number(filtros.valor_min) : null,
         valor_maximo: filtros.valor_max ? Number(filtros.valor_max) : null,
+        catalogo_classes: saveCatalogoClasses
+          .split(',').map(s => s.trim()).filter(Boolean),
         ...waPayload,
       });
       setSaveDialog(false);
@@ -5005,6 +5366,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
       setSaveWhatsappEnabled(false);
       setSaveWhatsappNumber('');
       setSaveWhatsappScoreBand('all');
+      setSaveCatalogoClasses('');
       setWatchlistListRefreshVersion(v => v + 1);
       setSaveNotice({
         tone: 'success',
@@ -5571,6 +5933,17 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
               value={saveName}
               onChange={e => setSaveName(e.target.value)}
             />
+            <div>
+              <input
+                className={`${input} w-full`}
+                placeholder="Classes CATMAT/CATSER (opcional, separadas por vírgula)"
+                value={saveCatalogoClasses}
+                onChange={e => setSaveCatalogoClasses(e.target.value)}
+              />
+              <p className={`${subtle} mt-1`}>
+                Itens do PCA nessas classes de catálogo ganham aderência extra (sinal determinístico, além do texto).
+              </p>
+            </div>
             <label className="flex cursor-pointer items-start gap-2 text-xs text-muted">
               <input
                 type="checkbox"
@@ -7531,6 +7904,8 @@ const ProcessSectionHeader = memo(function ProcessSectionHeader({ kicker, title,
 
 function App() {
   const [contacts, setContacts] = useState([]);
+  const [followupsByContact, setFollowupsByContact] = useState({});
+  const [followupLoadState, setFollowupLoadState] = useState('idle');
   const [licitacaoOpportunities, setLicitacaoOpportunities] = useState([]);
   const [licSummary, setLicSummary] = useState(null);
   const [pncpSearchJobsCount, setPncpSearchJobsCount] = useState(null);
@@ -8096,6 +8471,12 @@ function App() {
         setActiveView(data.view);
         if (data.sub) setLicitacaoSubview(data.sub);
       }
+      if (data.contact_id) {
+        const contact = contacts.find((item) => String(item.id) === String(data.contact_id));
+        pendingBoardFocusContactIdRef.current = data.contact_id;
+        setActiveTab(customerColumns.includes(contact?.custom_attributes?.Funil_Vendas) ? 'customers' : 'leads');
+        setSearchQuery(contact?.company_name || contact?.name || String(data.contact_id));
+      }
       if (data.job_id) {
         try {
           localStorage.setItem('pncp_active_search_job_id', String(data.job_id));
@@ -8107,7 +8488,7 @@ function App() {
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
-  }, [authStatus.authenticated, loadInboxNotifications]);
+  }, [authStatus.authenticated, contacts, loadInboxNotifications]);
 
   const loadUsers = useCallback(() => {
     setUsersLoading(true);
@@ -8180,6 +8561,68 @@ function App() {
   }, [pageAccessLevel]);
 
   const canEditPage = useCallback((viewName) => pageAccessLevel(viewName) === 'edit', [pageAccessLevel]);
+
+  const mergeFollowupStatus = useCallback((status) => {
+    if (!status?.contact_id) return;
+    const key = String(status.contact_id);
+    setFollowupsByContact((previous) => ({ ...previous, [key]: status }));
+  }, []);
+
+  const loadContactFollowups = useCallback(async ({ background = false } = {}) => {
+    if (!background) setFollowupLoadState('loading');
+    try {
+      const response = await axios.get('/api/contacts/follow-up-status');
+      const statuses = Array.isArray(response.data) ? response.data : [];
+      setFollowupsByContact((previous) => {
+        const next = {};
+        statuses.forEach((status) => {
+          if (!status?.contact_id) return;
+          const key = String(status.contact_id);
+          const previousStatus = previous[key];
+          next[key] = previousStatus && JSON.stringify(previousStatus) === JSON.stringify(status)
+            ? previousStatus
+            : status;
+        });
+        return next;
+      });
+      setFollowupLoadState('ready');
+    } catch (error) {
+      console.error('Error fetching contact follow-ups:', error);
+      setFollowupLoadState((current) => (current === 'ready' ? current : 'error'));
+    }
+  }, []);
+
+  const saveContactFollowup = useCallback(async (contactId, payload) => {
+    const response = await axios.put(`/api/contacts/${contactId}/reminder`, payload);
+    mergeFollowupStatus(response.data);
+    return response.data;
+  }, [mergeFollowupStatus]);
+
+  const completeContactFollowup = useCallback(async (contactId) => {
+    const response = await axios.post(`/api/contacts/${contactId}/reminder/complete`);
+    mergeFollowupStatus(response.data);
+    return response.data;
+  }, [mergeFollowupStatus]);
+
+  const cancelContactFollowup = useCallback(async (contactId) => {
+    const response = await axios.delete(`/api/contacts/${contactId}/reminder`);
+    mergeFollowupStatus(response.data);
+    return response.data;
+  }, [mergeFollowupStatus]);
+
+  useEffect(() => {
+    if (!authStatus.authenticated || activeView !== 'Board') return undefined;
+    loadContactFollowups();
+    const timer = window.setInterval(() => loadContactFollowups({ background: true }), 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadContactFollowups({ background: true });
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authStatus.authenticated, activeView, loadContactFollowups]);
 
   const loadMetas = useCallback((year, background = false) => {
     if (!background) setMetasLoading(true);
@@ -9924,45 +10367,9 @@ function App() {
     return `${Math.floor(diffSec / 86400)} d`;
   };
 
-  // Countdown até arquivamento (15 dias desde started_at; reexecuções não estendem).
-  const getPncpJobArchiveMeta = (job) => {
-    if (!job || job.watchlist_id) return null;
-    const archiveDays = Number(job.archive_days || 15);
-    let daysLeft = job.days_until_archive;
-    if (daysLeft == null && job.archive_at) {
-      const archiveTs = Date.parse(job.archive_at);
-      if (Number.isFinite(archiveTs)) {
-        daysLeft = Math.max(0, Math.ceil((archiveTs - Date.now()) / 86400000));
-      }
-    }
-    if (daysLeft == null && job.started_at) {
-      const startTs = typeof job.started_at === 'number' ? job.started_at : Date.parse(job.started_at);
-      if (Number.isFinite(startTs)) {
-        const archiveTs = startTs + archiveDays * 86400000;
-        daysLeft = Math.max(0, Math.ceil((archiveTs - Date.now()) / 86400000));
-      }
-    }
-    if (daysLeft == null || !Number.isFinite(Number(daysLeft))) return null;
-    const n = Number(daysLeft);
-    if (n <= 0) {
-      return { daysLeft: 0, label: 'Arquiva hoje', urgent: true, className: 'bg-status-danger/10 text-status-danger border-status-danger/25' };
-    }
-    if (n === 1) {
-      return { daysLeft: 1, label: 'Arquiva em 1 d', urgent: true, className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' };
-    }
-    if (n <= 2) {
-      return { daysLeft: n, label: `Arquiva em ${n} d`, urgent: true, className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' };
-    }
-    return { daysLeft: n, label: `Arquiva em ${n} d`, urgent: false, className: 'bg-cardAlt text-muted border-border' };
-  };
-
   const canRerunPncpSearchJob = (job) => {
     if (!job?.id || job.watchlist_id) return false;
     if (isPncpJobLive(job.status)) return false;
-    const archive = getPncpJobArchiveMeta(job);
-    if (archive && archive.daysLeft <= 0 && job.days_until_archive === 0) {
-      // Ainda permite no último dia; bloqueio real fica no backend (410).
-    }
     return ['completed', 'failed', 'cancelled'].includes(String(job.status || ''));
   };
 
@@ -10082,6 +10489,12 @@ function App() {
         const bVal = parseCurrency(b.custom_attributes?.Valor_Oportunidade) || 0;
         return aVal - bVal;
       }
+      if (sortOption === 'reminder-asc') {
+        return compareContactsByReminder(a, b, followupsByContact);
+      }
+      if (sortOption === 'interaction-oldest') {
+        return compareContactsByOldestInteraction(a, b, followupsByContact);
+      }
       return 0;
     });
     return sorted;
@@ -10124,7 +10537,7 @@ function App() {
     });
     contactsByColumnPrevRef.current = buckets;
     return buckets;
-  }, [filteredContacts, activeColumns, activeDragId, sortOption]);
+  }, [filteredContacts, activeColumns, activeDragId, sortOption, followupsByContact]);
 
   const getContactsForColumn = (columnName) => contactsByColumn[columnName] || [];
   const dotClass = activeTab === 'leads' ? 'bg-primary' : 'bg-secondary';
@@ -10772,9 +11185,6 @@ function App() {
           started_at: response.data?.started_at,
           updated_at: response.data?.updated_at,
           completed_at: response.data?.completed_at,
-          archive_at: response.data?.archive_at || null,
-          days_until_archive: response.data?.days_until_archive,
-          archive_days: response.data?.archive_days || 15,
           term_runs: response.data?.term_runs || response.data?.query_plan?.term_runs || [],
         };
         const exists = prev.some(j => String(j.id) === String(jobId));
@@ -11943,9 +12353,6 @@ function App() {
             started_at: response.data?.started_at || jobRow.started_at,
             updated_at: response.data?.updated_at || jobRow.updated_at,
             completed_at: response.data?.completed_at || jobRow.completed_at,
-            archive_at: response.data?.archive_at ?? jobRow.archive_at,
-            days_until_archive: response.data?.days_until_archive ?? jobRow.days_until_archive,
-            archive_days: response.data?.archive_days || jobRow.archive_days || 15,
             term_runs: nextRuns,
             query_plan: {
               ...(jobRow.query_plan || {}),
@@ -15134,6 +15541,12 @@ function App() {
                                       } else {
                                         setActiveView('Notificações');
                                       }
+                                      if (item.data?.contact_id) {
+                                        const contact = contacts.find((candidate) => String(candidate.id) === String(item.data.contact_id));
+                                        pendingBoardFocusContactIdRef.current = item.data.contact_id;
+                                        setActiveTab(customerColumns.includes(contact?.custom_attributes?.Funil_Vendas) ? 'customers' : 'leads');
+                                        setSearchQuery(contact?.company_name || contact?.name || String(item.data.contact_id));
+                                      }
                                       if (item.data?.job_id && typeof openPncpSearchJob === 'function') {
                                         openPncpSearchJob(item.data.job_id);
                                       }
@@ -15298,6 +15711,8 @@ function App() {
                         <option value="name-desc">Nome (Z-A)</option>
                         <option value="opportunity-desc">Maior oportunidade</option>
                         <option value="opportunity-asc">Menor oportunidade</option>
+                        <option value="reminder-asc">Próximo retorno</option>
+                        <option value="interaction-oldest">Interação mais antiga</option>
                       </select>
                     </div>
                   </div>
@@ -15472,6 +15887,12 @@ function App() {
                   key={column}
                   title={column}
                   contacts={getContactsForColumn(column)}
+                  followupsByContact={followupsByContact}
+                  followupLoadState={followupLoadState === 'idle' ? 'loading' : followupLoadState}
+                  canEditFollowup={canEditPage('Board')}
+                  onSaveFollowup={saveContactFollowup}
+                  onCompleteFollowup={completeContactFollowup}
+                  onCancelFollowup={cancelContactFollowup}
                   dotClass={dotClass}
                   showMenu={showMenu}
                   menuLabel={menuLabel}
@@ -16189,7 +16610,7 @@ function App() {
                       <h3 className={`${sectionTitle} text-[15px]`}>Minhas buscas</h3>
                       {/* Altura fixa 2 linhas: o sufixo “ao vivo” NÃO empurra o grid de cards */}
                       <p className={`${subtle} mt-0.5 h-8 overflow-hidden leading-4 sm:h-4 sm:truncate`}>
-                        Ativas por 15 dias (recoleta diária + botão Rodar de novo, sem apagar o acervo). Depois arquivam, a menos que virem watchlist.
+                        Ficam salvas até você excluí-las. Recoleta diária + botão Rodar de novo, sem apagar o acervo.
                         {pncpSearchJobs.some(j => isPncpJobLive(j.status)) ? ' · Atualizando status ao vivo…' : ''}
                       </p>
                     </div>
@@ -16207,9 +16628,8 @@ function App() {
                     </div>
                   ) : (
                     <div className="mt-3 grid items-stretch gap-3 md:grid-cols-2">
-                      {pncpSearchJobs.slice(0, 18).map(job => {
+                      {pncpSearchJobs.map(job => {
                         const meta = getPncpJobStatusMeta(job.status);
-                        const archiveMeta = getPncpJobArchiveMeta(job);
                         const canRerun = canRerunPncpSearchJob(job);
                         const done = Number(job.progress?.terms_done || 0);
                         const termsTotal = Math.max(Number(job.progress?.terms_total || job.terms?.length || 0), 1);
@@ -16245,7 +16665,7 @@ function App() {
                                 </span>
                               </div>
 
-                              {/* Chips em altura fixa (1 linha) — %/arquivo/temporária não empurram o card */}
+                              {/* Chips em altura fixa (1 linha) — o progresso não empurra o card */}
                               <div className="mt-2.5 flex h-6 items-center gap-1.5 overflow-hidden">
                                 <span
                                   className={metaChip}
@@ -16268,24 +16688,6 @@ function App() {
                                   aria-hidden={!live}
                                 >
                                   {live ? `${pct}%` : '0%'}
-                                </span>
-                                <span
-                                  className={`${metaChip} ${isSubscribed ? 'invisible' : ''}`}
-                                  title="Busca temporária: 15 dias de recoleta diária, depois arquiva (a menos que vire assinatura)."
-                                  aria-hidden={isSubscribed}
-                                >
-                                  Temporária
-                                </span>
-                                <span
-                                  className={`inline-flex min-w-[4.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                    archiveMeta ? archiveMeta.className : 'invisible border-transparent'
-                                  }`}
-                                  title={archiveMeta
-                                    ? 'Buscas sem assinatura são arquivadas 15 dias após a criação. A recoleta diária não estende o prazo.'
-                                    : undefined}
-                                  aria-hidden={!archiveMeta}
-                                >
-                                  {archiveMeta?.label || '·'}
                                 </span>
                               </div>
 
@@ -16519,7 +16921,6 @@ function App() {
                     {(() => {
                       const job = activePncpSearchJob;
                       const meta = getPncpJobStatusMeta(job?.status);
-                      const archiveMeta = getPncpJobArchiveMeta(job);
                       const canRerun = canRerunPncpSearchJob(job);
                       const live = isPncpJobLive(job?.status);
                       const title = job?.nome || job?.filters?.q || 'Pesquisa PNCP';
@@ -16541,20 +16942,6 @@ function App() {
                                   <span className={`inline-flex max-w-[11rem] shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}>
                                     {meta.live && <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />}
                                     <span className="truncate">{meta.label}</span>
-                                  </span>
-                                  {/* Slot fixo do chip de arquivo — evita reflow quando aparece/some */}
-                                  <span
-                                    className={`inline-flex min-w-[5.5rem] shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
-                                      archiveMeta
-                                        ? archiveMeta.className
-                                        : 'border-transparent text-transparent'
-                                    }`}
-                                    title={archiveMeta
-                                      ? 'Arquivamento 15 dias após a criação. Recoleta diária mantém resultados e não estende o prazo.'
-                                      : undefined}
-                                    aria-hidden={!archiveMeta}
-                                  >
-                                    {archiveMeta?.label || '·'}
                                   </span>
                                 </div>
                                 <p className="mt-0.5 h-4 truncate font-mono text-[11px] leading-4 text-muted">
@@ -25752,7 +26139,10 @@ function App() {
           </div>
         ) : dragOverlayPayload?.type === 'contact' ? (
           <div className="w-[270px]">
-            <CardPreview contact={dragOverlayPayload.contact} />
+            <CardPreview
+              contact={dragOverlayPayload.contact}
+              followup={followupsByContact[String(dragOverlayPayload.contact?.id)]}
+            />
           </div>
         ) : null}
       </DragOverlay>

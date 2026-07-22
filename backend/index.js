@@ -23,11 +23,35 @@ const {
   analyzeLicitacaoDeadlineSummary,
 } = require('./brazilBusinessDays');
 const {
+  createContactReminderTable,
+  normalizeReminderPayload,
+  getContactFollowupStatuses,
+  replaceContactReminder,
+  closeContactReminder,
+  processContactFollowups,
+} = require('./contactFollowups');
+const {
   decodeXmlEntities,
   extractXmlTag,
   extractRssImage,
   enrichNewsPictures,
+  combineTrendsFeeds,
 } = require('./trendsMedia');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const {
+  createPncpProxyPool,
+  refreshPncpProxyPool,
+  pickPncpProxy,
+  reportPncpProxyOk,
+  reportPncpProxyThrottle,
+  reportPncpProxyDown,
+  isPncpProxyTransportError,
+  countAliveProxies,
+  countRecentProxyThrottles,
+  proxyToUrl,
+  getPncpProxyPoolSnapshot,
+} = require('./pncpProxyPool');
+const { fetch: undiciFetch, ProxyAgent } = require('undici');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -561,6 +585,22 @@ async function getUserById(id) {
 const requireAdmin = (req, res, next) => {
   if (req.auth && req.auth.role === 'admin') return next();
   return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+};
+
+const requireBoardEdit = async (req, res, next) => {
+  if (req.auth?.role === 'admin') return next();
+  const userId = Number(req.auth?.uid);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return res.status(403).json({ error: 'Você não tem permissão para editar o Board.' });
+  }
+  try {
+    const user = await getUserById(userId);
+    if (user?.page_permissions?.Board === 'edit') return next();
+    return res.status(403).json({ error: 'Você não tem permissão para editar o Board.' });
+  } catch (error) {
+    console.error('board permission check failed:', error.message);
+    return res.status(500).json({ error: 'Não foi possível validar sua permissão.' });
+  }
 };
 
 // List users (Chatwoot account members) + app-side access + flags de vendedor. Admin only.
@@ -1797,6 +1837,8 @@ const WATCHLIST_NOTIFICATIONS_TABLE = 'watchlist_notifications';
 const PNCP_RESULT_CACHE_TABLE = 'pncp_result_cache';
 const PNCP_SEARCH_JOBS_TABLE = 'pncp_search_jobs';
 const PNCP_SEARCH_JOB_RESULTS_TABLE = 'pncp_search_job_results';
+const PNCP_ENRICHMENT_TABLE = 'pncp_compra_enrichment';
+const SEARCH_ALLOWLIST_TABLE = 'search_allowlist_terms';
 const PCA_PLANOS_TABLE = 'pca_planos';
 const PCA_ITENS_TABLE = 'pca_itens';
 const PCA_WATCHLIST_TABLE = 'pca_watchlist';
@@ -2658,6 +2700,45 @@ const createLicitacaoTables = async () => {
   await pool.query(`ALTER TABLE ${PCA_SYNC_STATE_TABLE} ADD COLUMN IF NOT EXISTS bootstrap_finished_at TIMESTAMP;`);
   await pool.query(`ALTER TABLE ${PCA_SYNC_STATE_TABLE} ADD COLUMN IF NOT EXISTS bootstrap_error TEXT;`);
   await pool.query(`INSERT INTO ${PCA_SYNC_STATE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING;`);
+
+  // ===== #5: Enrichment de compra PNCP persistido =====
+  // L2 durável do enrichment (detalhe + itens pertinentes). Sobrevive a restart
+  // e réplicas; incompleto (PNCP cortou no meio) é reprocessado pelo job de repair.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${PNCP_ENRICHMENT_TABLE} (
+      cache_key TEXT PRIMARY KEY,
+      cnpj TEXT NOT NULL,
+      ano TEXT NOT NULL,
+      sequencial TEXT NOT NULL,
+      query_text TEXT NOT NULL DEFAULT '',
+      max_pages INTEGER NOT NULL DEFAULT 1,
+      value JSONB NOT NULL,
+      is_complete BOOLEAN NOT NULL DEFAULT FALSE,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pncp_enrichment_repair ON ${PNCP_ENRICHMENT_TABLE} (is_complete, fetched_at) WHERE is_complete = FALSE;`);
+
+  // ===== #7: CATMAT/CATSER na watchlist de PCA =====
+  // Classes de catálogo associadas à assinatura → boost determinístico de aderência.
+  await pool.query(`ALTER TABLE ${PCA_WATCHLIST_TABLE} ADD COLUMN IF NOT EXISTS catalogo_classes TEXT[] NOT NULL DEFAULT '{}';`);
+
+  // ===== #8: Allowlists curadas por vertical =====
+  // Semente = allowlists hardcoded (ex.: drone→vant/rpa/uav). Alimentável por
+  // curadoria e pelo feedback de descarte.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${SEARCH_ALLOWLIST_TABLE} (
+      id BIGSERIAL PRIMARY KEY,
+      vertical TEXT NOT NULL,
+      termo TEXT NOT NULL,
+      peso NUMERIC NOT NULL DEFAULT 0.8,
+      fonte TEXT NOT NULL DEFAULT 'curadoria',
+      ativo BOOLEAN NOT NULL DEFAULT TRUE,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (vertical, termo)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_search_allowlist_vertical ON ${SEARCH_ALLOWLIST_TABLE} (vertical) WHERE ativo = TRUE;`);
 };
 
 const getPrazoStatusSql = (alias = '') => `
@@ -3431,6 +3512,80 @@ const fetchComprasGov = async (pathName, query = {}) => {
   }
 };
 
+// ============ POOL DE PROXIES PNCP (rotação por IP, fase 1) ============
+// Rotação dentro do gate: cada request interactive/sync sai por um proxy do
+// webshare (bulk fica no IP direto). Ver pncpProxyPool.js para as regras.
+const PNCP_PROXY_POOL = createPncpProxyPool(process.env);
+// Contexto da chamada em curso (setado por withPncpGate): as funções de fetch
+// leem daqui qual proxy usar, sem mudar assinatura de ninguém.
+const PNCP_CALL_CONTEXT = new AsyncLocalStorage();
+const getPncpCallProxy = () => PNCP_CALL_CONTEXT.getStore()?.proxy || null;
+
+// Um ProxyAgent por proxy (keep-alive próprio por túnel).
+const PNCP_PROXY_DISPATCHERS = new Map();
+const getPncpProxyDispatcher = (proxy) => {
+  let dispatcher = PNCP_PROXY_DISPATCHERS.get(proxy.id);
+  if (!dispatcher) {
+    dispatcher = new ProxyAgent(proxyToUrl(proxy));
+    PNCP_PROXY_DISPATCHERS.set(proxy.id, dispatcher);
+  }
+  return dispatcher;
+};
+
+/** fetch que respeita o proxy do contexto (IP direto quando não há proxy). */
+const pncpFetch = (url, options = {}) => {
+  const proxy = getPncpCallProxy();
+  if (!proxy) return fetch(url, options);
+  return undiciFetch(url, { ...options, dispatcher: getPncpProxyDispatcher(proxy) });
+};
+
+// ---- Lanes (fase 2): cada proxy vivo é uma lane; 'direct' é a lane sem proxy.
+// Uma lane atende um request por vez, com pacing (gapMs) próprio.
+const PNCP_LANES_BUSY = new Set();
+
+/** Teto de requests PNCP simultâneos agora: lanes de proxy vivas + 1 direta. */
+const getPncpMaxConcurrent = () => {
+  if (!PNCP_PROXY_POOL.enabled) return 1;
+  // Gate globalmente degradado (429/reset em vários IPs): volta a 1 por vez.
+  if (isPncpGateDegraded()) return 1;
+  return 1 + Math.min(countAliveProxies(PNCP_PROXY_POOL), PNCP_PROXY_POOL.maxLanes);
+};
+
+/**
+ * Tenta ocupar uma lane livre para a prioridade (síncrono — sem await entre
+ * checagem e marcação). bulk só usa a direta; interactive/sync preferem proxy
+ * e caem para a direta se não houver proxy livre.
+ */
+const acquirePncpLane = (priority) => {
+  const proxy = pickPncpProxy(PNCP_PROXY_POOL, priority, Date.now(), PNCP_LANES_BUSY);
+  if (proxy) {
+    PNCP_LANES_BUSY.add(proxy.id);
+    return { id: proxy.id, proxy };
+  }
+  if (!PNCP_LANES_BUSY.has('direct')) {
+    PNCP_LANES_BUSY.add('direct');
+    return { id: 'direct', proxy: null };
+  }
+  return null;
+};
+
+const releasePncpLane = (lane) => {
+  if (lane) PNCP_LANES_BUSY.delete(lane.id);
+};
+
+if (PNCP_PROXY_POOL.enabled) {
+  refreshPncpProxyPool(PNCP_PROXY_POOL).then(ok => {
+    console.log(
+      ok
+        ? `[PNCP Proxy] pool carregado: ${PNCP_PROXY_POOL.proxies.length} proxies (${[...new Set(PNCP_PROXY_POOL.proxies.map(p => p.country))].join(', ')})`
+        : `[PNCP Proxy] falha ao carregar pool: ${PNCP_PROXY_POOL.lastRefreshError}`
+    );
+  });
+  setInterval(() => refreshPncpProxyPool(PNCP_PROXY_POOL), PNCP_PROXY_POOL.refreshMs).unref();
+} else {
+  console.log('[PNCP Proxy] desabilitado (sem WEBSHARE_TOKEN ou PNCP_PROXY_ENABLED=0)');
+}
+
 const fetchPncp = async (pathName, query = {}) => {
   const normalizedPath = String(pathName || '').replace(/^\/+/, '');
   const url = new URL(normalizedPath, 'https://pncp.gov.br/api/pncp/');
@@ -3443,7 +3598,7 @@ const fetchPncp = async (pathName, query = {}) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(url.toString(), {
+    const response = await pncpFetch(url.toString(), {
       method: 'GET',
       headers: {
         Accept: 'application/json',
@@ -3495,8 +3650,10 @@ let notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
 
 const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, reject) => {
   const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  const proxy = getPncpCallProxy();
   const args = [
     ...(process.platform === 'win32' ? ['--ssl-no-revoke'] : []),
+    ...(proxy ? ['-x', proxyToUrl(proxy)] : []),
     '--fail',
     '--silent',
     '--show-error',
@@ -3590,7 +3747,7 @@ const fetchPncpConsulta = async (pathName, query = {}) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(url.toString(), {
+    const response = await pncpFetch(url.toString(), {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -3631,13 +3788,14 @@ const PNCP_RATE_LIMIT_RESUME_DELAY_MS = 6 * 60 * 1000;
 const PNCP_DEEP_SEARCH_STALE_MS = Math.max(3 * 60 * 1000, Number(process.env.PNCP_DEEP_STALE_MS) || 8 * 60 * 1000);
 // Bulk não pode segurar o heavy slot esperando orçamento/gate para sempre.
 const PNCP_BULK_GATE_WAIT_MAX_MS = Math.max(30_000, Number(process.env.PNCP_BULK_GATE_WAIT_MAX_MS) || 90_000);
-// Buscas que não viraram watchlist ficam ativas por 15 dias (contados desde started_at)
-// e reexecutam diariamente; depois disso o cleanup remove do banco.
-const PNCP_SEARCH_JOB_ARCHIVE_DAYS = 15;
 const pncpCompraDetalheCache = new Map();
 const PNCP_DETALHE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
 const pncpCompraEnrichmentCache = new Map();
 const PNCP_ENRICHMENT_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
+// Enrichment parcial (detalhe/itens falharam por reset/timeout do PNCP) não pode
+// ficar 6h em cache mascarando N/A: guarda por pouco tempo só para não martelar,
+// e reprocessa na próxima vista.
+const PNCP_ENRICHMENT_INCOMPLETE_TTL = 90 * 1000; // 90s
 let pncpDetalheRateLimitedUntil = 0;
 const PNCP_SCORE_HIGH_THRESHOLD = 68;
 const PNCP_SCORE_MEDIUM_THRESHOLD = 38;
@@ -3668,6 +3826,43 @@ const decoratePcaScoredRow = (row) => {
     score,
     score_label: getPncpScoreLabel(score),
   };
+};
+
+// Peso de aderência por origem do termo que casou (para pesos e badge no PCA).
+const PCA_TERM_ORIGIN_WEIGHT = { original: 1.0, allowlist: 0.8, ia: 0.5 };
+const PCA_TERM_ORIGIN_RANK = { original: 3, allowlist: 2, ia: 1 };
+
+// Classifica de onde veio o termo: digitado pelo usuário (original), curadoria
+// (allowlist por vertical) ou expansão da IA. allowlistSet é um Set normalizado.
+const classifyPcaTermOrigin = (term, termoOriginal, allowlistSet) => {
+  const n = normalizeSearchText(term);
+  if (termoOriginal && n === normalizeSearchText(termoOriginal)) return 'original';
+  if (allowlistSet && allowlistSet.has(n)) return 'allowlist';
+  return 'ia';
+};
+
+// Reconstrói, em JS, os componentes do score que a SQL calculou — para o
+// tooltip "por que este score". Os valores somam o score final (com o ajuste de
+// teto explícito), espelhando o CASE de matchPcaItens.
+const buildPcaScoreBreakdown = ({ rankRaw, origMatch, hasOriginal, boostHit, catmatHit, score }) => {
+  const parts = [];
+  const rank = Number(rankRaw) || 0;
+  if (origMatch || !hasOriginal) {
+    parts.push({ label: 'Match do termo original', value: 60 });
+    const textual = Math.round(rank * 40);
+    if (textual) parts.push({ label: 'Relevância textual', value: textual });
+    if (boostHit) parts.push({ label: 'Termo original literal no texto', value: 20 });
+  } else {
+    const textual = Math.min(55, Math.max(8, Math.round(rank * 120)));
+    parts.push({ label: 'Somente correlatos — sem o termo original (teto 55)', value: textual });
+  }
+  if (catmatHit) parts.push({ label: 'Classe de catálogo monitorada (CATMAT/CATSER)', value: 15 });
+  const sum = parts.reduce((acc, part) => acc + part.value, 0);
+  const finalScore = Number(score) || 0;
+  if (sum !== finalScore) {
+    parts.push({ label: sum > finalScore ? 'Limite de aderência' : 'Ajuste', value: finalScore - sum });
+  }
+  return parts;
 };
 
 const removeAcentos = (value = '') => value
@@ -3972,33 +4167,93 @@ const parsePncpCompraControlNumber = (value = '') => {
   return { cnpj: match[1], sequencial: String(Number(match[2])), ano: match[3] };
 };
 
+// #8: allowlists curadas por vertical. As listas abaixo são a SEMENTE (nunca
+// regridem, mesmo com o DB vazio); a tabela search_allowlist_terms adiciona
+// termos por curadoria/feedback. Uma vertical casa uma busca quando TODOS os
+// tokens do nome da vertical aparecem na query (ex.: "suporte monitor").
+const HARDCODED_ALLOWLIST_SEED = [
+  {
+    vertical: 'drone',
+    termos: [
+      'vant', 'rpa', 'uav', 'quadricoptero', 'aeronave remotamente pilotada',
+      'aeronave nao tripulada', 'multirrotor', 'veiculo aereo nao tripulado', 'arp',
+      'aeronaves remotamente pilotadas', 'aeronaves nao tripuladas', 'uas', 'vants', 'rpas',
+    ],
+  },
+  {
+    vertical: 'suporte monitor',
+    termos: ['ergonomia', 'nr17', 'suporte articulado', 'braco articulado', 'suporte de tela', 'material de escritorio'],
+  },
+];
+
+// Cache em memória (síncrono para o caminho de scoring). Recarregado no startup
+// e por cron; a escrita nos endpoints também dispara reload.
+const ALLOWLIST_CACHE = { byVertical: new Map(), loadedAt: 0 };
+
+const loadAllowlistCache = async () => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT vertical, termo, peso FROM ${SEARCH_ALLOWLIST_TABLE} WHERE ativo = TRUE`
+    );
+    const byVertical = new Map();
+    for (const r of rows) {
+      const v = normalizeSearchText(r.vertical);
+      if (!byVertical.has(v)) byVertical.set(v, []);
+      byVertical.get(v).push({ termo: normalizeSearchText(r.termo), peso: Number(r.peso) || 0.8 });
+    }
+    ALLOWLIST_CACHE.byVertical = byVertical;
+    ALLOWLIST_CACHE.loadedAt = Date.now();
+  } catch (error) {
+    console.warn('[allowlist] load falhou:', error.message);
+  }
+};
+
+const seedAllowlistTable = async () => {
+  try {
+    for (const { vertical, termos } of HARDCODED_ALLOWLIST_SEED) {
+      for (const termo of termos) {
+        await pool.query(
+          `INSERT INTO ${SEARCH_ALLOWLIST_TABLE} (vertical, termo, peso, fonte)
+           VALUES ($1,$2,0.8,'seed') ON CONFLICT (vertical, termo) DO NOTHING`,
+          [normalizeSearchText(vertical), normalizeSearchText(termo)]
+        );
+      }
+    }
+  } catch (error) {
+    console.warn('[allowlist] seed falhou:', error.message);
+  }
+};
+
+// Termos do DB para uma query já normalizada (vertical casa se todos os seus
+// tokens aparecem na query).
+const getDbAllowlistTermsForQuery = (normalizedQuery = '') => {
+  const q = normalizedQuery || '';
+  const out = [];
+  for (const [vertical, termos] of ALLOWLIST_CACHE.byVertical) {
+    const tokens = vertical.split(/\s+/).filter(Boolean);
+    if (tokens.length && tokens.every((tok) => q.includes(tok))) {
+      for (const t of termos) out.push(t.termo);
+    }
+  }
+  return out;
+};
+
 const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
+  const terms = [];
 
+  // Semente hardcoded (nunca regride).
   if (q.includes('drone')) {
-    return [
-      'vant',
-      'rpa',
-      'uav',
-      'quadricoptero',
-      'aeronave remotamente pilotada',
-      'aeronave nao tripulada',
-      'multirrotor',
-      'veiculo aereo nao tripulado',
-      'arp',
-      'aeronaves remotamente pilotadas',
-      'aeronaves nao tripuladas',
-      'uas',
-      'vants',
-      'rpas',
-    ];
+    terms.push(...HARDCODED_ALLOWLIST_SEED[0].termos);
   }
-
   if (q.includes('suporte') && q.includes('monitor')) {
-    return ['ergonomia', 'nr17', 'suporte articulado', 'braco articulado', 'suporte de tela', 'material de escritorio'];
+    terms.push(...HARDCODED_ALLOWLIST_SEED[1].termos);
   }
 
-  return [];
+  // Curadoria/feedback via DB (mesclado e deduplicado).
+  for (const t of getDbAllowlistTermsForQuery(q)) terms.push(t);
+
+  return Array.from(new Set(terms.filter(Boolean)));
 };
 
 const buildFallbackNegativeTerms = (query = '') => {
@@ -4161,6 +4416,39 @@ const normalizePncpItemUrl = (itemUrl) => {
   return `https://pncp.gov.br${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`;
 };
 
+// Link canônico da compra no PNCP a partir dos identificadores. Usado como
+// fallback quando o item não trouxe item_url/linkSistemaOrigem (senão o card
+// fica sem link mesmo com o dado existindo no PNCP).
+const buildPncpEditalUrl = ({ cnpj, ano, sequencial } = {}) => {
+  const c = String(cnpj || '').replace(/\D/g, '');
+  if (!c || c.length !== 14 || !ano || !sequencial) return null;
+  return `https://pncp.gov.br/app/editais/${c}/${ano}/${sequencial}`;
+};
+
+// Reintenta erros transitórios do PNCP (reset/timeout/5xx) com backoff. NÃO
+// reintenta throttle/429 aqui: o gate global já registra a pausa (pausedUntil) e
+// insistir só piora o rate-limit — relança para o chamador tratar.
+const withPncpTransientRetry = async (work, { maxRetries = 3, baseDelayMs = 1000, maxDelayMs = 4000 } = {}) => {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      lastErr = error;
+      if (isPncpThrottleError(error) || String(error?.message || '').includes('429')) {
+        throw error;
+      }
+      if (error?.name === 'AbortError') {
+        throw error;
+      }
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(baseDelayMs * attempt, maxDelayMs)));
+      }
+    }
+  }
+  throw lastErr;
+};
+
 const getPncpCompraDetalhe = async (cnpj, ano, sequencial, { priority = 'sync' } = {}) => {
   if (!cnpj || !ano || !sequencial) {
     return null;
@@ -4176,7 +4464,9 @@ const getPncpCompraDetalhe = async (cnpj, ano, sequencial, { priority = 'sync' }
   }
 
   try {
-    const detail = await withPncpGate(() => fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`), { priority });
+    const detail = await withPncpTransientRetry(
+      () => withPncpGate(() => fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`), { priority })
+    );
     const value = {
       srp: typeof detail?.srp === 'boolean' ? detail.srp : null,
       amparo_legal: detail?.amparoLegal ? {
@@ -4220,10 +4510,12 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
   let page = 1;
 
   while (page <= maxPages) {
-    const itensData = await withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
-      pagina: page,
-      tamanhoPagina: pageSize,
-    }), { priority });
+    const itensData = await withPncpTransientRetry(
+      () => withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
+        pagina: page,
+        tamanhoPagina: pageSize,
+      }), { priority })
+    );
 
     const pageItems = Array.isArray(itensData?.data)
       ? itensData.data
@@ -4737,6 +5029,42 @@ const isPncpCompraItemRelevantToQuery = (item, query) => {
   return matchedCount >= 2;
 };
 
+// L2 durável do enrichment (Postgres). Erros de DB nunca quebram o enrichment:
+// degrada para a rede. Usado também pelo job de repair (#5).
+const readPncpEnrichmentFromDb = async (cacheKey) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT value, is_complete, EXTRACT(EPOCH FROM fetched_at) * 1000 AS fetched_ms
+         FROM ${PNCP_ENRICHMENT_TABLE} WHERE cache_key = $1`,
+      [cacheKey]
+    );
+    if (!rows[0]) return null;
+    return { value: rows[0].value, isComplete: rows[0].is_complete === true, fetchedAtMs: Number(rows[0].fetched_ms) || 0 };
+  } catch (error) {
+    console.warn('[pncp-enrichment] leitura L2 falhou:', error.message);
+    return null;
+  }
+};
+
+const writePncpEnrichmentToDb = async ({ cacheKey, cnpj, ano, sequencial, queryText, maxPages, value, isComplete }) => {
+  try {
+    await pool.query(
+      `INSERT INTO ${PNCP_ENRICHMENT_TABLE}
+         (cache_key, cnpj, ano, sequencial, query_text, max_pages, value, is_complete, fetched_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8, NOW())
+       ON CONFLICT (cache_key) DO UPDATE SET
+         value = EXCLUDED.value,
+         is_complete = EXCLUDED.is_complete,
+         query_text = EXCLUDED.query_text,
+         max_pages = EXCLUDED.max_pages,
+         fetched_at = NOW()`,
+      [cacheKey, String(cnpj), String(ano), String(sequencial), queryText || '', maxPages, JSON.stringify(value), isComplete]
+    );
+  } catch (error) {
+    console.warn('[pncp-enrichment] gravação L2 falhou:', error.message);
+  }
+};
+
 const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', options = {}) => {
   if (!cnpj || !ano || !sequencial) {
     return null;
@@ -4748,8 +5076,18 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
   const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || (normalizedQuery ? 100 : 50)));
   const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}|p:${maxPages}`;
   const cached = pncpCompraEnrichmentCache.get(cacheKey);
-  if (cached && (Date.now() - cached.timestamp) < PNCP_ENRICHMENT_CACHE_TTL) {
+  if (cached && (Date.now() - cached.timestamp) < (cached.ttl || PNCP_ENRICHMENT_CACHE_TTL)) {
     return cached.value;
+  }
+
+  // L2 (Postgres): sobrevive a restart/réplicas. Respeita o mesmo TTL do L1.
+  const dbCached = await readPncpEnrichmentFromDb(cacheKey);
+  if (dbCached) {
+    const ttl = dbCached.isComplete ? PNCP_ENRICHMENT_CACHE_TTL : PNCP_ENRICHMENT_INCOMPLETE_TTL;
+    if ((Date.now() - dbCached.fetchedAtMs) < ttl) {
+      pncpCompraEnrichmentCache.set(cacheKey, { value: dbCached.value, timestamp: dbCached.fetchedAtMs, ttl });
+      return dbCached.value;
+    }
   }
 
   try {
@@ -4759,8 +5097,10 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
     let totalItens = 0;
     let valorItensPertinentes = null;
     let itensPertinentes = [];
+    let itensOk = false;
     try {
       const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize, maxPages, priority });
+      itensOk = true;
       totalItens = itens.length;
       itensResumoTexto = itens
         .map(item => `${item?.descricao || ''} ${item?.itemCategoriaNome || ''} ${item?.catalogoCodigoItem || ''} ${item?.numeroItem || ''}`.trim())
@@ -4834,12 +5174,60 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
       total_itens: totalItens,
     };
 
-    pncpCompraEnrichmentCache.set(cacheKey, { value, timestamp: Date.now() });
+    // Completo = detalhe veio E a listagem de itens não falhou. Se o PNCP cortou
+    // no meio (detalhe null por reset/throttle, ou itens lançaram), guarda por
+    // pouco tempo e reprocessa na próxima vista em vez de fixar N/A por 6h.
+    const isComplete = detalhe !== null && itensOk;
+    value.incompleto = !isComplete;
+    pncpCompraEnrichmentCache.set(cacheKey, {
+      value,
+      timestamp: Date.now(),
+      ttl: isComplete ? PNCP_ENRICHMENT_CACHE_TTL : PNCP_ENRICHMENT_INCOMPLETE_TTL,
+    });
+    // Persiste no L2 (query = raw, para o repair recompor a mesma cache_key).
+    await writePncpEnrichmentToDb({
+      cacheKey, cnpj, ano, sequencial, queryText: query, maxPages, value, isComplete,
+    });
     return value;
   } catch (error) {
     console.error(`Erro no enrichment PNCP (${cacheKey}):`, error.message);
     return null;
   }
+};
+
+// #5: revisita enrichments incompletos (>5min) e tenta completá-los fora do
+// caminho interativo, com prioridade 'bulk' e respeitando pausa/throttle do gate.
+const repairIncompletePncpEnrichments = async ({ limit = 25 } = {}) => {
+  let rows = [];
+  try {
+    const res = await pool.query(
+      `SELECT cnpj, ano, sequencial, query_text, max_pages
+         FROM ${PNCP_ENRICHMENT_TABLE}
+        WHERE is_complete = FALSE AND fetched_at < NOW() - INTERVAL '5 minutes'
+        ORDER BY fetched_at ASC
+        LIMIT $1`,
+      [limit]
+    );
+    rows = res.rows;
+  } catch (error) {
+    console.warn('[pncp-enrichment] repair query falhou:', error.message);
+    return { repaired: 0, scanned: 0 };
+  }
+
+  let repaired = 0;
+  for (const r of rows) {
+    if (Date.now() < pncpDetalheRateLimitedUntil) break;
+    if (typeof PNCP_GATE !== 'undefined' && Date.now() < PNCP_GATE.pausedUntil) break;
+    // Invalida o L1 para forçar recomputo (o Map poderia devolver o incompleto).
+    const key = `${r.cnpj}/${r.ano}/${r.sequencial}|q:${normalizeSearchText(r.query_text || '').trim()}|p:${r.max_pages}`;
+    pncpCompraEnrichmentCache.delete(key);
+    const value = await getPncpCompraEnrichment(r.cnpj, r.ano, r.sequencial, r.query_text || '', {
+      maxPages: r.max_pages,
+      priority: 'bulk',
+    });
+    if (value && value.incompleto === false) repaired += 1;
+  }
+  return { repaired, scanned: rows.length };
 };
 
 const buildPncpEnrichmentQuery = (item, fallbackQuery = '') => {
@@ -5493,7 +5881,142 @@ app.get('/api/licitacoes/termos-correlatos', async (req, res) => {
   }
 });
 
+// #8: gestão de allowlists curadas por vertical. Semente = HARDCODED_ALLOWLIST_SEED;
+// aqui a curadoria (e o feedback de descarte, via POST) adiciona/remove termos.
+app.get('/api/licitacoes/allowlist', async (req, res) => {
+  try {
+    const vertical = req.query.vertical ? normalizeSearchText(req.query.vertical) : null;
+    const params = [];
+    let where = 'ativo = TRUE';
+    if (vertical) { params.push(vertical); where += ` AND vertical = $${params.length}`; }
+    const { rows } = await pool.query(
+      `SELECT id, vertical, termo, peso, fonte, criado_em
+         FROM ${SEARCH_ALLOWLIST_TABLE} WHERE ${where}
+        ORDER BY vertical ASC, termo ASC`,
+      params
+    );
+    res.json({ total: rows.length, items: rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao listar allowlist', details: error.message });
+  }
+});
+
+app.post('/api/licitacoes/allowlist', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const vertical = normalizeSearchText(b.vertical || '');
+    const termo = normalizeSearchText(b.termo || '');
+    if (!vertical || !termo) {
+      return res.status(400).json({ error: 'vertical e termo são obrigatórios' });
+    }
+    const peso = Number.isFinite(Number(b.peso)) ? Math.max(0, Math.min(1, Number(b.peso))) : 0.8;
+    const fonte = String(b.fonte || 'curadoria').slice(0, 40);
+    const { rows } = await pool.query(
+      `INSERT INTO ${SEARCH_ALLOWLIST_TABLE} (vertical, termo, peso, fonte, ativo)
+       VALUES ($1,$2,$3,$4,TRUE)
+       ON CONFLICT (vertical, termo) DO UPDATE SET peso = EXCLUDED.peso, fonte = EXCLUDED.fonte, ativo = TRUE
+       RETURNING id, vertical, termo, peso, fonte, criado_em`,
+      [vertical, termo, peso, fonte]
+    );
+    await loadAllowlistCache();
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao adicionar termo à allowlist', details: error.message });
+  }
+});
+
+app.delete('/api/licitacoes/allowlist/:id', async (req, res) => {
+  try {
+    const id = toIntOrNull(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id inválido' });
+    const { rowCount } = await pool.query(
+      `UPDATE ${SEARCH_ALLOWLIST_TABLE} SET ativo = FALSE WHERE id = $1`,
+      [id]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'não encontrado' });
+    await loadAllowlistCache();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao remover termo da allowlist', details: error.message });
+  }
+});
+
 // ============ FIM FUNÇÕES DE IA ============
+
+app.get('/api/contacts/follow-up-status', async (req, res) => {
+  try {
+    const statuses = await getContactFollowupStatuses(pool, CHATWOOT_ACCOUNT_ID);
+    res.json(statuses);
+  } catch (error) {
+    console.error('[follow-up] status failed:', error.message);
+    res.status(500).json({ error: 'Não foi possível carregar interações e retornos.' });
+  }
+});
+
+app.put('/api/contacts/:id/reminder', requireBoardEdit, async (req, res) => {
+  try {
+    const contactId = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(contactId) || contactId <= 0) {
+      return res.status(400).json({ error: 'Contato inválido.' });
+    }
+    const payload = normalizeReminderPayload(req.body || {});
+    const status = await replaceContactReminder(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      contactId,
+      dueAt: payload.dueAt,
+      note: payload.note,
+      userId: Number(req.auth?.uid) || null,
+    });
+    res.json(status);
+  } catch (error) {
+    console.error('[follow-up] save failed:', error.message);
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Não foi possível salvar o retorno.',
+    });
+  }
+});
+
+app.post('/api/contacts/:id/reminder/complete', requireBoardEdit, async (req, res) => {
+  try {
+    const contactId = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(contactId) || contactId <= 0) {
+      return res.status(400).json({ error: 'Contato inválido.' });
+    }
+    const status = await closeContactReminder(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      contactId,
+      userId: Number(req.auth?.uid) || null,
+      action: 'completed',
+    });
+    res.json(status);
+  } catch (error) {
+    console.error('[follow-up] complete failed:', error.message);
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Não foi possível concluir o retorno.',
+    });
+  }
+});
+
+app.delete('/api/contacts/:id/reminder', requireBoardEdit, async (req, res) => {
+  try {
+    const contactId = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(contactId) || contactId <= 0) {
+      return res.status(400).json({ error: 'Contato inválido.' });
+    }
+    const status = await closeContactReminder(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      contactId,
+      userId: Number(req.auth?.uid) || null,
+      action: 'cancelled',
+    });
+    res.json(status);
+  } catch (error) {
+    console.error('[follow-up] cancel failed:', error.message);
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Não foi possível cancelar o retorno.',
+    });
+  }
+});
 
 app.get('/api/contacts', async (req, res) => {
   try {
@@ -7986,7 +8509,7 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   return ({
   id: item.id || getPncpRawItemKey(item),
   descricao: item.description || item.descricao || item.objetoCompra || '',
-  url: normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem),
+  url: normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem) || buildPncpEditalUrl(ids),
   numero_controle_pncp: item.numero_controle_pncp || item.numeroControlePNCP,
   numero_sequencial: ids.sequencial || item.numero_sequencial,
   ano: ids.ano || item.ano,
@@ -9395,15 +9918,16 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 // Opções de status disponíveis para busca
 // Balanceador global adaptativo do PNCP.
 // O PNCP NÃO publica cota fixa; na prática responde 429 / reseta conexão quando
-// o ritmo sobe. Por isso: 1 request por vez, gap generoso, freia ao menor sinal
-// e só acelera de novo após sequência estável de sucesso.
+// o ritmo sobe. Por isso: um request POR LANE (IP) com gap generoso — teto de
+// concorrência dinâmico em getPncpMaxConcurrent (proxies vivos + lane direta;
+// sem pool = 1, como antes) — freia ao menor sinal global e só acelera de novo
+// após sequência estável de sucesso.
 const PNCP_GATE = {
   active: 0,
   // Filas por prioridade: interactive (usuário esperando na tela) fura a fila;
   // sync (watchlists/syncs agendados) no meio; bulk (deep jobs, PCA, backfill)
   // só roda com o gate saudável e orçamento folgado.
   queues: { interactive: [], sync: [], bulk: [] },
-  max: 1,
   gapMs: 950,
   gapMsMin: 700,
   gapMsMax: 15_000,
@@ -9486,7 +10010,8 @@ const hasHigherPncpPriorityWaiter = (priority) => {
 
 const getPncpGateSnapshot = () => ({
   gap_ms: PNCP_GATE.gapMs,
-  max_concurrent: PNCP_GATE.max,
+  max_concurrent: getPncpMaxConcurrent(),
+  lanes_busy: [...PNCP_LANES_BUSY],
   paused_until: PNCP_GATE.pausedUntil || null,
   paused_for_ms: Math.max(0, PNCP_GATE.pausedUntil - Date.now()),
   success_streak: PNCP_GATE.successStreak,
@@ -9502,6 +10027,9 @@ const getPncpGateSnapshot = () => ({
   budget_tokens: Math.round(PNCP_GATE.budget.tokens),
   budget_capacity: PNCP_GATE.budget.capacity,
   active: PNCP_GATE.active,
+  // Por proxy: se os throttles forem independentes por IP aqui, o rate limit do
+  // PNCP é por IP e a fase 2 (concorrência por proxy) se justifica.
+  proxy_pool: getPncpProxyPoolSnapshot(PNCP_PROXY_POOL),
 });
 
 const notePncpSuccess = () => {
@@ -9517,11 +10045,36 @@ const notePncpSuccess = () => {
 };
 
 notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
+  // Throttle em lane com proxy: quarentena SÓ aquela lane — as outras seguem.
+  // Exceção: 3+ proxies distintos com throttle em 90s é evidência de limite
+  // global (não por IP) → cai no freio global abaixo, como antes dos proxies.
+  const ctxProxy = getPncpCallProxy();
+  if (ctxProxy) {
+    // Falha de TRANSPORTE do proxy (banda esgotada, CONNECT recusado): o PNCP
+    // nem foi alcançado — quarentena longa do proxy, zero efeito no gate global
+    // e fora da janela "3+ em 90s". O retry direto acontece no withPncpGate.
+    if (isPncpProxyTransportError(reason)) {
+      reportPncpProxyDown(PNCP_PROXY_POOL, ctxProxy.id);
+      console.warn(`[PNCP Proxy] ${ctxProxy.id} fora do ar (${String(reason).slice(0, 80)}) — quarentena longa, gate segue`);
+      return;
+    }
+    const quarantined = reportPncpProxyThrottle(PNCP_PROXY_POOL, ctxProxy.id);
+    if (quarantined) {
+      console.warn(`[PNCP Proxy] ${ctxProxy.id} em quarentena (failStreak=${PNCP_PROXY_POOL.proxies.find(p => p.id === ctxProxy.id)?.failStreak})`);
+    }
+    const recent = countRecentProxyThrottles(PNCP_PROXY_POOL);
+    if (recent < 3) {
+      console.warn(`[PNCP Proxy] throttle isolado em ${ctxProxy.id} (${String(reason).slice(0, 80)}) — demais lanes seguem`);
+      return;
+    }
+    console.warn(`[PNCP Proxy] ${recent} proxies com throttle em 90s — tratando como limite GLOBAL`);
+  }
   PNCP_GATE.failStreak += 1;
   PNCP_GATE.successStreak = 0;
   PNCP_GATE.totalThrottle += 1;
   PNCP_GATE.lastThrottleAt = Date.now();
-  PNCP_GATE.max = 1;
+  // (o teto de concorrência é dinâmico: getPncpMaxConcurrent colapsa para 1
+  // enquanto o gate estiver degradado — failStreak>=2 ou gap alto)
   // Freia o gap (backoff exponencial suave).
   PNCP_GATE.gapMs = Math.min(
     PNCP_GATE.gapMsMax,
@@ -9578,8 +10131,10 @@ const waitForPncpGateSlot = async (priority = 'sync') => {
       await sleep(priority === 'interactive' ? 500 : 3000);
       continue;
     }
-    if (PNCP_GATE.active < PNCP_GATE.max && !hasHigherPncpPriorityWaiter(priority)) {
-      return;
+    if (PNCP_GATE.active < getPncpMaxConcurrent() && !hasHigherPncpPriorityWaiter(priority)) {
+      // Slot disponível: ainda precisa de uma lane livre (bulk exige a direta).
+      const lane = acquirePncpLane(priority);
+      if (lane) return lane;
     }
     if (priority === 'bulk' && Date.now() - waitStarted > PNCP_BULK_GATE_WAIT_MAX_MS) {
       const err = new Error('PNCP bulk gate wait exceeded (queue)');
@@ -9591,30 +10146,68 @@ const waitForPncpGateSlot = async (priority = 'sync') => {
 };
 
 const withPncpGate = async (fn, { priority = 'sync' } = {}) => {
-  await waitForPncpGateSlot(priority);
+  const lane = await waitForPncpGateSlot(priority);
   PNCP_GATE.active += 1;
   try {
-    // Jitter no gap: cadência fixa parece bot para o WAF do PNCP.
+    // Pacing POR LANE: cada IP tem cadência própria (jitter — cadência fixa
+    // parece bot para o WAF do PNCP). A lane direta usa PNCP_GATE.last.
     const pacedGap = Math.round(PNCP_GATE.gapMs * (0.85 + Math.random() * 0.5));
-    const wait = PNCP_GATE.last + pacedGap - Date.now();
+    const laneLast = lane.proxy ? (lane.proxy.lastAt || 0) : PNCP_GATE.last;
+    const wait = laneLast + pacedGap - Date.now();
     if (wait > 0) await sleep(wait);
-    // Re-checa pausa após o gap (outro worker pode ter tomado 429).
+    // Re-checa pausa após o gap (outra lane pode ter tomado throttle global).
     while (Date.now() < PNCP_GATE.pausedUntil) {
       await sleep(Math.min(4000, Math.max(200, PNCP_GATE.pausedUntil - Date.now())));
     }
-    PNCP_GATE.last = Date.now();
+    if (lane.proxy) lane.proxy.lastAt = Date.now();
+    else PNCP_GATE.last = Date.now();
     refillPncpBudget();
     PNCP_GATE.budget.tokens = Math.max(0, PNCP_GATE.budget.tokens - 1);
-    const result = await fn();
-    notePncpSuccess();
-    return result;
-  } catch (error) {
-    if (isPncpThrottleError(error)) {
-      notePncpThrottle(error.message || 'error');
+    // Expõe o proxy da lane via contexto — pncpFetch/fetchJsonWithCurl leem de lá.
+    try {
+      return await PNCP_CALL_CONTEXT.run({ proxy: lane.proxy, priority }, async () => {
+        try {
+          const result = await fn();
+          notePncpSuccess();
+          if (lane.proxy) reportPncpProxyOk(PNCP_PROXY_POOL, lane.proxy.id);
+          return result;
+        } catch (error) {
+          if (isPncpThrottleError(error)) {
+            notePncpThrottle(error.message || 'error');
+          }
+          throw error;
+        }
+      });
+    } catch (error) {
+      // Proxy fora do ar (banda esgotada, CONNECT recusado...): a request nem
+      // chegou ao PNCP. Quarentena o proxy e REFAZ pelo IP direto no mesmo
+      // slot — o caller (varreduras incluídas) não vê a falha. Pode coexistir
+      // brevemente com a lane direta ocupada; o pacing abaixo limita o burst.
+      if (!lane.proxy || !isPncpProxyTransportError(error)) throw error;
+      reportPncpProxyDown(PNCP_PROXY_POOL, lane.proxy.id);
+      console.warn(`[PNCP Proxy] ${lane.proxy.id} falhou no transporte — refazendo pelo IP direto (${String(error.message || error).slice(0, 80)})`);
+      const directGap = Math.round(PNCP_GATE.gapMs * (0.85 + Math.random() * 0.5));
+      const directWait = PNCP_GATE.last + directGap - Date.now();
+      if (directWait > 0) await sleep(directWait);
+      PNCP_GATE.last = Date.now();
+      refillPncpBudget();
+      PNCP_GATE.budget.tokens = Math.max(0, PNCP_GATE.budget.tokens - 1);
+      return await PNCP_CALL_CONTEXT.run({ proxy: null, priority }, async () => {
+        try {
+          const result = await fn();
+          notePncpSuccess();
+          return result;
+        } catch (retryError) {
+          if (isPncpThrottleError(retryError)) {
+            notePncpThrottle(retryError.message || 'error');
+          }
+          throw retryError;
+        }
+      });
     }
-    throw error;
   } finally {
     PNCP_GATE.active -= 1;
+    releasePncpLane(lane);
     const next = PNCP_GATE.queues.interactive.shift()
       || PNCP_GATE.queues.sync.shift()
       || PNCP_GATE.queues.bulk.shift();
@@ -9662,27 +10255,6 @@ const getPncpEnrichBudget = () => {
   return { limit: 45, delayMs: 150, rateLimitWaitMs: 8000, paused: false };
 };
 
-const getPncpSearchJobArchiveAt = (startedAt) => {
-  if (!startedAt) return null;
-  const base = startedAt instanceof Date ? startedAt.getTime() : Date.parse(startedAt);
-  if (!Number.isFinite(base)) return null;
-  return new Date(base + PNCP_SEARCH_JOB_ARCHIVE_DAYS * 24 * 60 * 60 * 1000);
-};
-
-const getPncpSearchJobDaysUntilArchive = (startedAt, now = Date.now()) => {
-  const archiveAt = getPncpSearchJobArchiveAt(startedAt);
-  if (!archiveAt) return null;
-  const msLeft = archiveAt.getTime() - now;
-  return Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
-};
-
-const isPncpSearchJobArchivable = (job) => {
-  if (!job || job.watchlist_id) return false;
-  const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
-  if (!archiveAt) return false;
-  return Date.now() >= archiveAt.getTime();
-};
-
 const cleanupPncpDeepJobs = () => {
   const now = Date.now();
   for (const [id, job] of PNCP_DEEP_SEARCH_JOBS.entries()) {
@@ -9694,20 +10266,10 @@ const cleanupPncpDeepJobs = () => {
       PNCP_DEEP_SEARCH_WORKERS.delete(id);
     }
   }
-  // Buscas antigas que não viraram watchlist somem do banco depois de 7 dias
-  // (desde a criação/started_at — reexecuções diárias não estendem o prazo).
-  pool.query(
-    `DELETE FROM ${PNCP_SEARCH_JOBS_TABLE}
-      WHERE watchlist_id IS NULL
-        AND started_at < NOW() - ($1::int * INTERVAL '1 day')`,
-    [PNCP_SEARCH_JOB_ARCHIVE_DAYS]
-  ).catch(() => {});
 };
 
 const normalizePncpSearchJobRow = (row) => {
   if (!row) return null;
-  const archiveAt = getPncpSearchJobArchiveAt(row.started_at);
-  const daysUntilArchive = row.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(row.started_at);
   const whatsappNumbers = parseWatchlistPhones(row.whatsapp_number);
   const whatsappEnabled = (
     row.whatsapp_enabled === true
@@ -9746,9 +10308,6 @@ const normalizePncpSearchJobRow = (row) => {
     started_at: row.started_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
-    archive_at: archiveAt ? archiveAt.toISOString() : null,
-    days_until_archive: daysUntilArchive,
-    archive_days: PNCP_SEARCH_JOB_ARCHIVE_DAYS,
   };
 };
 
@@ -9896,7 +10455,7 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
     error: null,
     preserve_results: preserveResults,
     incremental_refresh: incrementalRefresh,
-    // Não reseta started_at: o countdown de arquivamento conta desde a criação.
+    // Preserva a data original da busca ao reexecutar.
     started_at: job.started_at ? new Date(job.started_at).getTime() : Date.now(),
     updated_at: Date.now(),
     progress: {
@@ -9933,7 +10492,7 @@ const startPersistedPncpSearchJob = async (jobOrId, opts = {}) => {
   return true;
 };
 
-// Reexecuta buscas ativas (sem watchlist, ainda no prazo de 7 dias) mantendo resultados.
+// Reexecuta buscas sem watchlist diariamente, mantendo os resultados.
 const runDailyPncpSearchJobRefresh = async ({ limit = 8 } = {}) => {
   cleanupPncpDeepJobs();
   const { rows } = await pool.query(
@@ -9942,22 +10501,17 @@ const runDailyPncpSearchJobRefresh = async ({ limit = 8 } = {}) => {
         FROM ${PNCP_SEARCH_JOBS_TABLE}
        WHERE watchlist_id IS NULL
          AND status IN ('completed', 'failed')
-         AND started_at >= NOW() - ($1::int * INTERVAL '1 day')
          AND (completed_at IS NULL OR completed_at <= NOW() - INTERVAL '18 hours')
        ORDER BY completed_at ASC NULLS FIRST, updated_at ASC
-       LIMIT $2
+       LIMIT $1
     `,
-    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, Math.max(1, Math.min(20, Number(limit) || 8))]
+    [Math.max(1, Math.min(20, Number(limit) || 8))]
   );
   let started = 0;
   let skipped = 0;
   for (const row of rows) {
     const job = normalizePncpSearchJobRow(row);
     if (!job?.id) continue;
-    if (isPncpSearchJobArchivable(job)) {
-      skipped += 1;
-      continue;
-    }
     const current = PNCP_DEEP_SEARCH_JOBS.get(job.id);
     if (current && ['queued', 'running', 'cancelling', 'paused_rate_limit'].includes(current.status)) {
       skipped += 1;
@@ -10053,16 +10607,15 @@ const runPncpJobValueBackfill = async ({ limit = 80 } = {}) => {
       SELECT r.job_id, r.result_key, r.payload, r.account_id
         FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} r
         JOIN ${PNCP_SEARCH_JOBS_TABLE} j ON j.id = r.job_id
-       WHERE j.updated_at > NOW() - ($1::int * INTERVAL '1 day')
-         AND (
+       WHERE (
            r.value_matched IS NULL
            OR COALESCE(r.value_matched, 0) <= 0
            OR COALESCE((r.payload->>'valor_itens_pertinentes')::numeric, 0) <= 0
          )
        ORDER BY j.updated_at DESC, r.score DESC NULLS LAST
-       LIMIT $2
+       LIMIT $1
     `,
-    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, effectiveLimit]
+    [effectiveLimit]
   );
   let updated = 0;
   let matchedFilled = 0;
@@ -10339,7 +10892,7 @@ const purgeExpiredPncpJobResults = async ({ jobId = null, accountId = null } = {
   };
 };
 
-/** Varredura diária: limpa vencidos de todos os jobs ainda no prazo de arquivo. */
+/** Varredura diária: remove dos resultados os editais cujo prazo de proposta venceu. */
 const runDailyPncpExpiredResultsPurge = async () => {
   const started = Date.now();
   const result = await purgeExpiredPncpJobResults({});
@@ -10640,11 +11193,10 @@ const runDailyPncpStatusReconcile = async ({ limit = 10 } = {}) => {
         FROM ${PNCP_SEARCH_JOBS_TABLE}
        WHERE watchlist_id IS NULL
          AND status IN ('completed', 'failed', 'paused_rate_limit')
-         AND started_at >= NOW() - ($1::int * INTERVAL '1 day')
        ORDER BY updated_at ASC
-       LIMIT $2
+       LIMIT $1
     `,
-    [PNCP_SEARCH_JOB_ARCHIVE_DAYS, Math.max(1, Math.min(20, Number(limit) || 10))]
+    [Math.max(1, Math.min(20, Number(limit) || 10))]
   ).catch(() => ({ rows: [] }));
 
   let jobs = 0;
@@ -10653,7 +11205,6 @@ const runDailyPncpStatusReconcile = async ({ limit = 10 } = {}) => {
   for (const row of rows) {
     const job = normalizePncpSearchJobRow(row);
     if (!job?.id) continue;
-    if (isPncpSearchJobArchivable(job)) continue;
     const live = PNCP_DEEP_SEARCH_JOBS.get(job.id);
     if (live && ['queued', 'running', 'cancelling'].includes(live.status)) continue;
     const memJob = live || job;
@@ -12403,10 +12954,9 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
              FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
             GROUP BY job_id
          ) rc ON rc.job_id = j.id
-         LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
+        LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
         WHERE j.account_id = $1
-        ORDER BY j.updated_at DESC
-        LIMIT 20`,
+        ORDER BY j.updated_at DESC`,
       [accountId]
     );
     res.json(rows.map(normalizePncpSearchJobRow));
@@ -12493,7 +13043,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   const memoryJob = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
   const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, getAccountId(req));
   const job = memoryJob || dbJob;
-  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada ou expirada' });
+  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada' });
   // Job órfão: ficou queued/running no banco mas o worker (em memória) morreu num
   // restart. Ao abrir o job, retoma o processamento de onde parou (idempotente).
   if (!memoryJob && ['queued', 'running', 'paused_rate_limit'].includes(job.status)) {
@@ -12521,7 +13071,6 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
       startPersistedPncpSearchJob(job, { force: true }).catch(err => console.warn('[PNCP Search Job] resume parcial falhou:', err.message));
     }
   }
-  const archiveAt = getPncpSearchJobArchiveAt(job.started_at);
   const accountId = getAccountId(req);
   // Total canônico da lista ativa (sem descartados e sem já no pipeline) + contagem por termo.
   let listTotal = Number(job.total || 0);
@@ -12581,9 +13130,6 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
     started_at: job.started_at,
     updated_at: job.updated_at,
     completed_at: job.completed_at,
-    archive_at: archiveAt ? archiveAt.toISOString() : null,
-    days_until_archive: job.watchlist_id ? null : getPncpSearchJobDaysUntilArchive(job.started_at),
-    archive_days: PNCP_SEARCH_JOB_ARCHIVE_DAYS,
   });
 });
 
@@ -13137,7 +13683,7 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
   }
 });
 
-// Reexecuta a coleta mantendo o que já foi encontrado (UPSERT). Não estende o prazo de arquivo.
+// Reexecuta a coleta mantendo o que já foi encontrado (UPSERT).
 app.post('/api/licitacoes/pncp/search/deep/:jobId/rerun', async (req, res) => {
   try {
     const accountId = getAccountId(req);
@@ -13154,13 +13700,6 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/rerun', async (req, res) => {
         status: job.status,
       });
     }
-    if (isPncpSearchJobArchivable(job)) {
-      return res.status(410).json({
-        error: 'Esta busca expirou e será arquivada. Crie uma nova ou transforme em watchlist antes de expirar.',
-        archive_at: getPncpSearchJobArchiveAt(job.started_at)?.toISOString() || null,
-      });
-    }
-
     const ok = await startPersistedPncpSearchJob(job, { force: true, preserveResults: true });
     if (!ok) {
       return res.status(500).json({ error: 'Não foi possível reexecutar a busca' });
@@ -13172,8 +13711,6 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/rerun', async (req, res) => {
       status: fresh?.status || 'queued',
       preserve_results: true,
       total: Number(fresh?.total || job.total || 0),
-      archive_at: getPncpSearchJobArchiveAt(job.started_at)?.toISOString() || null,
-      days_until_archive: getPncpSearchJobDaysUntilArchive(job.started_at),
     });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao reexecutar a busca', details: error.message });
@@ -13369,7 +13906,7 @@ app.patch('/api/licitacoes/pncp/search/deep/:jobId/alerts', async (req, res) => 
 app.get('/api/licitacoes/pncp/search/deep/:jobId', (req, res) => {
   cleanupPncpDeepJobs();
   const job = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada ou expirada' });
+  if (!job) return res.status(404).json({ error: 'Busca profunda não encontrada' });
   res.json({
     id: job.id,
     status: job.status,
@@ -15447,6 +15984,7 @@ const matchPcaItens = async ({
   tam = 50,
   termoOriginal = '',
   accountId = null,
+  catalogoClasses = [],
 }) => {
   const tsPos = buildTsQuery(positivos);
   if (!tsPos) {
@@ -15497,6 +16035,28 @@ const matchPcaItens = async ({
     : '0';
   if (termoOriginal) params.push(`%${termoOriginal}%`);
 
+  // tsquery só do termo ORIGINAL: usado para separar match direto (60–100, pode
+  // ser "alta") de match apenas por correlato/expansão IA (teto 55, "média").
+  const tsOriginal = buildTsQuery(termoOriginal ? [termoOriginal] : []);
+  params.push(tsOriginal);
+  const tsOriginalIdx = params.length;
+
+  // #7: classes de catálogo (CATMAT/CATSER) monitoradas → boost determinístico.
+  // Item na classe certa ganha +15 fora do teto do ramo (correlato pode passar
+  // de 55) porque é sinal de aderência mais forte que o texto.
+  const catalogoClassesClean = (Array.isArray(catalogoClasses) ? catalogoClasses : [])
+    .map((c) => String(c || '').trim()).filter(Boolean);
+  const hasCatClasses = catalogoClassesClean.length > 0;
+  let catmatHitExpr = 'FALSE';
+  let catmatBoostExpr = '0';
+  if (hasCatClasses) {
+    // Só empurra o parâmetro quando é referenciado no SQL (parâmetro a mais → erro de bind).
+    params.push(catalogoClassesClean);
+    const catClassesIdx = params.length;
+    catmatHitExpr = `(i.codigo_item_catalogo = ANY($${catClassesIdx}) OR i.classificacao_codigo = ANY($${catClassesIdx}))`;
+    catmatBoostExpr = `(CASE WHEN ${catmatHitExpr} THEN 15 ELSE 0 END)`;
+  }
+
   const sql = `
     SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
            i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
@@ -15515,10 +16075,26 @@ const matchPcaItens = async ({
              ORDER BY s2.criado_em DESC
              LIMIT 1
            ) AS signal_status,
-           -- Escala 0–100 (igual editais): ts_rank ~0–1 → *100; boost ILIKE +50 pts.
-           LEAST(100::numeric, ROUND(
-             ((ts_rank(i.descricao_tsv, to_tsquery('portuguese', $1)) + ${boostExpr}) * 100)::numeric
-           , 1)) AS score
+           -- Score em camadas para matar falso-positivo de aderência:
+           --  • match do termo ORIGINAL → 60–100 (pode virar "alta");
+           --  • match só por correlato (expansão IA) → teto 55, nunca "alta".
+           -- ts_rank_cd normalização 33 (1|32) penaliza descrição longa e satura
+           -- em [0,1), impedindo texto grande com termos genéricos estourar 100.
+           LEAST(100::numeric, (
+             CASE
+               WHEN $${tsOriginalIdx} = '' OR i.descricao_tsv @@ to_tsquery('portuguese', $${tsOriginalIdx})
+                 THEN LEAST(100::numeric, ROUND(
+                   (60 + ts_rank_cd(i.descricao_tsv, to_tsquery('portuguese', $1), 33) * 40 + ${boostExpr} * 40)::numeric
+                 ))
+               ELSE LEAST(55::numeric, GREATEST(8::numeric, ROUND(
+                 (ts_rank_cd(i.descricao_tsv, to_tsquery('portuguese', $1), 33) * 120)::numeric
+               )))
+             END + ${catmatBoostExpr}
+           )) AS score,
+           -- Insumos para o breakdown "por que este score" (reconstruído em JS):
+           ts_rank_cd(i.descricao_tsv, to_tsquery('portuguese', $1), 33)::numeric AS rank_raw,
+           ($${tsOriginalIdx} <> '' AND i.descricao_tsv @@ to_tsquery('portuguese', $${tsOriginalIdx})) AS orig_match,
+           ${catmatHitExpr} AS catmat_hit
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
     WHERE ${where}
@@ -15541,7 +16117,49 @@ const matchPcaItens = async ({
     pool.query(countSql, countParams),
   ]);
 
-  const items = rowsResult.rows.map((row) => decoratePcaScoredRow(row));
+  // Allowlist curada da vertical (ex.: drone→vant/rpa/uav) para separar termo
+  // curado (peso 0.8) de expansão pura da IA (0.5) no breakdown.
+  const allowlistSet = new Set(
+    (getQuerySpecificAllowlist(termoOriginal || '') || []).map((t) => normalizeSearchText(t))
+  );
+  const hasOriginal = Boolean(tsOriginal);
+
+  const items = rowsResult.rows.map((row) => {
+    // Termos que de fato aparecem na descrição — para auditar por que casou
+    // (antes gravávamos a lista de busca inteira, mascarando o motivo do match).
+    const termosMatched = (positivos || []).filter(
+      (t) => t && containsTermStrictFlexible(row.descricao || '', t)
+    );
+    const termosDetalhe = termosMatched.map((termo) => {
+      const origem = classifyPcaTermOrigin(termo, termoOriginal, allowlistSet);
+      return { termo, origem, peso: PCA_TERM_ORIGIN_WEIGHT[origem] };
+    });
+    const origemDominante = termosDetalhe.reduce(
+      (best, cur) => (PCA_TERM_ORIGIN_RANK[cur.origem] > PCA_TERM_ORIGIN_RANK[best] ? cur.origem : best),
+      'ia'
+    );
+    const boostHit = Boolean(termoOriginal) && containsTermStrict(row.descricao || '', termoOriginal);
+    const catmatHit = row.catmat_hit === true;
+    const scoreBreakdown = buildPcaScoreBreakdown({
+      rankRaw: row.rank_raw,
+      origMatch: row.orig_match === true,
+      hasOriginal,
+      boostHit,
+      catmatHit,
+      score: scalePcaMatchScore(row.score),
+    });
+    // rank_raw/orig_match/catmat_hit são insumos internos — não vazam crus.
+    const { rank_raw, orig_match, catmat_hit, ...cleanRow } = row;
+    const decorated = decoratePcaScoredRow(cleanRow);
+    return {
+      ...decorated,
+      termos_matched: termosMatched,
+      termos_matched_detalhe: termosDetalhe,
+      score_origem: termosDetalhe.length ? origemDominante : (row.orig_match === true ? 'original' : 'ia'),
+      catmat_match: catmatHit,
+      score_breakdown: scoreBreakdown,
+    };
+  });
   return { items, total: countResult.rows[0]?.total || 0 };
 };
 
@@ -15912,6 +16530,8 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
       pagina: 1,
       tam: 500,
       termoOriginal: positivos[0] || '',
+      // #7: classes de catálogo monitoradas nesta assinatura dão boost determinístico.
+      catalogoClasses: Array.isArray(watch.catalogo_classes) ? watch.catalogo_classes : [],
       // Exclui itens já no pipeline desta conta (não gera sinal novo de promovido).
       accountId: watch.account_id,
     });
@@ -15925,7 +16545,9 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
           RETURNING id
         `,
         [watch.account_id, item.plano_id, item.item_id, watch.id,
-         scalePcaMatchScore(item.score), positivos.slice(0, 8), negativos.slice(0, 8)]
+         scalePcaMatchScore(item.score),
+         (item.termos_matched && item.termos_matched.length ? item.termos_matched : positivos).slice(0, 8),
+         negativos.slice(0, 8)]
       );
       if (r.rowCount > 0) {
         inserted += 1;
@@ -16197,6 +16819,7 @@ app.get('/api/licitacoes/pca/search', async (req, res) => {
       pagina: req.query.pagina || 1,
       tam: req.query.tam || 50,
       termoOriginal: q,
+      catalogoClasses: parseAtoOuArray(req.query.catalogo_classes),
       accountId,
     });
 
@@ -16899,8 +17522,8 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
         INSERT INTO ${PCA_WATCHLIST_TABLE}
           (account_id, nome, palavras_chave, termos_negativos, usar_ia,
            valor_minimo, valor_maximo, orgao_filtros, uasg_filtros,
-           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13)
+           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo, catalogo_classes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14)
         RETURNING *
       `,
       [accountId,
@@ -16915,7 +17538,8 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
        waEnabled,
        waNumber,
        waMinScore,
-       b.ativo !== false]
+       b.ativo !== false,
+       asTextArray(b.catalogo_classes)]
     );
     const created = decorateWatchlistWhatsapp(rows[0]);
     res.status(201).json(created);
@@ -16970,6 +17594,7 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
                whatsapp_number = CASE WHEN $14::boolean THEN $10 ELSE whatsapp_number END,
                whatsapp_min_score = CASE WHEN $14::boolean THEN $15 ELSE whatsapp_min_score END,
                ativo = COALESCE($11, ativo),
+               catalogo_classes = COALESCE($16, catalogo_classes),
                atualizado_em = NOW()
          WHERE id = $12 AND account_id = $13
          RETURNING *
@@ -16987,13 +17612,14 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
        typeof b.ativo === 'boolean' ? b.ativo : null,
        id, accountId,
        touchingWhatsapp,
-       waMinScore]
+       waMinScore,
+       b.catalogo_classes !== undefined ? asTextArray(b.catalogo_classes) : null]
     );
     if (!rows[0]) return res.status(404).json({ error: 'não encontrado' });
     const updated = decorateWatchlistWhatsapp(rows[0]);
     res.json(updated);
     const matchingRelevant = ['ativo', 'palavras_chave', 'termos_negativos', 'usar_ia',
-      'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros']
+      'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros', 'catalogo_classes']
       .some((key) => Object.prototype.hasOwnProperty.call(b, key));
     if (updated.ativo && matchingRelevant && !pcaBootstrapState.running) {
       setImmediate(() => runPcaWatchlistMatching({ watchlistId: updated.id }).catch((error) => {
@@ -17881,7 +18507,7 @@ Modelo de canal: revendas/integradores; não concorre em serviço final; licita�
 
 let trendsIntelMemory = null; // { dayKey, payload, updatedAt }
 let trendsIntelRefreshRunning = false;
-const TRENDS_MEDIA_VERSION = 2;
+const TRENDS_MEDIA_VERSION = 3;
 
 const brDayKey = (date = new Date()) => {
   // America/Sao_Paulo as YYYY-MM-DD without external deps
@@ -18125,46 +18751,67 @@ const fetchPytrendsRelated = async () => {
 
 /**
  * Pipeline de coleta (geo=BR, seeds do negócio):
- * 1) Related queries (pytrends/HTTP)
- * 2) Google News setorial pelas seeds (estável sob 429 do Trends)
- * 3) RSS "em alta" do país (último recurso)
+ * - Related queries alimentam a inteligência comercial.
+ * - Google News RSS alimenta a vitrine de notícias, independentemente do related.
+ * - RSS "em alta" do país é o último fallback para a vitrine e para a inteligência.
  */
 const fetchGoogleTrendsDaily = async () => {
-  let pytrendsError = null;
-  try {
-    const related = await fetchPytrendsRelated();
+  const [relatedResult, newsResult] = await Promise.allSettled([
+    fetchPytrendsRelated(),
+    fetchSectorNewsForSeeds(TRENDS_SEEDS),
+  ]);
+
+  const related = relatedResult.status === 'fulfilled' ? relatedResult.value : null;
+  const sectorNews = newsResult.status === 'fulfilled' ? newsResult.value : null;
+  const pytrendsError = relatedResult.status === 'rejected'
+    ? (relatedResult.reason?.message || String(relatedResult.reason))
+    : null;
+  const newsError = newsResult.status === 'rejected'
+    ? (newsResult.reason?.message || String(newsResult.reason))
+    : null;
+
+  if (related) {
     console.log(
       `[trends-intel] related ok trends=${related.trends.length} seeds=${(related.seeds || []).length}`
     );
-    return related;
-  } catch (err) {
-    pytrendsError = err.message;
-    console.warn(`[trends-intel] related/pytrends falhou: ${err.message}`);
+  } else {
+    console.warn(`[trends-intel] related/pytrends falhou: ${pytrendsError}`);
   }
 
-  try {
-    const news = await fetchSectorNewsForSeeds(TRENDS_SEEDS);
+  if (sectorNews) {
     console.log(
-      `[trends-intel] news sector ok trends=${news.trends.length} seeds=${(news.seeds || []).length}`
+      `[trends-intel] news sector ok trends=${sectorNews.trends.length} seeds=${(sectorNews.seeds || []).length}`
     );
-    return { ...news, pytrends_error: pytrendsError };
-  } catch (err) {
-    console.warn(`[trends-intel] news sector falhou: ${err.message}`);
+  } else {
+    console.warn(`[trends-intel] news sector falhou: ${newsError}`);
   }
 
-  try {
-    const rss = await fetchGoogleTrendsRssFallback();
-    return {
-      ...rss,
-      source: 'google_trends_rss_fallback',
-      seeds: TRENDS_SEEDS,
-      pytrends_error: pytrendsError,
-    };
-  } catch (err) {
+  let rss = null;
+  let rssError = null;
+  if (!sectorNews) {
+    try {
+      rss = await fetchGoogleTrendsRssFallback();
+      console.log(`[trends-intel] RSS geral ok trends=${rss.trends.length}`);
+    } catch (err) {
+      rssError = err.message;
+      console.warn(`[trends-intel] RSS geral falhou: ${rssError}`);
+    }
+  }
+
+  const payload = combineTrendsFeeds({
+    related,
+    sectorNews,
+    rss,
+    fallbackSeeds: TRENDS_SEEDS,
+    pytrendsError,
+    newsError,
+  });
+  if (!payload) {
     throw new Error(
-      `Falha total trends (related + news + rss): ${pytrendsError || ''} | ${err.message}`
+      `Falha total trends (related + news + rss): ${pytrendsError || ''} | ${newsError || ''} | ${rssError || ''}`
     );
   }
+  return payload;
 };
 
 const getAiChatProviders = () => {
@@ -19269,18 +19916,23 @@ const createTrendsIntelTable = async () => {
       day_key TEXT PRIMARY KEY,
       geo TEXT NOT NULL DEFAULT 'BR',
       trends_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      news_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       intel_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    ALTER TABLE trends_intel_cache
+    ADD COLUMN IF NOT EXISTS news_json JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
 };
 
 const loadTrendsIntelFromDb = async (dayKey) => {
   try {
     const { rows } = await pool.query(
-      `SELECT day_key, geo, trends_json, intel_json, meta_json, updated_at
+      `SELECT day_key, geo, trends_json, news_json, intel_json, meta_json, updated_at
        FROM trends_intel_cache WHERE day_key = $1`,
       [dayKey]
     );
@@ -19290,6 +19942,7 @@ const loadTrendsIntelFromDb = async (dayKey) => {
       dayKey: row.day_key,
       geo: row.geo,
       trends: row.trends_json,
+      news: row.news_json,
       intel: row.intel_json,
       meta: row.meta_json || {},
       updatedAt: row.updated_at,
@@ -19303,10 +19956,11 @@ const loadTrendsIntelFromDb = async (dayKey) => {
 const saveTrendsIntelToDb = async (payload) => {
   try {
     await pool.query(
-      `INSERT INTO trends_intel_cache (day_key, geo, trends_json, intel_json, meta_json, updated_at)
-       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, NOW())
+      `INSERT INTO trends_intel_cache (day_key, geo, trends_json, news_json, intel_json, meta_json, updated_at)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, NOW())
        ON CONFLICT (day_key) DO UPDATE SET
          trends_json = EXCLUDED.trends_json,
+         news_json = EXCLUDED.news_json,
          intel_json = EXCLUDED.intel_json,
          meta_json = EXCLUDED.meta_json,
          updated_at = NOW()`,
@@ -19314,6 +19968,7 @@ const saveTrendsIntelToDb = async (payload) => {
         payload.dayKey,
         payload.geo || TRENDS_GEO,
         JSON.stringify(payload.trends || []),
+        JSON.stringify(payload.news || []),
         JSON.stringify(payload.intel || {}),
         JSON.stringify(payload.meta || {}),
       ]
@@ -19343,6 +19998,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       day: raw.day || raw.dayKey || dayKey,
       geo: raw.geo || TRENDS_GEO,
       trends: raw.trends || [],
+      news: raw.news || [],
       intel,
       meta: {
         ...(raw.meta || {}),
@@ -19359,9 +20015,9 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
 
   // Cache genérico do país (RSS) não serve se queremos radar setorial por seeds — regenera 1×.
   const cacheIsUsableSector = (meta) => {
+    if (Number(meta?.mediaVersion || 0) < TRENDS_MEDIA_VERSION) return false;
     if (!TRENDS_SEEDS.length) return true;
-    return isSectorTrendsSource(meta?.source)
-      && Number(meta?.mediaVersion || 0) >= TRENDS_MEDIA_VERSION;
+    return isSectorTrendsSource(meta?.source);
   };
 
   if (!force && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
@@ -19379,6 +20035,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
           day: fromDb.dayKey,
           geo: fromDb.geo,
           trends: fromDb.trends,
+          news: fromDb.news,
           intel: fromDb.intel,
           meta: fromDb.meta || {},
           updatedAt: fromDb.updatedAt,
@@ -19389,6 +20046,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
         dayKey,
         geo: payload.geo,
         trends: payload.trends,
+        news: payload.news,
         intel: payload.intel,
         meta: payload.meta,
       });
@@ -19415,6 +20073,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
           day: fromDb.dayKey,
           geo: fromDb.geo,
           trends: fromDb.trends,
+          news: fromDb.news,
           intel: fromDb.intel,
           meta: fromDb.meta || {},
           updatedAt: fromDb.updatedAt,
@@ -19432,6 +20091,7 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       day: dayKey,
       geo: trendsPayload.geo,
       trends: trendsPayload.trends,
+      news: trendsPayload.news || [],
       intel,
       meta: {
         source: trendsPayload.source,
@@ -19440,6 +20100,9 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
         seeds: trendsPayload.seeds || TRENDS_SEEDS,
         by_seed: trendsPayload.by_seed || {},
         pytrends_error: trendsPayload.pytrends_error || null,
+        newsSource: trendsPayload.news_source || null,
+        newsFetchedAt: trendsPayload.news_fetched_at || null,
+        news_error: trendsPayload.news_error || null,
         partial_errors: trendsPayload.partial_errors || [],
         mediaVersion: TRENDS_MEDIA_VERSION,
         ai,
@@ -19454,11 +20117,12 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
       dayKey,
       geo: payload.geo,
       trends: payload.trends,
+      news: payload.news,
       intel: payload.intel,
       meta: payload.meta,
     });
     console.log(
-      `[trends-intel] refreshed day=${dayKey} source=${trendsPayload.source} trends=${payload.trends.length} suggestions=${intel.suggestions?.length || 0} ai=${ai.provider || 'fallback'}`
+      `[trends-intel] refreshed day=${dayKey} source=${trendsPayload.source} trends=${payload.trends.length} news=${payload.news.length} suggestions=${intel.suggestions?.length || 0} ai=${ai.provider || 'fallback'}`
     );
     return payload;
   } finally {
@@ -19480,6 +20144,7 @@ const loadTrendsIntelCacheOnly = async () => {
         day: fromDb.dayKey,
         geo: fromDb.geo,
         trends: fromDb.trends,
+        news: fromDb.news,
         intel: fromDb.intel,
         meta: fromDb.meta || {},
         updatedAt: fromDb.updatedAt,
@@ -19498,6 +20163,7 @@ const loadTrendsIntelCacheOnly = async () => {
     day: raw.day || raw.dayKey || dayKey,
     geo: raw.geo || TRENDS_GEO,
     trends: raw.trends || [],
+    news: raw.news || [],
     intel,
     meta: {
       ...(raw.meta || {}),
@@ -20921,6 +21587,28 @@ const registerBackgroundSchedules = () => {
   backgroundSchedulesRegistered = true;
 
   cron.schedule('0 * * * *', pollStageChanges);
+  cron.schedule('* * * * *', async () => {
+    if (!dataLayerReady) return;
+    try {
+      const result = await processContactFollowups(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        notifyDue: (reminder) => notifyAccountUsers(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          type: 'funil.followup_due',
+          title: `Hora de falar com ${reminder.contact_name || 'este contato'}`,
+          body: reminder.note || 'Retorno agendado para agora.',
+          data: { view: 'Board', contact_id: reminder.contact_id },
+          dedupeKey: `reminder:${reminder.id}`,
+          onlyUserIds: reminder.assignee_id ? [Number(reminder.assignee_id)] : null,
+        }),
+      });
+      if (result.auto_completed > 0 || result.notified > 0) {
+        console.log('[follow-up] processed:', result);
+      }
+    } catch (error) {
+      console.error('[follow-up] processor failed:', error.message);
+    }
+  }, { timezone: 'America/Sao_Paulo' });
   // Trends intel: sob demanda ao expandir o painel no frontend (sem cron diário).
   cron.schedule('17 */6 * * *', () => checkAndStartRFBImport('scheduled-check'));
   cron.schedule('30 7 * * *', async () => {
@@ -20996,7 +21684,7 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
-  // Buscas de editais ainda ativas (sem watchlist, < 7 dias): recoleta diária mantendo o acervo.
+  // Buscas de editais sem watchlist: recoleta periódica mantendo o acervo.
   cron.schedule('20 8 * * *', async () => {
     if (!dataLayerReady) {
       console.log('[pncp-search-jobs] daily refresh adiado: camada de dados ainda não inicializada');
@@ -21056,6 +21744,24 @@ const registerBackgroundSchedules = () => {
     }
   });
 
+  // #5: revisita enrichments que ficaram incompletos (PNCP cortou no meio) e
+  // tenta completá-los fora do caminho interativo. Só quando a camada está pronta.
+  cron.schedule('*/5 * * * *', async () => {
+    if (!dataLayerReady) return;
+    try {
+      const r = await repairIncompletePncpEnrichments();
+      if (r.repaired > 0) console.log('[pncp-enrichment] repair:', r);
+    } catch (error) {
+      console.error('[pncp-enrichment] repair error:', error.message);
+    }
+  });
+
+  // #8: recarrega o cache de allowlists (curadoria feita por outra réplica).
+  cron.schedule('*/10 * * * *', async () => {
+    if (!dataLayerReady) return;
+    await loadAllowlistCache();
+  });
+
   // Digest de prazos do pipeline → inbox + push (dedupe diário por tipo).
   cron.schedule('15 8,14 * * 1-5', async () => {
     if (!dataLayerReady) return;
@@ -21104,6 +21810,7 @@ const registerBackgroundSchedules = () => {
 const initializeDataLayer = async () => {
   await createHistoryTable();
   await createActivityTable();
+  await createContactReminderTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();
 
@@ -21142,6 +21849,9 @@ const initializeDataLayer = async () => {
   await migrateLicitacaoFases();
   await createTrendsIntelTable();
   await seedHistorySnapshot();
+  // #8: garante a semente de allowlists e carrega o cache em memória.
+  await seedAllowlistTable();
+  await loadAllowlistCache();
   await resumePausedPncpSearchJobs();
   await pollStageChanges();
   // Limpa prazos vencidos que acumularam com o backend offline / antes do cron.

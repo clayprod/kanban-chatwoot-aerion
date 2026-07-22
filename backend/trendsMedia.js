@@ -126,6 +126,36 @@ const enrichNewsPictures = async (trends = [], {
   return [...enriched, ...trends.slice(head.length)];
 };
 
+const combineTrendsFeeds = ({
+  related = null,
+  sectorNews = null,
+  rss = null,
+  fallbackSeeds = [],
+  pytrendsError = null,
+  newsError = null,
+} = {}) => {
+  const hasItems = (payload) => Array.isArray(payload?.trends) && payload.trends.length > 0;
+  const relatedReady = hasItems(related);
+  const sectorNewsReady = hasItems(sectorNews);
+  const rssReady = hasItems(rss);
+  const newsPayload = sectorNewsReady ? sectorNews : (rssReady ? rss : null);
+  const intelPayload = relatedReady ? related : newsPayload;
+
+  if (!intelPayload) return null;
+
+  const onlyGeneralRss = !relatedReady && !sectorNewsReady && rssReady;
+  return {
+    ...intelPayload,
+    source: onlyGeneralRss ? 'google_trends_rss_fallback' : intelPayload.source,
+    seeds: onlyGeneralRss && fallbackSeeds.length ? fallbackSeeds : (intelPayload.seeds || []),
+    news: newsPayload?.trends || [],
+    news_source: newsPayload?.source || null,
+    news_fetched_at: newsPayload?.fetchedAt || null,
+    pytrends_error: pytrendsError || null,
+    news_error: newsError || null,
+  };
+};
+
 module.exports = {
   decodeXmlEntities,
   extractXmlTag,
@@ -133,4 +163,5 @@ module.exports = {
   extractHtmlPreviewImage,
   fetchArticlePreviewImage,
   enrichNewsPictures,
+  combineTrendsFeeds,
 };

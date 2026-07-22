@@ -4,6 +4,7 @@ const {
   extractRssImage,
   extractHtmlPreviewImage,
   enrichNewsPictures,
+  combineTrendsFeeds,
 } = require('../trendsMedia');
 
 test('extrai imagens dos campos usados pelo RSS do Google Trends', () => {
@@ -45,4 +46,61 @@ test('enriquece apenas os itens sem imagem usando o preview da matéria', async 
   assert.equal(trends[0].picture, 'https://img.example/existing.jpg');
   assert.equal(trends[1].picture, 'https://img.example/article.jpg');
   assert.deepEqual(requested, ['https://news.example/2']);
+});
+
+test('mantém correlatos para inteligência e notícias em coleção separada', () => {
+  const related = {
+    source: 'pytrends_related',
+    fetchedAt: '2026-07-22T12:00:00.000Z',
+    seeds: ['drone'],
+    trends: [{ title: 'mapeamento com drone', kind: 'rising' }],
+  };
+  const sectorNews = {
+    source: 'google_news_sector',
+    fetchedAt: '2026-07-22T12:00:01.000Z',
+    trends: [{ title: 'Notícia do setor', picture: 'https://img.example/news.jpg' }],
+  };
+
+  const payload = combineTrendsFeeds({ related, sectorNews });
+
+  assert.equal(payload.source, 'pytrends_related');
+  assert.deepEqual(payload.trends, related.trends);
+  assert.deepEqual(payload.news, sectorNews.trends);
+  assert.equal(payload.news_source, 'google_news_sector');
+});
+
+test('usa RSS de notícias também como inteligência quando correlatos falham', () => {
+  const sectorNews = {
+    source: 'google_news_sector',
+    trends: [{ title: 'Notícia do setor' }],
+  };
+
+  const payload = combineTrendsFeeds({
+    sectorNews,
+    pytrendsError: 'Google Trends HTTP 429',
+  });
+
+  assert.deepEqual(payload.trends, sectorNews.trends);
+  assert.deepEqual(payload.news, sectorNews.trends);
+  assert.equal(payload.pytrends_error, 'Google Trends HTTP 429');
+});
+
+test('usa RSS geral como último fallback visual e de inteligência', () => {
+  const rss = {
+    source: 'google_trends_rss',
+    trends: [{ title: 'Assunto em alta', picture: 'https://img.example/trend.jpg' }],
+  };
+
+  const payload = combineTrendsFeeds({
+    rss,
+    fallbackSeeds: ['drone'],
+    pytrendsError: 'pytrends offline',
+    newsError: 'Google News offline',
+  });
+
+  assert.equal(payload.source, 'google_trends_rss_fallback');
+  assert.deepEqual(payload.trends, rss.trends);
+  assert.deepEqual(payload.news, rss.trends);
+  assert.deepEqual(payload.seeds, ['drone']);
+  assert.equal(payload.news_source, 'google_trends_rss');
 });

@@ -3,6 +3,8 @@ frontend/.env
 backend/.env
 node_modules
 nul
+frontend/nul.css
+Webshare 10 proxies.txt
 backend/data/
 backend/scripts/__pycache__/
 

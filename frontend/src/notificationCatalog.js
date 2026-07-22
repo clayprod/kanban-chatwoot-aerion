@@ -4,7 +4,7 @@ export const NOTIFICATION_CATEGORIES = [
   {
     id: 'funil',
     label: 'Funil e leads',
-    description: 'Importações B2B, marcos do funil, ganhos/perdas e leads parados.',
+    description: 'Importações B2B, marcos do funil, ganhos/perdas, leads parados e retornos.',
   },
   {
     id: 'disparo',
@@ -63,6 +63,12 @@ export const NOTIFICATION_TYPES = [
     category: 'funil',
     label: 'Leads parados no Inbox',
     description: 'Digest diário de leads no Inbox (Novos) sem avanço.',
+  },
+  {
+    type: 'funil.followup_due',
+    category: 'funil',
+    label: 'Retorno de contato',
+    description: 'Quando chega a hora de ligar ou falar novamente com um contato.',
   },
   {
     type: 'disparo.started',
