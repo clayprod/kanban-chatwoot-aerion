@@ -9355,6 +9355,9 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       tipos_documento,
       pagina,
       tam,
+      // Varredura last-first: sem isso o índice do PNCP decide a fatia por
+      // relevância própria e edital recém-publicado pode ficar fora das páginas.
+      ordenacao: '-data',
     };
     const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
     if (mappedStatus && String(mappedStatus) !== 'todos' && !shouldApplyReceivingProposalLocally) {
@@ -15010,6 +15013,9 @@ const runEditalWatchlistMatching = async () => {
       uf: filters.uf,
       esfera_id: filters.esfera_id,
       tam: 50,
+      // Last-first: watchlist lê poucas páginas por termo — priorizar recentes
+      // é o que garante sinal de edital novo (prazo correndo).
+      ordenacao: '-data',
     };
     const seen = new Set();
     const processEditalCandidate = async (raw, term, key) => {
