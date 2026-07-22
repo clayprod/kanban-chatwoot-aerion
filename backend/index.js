@@ -10036,7 +10036,14 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       orgaoFilterRaw,
       unidadeFilterRaw,
     }));
-    allItems = await rerankPncpItems(allItems, qText, { timeoutMs: 2500, topN: 60 });
+    // Intenção semântica opcional (?intencao=...): enriquece o vetor da query
+    // quando o termo cru é pobre (ex.: marca). Mesmo contrato do deep job.
+    const intencaoInterativa = String(req.query.intencao || '').trim().slice(0, 600);
+    allItems = await rerankPncpItems(
+      allItems,
+      intencaoInterativa ? `${qText}. ${intencaoInterativa}` : qText,
+      { timeoutMs: 2500, topN: 60 }
+    );
 
     const getDateSortValue = (item) => new Date(item?.data_publicacao || 0).getTime() || 0;
     // Ordenação por valor: só itens pertinentes (alinhado ao "Valor na lista").
@@ -10986,7 +10993,11 @@ const buildDeepSearchItemsSnapshot = async ({
     orgaoFilterRaw: filters.orgao_cnpj || '',
     unidadeFilterRaw: filters.unidade_codigo || '',
   }));
-  items = await rerankPncpItems(items, qText, { timeoutMs: 15000, topN: 60 });
+  // Query do embedding: termo cru + intenção descrita pelo usuário (quando há).
+  // Marca sozinha ("autel") é vetor pobre; a intenção dá o contexto semântico.
+  const intencaoSemantica = String(filters.intencao || '').trim().slice(0, 600);
+  const rerankQuery = intencaoSemantica ? `${qText}. ${intencaoSemantica}` : qText;
+  items = await rerankPncpItems(items, rerankQuery, { timeoutMs: 15000, topN: 60 });
   items = items.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
   return {
     items,
@@ -13846,6 +13857,40 @@ app.post('/api/licitacoes/pncp/search/deep-terms/:jobId', handlePncpSearchJobTer
 app.post('/api/licitacoes/pncp/search/deep/:jobId/terms', handlePncpSearchJobTerms);
 
 // Atualiza filtros de partida do job e reenfileira a coleta.
+// Atualiza SÓ a intenção semântica (query do embedding no rerank). Diferente do
+// /filters, não re-enfileira a coleta nem descarta o acervo — a intenção afeta
+// apenas a ordenação na leitura, então o snapshot seguinte já a usa.
+app.post('/api/licitacoes/pncp/search/deep/:jobId/intencao', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const memoryJob = PNCP_DEEP_SEARCH_JOBS.get(req.params.jobId);
+    const dbJob = memoryJob ? null : await loadPncpDeepJob(req.params.jobId, accountId);
+    const job = memoryJob || dbJob;
+    if (!job) return res.status(404).json({ error: 'Pesquisa nao encontrada' });
+    if (job.account_id && Number(job.account_id) !== Number(accountId)) {
+      return res.status(404).json({ error: 'Pesquisa nao encontrada' });
+    }
+
+    const intencao = String(req.body?.intencao || '').trim().slice(0, 600);
+    job.filters = { ...(job.filters || {}) };
+    if (intencao) job.filters.intencao = intencao;
+    else delete job.filters.intencao;
+    job.updated_at = Date.now();
+
+    await pool.query(
+      `UPDATE ${PNCP_SEARCH_JOBS_TABLE}
+          SET filters = $2::jsonb, updated_at = NOW()
+        WHERE id = $1 AND account_id = $3`,
+      [job.id, JSON.stringify(job.filters || {}), accountId]
+    );
+    if (memoryJob) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+
+    res.json({ ok: true, intencao: job.filters.intencao || '' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao salvar intencao', details: error.message });
+  }
+});
+
 app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => {
   try {
     const accountId = getAccountId(req);

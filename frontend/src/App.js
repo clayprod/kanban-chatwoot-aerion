@@ -8054,6 +8054,23 @@ function App() {
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpJobModalOpen, setPncpJobModalOpen] = useState(false);
   const [pncpJobModalTab, setPncpJobModalTab] = useState('resultados'); // resultados | termos | auditoria | descartados
+  // Intenção semântica do job (query do embedding no rerank) — rascunho + save.
+  const [pncpJobIntencaoDraft, setPncpJobIntencaoDraft] = useState(null); // null = não editado (usa o do job)
+  const [pncpJobIntencaoSaving, setPncpJobIntencaoSaving] = useState(false);
+  const savePncpJobIntencao = async (jobId, intencao) => {
+    setPncpJobIntencaoSaving(true);
+    try {
+      await axios.post(`/api/licitacoes/pncp/search/deep/${jobId}/intencao`, { intencao });
+      setPncpSearchJobs(prev => prev.map(j => (String(j.id) === String(jobId)
+        ? { ...j, filters: { ...(j.filters || {}), intencao } }
+        : j)));
+      setPncpJobIntencaoDraft(null);
+    } catch (e) {
+      console.error('Erro ao salvar intenção:', e);
+    } finally {
+      setPncpJobIntencaoSaving(false);
+    }
+  };
   // Header do popup compacto por padrão — mais espaço pra lista de resultados.
   const [pncpJobHeaderExpanded, setPncpJobHeaderExpanded] = useState(false);
   const [pncpJobFilterDraft, setPncpJobFilterDraft] = useState({
@@ -17321,6 +17338,22 @@ function App() {
                                 tipos: pncpEditalTipoInstrumentoOptions,
                                 modos: modoDisputaOptions,
                               });
+                              // Termos já cobertos por OUTRO job da conta: varredura no PNCP e
+                              // triagem (descartes) são por job — sobreposição = trabalho em dobro.
+                              const normalizeJobTerm = (t) => String(t || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+                              const termCoverage = new Map();
+                              (pncpSearchJobs || []).forEach(otherJob => {
+                                if (String(otherJob.id) === String(job?.id)) return;
+                                (otherJob.terms || []).forEach(t => {
+                                  const key = normalizeJobTerm(t);
+                                  if (!key) return;
+                                  if (!termCoverage.has(key)) termCoverage.set(key, []);
+                                  termCoverage.get(key).push(otherJob.nome || 'sem nome');
+                                });
+                              });
+                              const coveredBy = (term) => termCoverage.get(normalizeJobTerm(term)) || [];
+                              const overlappingTerms = [...(job?.terms || []), ...pncpActiveJobPendingTerms]
+                                .filter(term => coveredBy(term).length > 0);
                               return (
                               <div className="space-y-5">
                                 <div>
@@ -17329,22 +17362,83 @@ function App() {
                                     Cada termo é uma frente da busca profunda. Digite e use vírgula para virar chip; Anexar grava no job e mantém o acervo.
                                   </p>
                                   <div className="mt-2.5 flex flex-wrap gap-1.5">
-                                    {(job?.terms || []).map(term => (
-                                      <span key={term} className="rounded-lg bg-primary/10 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary">{term}</span>
-                                    ))}
-                                    {pncpActiveJobPendingTerms.map(term => (
+                                    {(job?.terms || []).map(term => {
+                                      const dupJobs = coveredBy(term);
+                                      return dupJobs.length ? (
+                                        <span
+                                          key={term}
+                                          title={`Já coberto pela busca "${dupJobs[0]}"${dupJobs.length > 1 ? ` (+${dupJobs.length - 1})` : ''} — varredura e triagem duplicadas`}
+                                          className="rounded-lg border border-amber/50 bg-amber/10 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-amber"
+                                        >
+                                          {term} <span className="normal-case opacity-80">⧉</span>
+                                        </span>
+                                      ) : (
+                                        <span key={term} className="rounded-lg bg-primary/10 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary">{term}</span>
+                                      );
+                                    })}
+                                    {pncpActiveJobPendingTerms.map(term => {
+                                      const dupJobs = coveredBy(term);
+                                      return (
                                       <button
                                         key={`pending-${term}`}
                                         type="button"
                                         onClick={() => removePncpActiveJobPendingTerm(term)}
-                                        title="Remover antes de anexar"
-                                        className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/15"
+                                        title={dupJobs.length
+                                          ? `Já coberto pela busca "${dupJobs[0]}" — clique para remover antes de anexar`
+                                          : 'Remover antes de anexar'}
+                                        className={dupJobs.length
+                                          ? 'rounded-lg border border-dashed border-amber/60 bg-amber/10 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-amber hover:bg-amber/20'
+                                          : 'rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-1 font-display text-[11px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/15'}
                                       >
-                                        {term} <span className="normal-case text-primary/70">×</span>
+                                        {term}{dupJobs.length ? ' ⧉' : ''} <span className={`normal-case ${dupJobs.length ? 'text-amber/70' : 'text-primary/70'}`}>×</span>
                                       </button>
-                                    ))}
+                                      );
+                                    })}
                                     {!(job?.terms || []).length && pncpActiveJobPendingTerms.length === 0 && (
                                       <span className="text-xs text-muted">Nenhum termo registrado.</span>
+                                    )}
+                                  </div>
+                                  {overlappingTerms.length > 0 && (
+                                    <div className="mt-2 rounded-lg border border-amber/40 bg-amber/5 px-3 py-2 text-xs text-amber">
+                                      <span className="font-semibold">⧉ {overlappingTerms.length === 1 ? 'Termo já coberto' : `${overlappingTerms.length} termos já cobertos`} por outra busca sua.</span>{' '}
+                                      Cada busca varre o PNCP e mantém a própria triagem: o mesmo termo em duas buscas duplica a coleta
+                                      e faz descartes feitos numa reaparecerem na outra. Passe o mouse no termo marcado para ver qual
+                                      busca já o cobre — em geral vale mantê-lo só nela.
+                                    </div>
+                                  )}
+
+                                  <div className="mt-4">
+                                    <h4 className={`${sectionTitle} text-sm`}>Intenção da busca</h4>
+                                    <p className={`${subtle} mt-0.5`}>
+                                      Descreva com suas palavras o que você procura — a IA usa isso para ordenar os resultados por
+                                      aderência semântica. Vale muito para marca ou sigla (ex.: “drones e câmeras térmicas da Autel
+                                      para segurança pública e monitoramento aéreo”). Não recoleta nada: só reordena.
+                                    </p>
+                                    <textarea
+                                      className="mt-2 min-h-[4.5rem] w-full resize-y rounded-[11px] border border-line bg-bg2 px-3 py-2 text-xs text-ink outline-none placeholder:text-muted"
+                                      maxLength={600}
+                                      placeholder="ex: equipamentos e serviços de drones da marca Autel — EVO Max, Dragonfish — para segurança pública, com câmeras térmicas e estação de comando"
+                                      value={pncpJobIntencaoDraft ?? (job?.filters?.intencao || '')}
+                                      onChange={(e) => setPncpJobIntencaoDraft(e.target.value)}
+                                    />
+                                    {pncpJobIntencaoDraft !== null && pncpJobIntencaoDraft !== (job?.filters?.intencao || '') && (
+                                      <div className="mt-1.5 flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={pncpJobIntencaoSaving}
+                                          onClick={() => savePncpJobIntencao(job.id, pncpJobIntencaoDraft.trim())}
+                                          className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+                                        >
+                                          {pncpJobIntencaoSaving ? 'Salvando…' : 'Salvar intenção'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setPncpJobIntencaoDraft(null)}
+                                          className="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-bg2 hover:text-ink"
+                                        >
+                                          Descartar
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
                                   {(job?.negative_terms || []).length > 0 && (
