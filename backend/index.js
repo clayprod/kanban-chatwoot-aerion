@@ -22261,14 +22261,26 @@ const registerBackgroundSchedules = () => {
 
   // Backfill incremental de embeddings dos itens do PCA (busca híbrida vetorial).
   // Gated: só roda com pgvector disponível, flag ligada e embeddings habilitados.
+  // Corpus real ~1,9M itens: 1 lote/min levaria semanas — roda vários lotes por
+  // tick com orçamento de tempo (~50s), respeitando o budget diário de tokens.
   let pcaBackfillRunning = false;
+  const PCA_BACKFILL_BATCHES_PER_TICK = Math.max(1, parseInt(process.env.PCA_BACKFILL_BATCHES_PER_TICK || '10', 10) || 10);
   cron.schedule('* * * * *', async () => {
     if (!dataLayerReady || pcaBackfillRunning) return;
     if (process.env.PCA_EMBED_BACKFILL !== '1' || !pcaVectorAvailable || !isEmbeddingsEnabled()) return;
     pcaBackfillRunning = true;
+    const tickDeadline = Date.now() + 50_000;
     try {
-      const r = await runPcaEmbedBackfillBatch({ pool, batchSize: 500 });
-      if (r.embedded > 0) console.log('[pca-vector] backfill:', r);
+      let totalEmbedded = 0;
+      let remaining = null;
+      for (let i = 0; i < PCA_BACKFILL_BATCHES_PER_TICK; i += 1) {
+        if (Date.now() > tickDeadline || !isEmbeddingsEnabled()) break;
+        const r = await runPcaEmbedBackfillBatch({ pool, batchSize: 500 });
+        totalEmbedded += r.embedded || 0;
+        remaining = r.remaining;
+        if (!r.embedded || r.unavailable) break;
+      }
+      if (totalEmbedded > 0) console.log(`[pca-vector] backfill: ${totalEmbedded} itens embedados, ${remaining} restantes`);
     } catch (e) {
       console.warn('[pca-vector] backfill erro:', e.message);
     } finally {
