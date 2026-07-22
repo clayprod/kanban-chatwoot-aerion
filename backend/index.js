@@ -6713,14 +6713,20 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const periodUnit = period; // day|week|month|quarter|year — válidos no DATE_TRUNC do PG
     const spRangeStart = spTruncStart(periodUnit);
 
-    // Marcos cumulativos (escadinha): 1 contato conta 1x por marco no período.
-    // Ex.: mover para 7. Agendamento Demo conta SQL + Oportunidade (sem exigir passagem pelo 6).
-    // Faixa 6–13 = pipeline qualificado + ganho; 14–17 (perdido/pausa/descarte/nurture) não promovem marcos.
+    // Marcos cumulativos (escadinha): 1 contato conta 1x por marco no período,
+    // somente quando cruza o marco avançando. Se depois voltar para uma etapa
+    // ativa abaixo dele, o avanço é desfeito (correção/regressão de coluna).
+    // Ex.: 8→10→9 mantém Proposta; 8→10→8 não mantém Proposta.
+    // Faixa 6–13 = pipeline qualificado + ganho; 14–17 (perdido/pausa/descarte/nurture)
+    // não criam marcos e não são tratados como simples regressão numérica.
     const buildMilestonePaceSql = (sinceSql) => `
       WITH events AS (
         SELECT
           h.contact_id,
-          NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int AS stage_num,
+          NULLIF(TRIM(SPLIT_PART(h.from_stage, '.', 1)), '')::int AS from_stage_num,
+          NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int AS to_stage_num,
+          h.changed_at,
+          h.id,
           ${valueNumExpr('c.')} AS value_num
         FROM ${HISTORY_TABLE} h
         LEFT JOIN contacts c ON c.id = h.contact_id
@@ -6733,14 +6739,40 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       per_contact AS (
         SELECT
           contact_id,
-          BOOL_OR(stage_num BETWEEN 6 AND 13) AS hit_sql,
-          BOOL_OR(stage_num BETWEEN 7 AND 13) AS hit_oportunidade,
-          BOOL_OR(stage_num BETWEEN 9 AND 13) AS hit_proposta,
-          BOOL_OR(stage_num = 13) AS hit_fechamento,
+          BOOL_OR(
+            to_stage_num BETWEEN 6 AND 13
+            AND CASE WHEN from_stage_num BETWEEN 1 AND 13 THEN from_stage_num ELSE 0 END < 6
+          ) AS crossed_sql,
+          BOOL_OR(
+            to_stage_num BETWEEN 7 AND 13
+            AND CASE WHEN from_stage_num BETWEEN 1 AND 13 THEN from_stage_num ELSE 0 END < 7
+          ) AS crossed_oportunidade,
+          BOOL_OR(
+            to_stage_num BETWEEN 9 AND 13
+            AND CASE WHEN from_stage_num BETWEEN 1 AND 13 THEN from_stage_num ELSE 0 END < 9
+          ) AS crossed_proposta,
+          BOOL_OR(
+            to_stage_num = 13
+            AND CASE WHEN from_stage_num BETWEEN 1 AND 13 THEN from_stage_num ELSE 0 END < 13
+          ) AS crossed_fechamento,
+          (ARRAY_AGG(to_stage_num ORDER BY changed_at DESC, id DESC)
+            FILTER (WHERE to_stage_num IS NOT NULL))[1] AS final_stage_num,
           MAX(value_num) AS value_num
         FROM events
-        WHERE stage_num IS NOT NULL
+        WHERE to_stage_num IS NOT NULL
         GROUP BY contact_id
+      ), effective AS (
+        SELECT
+          *,
+          crossed_sql
+            AND (final_stage_num NOT BETWEEN 1 AND 13 OR final_stage_num >= 6) AS hit_sql,
+          crossed_oportunidade
+            AND (final_stage_num NOT BETWEEN 1 AND 13 OR final_stage_num >= 7) AS hit_oportunidade,
+          crossed_proposta
+            AND (final_stage_num NOT BETWEEN 1 AND 13 OR final_stage_num >= 9) AS hit_proposta,
+          crossed_fechamento
+            AND (final_stage_num NOT BETWEEN 1 AND 13 OR final_stage_num >= 13) AS hit_fechamento
+        FROM per_contact
       )
       SELECT
         COUNT(*) FILTER (WHERE hit_sql)::int AS sql,
@@ -6750,7 +6782,7 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
         COALESCE(SUM(value_num) FILTER (WHERE hit_oportunidade), 0)::float AS oportunidade_value,
         COALESCE(SUM(value_num) FILTER (WHERE hit_proposta), 0)::float AS proposta_value,
         COALESCE(SUM(value_num) FILTER (WHERE hit_fechamento), 0)::float AS fechamento_value
-      FROM per_contact
+      FROM effective
     `;
 
     // "Contatos" mede pessoas distintas alcançadas, não volume de mensagens.
@@ -6919,10 +6951,10 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       rules: {
         contatos: 'Contatos distintos no período com mensagem enviada ou nota registrada. Mensagens e notas adicionais para a mesma pessoa contam apenas 1×. Ligação, e-mail e visita: registrar em Notas.',
         leads: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período).',
-        sql: 'Marco cumulativo: 1× por contato no período ao atingir etapa ≥ 6 (SQL, demo, proposta ou ganho). Pular o 6 e ir para Agendamento Demo ainda conta como SQL. Perdido/pausa/descarte/nurture (14–17) não contam sozinhos.',
-        oportunidade: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 7 (demo em diante até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
-        proposta: 'Marco cumulativo: 1× por contato ao atingir etapa ≥ 9 (elaborando proposta até ganho). Em R$: Valor_Oportunidade uma vez por contato.',
-        fechamento: 'Card movido para 13. Fechado-Ganho (1× por contato no período). Em R$: Valor_Oportunidade das vendas ganhas.',
+        sql: 'Marco cumulativo: 1× por contato no período ao avançar de uma etapa anterior para ≥ 6. Pular o 6 ainda conta. Se voltar para uma etapa ativa abaixo de SQL no mesmo período, o avanço é desfeito.',
+        oportunidade: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 7. Se voltar para uma etapa ativa abaixo de Oportunidade no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade uma vez por contato.',
+        proposta: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 9. Se voltar para uma etapa ativa abaixo de Proposta no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade uma vez por contato.',
+        fechamento: 'Card avançado para 13. Fechado-Ganho (1× por contato no período). Se voltar para uma etapa ativa anterior no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade das vendas ganhas.',
       },
     });
   } catch (err) {
