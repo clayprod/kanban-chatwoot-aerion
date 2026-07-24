@@ -30,6 +30,10 @@ const {
   closeContactReminder,
   processContactFollowups,
 } = require('./contactFollowups');
+const {
+  createCallTranscriptsTable,
+  registerCallTranscriptRoutes,
+} = require('./callTranscripts');
 const { recordSearchFeedback, recordSearchFeedbackBatch, initFeedback, getFeedbackStats } = require('./feedback');
 const {
   initEmbeddings,
@@ -88,6 +92,7 @@ const AUTH_PUBLIC_PATHS = new Set([
   '/auth/login',
   '/auth/logout',
   '/auth/status',
+  '/call-transcripts',
   '/licitacoes/pncp/modalidades',
   '/licitacoes/pncp/modos-disputa',
   '/licitacoes/pncp/tipos-instrumentos',
@@ -343,9 +348,18 @@ const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '
 const APP_ACCESS_TABLE = 'app_user_access';
 const APP_PAGE_VIEWS = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo', 'Disparo WhatsApp', 'Radar Trends', 'Metas', 'Usuários'];
 const APP_PERM_LEVELS = new Set(['none', 'view', 'edit']);
+const CALL_TRANSCRIPTS_WEBHOOK_TOKEN = String(process.env.CALL_TRANSCRIPTS_WEBHOOK_TOKEN || '').trim()
+  || (AUTH_TOKEN_SECRET
+    ? crypto.createHmac('sha256', AUTH_TOKEN_SECRET).update('call-transcripts-v1').digest('hex')
+    : '');
 
 // Web Push (VAPID) — inbox + push multi-navegador. Ver backend/notifications.js
 registerNotificationRoutes(app, { pool, defaultAccountId: CHATWOOT_ACCOUNT_ID });
+registerCallTranscriptRoutes(app, {
+  pool,
+  accountId: CHATWOOT_ACCOUNT_ID,
+  webhookToken: CALL_TRANSCRIPTS_WEBHOOK_TOKEN,
+});
 if (getVapidConfig()) {
   ensureVapidConfigured();
   console.log('[notifications] Web Push VAPID configurado');
@@ -22426,6 +22440,7 @@ const initializeDataLayer = async () => {
   await createHistoryTable();
   await createActivityTable();
   await createContactReminderTable(pool);
+  await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();
 
