@@ -52,3 +52,37 @@ test('exige transcript_id e limita o tamanho do identificador', () => {
   assert.throws(() => validateTranscriptPayload({}), /transcript_id/);
   assert.throws(() => validateTranscriptPayload({ transcript_id: 'x'.repeat(256) }), /255/);
 });
+
+test('não associa o contato quando o Caller ID recebido é o próprio DID', async () => {
+  const queries = [];
+  const client = {
+    query: async (sql, params = []) => {
+      queries.push({ sql, params });
+      if (/INSERT INTO call_transcripts/.test(sql)) {
+        return { rows: [{ id: 1, contact_id: null, note_id: null, match_status: 'pending' }] };
+      }
+      if (/UPDATE call_transcripts/.test(sql)) return { rows: [] };
+      if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [] };
+      throw new Error(`Query inesperada: ${sql}`);
+    },
+    release: () => {},
+  };
+  const pool = { connect: async () => client };
+  const { ingestCallTranscript } = require('../callTranscripts');
+
+  const result = await ingestCallTranscript(pool, {
+    accountId: 2,
+    payload: {
+      transcript_id: 'call_did_as_caller',
+      call: {
+        caller_number: '1151973319',
+        did: '+551151973319',
+      },
+    },
+  });
+
+  assert.equal(result.match_status, 'unmatched');
+  assert.equal(queries.some(({ sql }) => /FROM contacts/.test(sql)), false);
+  const insert = queries.find(({ sql }) => /INSERT INTO call_transcripts/.test(sql));
+  assert.equal(insert.params[3], null);
+});

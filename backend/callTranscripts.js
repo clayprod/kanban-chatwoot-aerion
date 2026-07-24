@@ -169,7 +169,18 @@ const ingestCallTranscript = async (pool, { accountId, payload }) => {
   const transcriptId = validateTranscriptPayload(payload);
   const call = payload.call && typeof payload.call === 'object' ? payload.call : {};
   const callerNumber = String(call.caller_number || '').trim() || null;
-  const normalizedPhone = normalizeNationalPhone(callerNumber);
+  const normalizedCaller = normalizeNationalPhone(callerNumber);
+  const normalizedDid = normalizeNationalPhone(call.did);
+  // Alguns troncos SIP substituem o Caller ID pelo próprio DID quando a
+  // identidade recebida não é confiável. Nunca associe esse número ao CRM:
+  // ele pertence à Aerion, não ao cliente que originou a chamada.
+  const callerIsDid = Boolean(
+    normalizedCaller
+    && normalizedDid
+    && normalizedCaller === normalizedDid
+  );
+  const normalizedPhone = callerIsDid ? null : normalizedCaller;
+  const phoneForMatching = callerIsDid ? null : callerNumber;
   const startedAt = call.started_at_utc || call.started_at_local || null;
   const client = await pool.connect();
 
@@ -202,7 +213,7 @@ const ingestCallTranscript = async (pool, { accountId, payload }) => {
       };
     }
 
-    const { contacts } = await findContactsByPhone(client, accountId, callerNumber);
+    const { contacts } = await findContactsByPhone(client, accountId, phoneForMatching);
     if (contacts.length !== 1) {
       const matchStatus = contacts.length > 1 ? 'ambiguous' : 'unmatched';
       await client.query(
