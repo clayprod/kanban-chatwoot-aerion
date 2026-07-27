@@ -6705,13 +6705,11 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const contactNoteAgentFilter = hasActorFilter
       ? `AND n.user_id = ANY($2::int[])`
       : '';
-    // Moves: individual = só o(s) id(s) da identidade; time = vendedores (+ moves sem actor legados)
+    // O individual e o time precisam usar o mesmo recorte de autoria.
+    // Movimentos legados sem actor não podem ser atribuídos a um vendedor.
     const histAgentFilter = hasActorFilter
-      ? (selectedAgentId != null
-        ? `AND h.actor_id = ANY($2::int[])`
-        : `AND (h.actor_id IS NULL OR h.actor_id = ANY($2::int[]))`)
+      ? `AND h.actor_id = ANY($2::int[])`
       : '';
-    const params = hasActorFilter ? [accountId, actorIds] : [accountId];
 
     // Cortes de período no fuso do negócio (America/Sao_Paulo, UTC-3), não em UTC.
     // As colunas created_at/changed_at são `timestamp without time zone` gravadas em UTC;
@@ -6863,23 +6861,48 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
 
     const needExtraRange = period !== 'day' && period !== 'month';
 
-    const queryBundle = await Promise.all([
-      pool.query(buildContactPaceSql(spDayStart), params),
-      pool.query(buildContactPaceSql(spMonthStart), params),
-      pool.query(buildMilestonePaceSql(spDayStart), params),
-      pool.query(buildMilestonePaceSql(spMonthStart), params),
-      pool.query(buildLeadsSql(spDayStart), params),
-      pool.query(buildLeadsSql(spMonthStart), params),
-      needExtraRange
-        ? pool.query(buildContactPaceSql(spRangeStart), params)
-        : Promise.resolve(null),
-      needExtraRange
-        ? pool.query(buildMilestonePaceSql(spRangeStart), params)
-        : Promise.resolve(null),
-      needExtraRange
-        ? pool.query(buildLeadsSql(spRangeStart), params)
-        : Promise.resolve(null),
-    ]);
+    const runPaceQueries = (queryActorIds) => {
+      const queryParams = Array.isArray(queryActorIds) && queryActorIds.length > 0
+        ? [accountId, queryActorIds]
+        : [accountId];
+      return Promise.all([
+        pool.query(buildContactPaceSql(spDayStart), queryParams),
+        pool.query(buildContactPaceSql(spMonthStart), queryParams),
+        pool.query(buildMilestonePaceSql(spDayStart), queryParams),
+        pool.query(buildMilestonePaceSql(spMonthStart), queryParams),
+        pool.query(buildLeadsSql(spDayStart), queryParams),
+        pool.query(buildLeadsSql(spMonthStart), queryParams),
+        needExtraRange
+          ? pool.query(buildContactPaceSql(spRangeStart), queryParams)
+          : Promise.resolve(null),
+        needExtraRange
+          ? pool.query(buildMilestonePaceSql(spRangeStart), queryParams)
+          : Promise.resolve(null),
+        needExtraRange
+          ? pool.query(buildLeadsSql(spRangeStart), queryParams)
+          : Promise.resolve(null),
+      ]);
+    };
+
+    // Deduplica contatos dentro de cada identidade e só então soma os
+    // vendedores. Assim "Time (geral)" fecha com os painéis individuais mesmo
+    // quando duas pessoas trabalharam o mesmo contato.
+    const actorGroups = selectedAgentId == null && sellerGroups.length > 0
+      ? sellerGroups.map((group) => group.user_ids)
+      : [actorIds];
+    const queryBundles = await Promise.all(actorGroups.map(runPaceQueries));
+    const mergeQueryResult = (index) => {
+      const results = queryBundles.map((bundle) => bundle[index]).filter(Boolean);
+      if (!results.length) return null;
+      const mergedRow = {};
+      for (const result of results) {
+        for (const [key, value] of Object.entries(result.rows?.[0] || {})) {
+          mergedRow[key] = (Number(mergedRow[key]) || 0) + (Number(value) || 0);
+        }
+      }
+      return { rows: [mergedRow] };
+    };
+    const queryBundle = Array.from({ length: 9 }, (_, index) => mergeQueryResult(index));
 
     const [
       contactsDay,

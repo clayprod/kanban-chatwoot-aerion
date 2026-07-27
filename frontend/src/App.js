@@ -1540,7 +1540,12 @@ const TeamPaceCard = ({
     1
   );
   const isIndividual = agentId != null && agentId !== '';
-  const personScale = isIndividual ? 1 / headcount : 1;
+  // Arredonda a meta individual primeiro e monta o total do time pela soma.
+  // Isso evita exibir, por exemplo, 250 no time enquanto 126 + 126 = 252.
+  const targetForScope = (teamTarget, minimum = 1) => {
+    const individualTarget = Math.max(minimum, Math.round(teamTarget / headcount));
+    return isIndividual ? individualTarget : individualTarget * headcount;
+  };
 
   const baseRevenue = revenueMeta > 0
     ? revenueMeta
@@ -1565,7 +1570,7 @@ const TeamPaceCard = ({
       if (isValue) {
         // Funil reverso da receita mensal, escalado ao período (dia/sem/mês/trim/ano).
         const monthTarget = valueFunnel.month[step.key] || 0;
-        target = Math.max(0, Math.round(monthTarget * scales.valueFromMonth * personScale));
+        target = targetForScope(monthTarget * scales.valueFromMonth, 0);
         if (loaded) {
           done = Number(rangeValue[step.key]) || 0;
           doneToday = Number(dayValue[step.key]) || 0;
@@ -1574,9 +1579,9 @@ const TeamPaceCard = ({
         // Preferir escala do diário; no mês/trim/ano usa meta mensal do funil (mais estável).
         if (period === 'month' || period === 'quarter' || period === 'year') {
           const months = period === 'year' ? 12 : period === 'quarter' ? 3 : 1;
-          target = Math.max(1, Math.round(teamCountMonth * months * personScale));
+          target = targetForScope(teamCountMonth * months);
         } else {
-          target = Math.max(1, Math.round(teamCountDay * scales.countFromDay * personScale));
+          target = targetForScope(teamCountDay * scales.countFromDay);
         }
         if (loaded) {
           if (step.key === 'contatos') {
@@ -1595,7 +1600,7 @@ const TeamPaceCard = ({
   // Em R$: o “total” é a meta de fechamento/receita — não a soma das etapas
   const closeRow = rows.find((r) => r.step.key === 'fechamento');
   const totalTarget = isValue
-    ? (closeRow?.target ?? Math.round(valueFunnel.revenueMonth * scales.valueFromMonth * personScale))
+    ? (closeRow?.target ?? targetForScope(valueFunnel.revenueMonth * scales.valueFromMonth, 0))
     : rows.reduce((s, r) => s + r.target, 0);
   const totalDone = isValue
     ? (loaded ? (closeRow?.done ?? 0) : null)
