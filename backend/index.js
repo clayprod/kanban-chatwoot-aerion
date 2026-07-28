@@ -6663,8 +6663,8 @@ app.get('/api/overview/recent-actions', async (req, res) => {
  *   (regra operacional: ligação/e-mail/visita podem ser registrados em qualquer uma das notas).
  * - SQL / Oportunidade / Proposta / Fechamento = movimentações do card no funil
  *   (kanban_stage_history → to_stage).
- * Query opcional: agent_id — filtra feito por remetente (mensagens),
- *   autor da nota de contato (notes.user_id) e actor (moves).
+ * Query opcional: agent_id — filtra contatos pelo autor da atividade e
+ *   marcos do funil pelo responsável atual da conversa do contato.
  * Query opcional: period = day|week|month|quarter|year (default day).
  *   Sempre devolve day + month (modal/compat). range espelha o período pedido.
  */
@@ -6705,10 +6705,12 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const contactNoteAgentFilter = hasActorFilter
       ? `AND n.user_id = ANY($2::int[])`
       : '';
-    // O individual e o time precisam usar o mesmo recorte de autoria.
-    // Movimentos legados sem actor não podem ser atribuídos a um vendedor.
-    const histAgentFilter = hasActorFilter
-      ? `AND h.actor_id = ANY($2::int[])`
+    // SQL → Fechamento pertencem ao responsável comercial atual do contato,
+    // não ao usuário (frequentemente um admin) que arrastou o card. Como o
+    // assignee é resolvido na consulta, atribuir/corrigir o responsável depois
+    // também recalcula o ritmo sem exigir um novo movimento.
+    const milestoneAssigneeFilter = hasActorFilter
+      ? `AND assigned.assignee_id = ANY($2::int[])`
       : '';
 
     // Cortes de período no fuso do negócio (America/Sao_Paulo, UTC-3), não em UTC.
@@ -6742,11 +6744,23 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
           ${valueNumExpr('c.')} AS value_num
         FROM ${HISTORY_TABLE} h
         LEFT JOIN contacts c ON c.id = h.contact_id
+        LEFT JOIN LATERAL (
+          SELECT conv.assignee_id
+          FROM conversations conv
+          WHERE conv.contact_id = h.contact_id
+            AND conv.account_id = h.account_id
+            AND conv.assignee_id IS NOT NULL
+          ORDER BY
+            conv.last_activity_at DESC NULLS LAST,
+            conv.updated_at DESC NULLS LAST,
+            conv.created_at DESC
+          LIMIT 1
+        ) assigned ON true
         WHERE h.account_id = $1
           AND h.source <> 'snapshot'
           AND h.changed_at >= ${sinceSql}
           AND h.to_stage IS NOT NULL
-          ${histAgentFilter}
+          ${milestoneAssigneeFilter}
       ),
       per_contact AS (
         SELECT
@@ -6852,11 +6866,23 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
     const buildLeadsSql = (sinceSql) => `
       SELECT COUNT(DISTINCT h.contact_id)::int AS total
       FROM ${HISTORY_TABLE} h
+      LEFT JOIN LATERAL (
+        SELECT conv.assignee_id
+        FROM conversations conv
+        WHERE conv.contact_id = h.contact_id
+          AND conv.account_id = h.account_id
+          AND conv.assignee_id IS NOT NULL
+        ORDER BY
+          conv.last_activity_at DESC NULLS LAST,
+          conv.updated_at DESC NULLS LAST,
+          conv.created_at DESC
+        LIMIT 1
+      ) assigned ON true
       WHERE h.account_id = $1
         AND h.source <> 'snapshot'
         AND h.changed_at >= ${sinceSql}
         AND NULLIF(TRIM(SPLIT_PART(h.to_stage, '.', 1)), '')::int = 1
-        ${histAgentFilter}
+        ${milestoneAssigneeFilter}
     `;
 
     const needExtraRange = period !== 'day' && period !== 'month';
@@ -6987,11 +7013,11 @@ app.get('/api/overview/funnel-pace', async (req, res) => {
       range,
       rules: {
         contatos: 'Contatos distintos no período com mensagem enviada ou nota registrada. Mensagens e notas adicionais para a mesma pessoa contam apenas 1×. Ligação, e-mail e visita: registrar em Notas.',
-        leads: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período).',
-        sql: 'Marco cumulativo: 1× por contato no período ao avançar de uma etapa anterior para ≥ 6. Pular o 6 ainda conta. Se voltar para uma etapa ativa abaixo de SQL no mesmo período, o avanço é desfeito.',
-        oportunidade: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 7. Se voltar para uma etapa ativa abaixo de Oportunidade no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade uma vez por contato.',
-        proposta: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 9. Se voltar para uma etapa ativa abaixo de Proposta no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade uma vez por contato.',
-        fechamento: 'Card avançado para 13. Fechado-Ganho (1× por contato no período). Se voltar para uma etapa ativa anterior no mesmo período, o avanço é desfeito. Em R$: Valor_Oportunidade das vendas ganhas.',
+        leads: 'Contato distinto movido para Inbox / etapa 1 do funil (1× por contato no período), creditado ao responsável atual do contato.',
+        sql: 'Marco cumulativo: 1× por contato no período ao avançar de uma etapa anterior para ≥ 6. Pular o 6 ainda conta. Se voltar para uma etapa ativa abaixo de SQL no mesmo período, o avanço é desfeito. O crédito pertence ao responsável atual do contato, independentemente de quem moveu o card.',
+        oportunidade: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 7. Se voltar para uma etapa ativa abaixo de Oportunidade no mesmo período, o avanço é desfeito. O crédito pertence ao responsável atual do contato. Em R$: Valor_Oportunidade uma vez por contato.',
+        proposta: 'Marco cumulativo: 1× por contato ao avançar de uma etapa anterior para ≥ 9. Se voltar para uma etapa ativa abaixo de Proposta no mesmo período, o avanço é desfeito. O crédito pertence ao responsável atual do contato. Em R$: Valor_Oportunidade uma vez por contato.',
+        fechamento: 'Card avançado para 13. Fechado-Ganho (1× por contato no período). Se voltar para uma etapa ativa anterior no mesmo período, o avanço é desfeito. O crédito pertence ao responsável atual do contato. Em R$: Valor_Oportunidade das vendas ganhas.',
       },
     });
   } catch (err) {
