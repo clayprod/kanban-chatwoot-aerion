@@ -21,7 +21,7 @@ export const sortRfbSearchResults = (rows, orderBy) => {
   return [...rows].sort((a, b) => compare(a, b) || compareText(a.cnpj, b.cnpj));
 };
 
-export const fetchAllRfbSearchResults = async ({ baseParams, orderBy, signal, onBatch, requestPage }) => {
+export const fetchAllRfbSearchResults = async ({ baseParams, orderBy, signal, onBatch, requestPage, requestStream }) => {
   const allResults = [];
   const seenCnpjs = new Set();
   const pageSignatures = new Set();
@@ -29,6 +29,30 @@ export const fetchAllRfbSearchResults = async ({ baseParams, orderBy, signal, on
   let knownTotal = null;
   let knownTotalProgressive = false;
   let lastMeta = {};
+
+  const addBatch = (responseData) => {
+    const pageResults = Array.isArray(responseData?.results) ? responseData.results : [];
+    pageResults.forEach((row) => {
+      const key = row?.cnpj || `${row?.cnpj_basico || ''}:${row?.cnpj_ordem || ''}`;
+      if (key && seenCnpjs.has(key)) return;
+      if (key) seenCnpjs.add(key);
+      allResults.push(row);
+    });
+    lastMeta = responseData || {};
+    onBatch?.([...allResults], lastMeta);
+    return pageResults;
+  };
+
+  if (requestStream) {
+    const params = new URLSearchParams(baseParams);
+    params.set('order_by', orderBy);
+    params.set('stream', 'true');
+    await requestStream(params, signal, addBatch);
+    return {
+      results: sortRfbSearchResults(allResults, orderBy),
+      meta: lastMeta,
+    };
+  }
 
   while (true) {
     const params = new URLSearchParams(baseParams);
@@ -52,17 +76,9 @@ export const fetchAllRfbSearchResults = async ({ baseParams, orderBy, signal, on
     }
     pageSignatures.add(signature);
 
-    pageResults.forEach((row) => {
-      const key = row?.cnpj || `${row?.cnpj_basico || ''}:${row?.cnpj_ordem || ''}`;
-      if (key && seenCnpjs.has(key)) return;
-      if (key) seenCnpjs.add(key);
-      allResults.push(row);
-    });
-
+    addBatch(responseData);
     knownTotal = Number(responseData?.total) || allResults.length;
     knownTotalProgressive = Boolean(responseData?.progressive);
-    lastMeta = responseData || {};
-    onBatch?.([...allResults], { ...lastMeta, has_more: hasMore });
 
     if (!hasMore || pageResults.length === 0) break;
     page += 1;

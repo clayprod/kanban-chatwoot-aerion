@@ -40,3 +40,30 @@ test('carrega todos os lotes da busca RFB sem limitar o total', async () => {
   });
   expect(requestedPages).toEqual(['1', '2', '3']);
 });
+
+test('carrega todos os resultados por stream em uma única requisição', async () => {
+  const requestPage = jest.fn();
+  const requestStream = jest.fn(async (params, _signal, onMessage) => {
+    expect(params.get('stream')).toBe('true');
+    expect(params.get('order_by')).toBe('capital_desc');
+    onMessage({ type: 'batch', results: makeRows(1, 250), total: 250 });
+    onMessage({ type: 'batch', results: makeRows(251, 30), total: 280 });
+  });
+  const onBatch = jest.fn();
+
+  const { results } = await fetchAllRfbSearchResults({
+    baseParams: new URLSearchParams('uf=SP&cnae=8011101'),
+    orderBy: 'capital_desc',
+    signal: new AbortController().signal,
+    onBatch,
+    requestPage,
+    requestStream,
+  });
+
+  expect(requestStream).toHaveBeenCalledTimes(1);
+  expect(requestPage).not.toHaveBeenCalled();
+  expect(onBatch).toHaveBeenCalledTimes(2);
+  expect(results).toHaveLength(280);
+  expect(results[0].capital_social).toBe('280');
+  expect(results[279].capital_social).toBe('1');
+});

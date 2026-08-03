@@ -131,6 +131,45 @@ const requestRfbSearchPage = async (params, signal) => {
   return response.data || {};
 };
 
+const requestRfbSearchStream = async (params, signal, onMessage) => {
+  const response = await fetch(`/api/rfb/search?${params}`, {
+    credentials: 'include',
+    headers: { Accept: 'application/x-ndjson' },
+    signal,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const error = new Error(payload.error || `Erro na busca (${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
+  if (!response.body) throw new Error('O navegador não conseguiu iniciar o carregamento contínuo da busca.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const parseLine = (line) => {
+    if (!line.trim()) return;
+    const payload = JSON.parse(line);
+    if (payload.type === 'error') {
+      const error = new Error(payload.error || 'Erro na busca.');
+      error.status = payload.status || 500;
+      throw error;
+    }
+    if (payload.type === 'batch') onMessage(payload);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    lines.forEach(parseLine);
+    if (done) break;
+  }
+  parseLine(buffer);
+};
+
 const VIEW_LABELS = {
   Overview: 'Gestão de Leads',
   Board: 'Funil',
@@ -9181,6 +9220,7 @@ function App() {
         orderBy: rfbOrderBy,
         signal: controller.signal,
         requestPage: requestRfbSearchPage,
+        requestStream: requestRfbSearchStream,
         onBatch: (loadedResults) => {
           if (rfbSearchAbortRef.current !== controller) return;
           setRfbResults(loadedResults);
@@ -9208,9 +9248,8 @@ function App() {
       } catch {}
     } catch (requestError) {
       if (requestError?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
-      const status = requestError.response?.status;
       const message = requestError.response?.data?.error || requestError.message || 'Erro na busca.';
-      setRfbError(status === 504 ? 'Tempo limite excedido — refine o perfil e tente novamente.' : message);
+      setRfbError(message);
       setRfbResults([]);
       setRfbTotal(0);
     } finally {
@@ -23834,6 +23873,7 @@ function App() {
                   orderBy: ob,
                   signal: controller.signal,
                   requestPage: requestRfbSearchPage,
+                  requestStream: requestRfbSearchStream,
                   onBatch: (loadedResults) => {
                     if (rfbSearchAbortRef.current !== controller) return;
                     setRfbResults(loadedResults);
@@ -23861,13 +23901,8 @@ function App() {
                 } catch {}
               } catch (e) {
                 if (e?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
-                const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
-                setRfbError(
-                  status === 504
-                    ? 'Tempo limite excedido — filtre por UF, use só CNAE principal, ou afunile porte/capital.'
-                    : msg
-                );
+                setRfbError(msg);
                 // Limpa resultados antigos pra não confundir com a busca que falhou
                 setRfbResults([]);
                 setRfbTotal(0);

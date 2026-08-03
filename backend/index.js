@@ -21584,6 +21584,7 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_min_anos = '', abertura_max_anos = '',
       page = '1', page_size = '10',
       order_by = 'capital_desc',
+      stream = 'false',
       known_total = '',  // client passes cached total on page>1 to skip count query
       known_total_progressive = 'false',
     } = req.query;
@@ -22145,7 +22146,7 @@ app.get('/api/rfb/search', async (req, res) => {
     // Os resultados são re-ordenados em JS pelo campo solicitado — evita full sort no PG para
     // buscas amplas (ex: "elg" → 28K matches → ORDER BY razao_social forçaria sort de 28K rows).
     const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0`;
-    const dataQuery = `
+    const selectQuery = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
           e.cnpj_basico, e.cnpj_ordem,
@@ -22192,6 +22193,90 @@ app.get('/api/rfb/search', async (req, res) => {
            FROM rfb_cnaes c2
            WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
         ${baseQuery}
+      `;
+
+    // Carregamento completo: um cursor mantém o plano rápido sem ORDER BY e continua
+    // exatamente do ponto anterior. Isso evita a regressão de ordenar milhões de linhas
+    // por CNPJ e também o custo quadrático de reler páginas anteriores com OFFSET.
+    // Cada lote vira uma linha NDJSON, mantendo o proxy e a UI ativos durante a busca.
+    if (stream === 'true') {
+      const client = await pool.connect();
+      let inTransaction = false;
+      let streamFinished = false;
+      const STREAM_BATCH_SIZE = 250;
+      const timeoutMessage = 'A busca excedeu o tempo limite. Tente usar apenas CNAE principal, selecionar um município ou afunilar porte, capital ou abertura.';
+      const writeNdjson = (payload) => new Promise((resolve) => {
+        if (res.destroyed || res.writableEnded) return resolve(false);
+        const chunk = `${JSON.stringify(payload)}\n`;
+        if (res.write(chunk)) return resolve(true);
+        const cleanup = () => {
+          res.off('drain', onDrain);
+          res.off('close', onClose);
+        };
+        const onDrain = () => { cleanup(); resolve(true); };
+        const onClose = () => { cleanup(); resolve(false); };
+        res.once('drain', onDrain);
+        res.once('close', onClose);
+      });
+
+      res.status(200);
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders?.();
+
+      try {
+        await client.query('BEGIN READ ONLY');
+        inTransaction = true;
+        await client.query(`SET LOCAL statement_timeout = '120s'; SET LOCAL random_page_cost = 1.0; SET LOCAL work_mem = '64MB'; SET LOCAL max_parallel_workers_per_gather = 0`);
+        await client.query(`DECLARE rfb_search_all NO SCROLL CURSOR FOR ${ctePrefix} ${selectQuery}`, params);
+
+        let streamedTotal = 0;
+        while (!res.destroyed && !res.writableEnded) {
+          const batch = await client.query(`FETCH FORWARD ${STREAM_BATCH_SIZE} FROM rfb_search_all`);
+          if (batch.rows.length === 0) break;
+
+          for (const row of batch.rows) {
+            const first = (row.socios_nomes || '').split(' · ')[0];
+            row.primeiro_socio = first.replace(/\s*\(.*\)\s*$/, '').trim() || null;
+          }
+          streamedTotal += batch.rows.length;
+          const writable = await writeNdjson({ type: 'batch', results: batch.rows, total: streamedTotal });
+          if (!writable) break;
+        }
+
+        await client.query('CLOSE rfb_search_all');
+        await client.query('COMMIT');
+        inTransaction = false;
+        if (!res.destroyed && !res.writableEnded) {
+          await writeNdjson({ type: 'done', total: streamedTotal });
+          streamFinished = true;
+          res.end();
+        }
+      } catch (error) {
+        if (inTransaction) await client.query('ROLLBACK').catch(() => {});
+        inTransaction = false;
+        const timedOut = error?.code === '57014' || /statement timeout|canceling statement/i.test(error?.message || '');
+        console.error('[rfb/search/stream] Erro:', error.message);
+        if (!res.destroyed && !res.writableEnded) {
+          await writeNdjson({
+            type: 'error',
+            status: timedOut ? 504 : 500,
+            error: timedOut ? timeoutMessage : (error.message || 'Erro interno na busca'),
+          });
+          streamFinished = true;
+          res.end();
+        }
+      } finally {
+        if (inTransaction) await client.query('ROLLBACK').catch(() => {});
+        client.release();
+        if (!streamFinished && !res.destroyed && !res.writableEnded) res.end();
+      }
+      return;
+    }
+
+    const dataQuery = `
+        ${selectQuery}
         ORDER BY ${paginationOrderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
@@ -22306,7 +22391,7 @@ app.get('/api/rfb/search', async (req, res) => {
     const timedOut = err?.code === '57014' || /statement timeout|canceling statement/i.test(err?.message || '');
     res.status(timedOut ? 504 : 500).json({
       error: timedOut
-        ? 'A busca excedeu o tempo limite. Tente filtrar por UF, usar CNAE principal apenas, ou reduzir porte/capital/abertura.'
+        ? 'A busca excedeu o tempo limite. Tente usar apenas CNAE principal, selecionar um município ou afunilar porte, capital ou abertura.'
         : (err.message || 'Erro interno na busca'),
     });
   }
