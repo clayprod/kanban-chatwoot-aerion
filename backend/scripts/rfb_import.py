@@ -44,7 +44,13 @@ def normalize_uf(val):
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-load_dotenv(Path(__file__).parent.parent / '.env')
+ENV_PATH = Path(__file__).parent.parent / '.env'
+try:
+    load_dotenv(ENV_PATH)
+except UnicodeDecodeError:
+    # Alguns ambientes Windows mantêm o .env em cp1252. A checagem/importação
+    # não deve falhar antes de começar por causa de um comentário acentuado.
+    load_dotenv(ENV_PATH, encoding='cp1252')
 
 BASE_URL   = 'https://arquivos.receitafederal.gov.br/index.php/s/gn672Ad4CF8N6TK?dir=/Dados/Cadastros/CNPJ'
 NEXTCLOUD  = 'https://arquivos.receitafederal.gov.br'
@@ -303,6 +309,13 @@ def import_csv(conn, csv_path, table):
             while len(row) < n:
                 row.append('')
             row = [(v.replace('\x00', '').strip() or None) if v else None for v in row[:n]]
+            # CNPJ alfanumérico: as partes continuam sendo texto. Apenas
+            # canonicalizamos letras para maiúsculas; nunca convertemos para número.
+            for cnpj_col in ('cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'cnpj_ou_cpf_do_socio'):
+                if cnpj_col in cols:
+                    cnpj_idx = cols.index(cnpj_col)
+                    if row[cnpj_idx]:
+                        row[cnpj_idx] = row[cnpj_idx].upper()
             # Normaliza UF numérico → sigla (ex: '08' → 'ES')
             if base_table == 'rfb_estabelecimentos':
                 uf_idx = cols.index('uf') if 'uf' in cols else -1
@@ -405,6 +418,11 @@ def check_remote_updates(conn, dev_limit):
     already_imported = load_imported_files(conn)
     missing = []
     changed = []
+    remote_period = None
+
+    if selected:
+        period_match = re.search(r'(\d{4}-\d{2})', selected[0].get('href', ''))
+        remote_period = period_match.group(1) if period_match else None
 
     for z in selected:
         filename = Path(z['href']).name
@@ -433,6 +451,7 @@ def check_remote_updates(conn, dev_limit):
         'has_updates': bool(missing or changed),
         'suggested_mode': suggested_mode,
         'remote_files': len(selected),
+        'remote_period': remote_period,
         'tracked_files': len(already_imported),
         'missing_count': len(missing),
         'changed_count': len(changed),

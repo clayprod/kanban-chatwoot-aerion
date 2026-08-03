@@ -105,6 +105,13 @@ import NotificationsView from './NotificationsView';
 import { registerPushServiceWorker } from './pushClient';
 import { typeLabel } from './notificationCatalog';
 import {
+  formatCnpj,
+  isCnpjFormat,
+  isCnpjRoot,
+  normalizeCnpj,
+  normalizeFiscalIdentifier,
+} from './cnpj';
+import {
   compareContactsByOldestInteraction,
   compareContactsByReminder,
   formatDateTimeLocalInSaoPaulo,
@@ -2593,6 +2600,7 @@ const getContactSearchText = (contact) => {
     attrs.Funil_Vendas,
     attrs.Prioridade,
     attrs.Valor_Oportunidade,
+    attrs.CNPJ_CPF,
     attrs.CNPJ,
     attrs.Cnpj,
     attrs.cnpj,
@@ -2607,6 +2615,16 @@ const contactMatchesQuery = (contact, rawQuery) => {
   const query = normalizeText(rawQuery).trim();
   if (!query) return true;
   if (getContactSearchText(contact).includes(query)) return true;
+  const queryFiscalId = normalizeFiscalIdentifier(rawQuery);
+  if (queryFiscalId.length >= 3) {
+    const fiscalFields = [
+      contact?.custom_attributes?.CNPJ_CPF,
+      contact?.custom_attributes?.CNPJ,
+      contact?.custom_attributes?.Cnpj,
+      contact?.custom_attributes?.cnpj,
+    ].filter(Boolean).map(normalizeFiscalIdentifier);
+    if (fiscalFields.some((value) => value.includes(queryFiscalId))) return true;
+  }
   const queryDigits = String(rawQuery || '').replace(/\D/g, '');
   if (queryDigits.length < 3) return false;
   const digitFields = [
@@ -2645,6 +2663,8 @@ const licitacaoMatchesQuery = (item, rawQuery) => {
   const query = normalizeText(rawQuery).trim();
   if (!query) return true;
   if (getLicitacaoSearchText(item).includes(query)) return true;
+  const queryFiscalId = normalizeFiscalIdentifier(rawQuery);
+  if (queryFiscalId.length >= 3 && normalizeCnpj(item?.orgao_cnpj).includes(queryFiscalId)) return true;
   const queryDigits = String(rawQuery || '').replace(/\D/g, '');
   if (queryDigits.length < 3) return false;
   const digitFields = [
@@ -5641,7 +5661,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="min-w-0">
                 <label className="mb-1.5 block text-xs font-medium text-muted">CNPJ do órgão</label>
-                <input className={`${input} w-full text-xs`} placeholder="00.000.000/0000-00"
+                <input className={`${input} w-full text-xs`} placeholder="12.ABC.345/01DE-35"
                   value={filtros.orgao_cnpj} onChange={e => setFiltros({ ...filtros, orgao_cnpj: e.target.value })} />
               </div>
               <div className="min-w-0">
@@ -8168,7 +8188,39 @@ function App() {
 
   // ── Busca Lead B2B (RFB Local) ──────────────────────────────
   const [rfbStatus, setRfbStatus] = useState(null); // null=carregando, false=não importado, objeto=importado
-  const [rfbFilters, setRfbFilters] = useState(() => { const _rfbDef = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], cnaeNot: [], situacao: ['2'], porte: '', natureza: [] }; try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); const saved = s.filters || {}; const sit = saved.situacao; const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']); const cn = saved.cnae; const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []); const cnn = saved.cnaeNot; const cnaeNot = Array.isArray(cnn) ? cnn : []; const nat = saved.natureza; const natureza = Array.isArray(nat) ? nat : (nat ? [nat] : []); return { ..._rfbDef, ...saved, situacao, cnae, cnaeNot, natureza }; } catch { return _rfbDef; } });
+  const [rfbFilters, setRfbFilters] = useState(() => {
+    const defaults = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], cnaeNot: [], situacao: ['2'], porte: '', natureza: [] };
+    try {
+      const stored = JSON.parse(localStorage.getItem('rfb_search') || '{}');
+      const saved = stored.filters || {};
+      const sit = saved.situacao;
+      const situacao = Array.isArray(sit) ? sit : (sit ? [sit] : ['2']);
+      const cn = saved.cnae;
+      const cnae = Array.isArray(cn) ? cn : (cn ? [cn] : []);
+      const cnn = saved.cnaeNot;
+      const cnaeNot = Array.isArray(cnn) ? cnn : [];
+      const nat = saved.natureza;
+      const natureza = Array.isArray(nat) ? nat : (nat ? [nat] : []);
+      const legacyCnpj = String(saved.cnpj || '').trim();
+      const normalizedLegacyCnpj = normalizeCnpj(legacyCnpj);
+      const moveLegacyCnpjToNome = /[A-Za-zÀ-ÿ]/.test(legacyCnpj)
+        && !isCnpjRoot(normalizedLegacyCnpj)
+        && !isCnpjFormat(normalizedLegacyCnpj)
+        && !String(saved.nome || '').trim();
+      return {
+        ...defaults,
+        ...saved,
+        cnpj: moveLegacyCnpjToNome ? '' : saved.cnpj,
+        nome: moveLegacyCnpjToNome ? legacyCnpj : saved.nome,
+        situacao,
+        cnae,
+        cnaeNot,
+        natureza,
+      };
+    } catch {
+      return defaults;
+    }
+  });
   const [rfbOps, setRfbOps] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.ops || { nome: 'contains', socio: 'contains' }; } catch { return { nome: 'contains', socio: 'contains' }; } });
   const [rfbCapitalRange, setRfbCapitalRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.capitalRange || [0, 0]; } catch { return [0, 0]; } });
   const [rfbAberturaRange, setRfbAberturaRange] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.aberturaRange || [0, 0]; } catch { return [0, 0]; } });
@@ -9395,10 +9447,10 @@ function App() {
           setModalidadeOptions(Array.isArray(modalidadeResult.value.data) ? modalidadeResult.value.data.filter(item => item && (item.id || item.nome)) : []);
         }
 
-        const orgaoCnpjDigits = String(newOpportunityForm.orgao_cnpj || '').replace(/\D/g, '');
-        if (orgaoCnpjDigits) {
+        const orgaoCnpj = normalizeCnpj(newOpportunityForm.orgao_cnpj);
+        if (isCnpjFormat(orgaoCnpj)) {
           // Tentar PNCP primeiro
-          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${orgaoCnpjDigits}/unidades`, {
+          const unitsResponse = await axios.get(`/api/licitacoes/pncp/orgaos/${encodeURIComponent(orgaoCnpj)}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           const pncpUnits = Array.isArray(unitsResponse.data) ? unitsResponse.data : [];
@@ -9411,7 +9463,7 @@ function App() {
               // Fallback para Compras.gov se PNCP não retornar unidades
               try {
                 const comprasResponse = await axios.get('/api/licitacoes/compras/uasgs', {
-                  params: { cnpj: orgaoCnpjDigits },
+                  params: { cnpj: orgaoCnpj },
                 });
                 const comprasUnits = Array.isArray(comprasResponse.data) ? comprasResponse.data.map(u => ({
                   codigo: u.codigoUasg || u.codigo,
@@ -9558,15 +9610,15 @@ function App() {
     if (!authStatus.authenticated || activeView !== 'Licitações') {
       return;
     }
-    const cnpj = String(pncpSearchFilters.orgao_cnpj || '').replace(/\D/g, '');
+    const cnpj = normalizeCnpj(pncpSearchFilters.orgao_cnpj);
     const uasgQuery = String(pncpUasgLookupQuery || '').trim();
 
     let cancelled = false;
     const loadUnits = async () => {
       setPncpUasgLookupLoading(true);
       try {
-        if (cnpj) {
-          const response = await axios.get(`/api/licitacoes/pncp/orgaos/${cnpj}/unidades`, {
+        if (isCnpjFormat(cnpj)) {
+          const response = await axios.get(`/api/licitacoes/pncp/orgaos/${encodeURIComponent(cnpj)}/unidades`, {
             params: { tamanhoPagina: 200 },
           });
           if (!cancelled) {
@@ -11597,7 +11649,7 @@ function App() {
     const merged = new Map();
     items.forEach((item, index) => {
       const purchaseKey = item.orgao_cnpj && item.ano && item.sequencial
-        ? `${String(item.orgao_cnpj).replace(/\D/g, '')}/${item.ano}/${Number(item.sequencial)}`
+        ? `${normalizeCnpj(item.orgao_cnpj)}/${item.ano}/${Number(item.sequencial)}`
         : null;
       const key = purchaseKey || item.pncp_key || item.url || `row-${index}`;
       const current = merged.get(key);
@@ -11607,7 +11659,8 @@ function App() {
       }
       const fornecedores = [...(current.fornecedores || []), ...(item.fornecedores || [])]
         .filter((row, supplierIndex, rows) => rows.findIndex(candidate => (
-          (row?.ni && candidate?.ni === row.ni) || (!row?.ni && row?.nome && candidate?.nome === row.nome)
+          (row?.ni && normalizeFiscalIdentifier(candidate?.ni) === normalizeFiscalIdentifier(row.ni))
+          || (!row?.ni && row?.nome && candidate?.nome === row.nome)
         )) === supplierIndex);
       merged.set(key, {
         ...current,
@@ -12175,16 +12228,16 @@ function App() {
     setPncpOutcomeDossierTarget(item || null);
     setPncpOutcomeDossier(null);
     setPncpOutcomeDossierError('');
-    const cnpj = String(item?.orgao_cnpj || '').replace(/\D/g, '');
+    const cnpj = normalizeCnpj(item?.orgao_cnpj);
     const ano = String(item?.ano || '').trim();
     const sequencial = String(item?.sequencial || '').trim();
-    if (!cnpj || !ano || !sequencial) {
+    if (!isCnpjFormat(cnpj) || !ano || !sequencial) {
       setPncpOutcomeDossierError('Este registro não contém os identificadores necessários para abrir o dossiê no PNCP.');
       return;
     }
     setPncpOutcomeDossierLoading(true);
     try {
-      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/dossier`, {
+      const response = await axios.get(`/api/licitacoes/pncp/compra/${encodeURIComponent(cnpj)}/${ano}/${sequencial}/dossier`, {
         params: { q: pncpOutcomeFiltersRef.current.q || undefined },
       });
       setPncpOutcomeDossier(response.data);
@@ -12676,10 +12729,10 @@ function App() {
   };
 
   const fetchAllPncpItemsForImport = async (item) => {
-    const cnpj = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
+    const cnpj = normalizeCnpj(item?.orgao?.cnpj);
     const ano = String(item?.ano || '').trim();
     const sequencial = String(item?.numero_sequencial || '').trim();
-    if (!cnpj || !ano || !sequencial) {
+    if (!isCnpjFormat(cnpj) || !ano || !sequencial) {
       return [];
     }
 
@@ -12688,7 +12741,7 @@ function App() {
     const allItems = [];
 
     for (let page = 1; page <= maxPages; page += 1) {
-      const response = await axios.get(`/api/licitacoes/pncp/compra/${cnpj}/${ano}/${sequencial}/itens`, {
+      const response = await axios.get(`/api/licitacoes/pncp/compra/${encodeURIComponent(cnpj)}/${ano}/${sequencial}/itens`, {
         params: {
           pagina: page,
           tamanhoPagina: pageSize,
@@ -14746,7 +14799,8 @@ function App() {
   const runGlobalSearchToRfb = useCallback(() => {
     const term = globalSearchQ.trim();
     if (!term) return;
-    const isCnpj = /^[\d./-]{11,}$/.test(term);
+    const normalized = normalizeCnpj(term);
+    const isCnpj = isCnpjFormat(normalized) || isCnpjRoot(normalized);
     setRfbFilters((prev) => ({ ...prev, cnpj: isCnpj ? term : '', nome: isCnpj ? '' : term }));
     setActiveView('Busca Lead B2B');
     setRfbPendingSearch(true);
@@ -15487,7 +15541,7 @@ function App() {
                             >
                               <DocumentMagnifyingGlassIcon className="h-4 w-4 shrink-0 text-muted" />
                               <span className="min-w-0 flex-1 truncate">
-                                {/^[\d./-]{11,}$/.test(globalSearchQ.trim())
+                                {(isCnpjFormat(normalizeCnpj(globalSearchQ.trim())) || isCnpjRoot(normalizeCnpj(globalSearchQ.trim())))
                                   ? 'Consultar CNPJ na Receita'
                                   : 'Buscar empresa na Receita (B2B)'}
                               </span>
@@ -18443,7 +18497,7 @@ function App() {
                           </div>
                           <div className="min-w-0">
                             <label className="mb-1 block text-xs font-medium text-muted">CNPJ do órgão</label>
-                            <input className={`${input} w-full text-sm`} placeholder="00.000.000/0000-00" value={newOpportunityForm.orgao_cnpj || ''} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, orgao_cnpj: event.target.value, uasg_codigo: '', uasg_nome: '' }))} />
+                            <input className={`${input} w-full text-sm`} placeholder="12.ABC.345/01DE-35" value={newOpportunityForm.orgao_cnpj || ''} onChange={(event) => setNewOpportunityForm(prev => ({ ...prev, orgao_cnpj: event.target.value, uasg_codigo: '', uasg_nome: '' }))} />
                           </div>
                           <div className="min-w-0 space-y-1.5">
                             <label className="block text-xs font-medium text-muted">UASG</label>
@@ -20293,7 +20347,7 @@ function App() {
                         <label className="mb-1.5 block text-xs font-medium text-muted">CNPJ do órgão</label>
                         <input
                           className={`${input} w-full text-xs`}
-                          placeholder="00.000.000/0000-00"
+                          placeholder="12.ABC.345/01DE-35"
                           value={pncpOutcomeFilters.orgao_cnpj}
                           onChange={(event) => setPncpOutcomeFilters(prev => ({ ...prev, orgao_cnpj: event.target.value }))}
                         />
@@ -23552,10 +23606,7 @@ function App() {
 
           {activeView === 'Busca Lead B2B' && (() => { // eslint-disable-line no-extra-parens
             // ── Helpers ──────────────────────────────────────────────────
-            const fmtCNPJ = (v) => {
-              const d = String(v || '').replace(/[^\d]/g, '').padStart(14, '0').slice(-14);
-              return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12,14)}`;
-            };
+            const fmtCNPJ = formatCnpj;
             const fmtCapital = (v) => {
               const n = Number(String(v || '').replace(',', '.'));
               if (!n) return '—';
@@ -23658,7 +23709,7 @@ function App() {
             };
 
             const handleRfbImport = async (row, { stage, labels } = {}) => {
-              const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
+              const cleanCNPJ = normalizeCnpj(row.cnpj);
               const socioName = rfbImportDialogSocio.trim();
               const partes = socioName ? socioName.split(/\s+/) : [];
               const primeiro_nome = socioName ? partes[0] : (row.razao_social || '');
@@ -24855,7 +24906,7 @@ function App() {
                                 <input
                                   type="text"
                                   className={fieldInput}
-                                  placeholder="00.000.000/0000-00"
+                                  placeholder="12.ABC.345/01DE-35"
                                   value={rfbFilters.cnpj}
                                   onChange={e => setRfbFilters(p => ({ ...p, cnpj: e.target.value }))}
                                   onKeyDown={e => { if (e.key === 'Enter') handleRfbSearch(1); }}
@@ -25375,7 +25426,11 @@ function App() {
                           <div className="font-medium text-primary">Busca paginada, sem limite de 100 resultados</div>
                           <div className="text-xs text-muted mt-0.5">
                             Em buscas amplas, o total exato não é calculado de uma vez para manter a resposta rápida.
-                            Use <strong className="text-ink">Próximo</strong> para continuar; {rfbOrderScope === 'global' ? 'a ordenação por capital considera toda a base, não só a página atual.' : 'a ordenação global será ativada quando o índice terminar de ser preparado.'}
+                            Use <strong className="text-ink">Próximo</strong> para continuar; {rfbOrderScope === 'global'
+                              ? 'a ordenação por capital considera toda a base, não só a página atual.'
+                              : rfbOrderScope === 'page_fallback'
+                                ? 'a ordenação global será ativada quando o índice terminar de ser preparado.'
+                                : 'para manter a busca rápida com estes filtros, a ordenação por capital é aplicada dentro de cada página.'}
                           </div>
                         </div>
                       </div>
@@ -25524,7 +25579,7 @@ function App() {
                                 {Array.isArray(filiais) && filiais.length > 0 && (
                                   <div className="space-y-1.5">
                                     {filiais.map(f => {
-                                      const fCNPJ = String(f.cnpj || '').replace(/\D/g, '');
+                                      const fCNPJ = normalizeCnpj(f.cnpj);
                                       const fDup = Boolean(leadExistingCNPJs[fCNPJ]);
                                       return (
                                         <div key={fCNPJ} className="flex flex-wrap items-center gap-2 rounded-[11px] border border-line bg-surf px-3 py-2 text-xs">
@@ -25578,7 +25633,7 @@ function App() {
                       return (
                         <div className="space-y-2">
                           {rfbResults.map((row, idx) => {
-                            const cleanCNPJ = String(row.cnpj || '').replace(/\D/g, '');
+                            const cleanCNPJ = normalizeCnpj(row.cnpj);
                             const crmContact = leadExistingCNPJs[cleanCNPJ] || null;
                             const isDup = Boolean(crmContact);
                             const crmUrl = crmContact ? `${CHATWOOT_BASE_URL}/app/accounts/2/contacts/${crmContact.id}` : null;

@@ -10,6 +10,13 @@ const net = require('net');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const {
+  isCnpjFormat,
+  isCnpjRoot,
+  normalizeCnpj,
+  normalizeFiscalIdentifier,
+  splitCnpj,
+} = require('./cnpj');
+const {
   createNotificationTables,
   registerNotificationRoutes,
   notifyAccountUsers,
@@ -4202,10 +4209,10 @@ const rankPositiveSearchTerms = (original, terms = [], limit = 5) => {
 const getPncpRawItemKey = (item = {}) => {
   const control = item.numero_controle_pncp || item.numeroControlePNCP;
   if (control) return `control:${control}`;
-  const orgao = item.orgao_cnpj || item.cnpjOrgao || item.orgaoEntidade?.cnpj || item.cnpjOrgaoEntidade;
+  const orgao = normalizeCnpj(item.orgao_cnpj || item.cnpjOrgao || item.orgaoEntidade?.cnpj || item.cnpjOrgaoEntidade);
   const ano = item.ano || item.anoCompra;
   const sequencial = item.numero_sequencial || item.sequencialCompra || item.numeroSequencial;
-  if (orgao && ano && sequencial) return `path:${orgao}-${ano}-${sequencial}`;
+  if (isCnpjFormat(orgao) && ano && sequencial) return `path:${orgao}-${ano}-${sequencial}`;
   const url = item.item_url || item.linkSistemaOrigem || item.url;
   if (url) return `url:${url}`;
   if (item.id) return `id:${item.id}`;
@@ -4216,24 +4223,25 @@ const extractPncpCompraIdentifiers = (item = {}) => {
   const directCnpj = item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || item.orgaoEntidade?.cnpj || item.cnpjOrgaoEntidade || item.orgao?.cnpj;
   const directAno = item.ano || item.anoCompra || item.compraAno || item.year;
   const directSequencial = item.numero_sequencial || item.sequencialCompra || item.numeroSequencial || item.compraSequencial || item.sequencial;
-  if (directCnpj && directAno && directSequencial) {
+  const normalizedDirectCnpj = normalizeCnpj(directCnpj);
+  if (isCnpjFormat(normalizedDirectCnpj) && directAno && directSequencial) {
     return {
-      cnpj: String(directCnpj).replace(/\D/g, ''),
+      cnpj: normalizedDirectCnpj,
       ano: String(directAno),
       sequencial: String(directSequencial),
     };
   }
 
   const url = normalizePncpItemUrl(item.item_url || item.url || item.linkSistemaOrigem || item.links_pncp);
-  const match = String(url || '').match(/\/app\/editais\/(\d{14})\/(\d{4})\/(\d+)/);
+  const match = String(url || '').match(/\/app\/editais\/([A-Z0-9]{12}\d{2})\/(\d{4})\/(\d+)/i);
   if (match) {
-    return { cnpj: match[1], ano: match[2], sequencial: match[3] };
+    return { cnpj: normalizeCnpj(match[1]), ano: match[2], sequencial: match[3] };
   }
 
   const control = String(item.numero_controle_pncp || item.numeroControlePNCP || '').trim();
-  const controlMatch = control.match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/);
+  const controlMatch = control.match(/^([A-Z0-9]{12}\d{2})-\d+-(\d+)\/(\d{4})$/i);
   if (controlMatch) {
-    return { cnpj: controlMatch[1], ano: controlMatch[3], sequencial: String(Number(controlMatch[2])) };
+    return { cnpj: normalizeCnpj(controlMatch[1]), ano: controlMatch[3], sequencial: String(Number(controlMatch[2])) };
   }
 
   return { cnpj: '', ano: '', sequencial: '' };
@@ -4241,9 +4249,9 @@ const extractPncpCompraIdentifiers = (item = {}) => {
 
 // Número de controle PNCP de compra no formato "07854402000100-1-000001/2024".
 const parsePncpCompraControlNumber = (value = '') => {
-  const match = String(value).trim().match(/^(\d{14})-\d+-(\d+)\/(\d{4})$/);
+  const match = String(value).trim().match(/^([A-Z0-9]{12}\d{2})-\d+-(\d+)\/(\d{4})$/i);
   if (!match) return null;
-  return { cnpj: match[1], sequencial: String(Number(match[2])), ano: match[3] };
+  return { cnpj: normalizeCnpj(match[1]), sequencial: String(Number(match[2])), ano: match[3] };
 };
 
 // #8: allowlists curadas por vertical. As listas abaixo são a SEMENTE (nunca
@@ -4508,9 +4516,9 @@ const normalizePncpItemUrl = (itemUrl) => {
 // fallback quando o item não trouxe item_url/linkSistemaOrigem (senão o card
 // fica sem link mesmo com o dado existindo no PNCP).
 const buildPncpEditalUrl = ({ cnpj, ano, sequencial } = {}) => {
-  const c = String(cnpj || '').replace(/\D/g, '');
-  if (!c || c.length !== 14 || !ano || !sequencial) return null;
-  return `https://pncp.gov.br/app/editais/${c}/${ano}/${sequencial}`;
+  const c = normalizeCnpj(cnpj);
+  if (!isCnpjFormat(c) || !ano || !sequencial) return null;
+  return `https://pncp.gov.br/app/editais/${encodeURIComponent(c)}/${ano}/${sequencial}`;
 };
 
 // Reintenta erros transitórios do PNCP (reset/timeout/5xx) com backoff. NÃO
@@ -4789,7 +4797,7 @@ const collectPncpFornecedores = (dossier = {}) => {
     const nome = row.nomeRazaoSocialFornecedor || row.razaoSocialFornecedor
       || nested.nomeRazaoSocialFornecedor || nested.razaoSocialFornecedor || null;
     if (!ni && !nome) return;
-    const normalizedNi = ni ? String(ni).replace(/\D/g, '') : '';
+    const normalizedNi = ni ? normalizeFiscalIdentifier(ni) : '';
     const normalizedNome = nome ? String(nome).trim() : '';
     const key = normalizedNi || normalizeSearchText(normalizedNome);
     if (!key) return;
@@ -4835,7 +4843,10 @@ const buildPncpResultCachePayload = (dossier, query = '') => {
   const hasValidIds = dossier?.ids?.cnpj && dossier?.ids?.ano && dossier?.ids?.sequencial;
   return {
     pncp_key: hasValidIds ? `${dossier.ids.cnpj}/${dossier.ids.ano}/${dossier.ids.sequencial}` : null,
-    orgao_cnpj: item.orgao?.cnpj || dossier?.ids?.cnpj || null,
+    orgao_cnpj: (() => {
+      const value = normalizeCnpj(item.orgao?.cnpj || dossier?.ids?.cnpj);
+      return isCnpjFormat(value) ? value : null;
+    })(),
     orgao_nome: item.orgao?.nome || compra?.orgaoEntidade?.razaoSocial || null,
     ano: Number(dossier?.ids?.ano) || null,
     sequencial: Number(dossier?.ids?.sequencial) || null,
@@ -8710,7 +8721,9 @@ app.get('/api/licitacoes/pncp/orgaos', async (req, res) => {
 
 app.get('/api/licitacoes/pncp/orgaos/:cnpj/unidades', async (req, res) => {
   try {
-    const data = await fetchPncp(`/v1/orgaos/${req.params.cnpj}/unidades`, {
+    const cnpj = normalizeCnpj(req.params.cnpj);
+    if (!isCnpjFormat(cnpj)) return res.status(400).json({ error: 'CNPJ do órgão inválido' });
+    const data = await fetchPncp(`/v1/orgaos/${encodeURIComponent(cnpj)}/unidades`, {
       pagina: req.query.pagina || 1,
       tamanhoPagina: req.query.tamanhoPagina || 100,
     });
@@ -8746,7 +8759,9 @@ app.get('/api/licitacoes/pncp/catalogos', async (req, res) => {
 
 app.get('/api/licitacoes/pncp/orgaos/:cnpj/compras', async (req, res) => {
   try {
-    const data = await fetchPncp(`/v1/orgaos/${req.params.cnpj}/compras`, {
+    const cnpj = normalizeCnpj(req.params.cnpj);
+    if (!isCnpjFormat(cnpj)) return res.status(400).json({ error: 'CNPJ do órgão inválido' });
+    const data = await fetchPncp(`/v1/orgaos/${encodeURIComponent(cnpj)}/compras`, {
       pagina: req.query.pagina || 1,
       tamanhoPagina: req.query.tamanhoPagina || 30,
       dataInicial: req.query.dataInicial,
@@ -8772,7 +8787,7 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   numero_controle_pncp: item.numero_controle_pncp || item.numeroControlePNCP,
   numero_sequencial: ids.sequencial || item.numero_sequencial,
   ano: ids.ano || item.ano,
-  orgao_cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || '',
+  orgao_cnpj: ids.cnpj || normalizeCnpj(item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj),
   situacao: {
     id: item.situacao_id || item.situacaoCompraId || item.situacaoId,
     nome: item.situacao_nome || item.situacaoCompraDescricao || item.situacaoCompraNome || item.situacaoNome,
@@ -8820,7 +8835,7 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   modo_disputa_unresolved: item.modo_disputa_unresolved === true || undefined,
   titulo: item.title || item.titulo || item.objetoCompra || item.numeroControlePNCP || 'Sem titulo',
   orgao: {
-    cnpj: ids.cnpj || item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || item.orgaoEntidade?.cnpj || '',
+    cnpj: ids.cnpj || normalizeCnpj(item.orgao_cnpj || item.cnpjOrgao || item.orgaoCnpj || item.orgaoEntidade?.cnpj),
     nome: item.orgao_nome || item.nomeOrgao || item.orgaoNome || item.razaoSocialOrgao || item.orgaoEntidade?.razaoSocial || '',
     id: item.orgao_id || item.idOrgao || item.orgaoId || '',
   },
@@ -9406,10 +9421,11 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const mappedStatus = normalizedStatus === 'suspenso' ? 'suspensa' : status;
     const orgaoFilterRaw = String(orgao_cnpj || '').trim();
     const unidadeFilterRaw = String(unidade_codigo || '').trim();
-    const orgaoDigits = orgaoFilterRaw.replace(/\D/g, '');
+    const orgaoCnpjFilter = normalizeCnpj(orgaoFilterRaw);
+    const hasOrgaoCnpjFilter = isCnpjRoot(orgaoCnpjFilter) || isCnpjFormat(orgaoCnpjFilter);
     const unidadeDigitsMatch = unidadeFilterRaw.match(/\d{4,}/);
     const entityQuerySeed = unidadeDigitsMatch?.[0]
-      || (orgaoDigits.length >= 8 ? orgaoDigits : '')
+      || (hasOrgaoCnpjFilter ? orgaoCnpjFilter : '')
       || unidadeFilterRaw
       || orgaoFilterRaw
       || '';
@@ -10033,7 +10049,9 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     const rawOrgaoFilter = String(orgao_cnpj || '').trim();
     const rawUnidadeFilter = String(unidade_codigo || '').trim();
-    const normalizedOrgaoDigitsFilter = rawOrgaoFilter.replace(/\D/g, '');
+    const normalizedOrgaoCnpjFilter = normalizeCnpj(rawOrgaoFilter);
+    const hasNormalizedOrgaoCnpjFilter = isCnpjRoot(normalizedOrgaoCnpjFilter)
+      || isCnpjFormat(normalizedOrgaoCnpjFilter);
     const normalizedOrgaoTextFilter = normalizeSearchText(rawOrgaoFilter).trim();
     const normalizedUnidadeTextFilter = normalizeSearchText(rawUnidadeFilter).trim();
     // Extrai apenas os dígitos do filtro de unidade para comparação numérica
@@ -10050,16 +10068,16 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
         });
       }
       allItems = allItems.filter(item => {
-        const orgaoCnpjItem = String(item?.orgao?.cnpj || '').replace(/\D/g, '');
+        const orgaoCnpjItem = normalizeCnpj(item?.orgao?.cnpj);
         const orgaoNomeItem = normalizeSearchText(item?.orgao?.nome || '').trim();
         const unidadeCodigoItem = String(item?.unidade?.codigo || '').trim();
         const unidadeCodigoDigits = unidadeCodigoItem.replace(/\D/g, '');
         const unidadeNomeItem = normalizeSearchText(item?.unidade?.nome || '').trim();
 
         const matchesOrgao = !normalizedOrgaoTextFilter || (
-          (normalizedOrgaoDigitsFilter.length >= 8 && orgaoCnpjItem === normalizedOrgaoDigitsFilter)
+          (hasNormalizedOrgaoCnpjFilter && orgaoCnpjItem === normalizedOrgaoCnpjFilter)
           || orgaoNomeItem.includes(normalizedOrgaoTextFilter)
-          || (normalizedOrgaoDigitsFilter.length >= 3 && orgaoCnpjItem.includes(normalizedOrgaoDigitsFilter))
+          || (hasNormalizedOrgaoCnpjFilter && orgaoCnpjItem.includes(normalizedOrgaoCnpjFilter))
         );
 
         // Comparação mais flexível para código de unidade
@@ -14463,8 +14481,10 @@ app.get('/api/licitacoes/pncp/search/ufs', (req, res) => {
 // Buscar detalhes de uma compra específica
 app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial', async (req, res) => {
   try {
-    const { cnpj, ano, sequencial } = req.params;
-    const data = await fetchPncpConsulta(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`);
+    const { ano, sequencial } = req.params;
+    const cnpj = normalizeCnpj(req.params.cnpj);
+    if (!isCnpjFormat(cnpj)) return res.status(400).json({ error: 'CNPJ do órgão inválido' });
+    const data = await fetchPncpConsulta(`/v1/orgaos/${encodeURIComponent(cnpj)}/compras/${ano}/${sequencial}`);
     res.json(data);
   } catch (error) {
     console.error('Error fetching PNCP compra details:', error);
@@ -14475,7 +14495,9 @@ app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial', async (req, res) =
 // Buscar itens de uma compra específica
 app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/itens', async (req, res) => {
   try {
-    const { cnpj, ano, sequencial } = req.params;
+    const { ano, sequencial } = req.params;
+    const cnpj = normalizeCnpj(req.params.cnpj);
+    if (!isCnpjFormat(cnpj)) return res.status(400).json({ error: 'CNPJ do órgão inválido' });
     const data = await fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
       pagina: req.query.pagina || 1,
       tamanhoPagina: req.query.tamanhoPagina || 100,
@@ -14490,8 +14512,10 @@ app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/itens', async (req, 
 // Buscar arquivos/documentos de uma compra específica
 app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/arquivos', async (req, res) => {
   try {
-    const { cnpj, ano, sequencial } = req.params;
-    const data = await fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`);
+    const { ano, sequencial } = req.params;
+    const cnpj = normalizeCnpj(req.params.cnpj);
+    if (!isCnpjFormat(cnpj)) return res.status(400).json({ error: 'CNPJ do órgão inválido' });
+    const data = await fetchPncp(`/v1/orgaos/${encodeURIComponent(cnpj)}/compras/${ano}/${sequencial}/arquivos`);
     res.json(data);
   } catch (error) {
     console.error('Error fetching PNCP compra arquivos:', error);
@@ -14507,10 +14531,10 @@ const pncpDossierInFlight = new Map(); // `${cnpj}/${ano}/${seq}` -> Promise
 
 app.get('/api/licitacoes/pncp/compra/:cnpj/:ano/:sequencial/dossier', async (req, res) => {
   try {
-    const cnpj = String(req.params.cnpj || '').replace(/\D/g, '');
+    const cnpj = normalizeCnpj(req.params.cnpj);
     const ano = String(req.params.ano || '').replace(/\D/g, '');
     const sequencial = String(Number(req.params.sequencial) || '');
-    if (!cnpj || !ano || !sequencial) {
+    if (!isCnpjFormat(cnpj) || !ano || !sequencial) {
       return res.status(400).json({ error: 'Identificadores da compra inválidos' });
     }
     const query = req.query.q || '';
@@ -14598,8 +14622,8 @@ const getPncpContratoDetalhe = async (cnpj, ano, sequencial, { priority = 'inter
 // ano/sequencial ficam nulos até o detalhe revelar a COMPRA de origem (dossiê).
 const mapPncpOutcomeSearchDoc = (raw) => {
   const docType = String(raw?.document_type || '').toLowerCase();
-  const cnpj = String(raw?.orgao_cnpj || '').replace(/\D/g, '');
-  const docIds = cnpj && raw?.ano && raw?.numero_sequencial
+  const cnpj = normalizeCnpj(raw?.orgao_cnpj);
+  const docIds = isCnpjFormat(cnpj) && raw?.ano && raw?.numero_sequencial
     ? { cnpj, ano: String(raw.ano), sequencial: String(raw.numero_sequencial) }
     : null;
   const documentKey = docIds ? `documento:${docType}:${docIds.cnpj}/${docIds.ano}/${Number(docIds.sequencial)}` : null;
@@ -14777,8 +14801,8 @@ app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
   try {
     const qText = String(req.query.q || '').trim();
     const fornecedor = String(req.query.fornecedor || '').trim();
-    const fornecedorNi = String(req.query.fornecedor_ni || '').replace(/\D/g, '');
-    const orgaoCnpj = String(req.query.orgao_cnpj || '').replace(/\D/g, '');
+    const fornecedorNi = normalizeFiscalIdentifier(req.query.fornecedor_ni);
+    const orgaoCnpj = normalizeCnpj(req.query.orgao_cnpj);
     const uf = String(req.query.uf || '').trim().toUpperCase();
     const tipo = normalizeSearchText(req.query.tipo || 'todos');
     const ordenacao = normalizeSearchText(req.query.ordenacao || 'data_desc');
@@ -14840,7 +14864,7 @@ app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
           // Só descarta quando o NI é conhecido e não bate; desconhecido fica
           // (a busca textual já restringiu pelos dígitos).
           liveItems = liveItems.filter(item => !item.fornecedor_ni
-            || String(item.fornecedor_ni).replace(/\D/g, '').includes(fornecedorNi));
+            || normalizeFiscalIdentifier(item.fornecedor_ni).includes(fornecedorNi));
         }
         // Materializa tudo que veio da busca ao vivo. Assim atas e contratos
         // continuam disponíveis se o PNCP oscilar ao trocar/voltar de página.
@@ -14912,13 +14936,13 @@ app.get('/api/licitacoes/pncp/resultados/search', async (req, res) => {
     if (fornecedorNi) {
       const p = addValue(`%${fornecedorNi}%`);
       clauses.push(`(
-        regexp_replace(coalesce(fornecedor_ni,''), '\\D', '', 'g') LIKE ${p}
-        OR regexp_replace(fornecedores::text, '\\D', '', 'g') LIKE ${p}
+        UPPER(regexp_replace(coalesce(fornecedor_ni,''), '[./[:space:]-]', '', 'g')) LIKE ${p}
+        OR UPPER(regexp_replace(fornecedores::text, '[./[:space:]-]', '', 'g')) LIKE ${p}
       )`);
     }
     if (orgaoCnpj) {
       const p = addValue(`%${orgaoCnpj}%`);
-      clauses.push(`regexp_replace(coalesce(orgao_cnpj,''), '\\D', '', 'g') LIKE ${p}`);
+      clauses.push(`UPPER(regexp_replace(coalesce(orgao_cnpj,''), '[./[:space:]-]', '', 'g')) LIKE ${p}`);
     }
     if (uf) {
       clauses.push(`uf = ${addValue(uf)}`);
@@ -14990,10 +15014,10 @@ app.post('/api/licitacoes/pncp/resultados/enrich', async (req, res) => {
     const enriched = {};
     const wanted = [];
     for (const entry of contratos) {
-      const cnpj = String(entry?.cnpj || '').replace(/\D/g, '');
+      const cnpj = normalizeCnpj(entry?.cnpj);
       const ano = String(entry?.ano || '').replace(/\D/g, '');
       const sequencial = String(entry?.sequencial || '').replace(/\D/g, '');
-      if (!/^\d{14}$/.test(cnpj) || !/^\d{4}$/.test(ano) || !sequencial) continue;
+      if (!isCnpjFormat(cnpj) || !/^\d{4}$/.test(ano) || !sequencial) continue;
       wanted.push({ key: `${cnpj}/${ano}/${Number(sequencial)}`, ids: { cnpj, ano, sequencial }, entry });
     }
     for (const item of wanted) {
@@ -15062,11 +15086,11 @@ const matchesWatchlistEntityFilters = (normalized, filters = {}) => {
   const orgaoFilter = String(filters.orgao_cnpj || '').trim();
   const unidadeFilter = String(filters.unidade_codigo || '').trim();
   if (orgaoFilter) {
-    const orgaoDigits = orgaoFilter.replace(/\D/g, '');
-    const itemCnpj = String(normalized.orgao?.cnpj || '').replace(/\D/g, '');
+    const orgaoCnpj = normalizeCnpj(orgaoFilter);
+    const itemCnpj = normalizeCnpj(normalized.orgao?.cnpj);
     const orgaoText = normalizeSearchText(orgaoFilter);
     const itemOrgaoText = normalizeSearchText(normalized.orgao?.nome || '');
-    if (!((orgaoDigits.length >= 3 && itemCnpj.includes(orgaoDigits)) || itemOrgaoText.includes(orgaoText))) {
+    if (!((orgaoCnpj.length >= 3 && itemCnpj.includes(orgaoCnpj)) || itemOrgaoText.includes(orgaoText))) {
       return false;
     }
   }
@@ -15269,9 +15293,9 @@ const extractPncpOutcomeCandidateIds = (source = {}) => {
   if (ids.cnpj && ids.ano && ids.sequencial) return ids;
 
   const serialized = JSON.stringify({ links, metadados, payload, numero_compra: source.numero_compra });
-  const urlMatch = serialized.match(/\/app\/editais\/(\d{14})\/(\d{4})\/(\d+)/);
-  if (urlMatch) return { cnpj: urlMatch[1], ano: urlMatch[2], sequencial: urlMatch[3] };
-  const controlMatch = serialized.match(/(\d{14}-\d+-(\d+)\/(\d{4}))/);
+  const urlMatch = serialized.match(/\/app\/editais\/([A-Z0-9]{12}\d{2})\/(\d{4})\/(\d+)/i);
+  if (urlMatch) return { cnpj: normalizeCnpj(urlMatch[1]), ano: urlMatch[2], sequencial: urlMatch[3] };
+  const controlMatch = serialized.match(/([A-Z0-9]{12}\d{2}-\d+-(\d+)\/(\d{4}))/i);
   if (controlMatch) return parsePncpCompraControlNumber(controlMatch[1]) || { cnpj: '', ano: '', sequencial: '' };
   return { cnpj: '', ano: '', sequencial: '' };
 };
@@ -15301,7 +15325,7 @@ const collectPncpOutcomeCandidates = async ({ limit = 20 } = {}) => {
           FROM ${LICITACAO_TABLE}
          WHERE updated_at > NOW() - INTERVAL '365 days'
            AND (
-             numero_compra ~ '^\\d{14}-\\d+-\\d+/\\d{4}$'
+             numero_compra ~* '^[A-Z0-9]{12}[0-9]{2}-[0-9]+-[0-9]+/[0-9]{4}$'
              OR links::text LIKE '%/app/editais/%'
              OR metadados::text ILIKE '%pncp%'
            )
@@ -15315,7 +15339,7 @@ const collectPncpOutcomeCandidates = async ({ limit = 20 } = {}) => {
   const candidates = new Map();
   const add = (source, metadata = {}) => {
     const ids = extractPncpOutcomeCandidateIds(source);
-    if (!/^\d{14}$/.test(String(ids.cnpj || '')) || !/^\d{4}$/.test(String(ids.ano || ''))
+    if (!isCnpjFormat(ids.cnpj) || !/^\d{4}$/.test(String(ids.ano || ''))
       || !/^\d+$/.test(String(ids.sequencial || ''))) return;
     const key = `${ids.cnpj}/${ids.ano}/${Number(ids.sequencial)}`;
     const existing = candidates.get(key);
@@ -15591,7 +15615,7 @@ const runPncpContratosAtasSyncUnlocked = async ({ windowDays = 2, maxPages = 40,
     const ata = entry.atas[0] || null;
     const row = {
       pncp_key: pncpKey,
-      orgao_cnpj: contrato?.orgaoEntidade?.cnpj || entry.ids.cnpj,
+      orgao_cnpj: normalizeCnpj(contrato?.orgaoEntidade?.cnpj || entry.ids.cnpj),
       orgao_nome: contrato?.orgaoEntidade?.razaoSocial || ata?.nomeOrgao || null,
       ano: Number(entry.ids.ano) || null,
       sequencial: Number(entry.ids.sequencial) || null,
@@ -16242,14 +16266,14 @@ const buildPcaItemStableKey = (item) => {
 // Upsert de um plano PCA do PNCP. Aceita nomes de campos variados
 // (a API ainda evolui; persistimos payload_raw como fonte canônica).
 const upsertPcaPlano = async (planoRaw) => {
-  const orgaoCnpj = String(pickFirst(planoRaw, [
+  const orgaoCnpj = normalizeCnpj(pickFirst(planoRaw, [
     'orgaoEntidadeCnpj', 'cnpjOrgao', 'orgaoCnpj',
-  ]) || '').replace(/\D/g, '');
+  ]));
   const codigoUnidade = String(pickFirst(planoRaw, [
     'codigoUnidade', 'unidadeCodigo', 'codigoUnidadeOrgao', 'codigoUasg',
   ]) || '');
   const anoPca = toIntOrNull(pickFirst(planoRaw, ['anoPca', 'ano']));
-  if (!orgaoCnpj || !codigoUnidade || !anoPca) {
+  if (!isCnpjFormat(orgaoCnpj) || !codigoUnidade || !anoPca) {
     return { plano: null, itensInseridos: 0 };
   }
   const orgaoRazao = pickFirst(planoRaw, [
@@ -16406,7 +16430,7 @@ const matchPcaItens = async ({
   if (filtros.valor_min) { params.push(toNullableNumber(filtros.valor_min)); where += ` AND i.valor_total >= $${params.length}`; }
   if (filtros.valor_max) { params.push(toNullableNumber(filtros.valor_max)); where += ` AND i.valor_total <= $${params.length}`; }
   if (filtros.mes_previsto) { params.push(toIntOrNull(filtros.mes_previsto)); where += ` AND i.mes_previsto = $${params.length}`; }
-  if (filtros.orgao_cnpj) { params.push(String(filtros.orgao_cnpj).replace(/\D/g, '')); where += ` AND p.orgao_cnpj = $${params.length}`; }
+  if (filtros.orgao_cnpj) { params.push(normalizeCnpj(filtros.orgao_cnpj)); where += ` AND p.orgao_cnpj = $${params.length}`; }
   if (filtros.unidade_codigo) { params.push(String(filtros.unidade_codigo)); where += ` AND p.codigo_unidade = $${params.length}`; }
 
   // accountId entra no WHERE (exclui já no pipe) e nos subselects de status.
@@ -16588,7 +16612,7 @@ const matchPcaItens = async ({
         if (filtros.valor_min) { vParams.push(toNullableNumber(filtros.valor_min)); vWhere += ` AND i.valor_total >= $${vParams.length}`; }
         if (filtros.valor_max) { vParams.push(toNullableNumber(filtros.valor_max)); vWhere += ` AND i.valor_total <= $${vParams.length}`; }
         if (filtros.mes_previsto) { vParams.push(toIntOrNull(filtros.mes_previsto)); vWhere += ` AND i.mes_previsto = $${vParams.length}`; }
-        if (filtros.orgao_cnpj) { vParams.push(String(filtros.orgao_cnpj).replace(/\D/g, '')); vWhere += ` AND p.orgao_cnpj = $${vParams.length}`; }
+        if (filtros.orgao_cnpj) { vParams.push(normalizeCnpj(filtros.orgao_cnpj)); vWhere += ` AND p.orgao_cnpj = $${vParams.length}`; }
         if (filtros.unidade_codigo) { vParams.push(String(filtros.unidade_codigo)); vWhere += ` AND p.codigo_unidade = $${vParams.length}`; }
 
         vParams.push(accountIdNum);
@@ -18467,7 +18491,7 @@ const createCNPJCacheTable = async () => {
   `);
 };
 
-const normalizeCNPJ = (value) => String(value || '').replace(/[^\d]/g, '').slice(-14).padStart(14, '0');
+const normalizeCNPJ = normalizeCnpj;
 
 // E.164 com prefixo BR — Chatwoot só renderiza phone_number com +.
 // Se já tem +, preserva. Senão, infere prefixo Brasil baseado no comprimento.
@@ -18569,7 +18593,7 @@ const normalizeCNPJData = (raw) => {
 
 const fetchCNPJFromAPI = async (cnpj) => {
   const clean = normalizeCNPJ(cnpj);
-  if (!clean || clean.replace(/0/g, '').length === 0) throw new Error('CNPJ inválido');
+  if (!isCnpjFormat(clean)) throw new Error('CNPJ inválido: informe os 14 caracteres, com os 2 dígitos verificadores numéricos.');
 
   // Checar cache (7 dias)
   const cached = await pool.query(
@@ -18583,7 +18607,7 @@ const fetchCNPJFromAPI = async (cnpj) => {
 
   // Tentar publica.cnpj.ws primeiro (tem email)
   try {
-    const res = await fetch(`https://publica.cnpj.ws/cnpj/${clean}`, {
+    const res = await fetch(`https://publica.cnpj.ws/cnpj/${encodeURIComponent(clean)}`, {
       headers: { Accept: 'application/json', 'User-Agent': 'kanban-dashboard/1.0' },
     });
     if (res.ok) raw = await res.json();
@@ -18595,7 +18619,7 @@ const fetchCNPJFromAPI = async (cnpj) => {
   // Fallback: BrasilAPI
   if (!raw) {
     try {
-      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${clean}`, {
+      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${encodeURIComponent(clean)}`, {
         headers: { Accept: 'application/json', 'User-Agent': 'kanban-dashboard/1.0' },
       });
       if (res.ok) raw = await res.json();
@@ -18608,6 +18632,8 @@ const fetchCNPJFromAPI = async (cnpj) => {
   if (!raw) throw new Error(lastError || 'Falha ao consultar CNPJ');
 
   const normalized = normalizeCNPJData(raw);
+  if (!normalized) throw new Error('Resposta inválida da API de CNPJ');
+  normalized.cnpj = clean;
 
   await pool.query(
     `INSERT INTO ${CNPJ_CACHE_TABLE} (cnpj, data) VALUES ($1, $2)
@@ -18681,15 +18707,14 @@ app.get('/api/leads/search', async (req, res) => {
   const { q, tipo = 'razao_social', uf } = req.query;
   if (!q) return res.status(400).json({ error: 'Parâmetro q é obrigatório' });
 
-  // Se parece CNPJ (8+ dígitos), faz lookup direto
-  const digits = q.replace(/[^\d]/g, '');
-  if (digits.length >= 8) {
+  // CNPJ completo pode conter A-Z nas primeiras 12 posições; os 2 DVs são numéricos.
+  const normalizedQueryCnpj = normalizeCnpj(q);
+  if (isCnpjFormat(normalizedQueryCnpj)) {
     try {
-      const data = await fetchCNPJFromAPI(q);
+      const data = await fetchCNPJFromAPI(normalizedQueryCnpj);
       return res.json({ results: [data], total: 1, source: 'cnpj_direto' });
     } catch (err) {
-      // Se falhar busca direta e é texto misto, cai no search por nome
-      if (digits.length === 14) return res.status(400).json({ error: err.message });
+      return res.status(400).json({ error: err.message });
     }
   }
 
@@ -18740,7 +18765,7 @@ app.get('/api/leads/existing-cnpjs', async (req, res) => {
     const map = {};
     for (const row of rows) {
       const clean = normalizeCNPJ(row.cnpj);
-      if (clean) map[clean] = { id: row.id, name: row.name, company_name: row.company_name };
+      if (isCnpjFormat(clean)) map[clean] = { id: row.id, name: row.name, company_name: row.company_name };
     }
     res.json(map);
   } catch (err) {
@@ -18761,6 +18786,7 @@ app.post('/api/leads/import', async (req, res) => {
   for (const lead of leads.slice(0, 100)) {
     try {
       const cnpj = normalizeCNPJ(lead.cnpj);
+      if (!isCnpjFormat(cnpj)) throw new Error('CNPJ inválido: esperado 12 caracteres alfanuméricos e 2 dígitos verificadores.');
       // Nome do contato: sócio (se disponível) ou razão social
       const fullName = lead.primeiro_nome
         ? `${lead.primeiro_nome}${lead.sobrenome ? ' ' + lead.sobrenome : ''}`.trim()
@@ -18772,7 +18798,10 @@ app.post('/api/leads/import', async (req, res) => {
       const location = [lead.municipio, lead.uf].filter(Boolean).join(', ');
 
       const existByCNPJ = await pool.query(
-        `SELECT id FROM contacts WHERE account_id = $1 AND (custom_attributes->>'CNPJ_CPF' = $2 OR custom_attributes->>'CNPJ' = $2 OR custom_attributes->>'cnpj' = $2) LIMIT 1`,
+        `SELECT id FROM contacts
+         WHERE account_id = $1
+           AND UPPER(regexp_replace(COALESCE(custom_attributes->>'CNPJ_CPF', custom_attributes->>'CNPJ', custom_attributes->>'cnpj', ''), '[./[:space:]-]', '', 'g')) = $2
+         LIMIT 1`,
         [accountId, cnpj]
       );
       const existByName = existByCNPJ.rows.length === 0
@@ -20887,6 +20916,7 @@ let rfbImportState = {
   records: 0,
   error: '',
   startedAt: null,
+  finishedAt: null,
 };
 
 const isEnvFlagEnabled = (value) => {
@@ -20926,7 +20956,7 @@ async function recordRFBImportFinish(logId, status, notes = '') {
 function startRFBImport({ force = false, staging = false, append = false, reason = '' } = {}) {
   if (rfbImportState.status === 'running') return false; // already running
   const modeLabel = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : append ? 'append (gap-fill)' : 'incremental';
-  rfbImportState = { status: 'running', message: `Iniciando importação ${modeLabel}...`, file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString() };
+  rfbImportState = { status: 'running', message: `Iniciando importação ${modeLabel}...`, file: '', percent: 0, records: 0, error: '', startedAt: new Date().toISOString(), finishedAt: null };
   const importLogPromise = recordRFBImportStart(modeLabel, reason);
 
   const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
@@ -20958,6 +20988,9 @@ function startRFBImport({ force = false, staging = false, append = false, reason
           records: msg.records || 0,
           error: msg.error || '',
           startedAt: rfbImportState.startedAt,
+          finishedAt: msg.status === 'done' || msg.status === 'error'
+            ? new Date().toISOString()
+            : null,
         };
       } catch (_) {
         // non-JSON stdout line, ignore
@@ -20974,6 +21007,7 @@ function startRFBImport({ force = false, staging = false, append = false, reason
       rfbImportState.status = code === 0 ? 'done' : 'error';
       rfbImportState.message = code === 0 ? 'Import concluído!' : `Import falhou (código ${code})`;
     }
+    rfbImportState.finishedAt = rfbImportState.finishedAt || new Date().toISOString();
     // invalidate caches so new data is reflected
     _rfbMunicipiosCache = null;
     _rfbCnaesCache = null;
@@ -21001,6 +21035,7 @@ function startRFBImport({ force = false, staging = false, append = false, reason
     rfbImportState.status = 'error';
     rfbImportState.error = err.message;
     rfbImportState.message = `Falha ao iniciar script: ${err.message}`;
+    rfbImportState.finishedAt = new Date().toISOString();
     importLogPromise.then((importLogId) => recordRFBImportFinish(importLogId, 'error', `spawn=${err.message}`));
     console.error('[rfb_import] spawn error:', err);
     notifyAccountUsers(pool, {
@@ -21181,6 +21216,17 @@ const createRFBTables = async () => {
       imported_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Uma reinicialização do container pode encerrar o processo Python antes do
+  // callback de fechamento registrar o fim. Não deixe esses logs aparecerem
+  // indefinidamente como imports em execução.
+  await pool.query(`
+    UPDATE rfb_import_log
+    SET status = 'interrupted',
+        finished_at = COALESCE(finished_at, NOW()),
+        notes = CONCAT(COALESCE(notes, ''), ' | processo interrompido antes da confirmação final')
+    WHERE status = 'running'
+      AND started_at < NOW() - INTERVAL '12 hours'
+  `);
   // Índices críticos — criados em background para não bloquear o startup
   setImmediate(async () => {
     const criticalIndexes = [
@@ -21234,8 +21280,10 @@ app.get('/api/rfb/status', async (req, res) => {
     // COUNT(*) em tabelas grandes é muito lento — usar estimativa do catálogo do PG
     const fastCount = (table) =>
       pool.query(`SELECT reltuples::BIGINT AS count FROM pg_class WHERE relname = $1`, [table]);
-    const [logRow, empCount, estCount, simCount, socCount, cnaeCount, munCount, capitalIndex] = await Promise.all([
+    const [logRow, fileRow, attemptRow, empCount, estCount, simCount, socCount, cnaeCount, munCount, capitalIndex] = await Promise.all([
       pool.query(`SELECT * FROM rfb_import_log WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1`),
+      pool.query(`SELECT MAX(imported_at) AS last_file_import, COUNT(*)::INT AS tracked_files FROM rfb_arquivos`),
+      pool.query(`SELECT id, started_at, finished_at, status, notes FROM rfb_import_log ORDER BY started_at DESC LIMIT 1`),
       fastCount('rfb_empresas'),
       fastCount('rfb_estabelecimentos'),
       fastCount('rfb_simples'),
@@ -21245,11 +21293,16 @@ app.get('/api/rfb/status', async (req, res) => {
       getRfbCapitalIndexStatus({ force: true }),
     ]);
     const last = logRow.rows[0];
+    const files = fileRow.rows[0] || {};
+    const latestAttempt = attemptRow.rows[0] || null;
     const empresas = parseInt(empCount.rows[0].count, 10);
     const estabelecimentos = parseInt(estCount.rows[0].count, 10);
     res.json({
       imported: estabelecimentos > 0,
-      last_import: last?.finished_at || null,
+      last_import: last?.finished_at || files.last_file_import || null,
+      last_file_import: files.last_file_import || null,
+      tracked_files: Number(files.tracked_files || 0),
+      latest_attempt: latestAttempt,
       dev_limit: last?.dev_limit ?? null,
       records: {
         empresas,
@@ -21325,13 +21378,12 @@ app.get('/api/rfb/naturezas', async (req, res) => {
   }
 });
 
-// GET /api/rfb/cnpj/:cnpj — lookup completo por CNPJ (14 dígitos)
+// GET /api/rfb/cnpj/:cnpj — lookup completo por CNPJ (14 caracteres)
 app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
   try {
-    const cnpj = String(req.params.cnpj).replace(/\D/g, '').padStart(14, '0').slice(-14);
-    const basico = cnpj.slice(0, 8);
-    const ordem  = cnpj.slice(8, 12);
-    const dv     = cnpj.slice(12, 14);
+    const parts = splitCnpj(req.params.cnpj);
+    if (!parts) return res.status(400).json({ error: 'CNPJ inválido: informe 14 caracteres; os 2 últimos devem ser numéricos.' });
+    const { basico, ordem, dv } = parts;
 
     const [estRow, sociosRow] = await Promise.all([
       pool.query(`
@@ -21365,12 +21417,11 @@ app.get('/api/rfb/cnpj/:cnpj', async (req, res) => {
 // Resolve gap: CNPJs em rfb_empresas mas ausentes em rfb_estabelecimentos
 app.post('/api/rfb/cnpj-enrich/:cnpj', async (req, res) => {
   try {
-    const cnpj   = String(req.params.cnpj).replace(/\D/g, '').padStart(14, '0').slice(-14);
-    const basico = cnpj.slice(0, 8);
-    const ordem  = cnpj.slice(8, 12);
-    const dv     = cnpj.slice(12, 14);
+    const parts = splitCnpj(req.params.cnpj);
+    if (!parts) return res.status(400).json({ error: 'CNPJ inválido: informe 14 caracteres; os 2 últimos devem ser numéricos.' });
+    const { cnpj, basico, ordem, dv } = parts;
 
-    const apiRes = await fetch(`https://publica.cnpj.ws/cnpj/${cnpj}`, {
+    const apiRes = await fetch(`https://publica.cnpj.ws/cnpj/${encodeURIComponent(cnpj)}`, {
       headers: { 'User-Agent': 'kanban-dashboard/1.0' },
       signal: AbortSignal.timeout(15000),
     });
@@ -21475,7 +21526,8 @@ app.post('/api/rfb/cnpj-enrich/:cnpj', async (req, res) => {
 
 // GET /api/rfb/filiais/:cnpjBasico — retorna todas as filiais de um CNPJ base
 app.get('/api/rfb/filiais/:cnpjBasico', async (req, res) => {
-  const { cnpjBasico } = req.params;
+  const cnpjBasico = normalizeCnpj(req.params.cnpjBasico);
+  if (!isCnpjRoot(cnpjBasico)) return res.status(400).json({ error: 'CNPJ básico inválido: informe 8 caracteres alfanuméricos.' });
   try {
     const r = await pool.query(`
       SELECT
@@ -21546,7 +21598,26 @@ app.get('/api/rfb/search', async (req, res) => {
 
     const params = [];
     const where  = [];
-    const cleanCnpjFilter = cnpj.trim() ? cnpj.replace(/\D/g, '') : '';
+    const rawCnpjFilter = cnpj.trim();
+    const normalizedCnpjFilter = rawCnpjFilter ? normalizeCnpj(rawCnpjFilter) : '';
+    const cleanCnpjFilter = (isCnpjRoot(normalizedCnpjFilter) || isCnpjFormat(normalizedCnpjFilter))
+      ? normalizedCnpjFilter
+      : '';
+    let effectiveNome = nome;
+    let cnpjFilterMovedToNome = false;
+
+    // Compatibilidade com filtros antigos salvos pelo frontend: versões anteriores
+    // podiam persistir uma palavra (ex.: "drone") no campo CNPJ. Ignorar silenciosamente
+    // esse valor removia o único filtro seletivo e disparava uma varredura nacional.
+    if (rawCnpjFilter && !cleanCnpjFilter) {
+      const looksLikeText = /[A-Za-zÀ-ÿ]/.test(rawCnpjFilter);
+      if (looksLikeText && !nome.trim()) {
+        effectiveNome = rawCnpjFilter;
+        cnpjFilterMovedToNome = true;
+      } else {
+        return res.status(400).json({ error: 'CNPJ inválido: informe o básico com 8 caracteres ou o CNPJ completo com 14; os 2 últimos devem ser numéricos.' });
+      }
+    }
 
     // Helper: aplica operador de texto em uma ou mais colunas
     const applyTextOp = (cols, val, op) => {
@@ -21566,7 +21637,7 @@ app.get('/api/rfb/search', async (req, res) => {
       return conds.length === 1 ? conds[0] : `(${conds.join(' OR ')})`;
     };
 
-    if (cnpj.trim()) {
+    if (rawCnpjFilter && !cnpjFilterMovedToNome) {
       const clean = cleanCnpjFilter;
       if (clean.length === 14) {
         params.push(clean.slice(0, 8), clean.slice(8, 12), clean.slice(12, 14));
@@ -21585,7 +21656,7 @@ app.get('/api/rfb/search', async (req, res) => {
     const nomeCtes  = [];  // strings 'alias AS MATERIALIZED (...)'
     const nomeJoins = [];  // strings 'JOIN alias ON alias.cnpj_basico = e.cnpj_basico'
     {
-      const n1 = nome.trim(), n2 = nome2.trim();
+      const n1 = effectiveNome.trim(), n2 = nome2.trim();
       if (n1 || n2) {
         // Monta o SQL do UNION para um termo (sem parâmetro ainda — recebe idx externo)
         const unionSql = (idx) =>
@@ -21933,7 +22004,7 @@ app.get('/api/rfb/search', async (req, res) => {
 
     // Mostrar apenas matriz por padrão, exceto quando a busca é por CNPJ completo.
     // Nesse caso, o usuário pediu um estabelecimento específico, que pode ser filial.
-    if (only_matriz !== 'false' && cleanCnpjFilter.length !== 14) where.push(`e.identificador_matriz_filial = '1'`);
+    if (only_matriz !== 'false' && !isCnpjFormat(cleanCnpjFilter)) where.push(`e.identificador_matriz_filial = '1'`);
 
     // Capital social (TEXT → NUMERIC)
     const capitalExpr = `NULLIF(replace(replace(emp.capital_social,'.',''),',','.'), '')::NUMERIC`;
@@ -21978,13 +22049,41 @@ app.get('/api/rfb/search', async (req, res) => {
     // Contar/ordenar o set completo materializa centenas de milhares de linhas e estoura
     // o timeout mesmo quando a 1ª página já está pronta.
     const hasBroadCnaeSearch = (cnaeCtes.length > 0 || cnaeInlineProgressive) && cnaeSecNarrow.length === 0;
-    const usesProgressiveTotal = hasCombinedHeavyFilters || hasBroadCnaeSearch || cnaeInlineProgressive;
+    const situacoesSelecionadas = situacao.split(',').map((value) => value.trim()).filter(Boolean);
+    const hasNonDefaultSituacao = situacoesSelecionadas.length > 0
+      && !(situacoesSelecionadas.length === 1 && ['2', '02'].includes(situacoesSelecionadas[0]));
+    const hasCapitalOrderBlocker = Boolean(
+      cleanCnpjFilter
+      || effectiveNome.trim() || nome2.trim()
+      || socio.trim() || socio2.trim()
+      || uf.trim() || municipio.trim()
+      || cnae.trim() || cnae_not.trim()
+      || porte.trim() || natureza.trim()
+      || endereco.trim() || endereco2.trim()
+      || simples || mei
+      || capital_min !== '' || capital_max !== ''
+      || abertura_min_anos !== '' || abertura_max_anos !== ''
+      || hasNonDefaultSituacao
+    );
+    // Filtros escalares amplos (UF + capital + idade, por exemplo) não têm um
+    // conjunto candidato pequeno. A contagem exata e a ordenação global forçam
+    // milhões de probes/sort; a página sem ORDER BY responde em milissegundos.
+    const hasBroadScalarSearch = hasCapitalOrderBlocker
+      && positiveFilterGroupCount === 0
+      && !isCnpjRoot(cleanCnpjFilter)
+      && !isCnpjFormat(cleanCnpjFilter);
+    const hasTextCandidateSearch = nomeCtes.length > 0 || socioCtes.length > 0 || endCtes.length > 0;
+    const usesProgressiveTotal = hasCombinedHeavyFilters
+      || hasBroadCnaeSearch
+      || cnaeInlineProgressive
+      || hasBroadScalarSearch
+      || hasTextCandidateSearch;
 
     // Ordenação
-    // Capital decrescente é a ordenação comercial padrão e precisa ser global, não
-    // apenas dentro da página. O índice de expressão idx_rfb_emp_capital_desc permite
-    // ao planner percorrer empresas do maior capital para o menor e encerrar no LIMIT.
-    // As demais ordenações continuam evitando full sort nos caminhos progressivos.
+    // Capital decrescente é a ordenação comercial padrão. O índice de expressão
+    // idx_rfb_emp_capital_desc mantém a ordenação global quando não há filtros que
+    // rejeitem muitas entradas. Com filtros seletivos, forçar esse índice faz milhões
+    // de probes; nesses casos a ordenação fica local à página para preservar latência.
     const ORDER_MAP = {
       razao_social:  'emp.razao_social NULLS LAST',
       nome_fantasia: 'e.nome_fantasia NULLS LAST',
@@ -21996,7 +22095,7 @@ app.get('/api/rfb/search', async (req, res) => {
       abertura_asc:  'e.data_de_inicio_da_atividade ASC NULLS LAST',
     };
     const useSqlOrder = order_by === 'capital_desc'
-      ? capitalIndexStatus.ready
+      ? (capitalIndexStatus.ready && !hasCapitalOrderBlocker)
       : (!usesProgressiveTotal && (where.length > 0 || nomeCtes.length > 0 || socioCtes.length > 0));
     const sqlOrderClause = useSqlOrder
       ? `${ORDER_MAP[order_by] || ORDER_MAP.capital_desc}, emp.cnpj_basico, e.cnpj_ordem`
@@ -22181,7 +22280,7 @@ app.get('/api/rfb/search', async (req, res) => {
       progressive: responseProgressive,
       has_more: hasMoreRows,
       order_scope: order_by === 'capital_desc'
-        ? (capitalIndexStatus.ready ? 'global' : 'page_fallback')
+        ? (useSqlOrder ? 'global' : (capitalIndexStatus.ready ? 'page' : 'page_fallback'))
         : (useSqlOrder ? 'global' : 'page'),
       capital_index_ready: capitalIndexStatus.ready,
     };
@@ -22189,6 +22288,12 @@ app.get('/api/rfb/search', async (req, res) => {
       // UI pode avisar: CNAE secundário exige UF/município em buscas nacionais.
       payload.warnings = [
         'cnae_secundario_omitido_sem_uf: sem filtro de UF/município a busca usa só CNAE principal (secundário nacional estoura o tempo).',
+      ];
+    }
+    if (cnpjFilterMovedToNome) {
+      payload.warnings = [
+        ...(payload.warnings || []),
+        'filtro_cnpj_textual_movido_para_nome: o termo textual foi pesquisado como nome/razão social.',
       ];
     }
     res.json(payload);
