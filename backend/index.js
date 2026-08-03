@@ -22100,6 +22100,10 @@ app.get('/api/rfb/search', async (req, res) => {
     const sqlOrderClause = useSqlOrder
       ? `${ORDER_MAP[order_by] || ORDER_MAP.capital_desc}, emp.cnpj_basico, e.cnpj_ordem`
       : null;
+    // Mesmo quando a ordenação comercial é aplicada no cliente, a paginação
+    // precisa de uma ordem determinística para não repetir nem pular empresas
+    // entre os lotes sucessivos que compõem a busca completa.
+    const paginationOrderClause = sqlOrderClause || 'e.cnpj_basico, e.cnpj_ordem';
 
     let allCtes  = [...nomeCtes, ...cnaeCtes, ...endCtes, ...socioCtes];
     let allJoins = [...nomeJoins, ...cnaeJoins, ...endJoins, ...socioJoins];
@@ -22188,7 +22192,7 @@ app.get('/api/rfb/search', async (req, res) => {
            FROM rfb_cnaes c2
            WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
         ${baseQuery}
-        ${sqlOrderClause ? `ORDER BY ${sqlOrderClause}` : ''}
+        ORDER BY ${paginationOrderClause}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
     const dataQueryFull  = `${ctePrefix} ${dataQuery}`;

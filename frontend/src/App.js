@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
+import { fetchAllRfbSearchResults, sortRfbSearchResults } from './rfbSearch';
 
 import {
   DndContext,
@@ -124,6 +125,11 @@ import './App.css';
 
 // Configurar axios para enviar cookies em todas as requisições
 axios.defaults.withCredentials = true;
+
+const requestRfbSearchPage = async (params, signal) => {
+  const response = await axios.get(`/api/rfb/search?${params}`, { signal });
+  return response.data || {};
+};
 
 const VIEW_LABELS = {
   Overview: 'Gestão de Leads',
@@ -8245,10 +8251,6 @@ function App() {
   const [rfbFiliais, setRfbFiliais] = useState({}); // cnpjBasico → filiais[]
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
-  const [rfbHasMore, setRfbHasMore] = useState(false); // total progressivo (mínimo), há mais no banco
-  const [rfbProgressive, setRfbProgressive] = useState(false);
-  const [rfbPage, setRfbPage] = useState(1);
-  const [rfbPageSize, setRfbPageSize] = useState(() => { try { const s = JSON.parse(localStorage.getItem('rfb_search') || '{}'); return s.pageSize || 10; } catch { return 10; } });
   const [rfbOrderBy, setRfbOrderBy] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('rfb_search') || '{}');
@@ -8258,8 +8260,7 @@ function App() {
   const [rfbLoading, setRfbLoading] = useState(false);
   const [rfbHasSearched, setRfbHasSearched] = useState(false);
   const [rfbError, setRfbError] = useState(null);
-  const [rfbOrderScope, setRfbOrderScope] = useState('global');
-  const rfbCacheRef = useRef({ results: [], total: 0, key: null });
+  const rfbSearchAbortRef = useRef(null);
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
   const [rfbCnaes, setRfbCnaes] = useState([]);
   const [rfbNaturezas, setRfbNaturezas] = useState([]);
@@ -8316,6 +8317,10 @@ function App() {
   // Modal: pregões eletrônicos com sessão hoje
   const [sessoesHojeModal, setSessoesHojeModal] = useState(null); // { items, dismissKey }
   const sessoesHojeCheckedRef = useRef(false);
+
+  useEffect(() => () => {
+    rfbSearchAbortRef.current?.abort();
+  }, []);
 
   // When logged in, the app shell (h-dvh + chevron scroll) owns vertical overflow.
   useEffect(() => {
@@ -9129,7 +9134,6 @@ function App() {
     setRfbSocio2('');
     setRfbMunicipioInput('');
     setRfbShowFilters(true);
-    setRfbPage(1);
     setRfbError(null);
     setActiveView('Busca Lead B2B');
     setMobileNavOpen(false);
@@ -9162,32 +9166,36 @@ function App() {
     if (!onlyMatriz) params.set('only_matriz', 'false');
     if (mei) params.set('mei', mei);
     if (simples) params.set('simples', simples);
-    params.set('page', 1);
-    params.set('page_size', rfbPageSize);
-    params.set('order_by', rfbOrderBy);
 
+    rfbSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    rfbSearchAbortRef.current = controller;
     setRfbShowFilters(false);
     setRfbHasSearched(true);
+    setRfbResults([]);
+    setRfbTotal(0);
     setRfbLoading(true);
     try {
-      const response = await axios.get(`/api/rfb/search?${params}`);
-      const results = response.data?.results || [];
-      const total = response.data?.total || 0;
-      const hasMore = Boolean(response.data?.has_more);
-      const progressive = Boolean(response.data?.progressive);
-      rfbCacheRef.current = { results, total, key: null, hasMore, progressive };
+      const { results } = await fetchAllRfbSearchResults({
+        baseParams: params,
+        orderBy: rfbOrderBy,
+        signal: controller.signal,
+        requestPage: requestRfbSearchPage,
+        onBatch: (loadedResults) => {
+          if (rfbSearchAbortRef.current !== controller) return;
+          setRfbResults(loadedResults);
+          setRfbTotal(loadedResults.length);
+        },
+      });
+      if (rfbSearchAbortRef.current !== controller) return;
       setRfbResults(results);
-      setRfbTotal(total);
-      setRfbHasMore(hasMore);
-      setRfbProgressive(progressive);
-      setRfbOrderScope(response.data?.order_scope || 'global');
+      setRfbTotal(results.length);
       try {
         localStorage.setItem('rfb_search', JSON.stringify({
           filters: nextFilters,
           ops: nextOps,
           orderBy: rfbOrderBy,
           orderVersion: 2,
-          pageSize: rfbPageSize,
           capitalRange,
           aberturaRange,
           endereco: '',
@@ -9199,19 +9207,19 @@ function App() {
         }));
       } catch {}
     } catch (requestError) {
+      if (requestError?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
       const status = requestError.response?.status;
       const message = requestError.response?.data?.error || requestError.message || 'Erro na busca.';
       setRfbError(status === 504 ? 'Tempo limite excedido — refine o perfil e tente novamente.' : message);
       setRfbResults([]);
       setRfbTotal(0);
-      setRfbHasMore(false);
-      setRfbProgressive(false);
-      setRfbOrderScope('global');
-      rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
     } finally {
-      setRfbLoading(false);
+      if (rfbSearchAbortRef.current === controller) {
+        rfbSearchAbortRef.current = null;
+        setRfbLoading(false);
+      }
     }
-  }, [rfbOrderBy, rfbPageSize]);
+  }, [rfbOrderBy]);
 
   useEffect(() => {
     if (activeView !== 'Busca Lead B2B' || !authStatus.authenticated) return;
@@ -23805,50 +23813,42 @@ function App() {
             };
             // Exposta para a busca global do header disparar a pesquisa após navegar até aqui.
             rfbSearchTriggerRef.current = (...args) => handleRfbSearch(...args);
-            const handleRfbSearch = async (pageOverride, pageSizeOverride, orderByOverride, filterSnap) => {
-              const pg = pageOverride     != null ? pageOverride     : rfbPage;
-              const ps = pageSizeOverride != null ? pageSizeOverride : rfbPageSize;
+            const handleRfbSearch = async (...searchArgs) => {
+              const [, , orderByOverride, filterSnap] = searchArgs;
               const ob = orderByOverride  != null ? orderByOverride  : rfbOrderBy;
-              if (pg === 1) {
-                setRfbExpanded(null);
-                setRfbShowFilters(false);
-              }
+              setRfbExpanded(null);
+              setRfbShowFilters(false);
 
               const fp = buildFilterParams(filterSnap);
-              const filterKey = fp.toString();
-              const cache = rfbCacheRef.current;
+              rfbSearchAbortRef.current?.abort();
+              const controller = new AbortController();
+              rfbSearchAbortRef.current = controller;
               setRfbHasSearched(true);
               setRfbError(null);
-
+              setRfbResults([]);
+              setRfbTotal(0);
               setRfbLoading(true);
               try {
-                const params = new URLSearchParams(fp);
-                params.set('page', pg);
-                params.set('page_size', ps);
-                params.set('order_by', ob);
-                if (cache.key === filterKey && cache.total > 0) {
-                  params.set('known_total', cache.total);
-                  params.set('known_total_progressive', cache.progressive ? 'true' : 'false');
-                }
-                const res = await axios.get(`/api/rfb/search?${params}`);
-                const results = res.data.results || [];
-                const hasMore = Boolean(res.data.has_more);
-                const progressive = Boolean(res.data.progressive);
-                const total = Number(res.data.total) || 0;
-                rfbCacheRef.current = { results, total, key: filterKey, hasMore, progressive };
+                const { results } = await fetchAllRfbSearchResults({
+                  baseParams: fp,
+                  orderBy: ob,
+                  signal: controller.signal,
+                  requestPage: requestRfbSearchPage,
+                  onBatch: (loadedResults) => {
+                    if (rfbSearchAbortRef.current !== controller) return;
+                    setRfbResults(loadedResults);
+                    setRfbTotal(loadedResults.length);
+                  },
+                });
+                if (rfbSearchAbortRef.current !== controller) return;
                 setRfbResults(results);
-                setRfbTotal(total);
-                setRfbHasMore(hasMore);
-                setRfbProgressive(progressive);
-                setRfbOrderScope(res.data?.order_scope || 'global');
-                setRfbPage(pg);
+                setRfbTotal(results.length);
                 try {
                   localStorage.setItem('rfb_search', JSON.stringify({
                     filters: filterSnap?.filters || rfbFilters,
                     ops: filterSnap?.ops || rfbOps,
                     orderBy: ob,
                     orderVersion: 2,
-                    pageSize: ps,
                     capitalRange: filterSnap?.capitalRange || rfbCapitalRange,
                     aberturaRange: filterSnap?.aberturaRange || rfbAberturaRange,
                     endereco: filterSnap?.endereco != null ? filterSnap.endereco : rfbEndereco,
@@ -23860,6 +23860,7 @@ function App() {
                   }));
                 } catch {}
               } catch (e) {
+                if (e?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
                 const status = e.response?.status;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
                 setRfbError(
@@ -23870,11 +23871,12 @@ function App() {
                 // Limpa resultados antigos pra não confundir com a busca que falhou
                 setRfbResults([]);
                 setRfbTotal(0);
-                setRfbHasMore(false);
-                setRfbProgressive(false);
-                setRfbOrderScope('global');
-                rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
-              } finally { setRfbLoading(false); }
+              } finally {
+                if (rfbSearchAbortRef.current === controller) {
+                  rfbSearchAbortRef.current = null;
+                  setRfbLoading(false);
+                }
+              }
             };
 
             const applyTrendsSuggestion = (s) => {
@@ -23930,6 +23932,8 @@ function App() {
             };
 
             const handleClear = () => {
+              rfbSearchAbortRef.current?.abort();
+              rfbSearchAbortRef.current = null;
               const empty = { cnpj: '', nome: '', socio: '', uf: '', municipio: '', cnae: [], cnaeNot: [], situacao: ['2'], porte: '', natureza: [] };
               setRfbFilters(empty);
               setRfbOps({ nome: 'contains', socio: 'contains' });
@@ -23950,31 +23954,27 @@ function App() {
               setRfbNatInput('');
               setRfbResults([]);
               setRfbTotal(0);
-              setRfbHasMore(false);
-              setRfbProgressive(false);
-              setRfbOrderScope('global');
-              setRfbPage(1);
               setRfbOrderBy('capital_desc');
+              setRfbLoading(false);
               setRfbError(null);
               setLeadImportStatus(null);
               setRfbHasSearched(false);
-              rfbCacheRef.current = { results: [], total: 0, key: null, hasMore: false, progressive: false };
               try { localStorage.removeItem('rfb_search'); } catch {}
             };
 
-            // Com has_more, total é mínimo: garante botão "próximo" mesmo com 101 e pageSize 100
-            const totalPages = Math.max(
-              1,
-              Math.ceil(Math.max(rfbTotal, 1) / Math.max(rfbPageSize, 1)),
-              rfbHasMore ? rfbPage + 1 : 1,
-            );
-            const rfbTotalLabel = rfbTotal <= 0
-              ? '0'
-              : rfbTotal >= 10001
-                ? 'mais de 10.000'
-                : rfbHasMore
-                  ? `mais de ${Math.max(rfbTotal - 1, rfbResults.length || 0).toLocaleString('pt-BR')}`
-                  : rfbTotal.toLocaleString('pt-BR');
+            const rfbTotalLabel = rfbTotal.toLocaleString('pt-BR');
+            const handleRfbOrderChange = (nextOrder) => {
+              setRfbOrderBy(nextOrder);
+              setRfbResults((results) => sortRfbSearchResults(results, nextOrder));
+              try {
+                const saved = JSON.parse(localStorage.getItem('rfb_search') || '{}');
+                localStorage.setItem('rfb_search', JSON.stringify({
+                  ...saved,
+                  orderBy: nextOrder,
+                  orderVersion: 2,
+                }));
+              } catch {}
+            };
 
             // CNAE dropdown — separado para "contém" (cnae) e "não contém" (cnaeNot)
             const cnaeQuery = rfbCnaeInput.trim().toLowerCase();
@@ -25400,86 +25400,56 @@ function App() {
                       <div className="rounded-2xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">{rfbError}</div>
                     )}
 
-                    {rfbOrderBy === 'capital_desc' && rfbOrderScope === 'page_fallback' && rfbResults.length > 0 && (
-                      <div className="flex items-start gap-2 rounded-[12px] border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning" role="status">
-                        <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 3a9 9 0 110 18 9 9 0 010-18z"/></svg>
-                        <span>O índice de capital está sendo preparado. A busca continua disponível, mas a ordenação global será ativada assim que ele terminar.</span>
-                      </div>
-                    )}
-
-                    {/* Em universos grandes o total é progressivo, mas a paginação não é cortada. */}
-                    {rfbTotal >= 10001 && rfbProgressive && rfbHasMore && rfbResults.length > 0 && (
-                      <div className="rounded-2xl border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning flex items-start gap-2">
-                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M5.072 19h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                        <div>
-                          <div className="font-medium">Mais de 10.000 resultados</div>
-                          <div className="text-xs opacity-90 mt-0.5">Você pode continuar navegando sem corte. O total exato só é fechado ao chegar à última página; refine os filtros apenas se quiser uma lista mais específica.</div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Progressive total: contagem exata do universo estoura timeout em CNAE nacional */}
-                    {rfbProgressive && rfbHasMore && rfbResults.length > 0 && rfbTotal < 10001 && (
-                      <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 text-sm text-ink flex items-start gap-2">
-                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5 text-primary" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z"/></svg>
-                        <div>
-                          <div className="font-medium text-primary">Busca paginada, sem limite de 100 resultados</div>
-                          <div className="text-xs text-muted mt-0.5">
-                            Em buscas amplas, o total exato não é calculado de uma vez para manter a resposta rápida.
-                            Use <strong className="text-ink">Próximo</strong> para continuar; {rfbOrderScope === 'global'
-                              ? 'a ordenação por capital considera toda a base, não só a página atual.'
-                              : rfbOrderScope === 'page_fallback'
-                                ? 'a ordenação global será ativada quando o índice terminar de ser preparado.'
-                                : 'para manter a busca rápida com estes filtros, a ordenação por capital é aplicada dentro de cada página.'}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     {/* Results header */}
                     {rfbTotal > 0 && (
-                      <div className="toolbar-meta rounded-[18px] border border-line bg-surf p-3 text-sm shadow-card">
-                        <span className="min-w-0 text-muted">
-                          Mostrando <span className="font-semibold text-ink">{((rfbPage - 1) * rfbPageSize) + 1}–{Math.min(rfbPage * rfbPageSize, rfbHasMore ? Number.MAX_SAFE_INTEGER : rfbTotal, ((rfbPage - 1) * rfbPageSize) + rfbResults.length)}</span>
-                          {' '}de <span className="font-semibold text-ink">{rfbTotalLabel}</span> resultados
-                        </span>
-                        <div className="toolbar-filters toolbar-filters--2 min-w-0 sm:justify-self-end sm:w-auto sm:min-w-[18rem]">
+                      <div className="rounded-[16px] border border-line bg-surf p-3 shadow-card" role="status" aria-live="polite">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex min-w-0 items-start gap-2.5">
+                            {rfbLoading
+                              ? <ArrowPathIcon className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+                              : <CheckBadgeIcon className="mt-0.5 h-4 w-4 shrink-0 text-status-success" aria-hidden="true" />}
+                            <div className="min-w-0">
+                              <p className="font-semibold text-ink">
+                                {rfbLoading ? 'Carregando todos os resultados' : `${rfbTotalLabel} empresa${rfbTotal === 1 ? '' : 's'} encontrada${rfbTotal === 1 ? '' : 's'}`}
+                              </p>
+                              <p className="mt-0.5 text-xs text-muted">
+                                {rfbLoading
+                                  ? `${rfbTotalLabel} empresa${rfbTotal === 1 ? '' : 's'} carregada${rfbTotal === 1 ? '' : 's'} até agora. A busca continua automaticamente até o fim.`
+                                  : 'Todos os resultados foram carregados e ordenados.'}
+                              </p>
+                            </div>
+                          </div>
                           <select
-                            className={`${select} filter-select text-xs`}
+                            className={`${select} filter-select w-full text-xs sm:w-[17rem]`}
                             value={rfbOrderBy}
-                            onChange={e => { const v = e.target.value; setRfbOrderBy(v); handleRfbSearch(1, null, v); }}
+                            onChange={e => handleRfbOrderChange(e.target.value)}
+                            disabled={rfbLoading}
                             aria-label="Ordenar resultados"
                           >
-                            <option value="capital_desc">Capital: maior primeiro (padrão)</option>
-                            <option value="razao_social">Ordenar: Razão Social</option>
-                            <option value="nome_fantasia">Ordenar: Nome Fantasia</option>
-                            <option value="uf">Ordenar: UF</option>
-                            <option value="situacao">Ordenar: Situação</option>
+                            <option value="capital_desc">Capital: maior primeiro</option>
+                            <option value="razao_social">Razão social: A–Z</option>
+                            <option value="nome_fantasia">Nome fantasia: A–Z</option>
+                            <option value="uf">UF: A–Z</option>
+                            <option value="situacao">Situação: A–Z</option>
                             <option value="capital_asc">Capital: menor primeiro</option>
                             <option value="abertura_desc">Mais recentes</option>
                             <option value="abertura_asc">Mais antigas</option>
-                          </select>
-                          <select
-                            className={`${select} filter-select text-xs`}
-                            value={rfbPageSize}
-                            onChange={e => { const n = Number(e.target.value); setRfbPageSize(n); handleRfbSearch(1, n); }}
-                            aria-label="Resultados por página"
-                          >
-                            {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n} por página</option>)}
                           </select>
                         </div>
                       </div>
                     )}
 
                     {/* Loading */}
-                    {rfbLoading && (
-                      <div className="flex items-center justify-center py-16">
-                        <div className="w-6 h-6 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+                    {rfbLoading && rfbResults.length === 0 && (
+                      <div className="rounded-[16px] border border-line bg-surf px-4 py-10 text-center" role="status" aria-live="polite">
+                        <ArrowPathIcon className="mx-auto h-5 w-5 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+                        <p className="mt-3 text-sm font-semibold text-ink">Buscando todas as empresas</p>
+                        <p className="mt-1 text-xs text-muted">Os resultados aparecerão aqui conforme forem carregados.</p>
                       </div>
                     )}
 
                     {/* Results cards */}
-                    {!rfbLoading && rfbResults.length > 0 && (() => {
+                    {rfbResults.length > 0 && (() => {
                       const detailLabel = 'mb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted2';
                       const ExpandedPanel = ({ row }) => {
                         const filiais = rfbFiliais[row.cnpj_basico];
@@ -25749,35 +25719,6 @@ function App() {
                       </div>
                     )}
 
-                    {/* Pagination */}
-                    {totalPages > 1 && !rfbLoading && (
-                      <div className="flex items-center justify-center gap-1.5 pt-2">
-                        <button
-                          onClick={() => handleRfbSearch(rfbPage - 1)}
-                          disabled={rfbPage <= 1}
-                          className="px-3 py-1.5 rounded-lg border border-border bg-cardAlt text-xs text-muted hover:text-ink hover:border-primary/40 transition disabled:opacity-40 disabled:cursor-not-allowed"
-                        >← Anterior</button>
-                        {[...Array(Math.min(totalPages, 7))].map((_, i) => {
-                          let pg;
-                          if (totalPages <= 7) { pg = i + 1; }
-                          else if (rfbPage <= 4) { pg = i + 1; }
-                          else if (rfbPage >= totalPages - 3) { pg = totalPages - 6 + i; }
-                          else { pg = rfbPage - 3 + i; }
-                          return (
-                            <button
-                              key={pg}
-                              onClick={() => handleRfbSearch(pg)}
-                              className={`px-3 py-1.5 rounded-lg border text-xs transition ${rfbPage === pg ? 'bg-primary text-white border-primary' : 'border-border bg-cardAlt text-muted hover:text-ink hover:border-primary/40'}`}
-                            >{pg}</button>
-                          );
-                        })}
-                        <button
-                          onClick={() => handleRfbSearch(rfbPage + 1)}
-                          disabled={rfbPage >= totalPages}
-                          className="px-3 py-1.5 rounded-lg border border-border bg-cardAlt text-xs text-muted hover:text-ink hover:border-primary/40 transition disabled:opacity-40 disabled:cursor-not-allowed"
-                        >Próximo →</button>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
