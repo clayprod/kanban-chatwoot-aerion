@@ -25406,7 +25406,35 @@ function App() {
                               </p>
                             </div>
                           </div>
-                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                            {(rfbPage > 1 || rfbCanGoNext) && (
+                              <div
+                                className="flex items-center justify-between gap-2 rounded-[11px] border border-line bg-bg2 p-1 sm:justify-start"
+                                aria-label="Paginação superior dos resultados"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleRfbPageChange(rfbPage - 1)}
+                                  disabled={rfbLoading || rfbPage <= 1}
+                                  className={btnSecondarySm}
+                                >
+                                  <ChevronLeftIcon className="h-4 w-4" aria-hidden="true" />
+                                  Anterior
+                                </button>
+                                <span className="min-w-[5.5rem] text-center text-xs font-medium tabular-nums text-ink" aria-current="page">
+                                  Página {rfbPage}{rfbProgressive ? '' : ` de ${rfbTotalPages}`}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRfbPageChange(rfbPage + 1)}
+                                  disabled={rfbLoading || !rfbCanGoNext}
+                                  className={btnSecondarySm}
+                                >
+                                  Próxima
+                                  <ChevronRightIcon className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              </div>
+                            )}
                             <select
                               className={`${select} filter-select w-full text-xs sm:w-[17rem]`}
                               value={rfbOrderBy}
