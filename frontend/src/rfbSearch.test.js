@@ -1,4 +1,4 @@
-import { fetchAllRfbSearchResults } from './rfbSearch';
+import { fetchRfbSearchPage } from './rfbSearch';
 
 const makeRows = (start, count) => Array.from({ length: count }, (_, index) => {
   const value = start + index;
@@ -8,62 +8,64 @@ const makeRows = (start, count) => Array.from({ length: count }, (_, index) => {
   };
 });
 
-test('carrega todos os lotes da busca RFB sem limitar o total', async () => {
-  const requestPage = jest.fn(async (params) => {
-    const page = Number(params.get('page'));
-    const batches = {
-      1: { results: makeRows(1, 100), total: 101, progressive: true, has_more: true },
-      2: { results: makeRows(101, 100), total: 201, progressive: true, has_more: true },
-      3: { results: makeRows(201, 35), total: 235, progressive: false, has_more: false },
-    };
-    return batches[page];
-  });
+test('carrega somente a página solicitada da busca RFB', async () => {
+  const requestPage = jest.fn(async () => ({
+    results: makeRows(26, 25),
+    total: 235,
+    page: 2,
+    page_size: 25,
+    progressive: false,
+    has_more: true,
+    order_scope: 'page',
+  }));
 
-  const onBatch = jest.fn();
-  const { results } = await fetchAllRfbSearchResults({
+  const { results, meta } = await fetchRfbSearchPage({
     baseParams: new URLSearchParams('nome=aerion'),
+    page: 2,
+    pageSize: 25,
     orderBy: 'capital_desc',
+    knownTotal: 235,
     signal: new AbortController().signal,
-    onBatch,
     requestPage,
   });
 
-  expect(requestPage).toHaveBeenCalledTimes(3);
-  expect(onBatch).toHaveBeenCalledTimes(3);
-  expect(results).toHaveLength(235);
-  expect(results[0].capital_social).toBe('235');
-  expect(results[234].capital_social).toBe('1');
-
-  const requestedPages = requestPage.mock.calls.map(([params]) => {
-    expect(params.get('page_size')).toBe('100');
-    return params.get('page');
-  });
-  expect(requestedPages).toEqual(['1', '2', '3']);
+  expect(requestPage).toHaveBeenCalledTimes(1);
+  const [params] = requestPage.mock.calls[0];
+  expect(params.get('page')).toBe('2');
+  expect(params.get('page_size')).toBe('25');
+  expect(params.get('order_by')).toBe('capital_desc');
+  expect(params.get('known_total')).toBe('235');
+  expect(params.get('known_total_progressive')).toBe('false');
+  expect(results).toHaveLength(25);
+  expect(results[0].capital_social).toBe('50');
+  expect(results[24].capital_social).toBe('26');
+  expect(meta).toMatchObject({ total: 235, page: 2, page_size: 25, has_more: true });
 });
 
-test('carrega todos os resultados por stream em uma única requisição', async () => {
-  const requestPage = jest.fn();
-  const requestStream = jest.fn(async (params, _signal, onMessage) => {
-    expect(params.get('stream')).toBe('true');
-    expect(params.get('order_by')).toBe('capital_desc');
-    onMessage({ type: 'batch', results: makeRows(1, 250), total: 250 });
-    onMessage({ type: 'batch', results: makeRows(251, 30), total: 280 });
-  });
-  const onBatch = jest.fn();
+test('preserva o total progressivo ao avançar sem buscar as demais páginas', async () => {
+  const requestPage = jest.fn(async () => ({
+    results: makeRows(51, 10),
+    total: 61,
+    page: 3,
+    page_size: 25,
+    progressive: true,
+    has_more: true,
+  }));
 
-  const { results } = await fetchAllRfbSearchResults({
+  const { results, meta } = await fetchRfbSearchPage({
     baseParams: new URLSearchParams('uf=SP&cnae=8011101'),
-    orderBy: 'capital_desc',
-    signal: new AbortController().signal,
-    onBatch,
+    page: 3,
+    pageSize: 25,
+    orderBy: 'razao_social',
+    knownTotal: 51,
+    knownTotalProgressive: true,
     requestPage,
-    requestStream,
   });
 
-  expect(requestStream).toHaveBeenCalledTimes(1);
-  expect(requestPage).not.toHaveBeenCalled();
-  expect(onBatch).toHaveBeenCalledTimes(2);
-  expect(results).toHaveLength(280);
-  expect(results[0].capital_social).toBe('280');
-  expect(results[279].capital_social).toBe('1');
+  expect(requestPage).toHaveBeenCalledTimes(1);
+  const [params] = requestPage.mock.calls[0];
+  expect(params.get('known_total')).toBe('51');
+  expect(params.get('known_total_progressive')).toBe('true');
+  expect(results).toHaveLength(10);
+  expect(meta).toMatchObject({ total: 61, progressive: true, has_more: true });
 });

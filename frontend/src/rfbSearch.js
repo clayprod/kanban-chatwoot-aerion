@@ -1,4 +1,4 @@
-const RFB_SEARCH_BATCH_SIZE = 100;
+const DEFAULT_RFB_PAGE_SIZE = 25;
 
 const rfbCapitalValue = (row) => {
   const value = Number(String(row?.capital_social ?? '').replace(',', '.'));
@@ -21,71 +21,43 @@ export const sortRfbSearchResults = (rows, orderBy) => {
   return [...rows].sort((a, b) => compare(a, b) || compareText(a.cnpj, b.cnpj));
 };
 
-export const fetchAllRfbSearchResults = async ({ baseParams, orderBy, signal, onBatch, requestPage, requestStream }) => {
-  const allResults = [];
-  const seenCnpjs = new Set();
-  const pageSignatures = new Set();
-  let page = 1;
-  let knownTotal = null;
-  let knownTotalProgressive = false;
-  let lastMeta = {};
+/**
+ * Loads exactly one server-side page. The RFB dataset has tens of millions of
+ * rows, so accumulating every page in the browser makes broad searches grow
+ * without bound in network traffic, memory and DOM size.
+ */
+export const fetchRfbSearchPage = async ({
+  baseParams,
+  page = 1,
+  pageSize = DEFAULT_RFB_PAGE_SIZE,
+  orderBy = 'capital_desc',
+  knownTotal,
+  knownTotalProgressive = false,
+  signal,
+  requestPage,
+}) => {
+  const normalizedPage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const normalizedPageSize = Math.min(100, Math.max(1, Number.parseInt(pageSize, 10) || DEFAULT_RFB_PAGE_SIZE));
+  const params = new URLSearchParams(baseParams);
+  params.set('page', String(normalizedPage));
+  params.set('page_size', String(normalizedPageSize));
+  params.set('order_by', orderBy);
 
-  const addBatch = (responseData) => {
-    const pageResults = Array.isArray(responseData?.results) ? responseData.results : [];
-    pageResults.forEach((row) => {
-      const key = row?.cnpj || `${row?.cnpj_basico || ''}:${row?.cnpj_ordem || ''}`;
-      if (key && seenCnpjs.has(key)) return;
-      if (key) seenCnpjs.add(key);
-      allResults.push(row);
-    });
-    lastMeta = responseData || {};
-    onBatch?.([...allResults], lastMeta);
-    return pageResults;
-  };
-
-  if (requestStream) {
-    const params = new URLSearchParams(baseParams);
-    params.set('order_by', orderBy);
-    params.set('stream', 'true');
-    await requestStream(params, signal, addBatch);
-    return {
-      results: sortRfbSearchResults(allResults, orderBy),
-      meta: lastMeta,
-    };
+  const parsedKnownTotal = Number(knownTotal);
+  if (knownTotal !== '' && knownTotal != null && Number.isFinite(parsedKnownTotal) && parsedKnownTotal >= 0) {
+    params.set('known_total', String(parsedKnownTotal));
+    params.set('known_total_progressive', knownTotalProgressive ? 'true' : 'false');
   }
 
-  while (true) {
-    const params = new URLSearchParams(baseParams);
-    params.set('page', page);
-    params.set('page_size', RFB_SEARCH_BATCH_SIZE);
-    params.set('order_by', orderBy);
-    if (knownTotal != null) {
-      params.set('known_total', knownTotal);
-      params.set('known_total_progressive', knownTotalProgressive ? 'true' : 'false');
-    }
-
-    const responseData = await requestPage(params, signal);
-    const pageResults = Array.isArray(responseData?.results) ? responseData.results : [];
-    const hasMore = Boolean(responseData?.has_more);
-    const signature = pageResults.length > 0
-      ? `${pageResults.length}:${pageResults[0]?.cnpj || ''}:${pageResults[pageResults.length - 1]?.cnpj || ''}`
-      : `empty:${page}`;
-
-    if (hasMore && pageSignatures.has(signature)) {
-      throw new Error('A busca repetiu o mesmo lote e foi interrompida para evitar resultados duplicados. Tente novamente.');
-    }
-    pageSignatures.add(signature);
-
-    addBatch(responseData);
-    knownTotal = Number(responseData?.total) || allResults.length;
-    knownTotalProgressive = Boolean(responseData?.progressive);
-
-    if (!hasMore || pageResults.length === 0) break;
-    page += 1;
-  }
+  const responseData = await requestPage(params, signal);
+  const results = Array.isArray(responseData?.results) ? responseData.results : [];
 
   return {
-    results: sortRfbSearchResults(allResults, orderBy),
-    meta: lastMeta,
+    results: sortRfbSearchResults(results, orderBy),
+    meta: {
+      ...(responseData || {}),
+      page: Number(responseData?.page) || normalizedPage,
+      page_size: Number(responseData?.page_size) || normalizedPageSize,
+    },
   };
 };

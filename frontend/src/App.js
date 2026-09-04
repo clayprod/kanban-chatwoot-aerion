@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
-import { fetchAllRfbSearchResults, sortRfbSearchResults } from './rfbSearch';
+import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
   DndContext,
@@ -129,45 +129,6 @@ axios.defaults.withCredentials = true;
 const requestRfbSearchPage = async (params, signal) => {
   const response = await axios.get(`/api/rfb/search?${params}`, { signal });
   return response.data || {};
-};
-
-const requestRfbSearchStream = async (params, signal, onMessage) => {
-  const response = await fetch(`/api/rfb/search?${params}`, {
-    credentials: 'include',
-    headers: { Accept: 'application/x-ndjson' },
-    signal,
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const error = new Error(payload.error || `Erro na busca (${response.status}).`);
-    error.status = response.status;
-    throw error;
-  }
-  if (!response.body) throw new Error('O navegador não conseguiu iniciar o carregamento contínuo da busca.');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const parseLine = (line) => {
-    if (!line.trim()) return;
-    const payload = JSON.parse(line);
-    if (payload.type === 'error') {
-      const error = new Error(payload.error || 'Erro na busca.');
-      error.status = payload.status || 500;
-      throw error;
-    }
-    if (payload.type === 'batch') onMessage(payload);
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    lines.forEach(parseLine);
-    if (done) break;
-  }
-  parseLine(buffer);
 };
 
 const VIEW_LABELS = {
@@ -8290,6 +8251,15 @@ function App() {
   const [rfbFiliais, setRfbFiliais] = useState({}); // cnpjBasico → filiais[]
   const [rfbResults, setRfbResults] = useState([]);
   const [rfbTotal, setRfbTotal] = useState(0);
+  const [rfbHasMore, setRfbHasMore] = useState(false);
+  const [rfbProgressive, setRfbProgressive] = useState(false);
+  const [rfbPage, setRfbPage] = useState(1);
+  const [rfbPageSize, setRfbPageSize] = useState(() => {
+    try {
+      const saved = Number(JSON.parse(localStorage.getItem('rfb_search') || '{}').pageSize);
+      return [10, 25, 50].includes(saved) ? saved : 25;
+    } catch { return 25; }
+  });
   const [rfbOrderBy, setRfbOrderBy] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('rfb_search') || '{}');
@@ -8299,7 +8269,10 @@ function App() {
   const [rfbLoading, setRfbLoading] = useState(false);
   const [rfbHasSearched, setRfbHasSearched] = useState(false);
   const [rfbError, setRfbError] = useState(null);
+  const [rfbOrderScope, setRfbOrderScope] = useState('global');
   const rfbSearchAbortRef = useRef(null);
+  const rfbActiveSearchRef = useRef(null);
+  const rfbResultsTopRef = useRef(null);
   const [rfbMunicipios, setRfbMunicipios] = useState([]);
   const [rfbCnaes, setRfbCnaes] = useState([]);
   const [rfbNaturezas, setRfbNaturezas] = useState([]);
@@ -9139,7 +9112,7 @@ function App() {
     loadTrendsIntel({ force: false });
   }, [activeView, authStatus.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const searchCompaniesFromTrendProfile = useCallback(async (suggestion) => {
+  const searchCompaniesFromTrendProfile = useCallback((suggestion) => {
     const suggested = suggestion?.filters || {};
     const nextFilters = {
       cnpj: '',
@@ -9171,11 +9144,13 @@ function App() {
     setRfbEndereco2('');
     setRfbNome2('');
     setRfbSocio2('');
+    setRfbCnaeOnlyPrincipal(false);
     setRfbMunicipioInput('');
     setRfbShowFilters(true);
     setRfbError(null);
     setActiveView('Busca Lead B2B');
     setMobileNavOpen(false);
+    setRfbPendingSearch(true);
 
     if ((suggested.cnae_labels || []).length) {
       setRfbCnaes((previous) => {
@@ -9189,76 +9164,7 @@ function App() {
       });
     }
 
-    const params = new URLSearchParams();
-    if (nextFilters.nome.trim()) {
-      params.set('nome', nextFilters.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim());
-      params.set('nome_op', 'contains');
-    }
-    if (nextFilters.uf) params.set('uf', nextFilters.uf);
-    if (nextFilters.cnae.length) params.set('cnae', nextFilters.cnae.join(','));
-    if (nextFilters.situacao.length) params.set('situacao', nextFilters.situacao.join(','));
-    if (nextFilters.porte) params.set('porte', nextFilters.porte);
-    if (capitalRange[0] > 0) params.set('capital_min', capitalRange[0]);
-    if (capitalRange[1] > 0) params.set('capital_max', capitalRange[1]);
-    if (aberturaRange[0] > 0) params.set('abertura_min_anos', aberturaRange[0]);
-    if (aberturaRange[1] > 0) params.set('abertura_max_anos', aberturaRange[1]);
-    if (!onlyMatriz) params.set('only_matriz', 'false');
-    if (mei) params.set('mei', mei);
-    if (simples) params.set('simples', simples);
-
-    rfbSearchAbortRef.current?.abort();
-    const controller = new AbortController();
-    rfbSearchAbortRef.current = controller;
-    setRfbShowFilters(false);
-    setRfbHasSearched(true);
-    setRfbResults([]);
-    setRfbTotal(0);
-    setRfbLoading(true);
-    try {
-      const { results } = await fetchAllRfbSearchResults({
-        baseParams: params,
-        orderBy: rfbOrderBy,
-        signal: controller.signal,
-        requestPage: requestRfbSearchPage,
-        requestStream: requestRfbSearchStream,
-        onBatch: (loadedResults) => {
-          if (rfbSearchAbortRef.current !== controller) return;
-          setRfbResults(loadedResults);
-          setRfbTotal(loadedResults.length);
-        },
-      });
-      if (rfbSearchAbortRef.current !== controller) return;
-      setRfbResults(results);
-      setRfbTotal(results.length);
-      try {
-        localStorage.setItem('rfb_search', JSON.stringify({
-          filters: nextFilters,
-          ops: nextOps,
-          orderBy: rfbOrderBy,
-          orderVersion: 2,
-          capitalRange,
-          aberturaRange,
-          endereco: '',
-          enderecoOp: 'contains',
-          simples,
-          mei,
-          onlyMatriz,
-          cnaeOnlyPrincipal: false,
-        }));
-      } catch {}
-    } catch (requestError) {
-      if (requestError?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
-      const message = requestError.response?.data?.error || requestError.message || 'Erro na busca.';
-      setRfbError(message);
-      setRfbResults([]);
-      setRfbTotal(0);
-    } finally {
-      if (rfbSearchAbortRef.current === controller) {
-        rfbSearchAbortRef.current = null;
-        setRfbLoading(false);
-      }
-    }
-  }, [rfbOrderBy]);
+  }, []);
 
   useEffect(() => {
     if (activeView !== 'Busca Lead B2B' || !authStatus.authenticated) return;
@@ -23853,42 +23759,67 @@ function App() {
             // Exposta para a busca global do header disparar a pesquisa após navegar até aqui.
             rfbSearchTriggerRef.current = (...args) => handleRfbSearch(...args);
             const handleRfbSearch = async (...searchArgs) => {
-              const [, , orderByOverride, filterSnap] = searchArgs;
+              const [pageOverride, pageSizeOverride, orderByOverride, filterSnap, reuseActiveSearch = false] = searchArgs;
+              const requestedPage = Math.max(1, Number(pageOverride) || 1);
+              const requestedPageSize = [10, 25, 50].includes(Number(pageSizeOverride))
+                ? Number(pageSizeOverride)
+                : rfbPageSize;
               const ob = orderByOverride  != null ? orderByOverride  : rfbOrderBy;
               setRfbExpanded(null);
               setRfbShowFilters(false);
 
-              const fp = buildFilterParams(filterSnap);
+              const activeSearch = rfbActiveSearchRef.current;
+              const canReuseActiveSearch = reuseActiveSearch && activeSearch?.params != null;
+              const fp = canReuseActiveSearch
+                ? new URLSearchParams(activeSearch.params)
+                : buildFilterParams(filterSnap);
               rfbSearchAbortRef.current?.abort();
               const controller = new AbortController();
               rfbSearchAbortRef.current = controller;
               setRfbHasSearched(true);
               setRfbError(null);
-              setRfbResults([]);
-              setRfbTotal(0);
+              if (!canReuseActiveSearch) {
+                setRfbResults([]);
+                setRfbTotal(0);
+                setRfbHasMore(false);
+                setRfbProgressive(false);
+                setRfbPage(1);
+              }
               setRfbLoading(true);
               try {
-                const { results } = await fetchAllRfbSearchResults({
+                const { results, meta } = await fetchRfbSearchPage({
                   baseParams: fp,
+                  page: requestedPage,
+                  pageSize: requestedPageSize,
                   orderBy: ob,
+                  knownTotal: canReuseActiveSearch ? rfbTotal : null,
+                  knownTotalProgressive: canReuseActiveSearch ? rfbProgressive : false,
                   signal: controller.signal,
                   requestPage: requestRfbSearchPage,
-                  requestStream: requestRfbSearchStream,
-                  onBatch: (loadedResults) => {
-                    if (rfbSearchAbortRef.current !== controller) return;
-                    setRfbResults(loadedResults);
-                    setRfbTotal(loadedResults.length);
-                  },
                 });
                 if (rfbSearchAbortRef.current !== controller) return;
+                const responseTotal = Number(meta.total);
                 setRfbResults(results);
-                setRfbTotal(results.length);
+                setRfbTotal(Number.isFinite(responseTotal) ? responseTotal : results.length);
+                setRfbHasMore(Boolean(meta.has_more));
+                setRfbProgressive(Boolean(meta.progressive));
+                setRfbPage(Number(meta.page) || requestedPage);
+                setRfbPageSize(Number(meta.page_size) || requestedPageSize);
+                setRfbOrderScope(meta.order_scope || 'global');
+                rfbActiveSearchRef.current = { params: fp.toString(), orderBy: ob };
                 try {
-                  localStorage.setItem('rfb_search', JSON.stringify({
+                  const previous = JSON.parse(localStorage.getItem('rfb_search') || '{}');
+                  localStorage.setItem('rfb_search', JSON.stringify(canReuseActiveSearch ? {
+                    ...previous,
+                    orderBy: ob,
+                    orderVersion: 2,
+                    pageSize: requestedPageSize,
+                  } : {
                     filters: filterSnap?.filters || rfbFilters,
                     ops: filterSnap?.ops || rfbOps,
                     orderBy: ob,
                     orderVersion: 2,
+                    pageSize: requestedPageSize,
                     capitalRange: filterSnap?.capitalRange || rfbCapitalRange,
                     aberturaRange: filterSnap?.aberturaRange || rfbAberturaRange,
                     endereco: filterSnap?.endereco != null ? filterSnap.endereco : rfbEndereco,
@@ -23899,13 +23830,19 @@ function App() {
                     cnaeOnlyPrincipal: filterSnap?.cnaeOnlyPrincipal != null ? filterSnap.cnaeOnlyPrincipal : rfbCnaeOnlyPrincipal,
                   }));
                 } catch {}
+                if (canReuseActiveSearch) {
+                  window.requestAnimationFrame(() => rfbResultsTopRef.current?.scrollIntoView({ block: 'start' }));
+                }
               } catch (e) {
                 if (e?.code === 'ERR_CANCELED' || controller.signal.aborted) return;
                 const msg = e.response?.data?.error || e.message || 'Erro na busca.';
                 setRfbError(msg);
-                // Limpa resultados antigos pra não confundir com a busca que falhou
-                setRfbResults([]);
-                setRfbTotal(0);
+                if (!canReuseActiveSearch) {
+                  setRfbResults([]);
+                  setRfbTotal(0);
+                  setRfbHasMore(false);
+                  setRfbProgressive(false);
+                }
               } finally {
                 if (rfbSearchAbortRef.current === controller) {
                   rfbSearchAbortRef.current = null;
@@ -23989,7 +23926,13 @@ function App() {
               setRfbNatInput('');
               setRfbResults([]);
               setRfbTotal(0);
+              setRfbHasMore(false);
+              setRfbProgressive(false);
+              setRfbPage(1);
+              setRfbPageSize(25);
               setRfbOrderBy('capital_desc');
+              setRfbOrderScope('global');
+              rfbActiveSearchRef.current = null;
               setRfbLoading(false);
               setRfbError(null);
               setLeadImportStatus(null);
@@ -23998,17 +23941,25 @@ function App() {
             };
 
             const rfbTotalLabel = rfbTotal.toLocaleString('pt-BR');
+            const rfbTotalPages = Math.max(1, Math.ceil(rfbTotal / Math.max(1, rfbPageSize)));
+            const rfbResultFrom = rfbResults.length > 0 ? ((rfbPage - 1) * rfbPageSize) + 1 : 0;
+            const rfbResultTo = rfbResults.length > 0 ? rfbResultFrom + rfbResults.length - 1 : 0;
+            const rfbCanGoNext = rfbHasMore || (!rfbProgressive && rfbPage < rfbTotalPages);
+            const handleRfbPageChange = (nextPage) => {
+              if (rfbLoading || nextPage < 1 || (nextPage > rfbPage && !rfbCanGoNext)) return;
+              handleRfbSearch(nextPage, rfbPageSize, rfbOrderBy, null, true);
+            };
             const handleRfbOrderChange = (nextOrder) => {
               setRfbOrderBy(nextOrder);
-              setRfbResults((results) => sortRfbSearchResults(results, nextOrder));
-              try {
-                const saved = JSON.parse(localStorage.getItem('rfb_search') || '{}');
-                localStorage.setItem('rfb_search', JSON.stringify({
-                  ...saved,
-                  orderBy: nextOrder,
-                  orderVersion: 2,
-                }));
-              } catch {}
+              if (rfbHasSearched && rfbActiveSearchRef.current) {
+                handleRfbSearch(1, rfbPageSize, nextOrder, null, true);
+              }
+            };
+            const handleRfbPageSizeChange = (nextPageSize) => {
+              setRfbPageSize(nextPageSize);
+              if (rfbHasSearched && rfbActiveSearchRef.current) {
+                handleRfbSearch(1, nextPageSize, rfbOrderBy, null, true);
+              }
             };
 
             // CNAE dropdown — separado para "contém" (cnae) e "não contém" (cnaeNot)
@@ -25429,7 +25380,7 @@ function App() {
                   )}
 
                   {/* ── Painel de resultados ───────────────────────────── */}
-                  <div className="min-w-0 space-y-3">
+                  <div ref={rfbResultsTopRef} className="min-w-0 scroll-mt-4 space-y-3">
 
                     {rfbError && (
                       <div className="rounded-2xl border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">{rfbError}</div>
@@ -25445,31 +25396,43 @@ function App() {
                               : <CheckBadgeIcon className="mt-0.5 h-4 w-4 shrink-0 text-status-success" aria-hidden="true" />}
                             <div className="min-w-0">
                               <p className="font-semibold text-ink">
-                                {rfbLoading ? 'Carregando todos os resultados' : `${rfbTotalLabel} empresa${rfbTotal === 1 ? '' : 's'} encontrada${rfbTotal === 1 ? '' : 's'}`}
+                                {rfbProgressive ? 'Pelo menos ' : ''}{rfbTotalLabel} empresa{rfbTotal === 1 ? '' : 's'} encontrada{rfbTotal === 1 ? '' : 's'}
                               </p>
                               <p className="mt-0.5 text-xs text-muted">
                                 {rfbLoading
-                                  ? `${rfbTotalLabel} empresa${rfbTotal === 1 ? '' : 's'} carregada${rfbTotal === 1 ? '' : 's'} até agora. A busca continua automaticamente até o fim.`
-                                  : 'Todos os resultados foram carregados e ordenados.'}
+                                  ? 'Atualizando a página…'
+                                  : `Exibindo ${rfbResultFrom.toLocaleString('pt-BR')}–${rfbResultTo.toLocaleString('pt-BR')} · página ${rfbPage}${rfbProgressive ? '' : ` de ${rfbTotalPages}`}.`}
+                                {!rfbLoading && rfbOrderScope !== 'global' && ' A ordenação é aplicada dentro de cada página.'}
                               </p>
                             </div>
                           </div>
-                          <select
-                            className={`${select} filter-select w-full text-xs sm:w-[17rem]`}
-                            value={rfbOrderBy}
-                            onChange={e => handleRfbOrderChange(e.target.value)}
-                            disabled={rfbLoading}
-                            aria-label="Ordenar resultados"
-                          >
-                            <option value="capital_desc">Capital: maior primeiro</option>
-                            <option value="razao_social">Razão social: A–Z</option>
-                            <option value="nome_fantasia">Nome fantasia: A–Z</option>
-                            <option value="uf">UF: A–Z</option>
-                            <option value="situacao">Situação: A–Z</option>
-                            <option value="capital_asc">Capital: menor primeiro</option>
-                            <option value="abertura_desc">Mais recentes</option>
-                            <option value="abertura_asc">Mais antigas</option>
-                          </select>
+                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                            <select
+                              className={`${select} filter-select w-full text-xs sm:w-[17rem]`}
+                              value={rfbOrderBy}
+                              onChange={e => handleRfbOrderChange(e.target.value)}
+                              disabled={rfbLoading}
+                              aria-label="Ordenar resultados"
+                            >
+                              <option value="capital_desc">Capital: maior primeiro</option>
+                              <option value="razao_social">Razão social: A–Z</option>
+                              <option value="nome_fantasia">Nome fantasia: A–Z</option>
+                              <option value="uf">UF: A–Z</option>
+                              <option value="situacao">Situação: A–Z</option>
+                              <option value="capital_asc">Capital: menor primeiro</option>
+                              <option value="abertura_desc">Mais recentes</option>
+                              <option value="abertura_asc">Mais antigas</option>
+                            </select>
+                            <select
+                              className={`${select} filter-select w-full text-xs sm:w-[9rem]`}
+                              value={rfbPageSize}
+                              onChange={e => handleRfbPageSizeChange(Number(e.target.value))}
+                              disabled={rfbLoading}
+                              aria-label="Resultados por página"
+                            >
+                              {[10, 25, 50].map(n => <option key={n} value={n}>{n} por página</option>)}
+                            </select>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -25478,8 +25441,8 @@ function App() {
                     {rfbLoading && rfbResults.length === 0 && (
                       <div className="rounded-[16px] border border-line bg-surf px-4 py-10 text-center" role="status" aria-live="polite">
                         <ArrowPathIcon className="mx-auto h-5 w-5 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
-                        <p className="mt-3 text-sm font-semibold text-ink">Buscando todas as empresas</p>
-                        <p className="mt-1 text-xs text-muted">Os resultados aparecerão aqui conforme forem carregados.</p>
+                        <p className="mt-3 text-sm font-semibold text-ink">Buscando empresas</p>
+                        <p className="mt-1 text-xs text-muted">Carregando até {rfbPageSize} resultados desta página.</p>
                       </div>
                     )}
 
@@ -25636,7 +25599,7 @@ function App() {
                       };
 
                       return (
-                        <div className="space-y-2">
+                        <div className={`space-y-2 transition-opacity ${rfbLoading ? 'pointer-events-none opacity-60' : ''}`} aria-busy={rfbLoading}>
                           {rfbResults.map((row, idx) => {
                             const cleanCNPJ = normalizeCnpj(row.cnpj);
                             const crmContact = leadExistingCNPJs[cleanCNPJ] || null;
@@ -25746,6 +25709,41 @@ function App() {
                         </div>
                       );
                     })()}
+
+                    {/* Paginação server-side: mantém rede, memória e DOM limitados à página atual. */}
+                    {rfbResults.length > 0 && (rfbPage > 1 || rfbCanGoNext) && (
+                      <nav
+                        className="flex flex-col items-center justify-between gap-3 rounded-[14px] border border-line bg-surf px-3 py-3 sm:flex-row"
+                        aria-label="Paginação dos resultados da busca de leads"
+                      >
+                        <p className="text-xs text-muted">
+                          {rfbResultFrom.toLocaleString('pt-BR')}–{rfbResultTo.toLocaleString('pt-BR')} de {rfbProgressive ? 'pelo menos ' : ''}{rfbTotalLabel}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleRfbPageChange(rfbPage - 1)}
+                            disabled={rfbLoading || rfbPage <= 1}
+                            className={btnSecondarySm}
+                          >
+                            <ChevronLeftIcon className="h-4 w-4" aria-hidden="true" />
+                            Anterior
+                          </button>
+                          <span className="min-w-[6.5rem] text-center text-xs font-medium tabular-nums text-ink" aria-current="page">
+                            Página {rfbPage}{rfbProgressive ? '' : ` de ${rfbTotalPages}`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRfbPageChange(rfbPage + 1)}
+                            disabled={rfbLoading || !rfbCanGoNext}
+                            className={btnSecondarySm}
+                          >
+                            Próxima
+                            <ChevronRightIcon className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </nav>
+                    )}
 
                     {/* Empty state */}
                     {!rfbLoading && rfbResults.length === 0 && rfbTotal === 0 && !rfbError && (
