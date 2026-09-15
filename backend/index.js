@@ -21093,8 +21093,10 @@ async function checkAndStartRFBImport(reason = 'scheduled-check') {
     }
     const append = result.suggested_mode === 'append';
     const details = `missing=${result.missing_count || 0}; changed=${result.changed_count || 0}`;
-    console.log(`[rfb] Atualização detectada (${reason}): ${details}; modo=${append ? 'append' : 'incremental'}`);
-    startRFBImport({ append, reason: `${reason}; ${details}` });
+    // Reimport de categoria usa staging: a busca segue servindo a base antiga
+    // até o swap, e uma interrupção não deixa tabelas truncadas em produção.
+    console.log(`[rfb] Atualização detectada (${reason}): ${details}; modo=${append ? 'append' : 'staging'}`);
+    startRFBImport({ append, staging: !append, reason: `${reason}; ${details}` });
   } catch (e) {
     console.error(`[rfb] Erro na checagem de atualização (${reason}):`, e.message);
   } finally {
@@ -22403,14 +22405,14 @@ app.get('/api/rfb/import-progress', (req, res) => {
 });
 
 // POST /api/rfb/import/start — manual trigger (re-import)
-// Body: { force: true } força re-download; { staging: true } zero-downtime; { append: true } gap-fill
+// Body: { force: true } força re-download; staging (zero-downtime) é o padrão — { staging: false } trunca direto; { append: true } gap-fill
 app.post('/api/rfb/import/start', (req, res) => {
   if (rfbImportState.status === 'running') {
     return res.status(409).json({ error: 'Import já em andamento' });
   }
   const force   = Boolean(req.body?.force);
-  const staging = Boolean(req.body?.staging);
   const append  = Boolean(req.body?.append);
+  const staging = !append && req.body?.staging !== false;
   startRFBImport({ force, staging, append });
   const mode = staging ? 'staging (zero-downtime)' : force ? 'completo (force)' : append ? 'append (gap-fill)' : 'incremental';
   res.json({ ok: true, message: `Import ${mode} iniciado` });

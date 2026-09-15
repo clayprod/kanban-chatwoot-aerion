@@ -14,10 +14,12 @@ import sys
 import re
 import csv
 import json
+import time
 import zipfile
 import argparse
 import requests
 import psycopg2
+import psycopg2.errors
 import psycopg2.extras
 from psycopg2 import sql
 from pathlib import Path
@@ -253,13 +255,73 @@ def create_staging_tables(conn):
     conn.commit()
 
 
+def drop_staging_tables(conn):
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+    with conn.cursor() as cur:
+        for t in ALL_RFB_TABLES:
+            cur.execute(f'DROP TABLE IF EXISTS {t}_new CASCADE')
+    conn.commit()
+
+
+def clone_production_indexes(conn, staged_tables):
+    """Replica na _new todo índice que existe na tabela de produção.
+    Índices criados fora de create_indexes (ex.: pelo backend ou manualmente
+    para performance da busca) seriam perdidos no swap sem isso.
+    """
+    progress('running', 'Replicando índices de produção nas tabelas staging...')
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname = current_schema() AND tablename = ANY(%s)",
+            (list(staged_tables),),
+        )
+        rows = cur.fetchall()
+    conn.commit()
+    for table, index_name, indexdef in rows:
+        new_def = re.sub(
+            rf'^CREATE (UNIQUE )?INDEX {re.escape(index_name)} ON (\S+\.)?{re.escape(table)} ',
+            lambda m: f'CREATE {m.group(1) or ""}INDEX IF NOT EXISTS {index_name}_new ON {table}_new ',
+            indexdef,
+        )
+        if new_def == indexdef:
+            progress('running', f'[warn] índice não replicável: {index_name}')
+            continue
+        try:
+            with conn.cursor() as cur:
+                cur.execute(new_def)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            progress('running', f'[warn] falha ao replicar {index_name}: {e}')
+
+
 def swap_staging_tables(conn, staged_tables):
     """Swap atômico: prod → _old, _new → prod, drop _old.
     staged_tables: conjunto de nomes de tabelas que foram importadas em _new.
     Tabelas não staged (não houve mudança de arquivo) ficam intocadas.
     """
     progress('running', 'Aplicando swap atômico das tabelas staging...')
+    # O RENAME precisa de lock exclusivo; buscas longas podem segurá-lo.
+    # lock_timeout evita enfileirar todas as buscas novas atrás do swap.
+    for attempt in range(1, 11):
+        try:
+            _swap_staging_tables_once(conn, staged_tables)
+            break
+        except psycopg2.errors.LockNotAvailable:
+            conn.rollback()
+            progress('running', f'Swap aguardando lock (tentativa {attempt}/10)...')
+            time.sleep(30)
+    else:
+        raise RuntimeError('não foi possível obter lock para o swap das tabelas')
+    progress('running', f'Swap concluído: {", ".join(staged_tables)}')
+
+
+def _swap_staging_tables_once(conn, staged_tables):
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL lock_timeout = '10s'")
         # Renomeia em uma única transação: prod→_old, new→prod
         for t in staged_tables:
             cur.execute(f'ALTER TABLE {t} RENAME TO {t}_old')
@@ -289,7 +351,6 @@ def swap_staging_tables(conn, staged_tables):
             if t not in staged_tables:
                 cur.execute(f'DROP TABLE IF EXISTS {t}_new CASCADE')
     conn.commit()
-    progress('running', f'Swap concluído: {", ".join(staged_tables)}')
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
@@ -411,6 +472,30 @@ def record_imported_file(conn, filename, table, remote_size, records):
     conn.commit()
 
 
+def find_depleted_tables(conn):
+    """Tabelas cujo volume real está muito abaixo do registrado em rfb_arquivos."""
+    depleted = set()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT table_name, SUM(records) FROM rfb_arquivos GROUP BY table_name')
+            recorded = cur.fetchall()
+            for table, expected in recorded:
+                if table not in TABLE_COLUMNS or not expected:
+                    continue
+                cur.execute(sql.SQL('SELECT EXISTS (SELECT 1 FROM {} LIMIT 1)').format(sql.Identifier(table)))
+                if not cur.fetchone()[0]:
+                    depleted.add(table)
+                    continue
+                cur.execute('SELECT reltuples FROM pg_class WHERE oid = %s::regclass', (table,))
+                estimate = cur.fetchone()[0]
+                if estimate > 0 and estimate < int(expected) * 0.5:
+                    depleted.add(table)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    return depleted
+
+
 def check_remote_updates(conn, dev_limit):
     token = parse_token(BASE_URL)
     all_zips = discover_files(token)
@@ -423,6 +508,8 @@ def check_remote_updates(conn, dev_limit):
     if selected:
         period_match = re.search(r'(\d{4}-\d{2})', selected[0].get('href', ''))
         remote_period = period_match.group(1) if period_match else None
+
+    depleted = find_depleted_tables(conn)
 
     for z in selected:
         filename = Path(z['href']).name
@@ -437,6 +524,11 @@ def check_remote_updates(conn, dev_limit):
             missing.append(item)
         elif remote > 0 and int(local) != remote:
             item['local_size'] = int(local)
+            changed.append(item)
+        elif item['table_name'] in depleted:
+            # rfb_arquivos diz importado, mas a tabela perdeu os dados (import
+            # truncado e interrompido). Força reimport da categoria.
+            item['reason'] = 'table_depleted'
             changed.append(item)
 
     suggested_mode = 'none'
@@ -574,6 +666,7 @@ def main():
             def _dl(z):
                 return download_file(token, z['href'], DATA_PATH), z.get('size', 0)
 
+            download_errors = []
             with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(to_download)))) as ex:
                 futures = {ex.submit(_dl, z): z for z in to_download}
                 for fut in as_completed(futures):
@@ -581,7 +674,16 @@ def main():
                         local_path, rsize = fut.result()
                         to_import.append((local_path, rsize))
                     except Exception as e:
+                        download_errors.append(Path(futures[fut]['href']).name)
                         progress('running', f'Erro no download: {e}', error=str(e))
+            # Truncate/staging substituem a categoria inteira: importar só parte
+            # dos arquivos deixaria a tabela com buracos. Aborta antes de mexer.
+            if download_errors and not args.append:
+                progress('error', f'Download falhou para {len(download_errors)} arquivo(s): '
+                         f'{", ".join(download_errors[:5])} — import abortado sem alterar tabelas',
+                         error='download_failed')
+                conn.close()
+                sys.exit(1)
         except Exception as e:
             progress('error', f'Erro ao descobrir arquivos: {e}', error=str(e))
             sys.exit(1)
@@ -626,6 +728,10 @@ def main():
 
     totals = {}
     total_zips = len(to_import)
+    # Em staging, rfb_arquivos só é atualizado depois do swap: se o processo
+    # morrer antes, os arquivos continuam pendentes e o próximo ciclo refaz.
+    pending_records = []
+    failed_zips = []
     for zip_idx, (zip_path, remote_size) in enumerate(to_import):
         cat   = classify(zip_path.name).lower()
         table = FILE_TABLE_MAP.get(cat)
@@ -652,7 +758,10 @@ def main():
                     except Exception:
                         pass
 
-            record_imported_file(conn, zip_path.name, table, remote_size, zip_records)
+            if args.staging:
+                pending_records.append((zip_path.name, table, remote_size, zip_records))
+            else:
+                record_imported_file(conn, zip_path.name, table, remote_size, zip_records)
             try:
                 zip_path.unlink()
                 progress('running', f'ZIP removido: {zip_path.name}')
@@ -660,16 +769,28 @@ def main():
                 pass
 
         except Exception as e:
-            progress('error', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
+            failed_zips.append(zip_path.name)
+            progress('running', f'Erro ao processar {zip_path.name}: {e}', error=str(e))
             try:
                 conn.rollback()
             except Exception:
                 pass
 
+    if args.staging and failed_zips:
+        # Nunca promove staging incompleta: produção fica intacta.
+        drop_staging_tables(conn)
+        conn.close()
+        progress('error', f'Import falhou em {len(failed_zips)} arquivo(s): {", ".join(failed_zips[:5])} '
+                 '— swap cancelado, tabelas de produção preservadas', error='import_failed')
+        sys.exit(1)
+
     create_indexes(conn, suffix=idx_suffix)
 
     if args.staging:
+        clone_production_indexes(conn, set(tbls_affected))
         swap_staging_tables(conn, set(tbls_affected))
+        for rec in pending_records:
+            record_imported_file(conn, *rec)
     elif args.append:
         progress('running', 'Append concluído — índices atualizados nas tabelas de produção')
 
