@@ -488,7 +488,9 @@ def find_depleted_tables(conn):
                     continue
                 cur.execute('SELECT reltuples FROM pg_class WHERE oid = %s::regclass', (table,))
                 estimate = cur.fetchone()[0]
-                if estimate > 0 and estimate < int(expected) * 0.5:
+                # 85%: a perda de um único arquivo grande (ex.: Empresas0) já
+                # derruba a tabela para ~60% do registrado.
+                if estimate > 0 and estimate < int(expected) * 0.85:
                     depleted.add(table)
         conn.commit()
     except Exception:
@@ -793,6 +795,17 @@ def main():
             record_imported_file(conn, *rec)
     elif args.append:
         progress('running', 'Append concluído — índices atualizados nas tabelas de produção')
+
+    # Atualiza estatísticas: o planner da busca e as contagens do status
+    # (reltuples) ficam defasados até o autoanalyze depois de um import grande.
+    for t in sorted(set(tbls_affected)):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL('ANALYZE {}').format(sql.Identifier(t)))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            progress('running', f'[warn] ANALYZE {t} falhou: {e}')
 
     conn.close()
 
