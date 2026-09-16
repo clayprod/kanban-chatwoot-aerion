@@ -148,16 +148,46 @@ def download_file(token, href, dest):
         return local
 
     progress('running', f'Baixando {filename}...', file=filename, percent=0)
-    downloaded = 0
-    with requests.get(url, auth=(token, ''), stream=True, timeout=300) as r:
-        r.raise_for_status()
-        with open(local, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1 << 20):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if remote_sz > 0:
-                    pct = int(downloaded * 100 / remote_sz)
-                    progress('running', f'Baixando {filename}', file=filename, percent=pct)
+    # O servidor da RF derruba conexões longas: um único timeout descartava o
+    # arquivo inteiro. Retoma por Range a partir do que já está em disco.
+    attempts = int(os.environ.get('RFB_DOWNLOAD_ATTEMPTS', '10'))
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        downloaded = local.stat().st_size if local.exists() else 0
+        if remote_sz > 0 and downloaded >= remote_sz:
+            break
+        headers = {'Range': f'bytes={downloaded}-'} if downloaded else {}
+        try:
+            with requests.get(url, auth=(token, ''), stream=True, timeout=(30, 120),
+                              headers=headers) as r:
+                # 416 = já temos o arquivo inteiro; 200 num retry = servidor
+                # ignorou o Range, então reescreve do zero.
+                if r.status_code == 416:
+                    break
+                r.raise_for_status()
+                resuming = r.status_code == 206 and downloaded > 0
+                if not resuming:
+                    downloaded = 0
+                with open(local, 'ab' if resuming else 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1 << 20):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if remote_sz > 0:
+                            pct = int(downloaded * 100 / remote_sz)
+                            progress('running', f'Baixando {filename}', file=filename, percent=pct)
+            if remote_sz <= 0 or local.stat().st_size >= remote_sz:
+                break
+            last_error = f'download incompleto ({local.stat().st_size}/{remote_sz} bytes)'
+        except Exception as e:
+            last_error = str(e)
+        progress('running', f'{filename}: {last_error} — retomando ({attempt}/{attempts})',
+                 file=filename)
+        time.sleep(min(60, 10 * attempt))
+    else:
+        raise RuntimeError(f'{filename}: download falhou após {attempts} tentativas — {last_error}')
+
+    if remote_sz > 0 and local.stat().st_size != remote_sz:
+        raise RuntimeError(f'{filename}: tamanho final {local.stat().st_size} != remoto {remote_sz}')
     progress('running', f'Download concluído: {filename}', file=filename, percent=100)
     return local
 
