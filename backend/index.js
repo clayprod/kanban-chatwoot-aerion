@@ -19256,7 +19256,23 @@ const fetchGoogleTrendsRssFallback = async () => {
  * Fallback setorial estável (sem pytrends): Google News RSS no BR
  * para as seeds do negócio. Funciona mesmo com 429 no Trends Explore.
  */
-const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS) => {
+const fetchSectorNewsForSeeds = async (seeds = TRENDS_SEEDS, { attempts = 3 } = {}) => {
+  // O cache é diário: uma resposta vazia momentânea do Google News deixava o
+  // painel sem notícia setorial pelo resto do dia. Tenta de novo antes de desistir.
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetchSectorNewsForSeedsOnce(seeds);
+    } catch (err) {
+      lastError = err;
+      console.warn(`[trends-intel] news sector tentativa ${attempt}/${attempts}: ${err.message}`);
+      if (attempt < attempts) await new Promise((r) => setTimeout(r, 3000 * attempt));
+    }
+  }
+  throw lastError;
+};
+
+const fetchSectorNewsForSeedsOnce = async (seeds = TRENDS_SEEDS) => {
   const list = (seeds || []).map((s) => String(s).trim()).filter(Boolean).slice(0, 6);
   if (!list.length) throw new Error('Sem TRENDS_SEEDS para news setorial');
 

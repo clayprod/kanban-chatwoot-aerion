@@ -4199,7 +4199,9 @@ const RadarTrendsPage = memo(function RadarTrendsPage({
   const trends = trendsIntel?.trends || [];
   const suggestions = trendsIntel?.intel?.suggestions || [];
   const trendsSource = String(trendsIntel?.meta?.source || '');
-  const isNewsMode = /news_sector|google_news|rss/i.test(trendsSource);
+  // 'rss' fora da regex de propósito: google_trends_rss_fallback é o ranking
+  // geral do país, não notícia do setor — não pode alimentar a vitrine.
+  const isNewsMode = /news_sector|google_news/i.test(trendsSource);
   const isRelatedMode = /pytrends|related/i.test(trendsSource);
   const relatedTrends = isRelatedMode ? trends : [];
   const collectedNews = Array.isArray(trendsIntel?.news) ? trendsIntel.news : [];

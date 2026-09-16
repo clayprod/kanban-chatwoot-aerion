@@ -224,8 +224,11 @@ const combineTrendsFeeds = ({
   const relatedReady = hasItems(related);
   const sectorNewsReady = hasItems(sectorNews);
   const rssReady = hasItems(rss);
-  const newsPayload = sectorNewsReady ? sectorNews : (rssReady ? rss : null);
-  const intelPayload = relatedReady ? related : newsPayload;
+  // A vitrine de notícias só aceita fonte setorial. O RSS "em alta no BR" é o
+  // ranking geral do país (novela, futebol, game) e não é notícia do setor:
+  // usá-lo aqui enchia o painel de assuntos sem relação com o negócio.
+  const newsPayload = sectorNewsReady ? sectorNews : null;
+  const intelPayload = relatedReady ? related : (newsPayload || (rssReady ? rss : null));
 
   if (!intelPayload) return null;
 
