@@ -20708,7 +20708,12 @@ const buildTrendsIntelPayload = async ({ force = false } = {}) => {
   const cacheIsUsableSector = (meta) => {
     if (Number(meta?.mediaVersion || 0) < TRENDS_MEDIA_VERSION) return false;
     if (!TRENDS_SEEDS.length) return true;
-    return isSectorTrendsSource(meta?.source);
+    if (!isSectorTrendsSource(meta?.source)) return false;
+    // A vitrine de notícias tem fonte própria: com os correlatos vindos do
+    // pytrends, um newsSource geral (RSS do país) passava como cache válido e
+    // o painel ficava o dia inteiro mostrando assunto fora do setor.
+    const newsSource = meta?.newsSource || null;
+    return !newsSource || isSectorTrendsSource(newsSource);
   };
 
   if (!force && trendsIntelMemory?.dayKey === dayKey && trendsIntelMemory.payload) {
