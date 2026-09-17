@@ -22168,7 +22168,13 @@ app.get('/api/rfb/search', async (req, res) => {
     // ORDER BY na SQL usa e.cnpj_basico (chave primária = 0-copy index scan + early termination).
     // Os resultados são re-ordenados em JS pelo campo solicitado — evita full sort no PG para
     // buscas amplas (ex: "elg" → 28K matches → ORDER BY razao_social forçaria sort de 28K rows).
-    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0`;
+    // enable_mergejoin=off com conjunto candidato (nome/sócio/CNAE/endereço): o planner
+    // estima dezenas de milhares de linhas onde existem poucas dezenas e troca o nested
+    // loop a partir do CTE por merge join, varrendo idx_rfb_est_unique inteiro (69M linhas,
+    // ~8GB) para achar 8 matches — 113s vs 0,1-2s. Sem CTE o merge join segue liberado.
+    const candidateSetSearch = hasNarrowFilter || hasTextCandidateSearch;
+    const MERGEJOIN_OPT = candidateSetSearch ? "; SET enable_mergejoin = off" : '';
+    const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0${MERGEJOIN_OPT}`;
     const selectQuery = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
@@ -22251,7 +22257,7 @@ app.get('/api/rfb/search', async (req, res) => {
       try {
         await client.query('BEGIN READ ONLY');
         inTransaction = true;
-        await client.query(`SET LOCAL statement_timeout = '120s'; SET LOCAL random_page_cost = 1.0; SET LOCAL work_mem = '64MB'; SET LOCAL max_parallel_workers_per_gather = 0`);
+        await client.query(`SET LOCAL statement_timeout = '120s'; SET LOCAL random_page_cost = 1.0; SET LOCAL work_mem = '64MB'; SET LOCAL max_parallel_workers_per_gather = 0${candidateSetSearch ? '; SET LOCAL enable_mergejoin = off' : ''}`);
         await client.query(`DECLARE rfb_search_all NO SCROLL CURSOR FOR ${ctePrefix} ${selectQuery}`, params);
 
         let streamedTotal = 0;
