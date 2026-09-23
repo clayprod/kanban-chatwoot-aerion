@@ -37,6 +37,13 @@ const {
   closeContactReminder,
   processContactFollowups,
 } = require('./contactFollowups');
+const { selecionarPublico: selecionarPublicoDisparo } = require('./disparoAudiencia');
+const {
+  AI_FOLLOWUP_LOG_TABLE,
+  carregarConfig: carregarConfigAiFollowup,
+  createAiFollowupTable,
+  runAiFollowupTick,
+} = require('./aiFollowups');
 const {
   createCallTranscriptsTable,
   registerCallTranscriptRoutes,
@@ -1010,6 +1017,11 @@ async function ensureDisparoTable() {
         status TEXT NOT NULL DEFAULT 'queued'
       )
     `);
+    // Trilha local de auditoria: sem isto nao da para responder "pra quem foi esse
+    // disparo?" sem depender do n8n.
+    await pool.query(`ALTER TABLE ${DISPARO_LOG_TABLE} ADD COLUMN IF NOT EXISTS campanha_ids TEXT`);
+    await pool.query(`ALTER TABLE ${DISPARO_LOG_TABLE} ADD COLUMN IF NOT EXISTS destinatarios JSONB`);
+    await pool.query(`ALTER TABLE ${DISPARO_LOG_TABLE} ADD COLUMN IF NOT EXISTS resumo JSONB`);
   } catch (error) {
     console.error('ensureDisparoTable failed:', error.message);
   }
@@ -1062,6 +1074,20 @@ const disparoIdentityKeys = (item) => [...new Set([
 
 // Mesmo teto do disparo-wpp (LIMITE_POR_INSTANCIA): mensagens/dia por instância.
 const DISPARO_MAX_POR_DIA_INSTANCIA = 30;
+
+// Janela (dias) que define "conversa em atendimento" para o filtro anti-spam.
+// Conversa aberta e parada ha mais tempo que isso NAO bloqueia o disparo.
+const DISPARO_CONVERSA_ATIVA_DIAS = Math.max(
+  0,
+  Number.parseInt(process.env.DISPARO_CONVERSA_ATIVA_DIAS || '7', 10) || 7
+);
+
+// Traduz uma excecao de `disparoFetch` na causa real (timeout, HTTP, corpo do
+// webhook) em vez de um "AbortError" opaco.
+const PREFIXO_ERRO_WEBHOOK = /^Webhook\s+\S+:\s*/;
+const descreverErroDisparo = (error) => (error && error.name === 'AbortError')
+  ? 'Tempo esgotado aguardando o n8n (timeout).'
+  : String((error && error.message) || 'Erro desconhecido').replace(PREFIXO_ERRO_WEBHOOK, '');
 
 async function disparoFetch(path, { method = 'GET', body, timeoutMs = 25000 } = {}) {
   const controller = new AbortController();
@@ -1374,8 +1400,12 @@ const enriquecerContatosDisparo = (contatos, mensagens) => contatos.map((c, i) =
   };
 });
 
-// Resolve o público direto no banco do Chatwoot com os mesmos seletores da UI
-// (funil/tags/canal/ddd em AND entre grupos preenchidos), deduplicado por telefone.
+// Resolve o público direto no banco do Chatwoot com os mesmos seletores da UI,
+// deduplicado por telefone. Entre grupos preenchidos (funil/tags/canal/ddd/contatos)
+// quem decide é o `combinar` da UI: true = OU (união), false = E (interseção).
+// Antes o backend forçava E e ignorava esse campo, o que fazia "etapa X + 3 contatos"
+// virar uma interseção quase sempre vazia.
+// Retorna { publico, descartados, totalBase } para a UI conseguir explicar a perda.
 async function resolverPublicoDisparo(destinatarios) {
   const { rows } = await pool.query(
     `SELECT c.id, c.name, c.phone_number,
@@ -1391,35 +1421,17 @@ async function resolverPublicoDisparo(destinatarios) {
       GROUP BY c.id`,
     [CHATWOOT_ACCOUNT_ID]
   );
-  const idsFixos = new Set((destinatarios.contatos || [])
-    .map(c => Number(typeof c === 'object' && c !== null ? c.id : c))
-    .filter(Number.isFinite));
-  const telefonesVistos = new Set();
-  const publico = [];
-  for (const row of rows) {
-    if (destinatarios.funil_vendas.length && !destinatarios.funil_vendas.includes(row.funil)) continue;
-    if (destinatarios.tags.length && !destinatarios.tags.some(tag => (row.labels || []).includes(tag))) continue;
-    if (destinatarios.canais.length && !destinatarios.canais.includes(row.canal)) continue;
-    if (destinatarios.ddds.length && !destinatarios.ddds.includes(disparoDdd(row.phone_number))) continue;
-    if (idsFixos.size && !idsFixos.has(Number(row.id))) continue;
-    const atributos = row.atributos && typeof row.atributos === 'object' ? row.atributos : {};
-    const boolAttr = (keys) => keys.some(key => ['true', '1', 'yes', 'sim'].includes(String(atributos[key]).trim().toLowerCase()));
-    if (boolAttr(['whatsapp_opt_out', 'opt_out', 'nao_contatar', 'não_contatar', 'bloqueado'])) continue;
-    if (disparoRequireOptIn() && !boolAttr(['whatsapp_opt_in', 'opt_in', 'consentimento_whatsapp', 'consentimento'])) continue;
-    const telefone = String(row.phone_number).trim();
-    const chave = telefone.replace(/\D/g, '');
-    if (!chave || telefonesVistos.has(chave)) continue;
-    telefonesVistos.add(chave);
-    // `nome` = contacts.name do Chatwoot (pessoa ou razão social cadastrada no contato)
-    publico.push({ id: Number(row.id), nome: row.name, telefone, empresa: row.empresa || null });
-  }
-  return publico;
+  return selecionarPublicoDisparo(rows, destinatarios, { requireOptIn: disparoRequireOptIn() });
 }
 
 // Filtros anti-spam ligados ao Chatwoot: cooldown de quem já recebeu mensagem
-// nossa há pouco tempo e contatos com conversa aberta (já em atendimento).
-async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbertas, inboxIds }) {
+// nossa há pouco tempo e contatos realmente em atendimento (conversa aberta E
+// com atividade nos últimos `conversaAtivaDias` dias).
+async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbertas, conversaAtivaDias, inboxIds }) {
   const descartados = { cooldown: 0, conversas_abertas: 0 };
+  const janelaAtiva = Number.isFinite(Number(conversaAtivaDias))
+    ? Math.max(0, Math.floor(Number(conversaAtivaDias)))
+    : DISPARO_CONVERSA_ATIVA_DIAS;
   const ids = publico.map(c => c.id);
   if (!ids.length || !inboxIds.length) return { publico, descartados };
   const excluir = new Set();
@@ -1437,10 +1449,20 @@ async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbe
     descartados.cooldown = excluir.size;
   }
   if (pularConversasAbertas) {
+    // "Conversa aberta" (status = 0) NAO significa atendimento em curso: neste
+    // Chatwoot ninguem resolve conversa, entao status 0 e o estado default de toda
+    // conversa que ja existiu (2040 abertas x 3 resolvidas em set/2026, 1516 delas
+    // paradas ha mais de 90 dias). Usar isso como filtro descartava a base inteira
+    // e fazia campanhas de centenas de leads sairem para 1 pessoa. O que interessa
+    // e atendimento VIVO: conversa aberta com atividade recente.
     const { rows } = await pool.query(
-      `SELECT DISTINCT contact_id FROM conversations
-        WHERE account_id = $1 AND status = 0 AND inbox_id = ANY($2) AND contact_id = ANY($3)`,
-      [CHATWOOT_ACCOUNT_ID, inboxIds, ids]
+      `SELECT DISTINCT conv.contact_id
+         FROM conversations conv
+        WHERE conv.account_id = $1 AND conv.status = 0
+          AND conv.inbox_id = ANY($2) AND conv.contact_id = ANY($3)
+          AND COALESCE(conv.last_activity_at, conv.updated_at, conv.created_at)
+              >= NOW() - make_interval(days => $4)`,
+      [CHATWOOT_ACCOUNT_ID, inboxIds, ids, janelaAtiva]
     );
     for (const r of rows) {
       const id = Number(r.contact_id);
@@ -1449,6 +1471,39 @@ async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbe
     }
   }
   return { publico: publico.filter(c => !excluir.has(c.id)), descartados };
+}
+
+// Resolve o público e aplica os filtros anti-spam, devolvendo o mesmo `resumo`
+// que a UI mostra. Usado pelo /api/disparo/send e pelo /api/disparo/preview —
+// o preview precisa ser o MESMO calculo do envio, senao volta a mentir.
+async function resolverPublicoComFiltros({ destinatarios, antiBan, inboxIds }) {
+  const { publico: publicoBruto, descartados: descartesSeletor, totalBase } =
+    await resolverPublicoDisparo(destinatarios);
+  const { publico, descartados } = await aplicarFiltrosChatwoot(publicoBruto, {
+    cooldownDias: antiBan.cooldownDias,
+    pularConversasAbertas: antiBan.pularConversasAbertas,
+    conversaAtivaDias: antiBan.conversaAtivaDias,
+    inboxIds,
+  });
+  const resumo = {
+    base: totalBase,
+    publico: publicoBruto.length,
+    apos_filtros: publico.length,
+    descartados: {
+      ...descartados,
+      opt_out: descartesSeletor.opt_out,
+      sem_opt_in: descartesSeletor.sem_opt_in,
+      duplicados: descartesSeletor.duplicados,
+    },
+    so_contatos_manuais: antiBan.soContatosManuais,
+    filtros: {
+      cooldownDias: antiBan.cooldownDias,
+      pularConversasAbertas: antiBan.pularConversasAbertas,
+      conversaAtivaDias: antiBan.conversaAtivaDias,
+      combinar: Boolean(destinatarios.combinar),
+    },
+  };
+  return { publico, publicoBruto, resumo };
 }
 
 // Última conversa WhatsApp de cada contato → instância "dona" do lead, para que
@@ -1481,8 +1536,49 @@ async function ultimaInstanciaPorContato(ids, inboxParaInstancia) {
 // pularConversasAbertas (não interrompe atendimento em curso), priorizarRecentes
 // (leads quentes primeiro, resto embaralhado). Quando ativa, o público é resolvido
 // no banco do Chatwoot e vira uma campanha em modo `contatos` por instância.
-app.post('/api/disparo/send', requireAdmin, async (req, res) => {
-  const body = req.body || {};
+// Pre-visualiza o publico sem tocar no n8n. Existe porque a tela mostrava apenas
+// "N na fila" no sucesso e escondia quantos foram descartados: uma campanha de 258
+// leads saiu para 1 pessoa (77 barrados pelo filtro de conversa aberta) sem nenhum
+// aviso. Agora da para ver a perda ANTES de disparar.
+app.post('/api/disparo/preview', requireAdmin, async (req, res) => {
+  const { destinatarios, instancias, antiBan, hasSelector } = normalizarPedidoDisparo(req.body || {});
+  if (!hasSelector) {
+    return res.status(400).json({ error: 'Selecione ao menos um público (funil, tags, canal, DDD ou contatos).' });
+  }
+  try {
+    // Sem instância escolhida ainda, considera todos os inboxes mapeados: o preview
+    // não deve exigir que o usuário já tenha decidido o número de saída.
+    let instanciasInfo = [];
+    try {
+      instanciasInfo = (await listarInstanciasVerificadas()).instancias || [];
+    } catch (error) {
+      console.warn('[disparo] preview sem lista de instâncias:', error.message);
+    }
+    const alvo = instancias.length
+      ? instanciasInfo.filter(i => instancias.some(sel => String(sel) === String(i.id)
+          || String(sel) === String(i.instancia_nome) || String(sel) === String(i.nome)))
+      : instanciasInfo;
+    const inboxParaInstancia = alvo.length ? await disparoInboxesPorInstancia(alvo) : new Map();
+    const { publico, resumo } = await resolverPublicoComFiltros({
+      destinatarios,
+      antiBan,
+      inboxIds: [...inboxParaInstancia.keys()],
+    });
+    return res.json({
+      ...resumo,
+      inboxes_considerados: inboxParaInstancia.size,
+      amostra: publico.slice(0, 50).map(c => ({ id: c.id, nome: c.nome, telefone: c.telefone })),
+    });
+  } catch (error) {
+    console.error('disparo preview falhou:', error.message);
+    return res.status(502).json({ error: 'Não foi possível calcular o público.', detail: error.message });
+  }
+});
+
+// Normaliza o corpo (mensagens, destinatarios, instancias, config, antiBan).
+// Extraido para que /api/disparo/preview calcule EXATAMENTE o mesmo publico que
+// o /api/disparo/send vai usar — um preview que diverge do envio nao serve.
+function normalizarPedidoDisparo(body = {}) {
   // Messages: accept rich `mensagens` array or legacy single `message`.
   const mensagens = (Array.isArray(body.mensagens) && body.mensagens.length)
     ? body.mensagens.map(m => ({
@@ -1539,10 +1635,26 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
     pularConversasAbertas: soContatosManuais
       ? false
       : cfg.pularConversasAbertas !== false,
+    conversaAtivaDias: Number.isFinite(Number(cfg.conversaAtivaDias))
+      ? Math.max(0, Math.floor(Number(cfg.conversaAtivaDias)))
+      : DISPARO_CONVERSA_ATIVA_DIAS,
     soContatosManuais,
   };
-  const hasSelector = destinatarios.funil_vendas.length || destinatarios.tags.length
-    || destinatarios.canais.length || destinatarios.ddds.length || destinatarios.contatos.length;
+  const hasSelector = Boolean(destinatarios.funil_vendas.length || destinatarios.tags.length
+    || destinatarios.canais.length || destinatarios.ddds.length || destinatarios.contatos.length);
+  const audienceLabel = `${destinatarios.modo}: ${[...destinatarios.funil_vendas, ...destinatarios.tags, ...destinatarios.canais, ...destinatarios.ddds].join(', ') || `${destinatarios.contatos.length} contato(s)`}`;
+  const firstText = (mensagens.find(m => m.texto)?.texto) || '(mídia)';
+  return {
+    mensagens, destinatarios, instancias, nomeCampanha, config,
+    antiBan, soContatosManuais, hasSelector, audienceLabel, firstText,
+  };
+}
+
+app.post('/api/disparo/send', requireAdmin, async (req, res) => {
+  const {
+    mensagens, destinatarios, instancias, nomeCampanha, config,
+    antiBan, soContatosManuais, hasSelector, audienceLabel, firstText,
+  } = normalizarPedidoDisparo(req.body || {});
   if (!mensagens.length || !mensagens.some(m => m.texto || m.arquivo_base64)) {
     return res.status(400).json({ error: 'Adicione ao menos uma mensagem.' });
   }
@@ -1550,8 +1662,6 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Selecione ao menos um público (funil, tags, canal, DDD ou contatos).' });
   }
   if (!instancias.length) return res.status(400).json({ error: 'Selecione ao menos uma instância.' });
-  const audienceLabel = `${destinatarios.modo}: ${[...destinatarios.funil_vendas, ...destinatarios.tags, ...destinatarios.canais, ...destinatarios.ddds].join(', ') || `${destinatarios.contatos.length} contato(s)`}`;
-  const firstText = (mensagens.find(m => m.texto)?.texto) || '(mídia)';
 
   if (!disparoBase()) {
     const logId = await registrarDisparoLog(req, audienceLabel, destinatarios.contatos.length, firstText, 'unconfigured');
@@ -1609,36 +1719,30 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
           error: 'Não existe mapeamento seguro entre as instâncias selecionadas e os inboxes do Chatwoot. Configure o vínculo antes de disparar.',
         });
       }
-      const publicoBruto = await resolverPublicoDisparo(destinatarios);
-      const { publico, descartados } = await aplicarFiltrosChatwoot(publicoBruto, {
-        cooldownDias: antiBan.cooldownDias,
-        pularConversasAbertas: antiBan.pularConversasAbertas,
+      const { publico, publicoBruto, resumo: resumoCalculado } = await resolverPublicoComFiltros({
+        destinatarios,
+        antiBan,
         inboxIds: [...inboxParaInstancia.keys()],
       });
+      const descartados = resumoCalculado.descartados;
       if (!publico.length) {
         const partes = [];
         if (descartados.cooldown > 0) {
           partes.push(`${descartados.cooldown} em cooldown (${antiBan.cooldownDias} dia${antiBan.cooldownDias === 1 ? '' : 's'})`);
         }
         if (descartados.conversas_abertas > 0) {
-          partes.push(`${descartados.conversas_abertas} com conversa aberta`);
+          partes.push(`${descartados.conversas_abertas} em atendimento ativo (${antiBan.conversaAtivaDias}d)`);
         }
+        if (descartados.opt_out > 0) partes.push(`${descartados.opt_out} com opt-out`);
+        if (descartados.duplicados > 0) partes.push(`${descartados.duplicados} telefone(s) duplicado(s)`);
         const detalhe = partes.length ? ` Descartados: ${partes.join('; ')}.` : '';
         const dica = antiBan.cooldownDias > 0 || antiBan.pularConversasAbertas
-          ? ' Para um teste pontual, na etapa Ritmo defina cooldown = 0 e desative “Pular conversas abertas”.'
+          ? ' Para um teste pontual, na etapa Ritmo defina cooldown = 0 e desative “Pular quem está em atendimento”.'
           : ' Ajuste o público e tente de novo.';
         return res.status(400).json({
           configured: true,
           error: `Nenhum contato restante após os filtros anti-spam.${detalhe}${dica}`,
-          resumo: {
-            publico: publicoBruto.length,
-            apos_filtros: 0,
-            descartados,
-            filtros: {
-              cooldownDias: antiBan.cooldownDias,
-              pularConversasAbertas: antiBan.pularConversasAbertas,
-            },
-          },
+          resumo: resumoCalculado,
         });
       }
       const historico = (antiBan.fixarNumero || antiBan.priorizarRecentes)
@@ -1670,17 +1774,7 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
           return { instancia: inst, contatos: ordenados.map(({ lastAt, ...c }) => c) };
         })
         .filter(g => g.contatos.length);
-      resumo = {
-        publico: publicoBruto.length,
-        apos_filtros: publico.length,
-        fixados_por_historico: fixados,
-        descartados,
-        so_contatos_manuais: soContatosManuais,
-        filtros: {
-          cooldownDias: antiBan.cooldownDias,
-          pularConversasAbertas: antiBan.pularConversasAbertas,
-        },
-      };
+      resumo = { ...resumoCalculado, fixados_por_historico: fixados };
     } catch (error) {
       console.error('disparo send: resolução via Chatwoot falhou:', error.message);
       return res.status(502).json({
@@ -1693,7 +1787,18 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
   const totalDestinatarios = plano
     ? plano.reduce((sum, g) => sum + g.contatos.length, 0)
     : destinatarios.contatos.length;
-  const logId = await registrarDisparoLog(req, audienceLabel, totalDestinatarios, firstText, 'sent');
+  const destinatariosAuditoria = plano
+    ? plano.flatMap(g => g.contatos.map(c => ({
+        instancia: g.instancia.nome || g.instancia.instancia_nome || String(g.instancia.id),
+        contact_id: c.id,
+        nome: c.nome || null,
+        telefone: c.telefone || null,
+      })))
+    : null;
+  const logId = await registrarDisparoLog(req, audienceLabel, totalDestinatarios, firstText, 'sent', {
+    resumo,
+    destinatarios: destinatariosAuditoria,
+  });
 
   try {
     // 3a) Caminho anti-ban: uma campanha em modo `contatos` por instância.
@@ -1722,19 +1827,48 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
           instancias: [grupo.instancia.id],
           config,
         };
-        const resp = await disparoFetch('/iniciar-disparo', { method: 'POST', body: payload, timeoutMs: 90000 });
-        campanhas.push({
-          instancia: rotulo,
-          instancia_id: grupo.instancia.id,
-          ok: resp.ok,
-          campanhaId: resp.data?.campanhaId ?? null,
-          totalEnfileirados: resp.data?.totalEnfileirados ?? grupo.contatos.length,
-          contatos: grupo.contatos.length,
-          erro: resp.ok ? null : (resp.data?.error || `HTTP ${resp.status}`),
-        });
+        // try/catch POR INSTANCIA: `disparoFetch` lanca em qualquer erro, entao sem
+        // isto a falha da 2a instancia impedia as seguintes de disparar e devolvia 502
+        // mesmo com a 1a campanha ja enfileirada no n8n. Como ele nunca retorna
+        // ok:false, o antigo `erro: resp.ok ? null : ...` era codigo morto.
+        try {
+          const resp = await disparoFetch('/iniciar-disparo', { method: 'POST', body: payload, timeoutMs: 90000 });
+          campanhas.push({
+            instancia: rotulo,
+            instancia_id: grupo.instancia.id,
+            ok: true,
+            campanhaId: resp.data?.campanhaId ?? null,
+            totalEnfileirados: resp.data?.totalEnfileirados ?? grupo.contatos.length,
+            contatos: grupo.contatos.length,
+            erro: null,
+          });
+        } catch (error) {
+          const causa = descreverErroDisparo(error);
+          console.error(`disparo send: instância ${rotulo} falhou:`, causa);
+          campanhas.push({
+            instancia: rotulo,
+            instancia_id: grupo.instancia.id,
+            ok: false,
+            campanhaId: null,
+            totalEnfileirados: 0,
+            contatos: grupo.contatos.length,
+            erro: causa,
+          });
+        }
       }
       const ok = campanhas.some(c => c.ok);
-      const totalEnfileirados = campanhas.reduce((sum, c) => sum + (Number(c.totalEnfileirados) || 0), 0);
+      // So conta o que realmente entrou na fila: o fallback antigo somava
+      // grupo.contatos.length e inflava o numero mesmo quando nada foi enfileirado.
+      const totalEnfileirados = campanhas
+        .filter(c => c.ok)
+        .reduce((sum, c) => sum + (Number(c.totalEnfileirados) || 0), 0);
+      const campanhaIds = campanhas.map(c => c.campanhaId).filter(Boolean);
+      if (logId && campanhaIds.length) {
+        pool.query(
+          `UPDATE ${DISPARO_LOG_TABLE} SET campanha_ids = $2 WHERE id = $1`,
+          [logId, campanhaIds.join(',')]
+        ).catch(err => console.warn('[disparo] gravar campanha_ids falhou:', err.message));
+      }
       const campanhaLabel = nomeCampanha || (campanhas.length === 1 && campanhas[0].campanhaId
         ? `#${campanhas[0].campanhaId}`
         : 'Disparo WhatsApp');
@@ -1806,9 +1940,7 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
     console.error('disparo webhook failed:', error.message);
     // Surface the real n8n/Evolution cause (aborts, HTTP status, webhook body)
     // instead of an opaque message — timeouts read as "AbortError".
-    const cause = error.name === 'AbortError'
-      ? 'Tempo esgotado aguardando o n8n (timeout).'
-      : String(error.message || '').replace(/^Webhook\s+\/iniciar-disparo:\s*/, '');
+    const cause = descreverErroDisparo(error);
     notifyAccountUsers(pool, {
       accountId: CHATWOOT_ACCOUNT_ID,
       type: 'disparo.failed',
@@ -1825,12 +1957,21 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
   }
 });
 
-async function registrarDisparoLog(req, audience, recipients, message, status) {
+async function registrarDisparoLog(req, audience, recipients, message, status, extra = {}) {
   try {
     const { rows } = await pool.query(
-      `INSERT INTO ${DISPARO_LOG_TABLE} (created_by, audience, recipients, message, status)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [req.auth?.sub || null, audience, recipients, message, status]
+      `INSERT INTO ${DISPARO_LOG_TABLE}
+         (created_by, audience, recipients, message, status, resumo, destinatarios)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [
+        req.auth?.sub || null,
+        audience,
+        recipients,
+        message,
+        status,
+        extra.resumo ? JSON.stringify(extra.resumo) : null,
+        extra.destinatarios ? JSON.stringify(extra.destinatarios) : null,
+      ]
     );
     return rows[0]?.id ?? null;
   } catch (error) {
@@ -22426,6 +22567,54 @@ app.get('/api/rfb/search', async (req, res) => {
   }
 });
 
+// Observabilidade do follow-up automático: o que a IA decidiu, enviou e segurou.
+app.get('/api/ai-followups', requireAdmin, async (req, res) => {
+  const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+  try {
+    const [decisoes, agregado] = await Promise.all([
+      pool.query(
+        `SELECT l.id, l.contact_id, l.conversation_id, l.status, l.skip_reason,
+                l.provider, l.model, l.confidence, l.message, l.error,
+                l.created_at, l.sent_at, c.name AS contact_name
+           FROM ${AI_FOLLOWUP_LOG_TABLE} l
+           LEFT JOIN contacts c ON c.id = l.contact_id AND c.account_id = l.account_id
+          WHERE l.account_id = $1
+          ORDER BY l.created_at DESC
+          LIMIT $2`,
+        [CHATWOOT_ACCOUNT_ID, limite]
+      ),
+      pool.query(
+        `SELECT status, COUNT(*)::int AS total
+           FROM ${AI_FOLLOWUP_LOG_TABLE}
+          WHERE account_id = $1
+            AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                AT TIME ZONE 'America/Sao_Paulo'
+          GROUP BY status`,
+        [CHATWOOT_ACCOUNT_ID]
+      ),
+    ]);
+    const config = carregarConfigAiFollowup();
+    res.json({
+      config: {
+        enabled: config.enabled,
+        dry_run: config.dryRun,
+        etapas: config.etapas,
+        silencio_dias: config.silencioDias,
+        max_por_dia: config.maxPorDia,
+        max_por_contato: config.maxPorContato,
+        janela: `${config.horaInicio}h-${config.horaFim}h`,
+        min_confianca: config.minConfianca,
+        chatwoot_configurado: Boolean(config.chatwootBaseUrl && config.chatwootToken),
+      },
+      hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
+      decisoes: decisoes.rows,
+    });
+  } catch (error) {
+    console.error('[ai-followup] listagem falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível carregar o histórico da IA.' });
+  }
+});
+
 // GET /api/rfb/import-progress
 app.get('/api/rfb/import-progress', (req, res) => {
   res.json(rfbImportState);
@@ -22481,6 +22670,50 @@ const registerBackgroundSchedules = () => {
       console.error('[follow-up] processor failed:', error.message);
     }
   }, { timezone: 'America/Sao_Paulo' });
+  // Follow-up automático com IA: cutuca leads parados usando o contexto da própria
+  // conversa. Fica inerte enquanto AI_FOLLOWUP_ENABLED não for 1.
+  //
+  // Cadência de hora em hora, não porque o tick custe token — ele só roda uma query
+  // e o gasto com o modelo é limitado por AI_FOLLOWUP_MAX_PER_DAY — mas porque é o
+  // que espalha os envios pela janela comercial. Rodar uma vez por dia faria os 20
+  // follow-ups saírem numa rajada só, que é exatamente o padrão que queima número
+  // no WhatsApp. Ajustável por AI_FOLLOWUP_CRON.
+  let aiFollowupRodando = false;
+  const aiFollowupCron = cron.validate(process.env.AI_FOLLOWUP_CRON || '')
+    ? process.env.AI_FOLLOWUP_CRON
+    : '0 * * * *';
+  cron.schedule(aiFollowupCron, async () => {
+    if (!dataLayerReady || aiFollowupRodando) return;
+    const config = carregarConfigAiFollowup();
+    if (!config.enabled) return;
+    aiFollowupRodando = true;
+    try {
+      const resultado = await runAiFollowupTick(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        chatCompletionJson,
+        config,
+        notify: ({ tipo, contato, mensagem, motivo }) => notifyAccountUsers(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          type: tipo === 'sent' ? 'funil.ai_followup_sent' : 'funil.ai_followup_skipped',
+          title: tipo === 'sent'
+            ? `IA enviou follow-up para ${contato.name || 'um contato'}`
+            : `IA segurou um follow-up para ${contato.name || 'um contato'}`,
+          body: tipo === 'sent' ? String(mensagem).slice(0, 180) : String(motivo || '').slice(0, 180),
+          data: { view: 'Board', contact_id: contato.contact_id },
+          dedupeKey: `ai-followup:${tipo}:${contato.contact_id}:${Date.now()}`,
+          onlyUserIds: contato.assignee_id ? [Number(contato.assignee_id)] : null,
+        }),
+      });
+      if (resultado.enviados || resultado.dry_run || resultado.falhas || resultado.pulados) {
+        console.log('[ai-followup] tick:', resultado);
+      }
+    } catch (error) {
+      console.error('[ai-followup] tick falhou:', error.message);
+    } finally {
+      aiFollowupRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Trends intel: sob demanda ao expandir o painel no frontend (sem cron diário).
   cron.schedule('17 */6 * * *', () => checkAndStartRFBImport('scheduled-check'));
   cron.schedule('30 7 * * *', async () => {
@@ -22712,6 +22945,7 @@ const initializeDataLayer = async () => {
   await createHistoryTable();
   await createActivityTable();
   await createContactReminderTable(pool);
+  await createAiFollowupTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

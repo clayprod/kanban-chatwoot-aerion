@@ -71,6 +71,18 @@ export const NOTIFICATION_TYPES = [
     description: 'Quando chega a hora de ligar ou falar novamente com um contato.',
   },
   {
+    type: 'funil.ai_followup_sent',
+    category: 'funil',
+    label: 'Follow-up enviado pela IA',
+    description: 'Quando a IA escreve e envia um follow-up automático na conversa do contato.',
+  },
+  {
+    type: 'funil.ai_followup_skipped',
+    category: 'funil',
+    label: 'Follow-up segurado pela IA',
+    description: 'Quando a IA desiste de enviar (baixa confiança ou mensagem reprovada) e passa a bola para o vendedor.',
+  },
+  {
     type: 'disparo.started',
     category: 'disparo',
     label: 'Campanha iniciada',

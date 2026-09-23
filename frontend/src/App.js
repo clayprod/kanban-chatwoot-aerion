@@ -7975,7 +7975,10 @@ function App() {
   const [disparoInstanciasSel, setDisparoInstanciasSel] = useState([]);
   const [disparoInstanciasStatus, setDisparoInstanciasStatus] = useState({ configured: null, verificado: false, error: '' });
   const [disparoNome, setDisparoNome] = useState('');
-  const [disparoConfig, setDisparoConfig] = useState({ maxPerDay: 30, minInterval: 30, maxInterval: 60, sendPeriod: 'integral', diasSemana: [1, 2, 3, 4, 5], fixarNumero: true, priorizarRecentes: true, cooldownDias: 7, pularConversasAbertas: true });
+  const [disparoConfig, setDisparoConfig] = useState({ maxPerDay: 30, minInterval: 30, maxInterval: 60, sendPeriod: 'integral', diasSemana: [1, 2, 3, 4, 5], fixarNumero: true, priorizarRecentes: true, cooldownDias: 7, pularConversasAbertas: true, conversaAtivaDias: 7, combinar: false });
+  const [disparoContatosLimite, setDisparoContatosLimite] = useState(200);
+  const [disparoPreview, setDisparoPreview] = useState(null);
+  const [disparoPreviewLoading, setDisparoPreviewLoading] = useState(false);
   const [disparoVerificando, setDisparoVerificando] = useState(false);
   const [disparoCampanhas, setDisparoCampanhas] = useState([]);
   const [disparoDash, setDisparoDash] = useState(null);
@@ -8885,6 +8888,60 @@ function App() {
     }
   }, [carregarDisparoMonitor, carregarDetalheCampanha, disparoCampanhaSel]);
 
+  // Público + config de envio, compartilhados pelo preview e pelo disparo real.
+  // O preview só tem valor se calcular exatamente o mesmo que o envio vai calcular.
+  const montarPublicoDisparo = useCallback(() => {
+    const ddds = disparoDDDs;
+    const contatosSel = disparoContatos.map(id => Number(id)).filter(Number.isFinite);
+    const selectorGroups = [disparoFunil, disparoTags, disparoCanais, ddds, contatosSel].filter(g => g.length > 0);
+    // Só contatos manuais (sem funil/tags/canal/ddd): escolha deliberada — não aplicar
+    // anti-spam de conversa ativa/cooldown (bloqueava testes e reenvios pontuais).
+    const soContatosManuais = contatosSel.length > 0
+      && !disparoFunil.length && !disparoTags.length && !disparoCanais.length && !ddds.length;
+    const destinatarios = {
+      modo: soContatosManuais ? 'contatos' : disparoModo,
+      funil_vendas: disparoFunil,
+      tags: disparoTags,
+      canais: disparoCanais,
+      ddds,
+      contatos: contatosSel,
+      // Escolha explícita do usuário (E/OU). Antes isto era `selectorGroups.length > 1`,
+      // o que não queria dizer nada — e o backend ignorava o campo de qualquer forma.
+      combinar: Boolean(disparoConfig.combinar),
+    };
+    const configEnvio = soContatosManuais
+      ? { ...disparoConfig, pularConversasAbertas: false, cooldownDias: 0 }
+      : disparoConfig;
+    return { destinatarios, configEnvio, selectorGroups, soContatosManuais };
+  }, [disparoModo, disparoFunil, disparoTags, disparoCanais, disparoDDDs, disparoContatos, disparoConfig]);
+
+  // Calcula quantos vão receber ANTES de disparar. Sem isto a tela só mostrava
+  // "N na fila" e escondia a perda: 258 leads viraram 1 destinatário sem aviso.
+  const previewDisparo = useCallback(async () => {
+    const { destinatarios, configEnvio, selectorGroups } = montarPublicoDisparo();
+    if (!selectorGroups.length) { setDisparoResult({ error: 'Selecione ao menos um item do público.' }); return; }
+    const instSel = disparoInstanciasSel.map(id => {
+      const inst = disparoInstancias.find(i => String(i.id ?? i.instancia_nome ?? i.nome) === String(id));
+      return inst ? (inst.id ?? inst.instancia_nome ?? inst.nome) : id;
+    });
+    setDisparoPreviewLoading(true);
+    try {
+      const r = await axios.post('/api/disparo/preview', { destinatarios, instancias: instSel, config: configEnvio });
+      setDisparoPreview(r.data);
+    } catch (error) {
+      const data = error?.response?.data;
+      setDisparoPreview({ error: data?.error || formatDisparoApiError(error, 'Não foi possível calcular o público.') });
+    } finally {
+      setDisparoPreviewLoading(false);
+    }
+  }, [montarPublicoDisparo, disparoInstanciasSel, disparoInstancias]);
+
+  // Preview vence assim que o público ou os filtros mudam — número velho na tela
+  // é pior do que número nenhum.
+  useEffect(() => {
+    setDisparoPreview(null);
+  }, [disparoFunil, disparoTags, disparoCanais, disparoDDDs, disparoContatos, disparoConfig]);
+
   const sendDisparo = useCallback(async () => {
     if (disparoSending) return;
     const msgs = disparoMensagens
@@ -8902,35 +8959,14 @@ function App() {
           arquivo_base64: m.arquivo_base64 || null,
         };
       });
-    const ddds = disparoDDDs;
-    const contatosSel = disparoContatos.map(id => Number(id)).filter(Number.isFinite);
     const instSel = disparoInstanciasSel.map(id => {
       const inst = disparoInstancias.find(i => String(i.id ?? i.instancia_nome ?? i.nome) === String(id));
       return inst ? (inst.id ?? inst.instancia_nome ?? inst.nome) : id;
     });
-    const selectorGroups = [disparoFunil, disparoTags, disparoCanais, ddds, contatosSel].filter(group => group.length > 0);
+    const { destinatarios, configEnvio, selectorGroups } = montarPublicoDisparo();
     if (!selectorGroups.length) { setDisparoResult({ error: 'Selecione ao menos um item do público.' }); return; }
     if (!msgs.length) { setDisparoResult({ error: 'Escreva ao menos uma mensagem.' }); return; }
     if (!instSel.length) { setDisparoResult({ error: 'Selecione ao menos uma instância.' }); return; }
-    // Só contatos manuais (sem funil/tags/canal/ddd): escolha deliberada — não aplicar
-    // anti-spam de conversa aberta/cooldown (bloqueava testes e reenvios pontuais).
-    const soContatosManuais = contatosSel.length > 0
-      && !disparoFunil.length
-      && !disparoTags.length
-      && !disparoCanais.length
-      && !ddds.length;
-    const destinatarios = {
-      modo: soContatosManuais ? 'contatos' : disparoModo,
-      funil_vendas: disparoFunil,
-      tags: disparoTags,
-      canais: disparoCanais,
-      ddds,
-      contatos: contatosSel,
-      combinar: selectorGroups.length > 1,
-    };
-    const configEnvio = soContatosManuais
-      ? { ...disparoConfig, pularConversasAbertas: false, cooldownDias: 0 }
-      : disparoConfig;
     setDisparoSending(true);
     setDisparoResult(null);
     try {
@@ -8963,7 +8999,7 @@ function App() {
     } finally {
       setDisparoSending(false);
     }
-  }, [disparoModo, disparoFunil, disparoTags, disparoCanais, disparoDDDs, disparoContatos, disparoMensagens, disparoInstanciasSel, disparoInstancias, disparoConfig, disparoNome, disparoSending, carregarDisparoMonitor, carregarDetalheCampanha]);
+  }, [montarPublicoDisparo, disparoMensagens, disparoInstanciasSel, disparoInstancias, disparoNome, disparoSending, carregarDisparoMonitor, carregarDetalheCampanha]);
 
   // Busca global do header: depois de navegar até a Busca B2B, dispara a pesquisa.
   useEffect(() => {
@@ -21455,17 +21491,28 @@ function App() {
               if (local.length === 10) return `(${local.slice(0, 2)}) ${local.slice(2, 6)}-${local.slice(6)}`;
               return digits;
             };
+            // Mesma regra do backend (disparoAudiencia.selecionarPublico): cada grupo
+            // preenchido vira um teste e `combinar` decide se é E (interseção) ou OU (união).
             const matchesAudience = (contact, exceptGroup) => {
               const attrs = contact.custom_attributes || {};
-              if (exceptGroup !== 'funil' && disparoFunil.length && !disparoFunil.includes(attrs.Funil_Vendas)) return false;
-              if (exceptGroup !== 'tags' && disparoTags.length) {
-                const labels = getContactLabels(contact);
-                if (!disparoTags.some(tag => labels.includes(tag))) return false;
+              const testes = [];
+              if (exceptGroup !== 'funil' && disparoFunil.length) {
+                testes.push(() => disparoFunil.includes(attrs.Funil_Vendas));
               }
-              if (exceptGroup !== 'canal' && disparoCanais.length && !disparoCanais.includes(String(attrs.Canal || '').trim())) return false;
-              if (exceptGroup !== 'ddd' && disparoDDDs.length && !disparoDDDs.includes(getContactDdd(contact))) return false;
-              if (exceptGroup !== 'contatos' && disparoContatos.length && !disparoContatosSet.has(String(contact.id))) return false;
-              return true;
+              if (exceptGroup !== 'tags' && disparoTags.length) {
+                testes.push(() => disparoTags.some(tag => getContactLabels(contact).includes(tag)));
+              }
+              if (exceptGroup !== 'canal' && disparoCanais.length) {
+                testes.push(() => disparoCanais.includes(String(attrs.Canal || '').trim()));
+              }
+              if (exceptGroup !== 'ddd' && disparoDDDs.length) {
+                testes.push(() => disparoDDDs.includes(getContactDdd(contact)));
+              }
+              if (exceptGroup !== 'contatos' && disparoContatos.length) {
+                testes.push(() => disparoContatosSet.has(String(contact.id)));
+              }
+              if (!testes.length) return true;
+              return disparoConfig.combinar ? testes.some(t => t()) : testes.every(t => t());
             };
             const countAudienceOption = (group, value) => contacts.filter(contact => {
               if (!matchesAudience(contact, group)) return false;
@@ -21506,9 +21553,11 @@ function App() {
                   const bOn = disparoContatosSet.has(String(b.id)) ? 0 : 1;
                   if (aOn !== bOn) return aOn - bOn;
                   return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
-                })
-                .slice(0, 80);
+                });
             })();
+            // A lista é longa: renderiza em blocos, mas "Selecionar todos" age sobre o
+            // filtro inteiro — antes o corte fixo em 80 tornava seleção em massa inviável.
+            const disparoContatosVisiveis = disparoContatosBuscaList.slice(0, disparoContatosLimite);
             const messageCount = disparoMensagens.filter(m => (m.texto || '').trim() || m.arquivo_base64).length;
             const incompleteMedia = disparoMensagens.some(m => m.tipo && m.tipo !== 'texto' && !m.arquivo_base64);
             const openInstances = disparoInstancias.filter(i => String(i.connection_state || i.status).toLowerCase() === 'open').length;
@@ -21566,7 +21615,7 @@ function App() {
                 short: 'Quem recebe',
                 ok: audienceOk,
                 summary: audienceOk
-                  ? `${matchedContacts.toLocaleString('pt-BR')} contato${matchedContacts === 1 ? '' : 's'} · ${activeAudienceGroups.join(' + ')}`
+                  ? `${matchedContacts.toLocaleString('pt-BR')} contato${matchedContacts === 1 ? '' : 's'} · ${activeAudienceGroups.join(disparoConfig.combinar ? ' ou ' : ' + ')}`
                   : audienceCount > 0
                     ? 'Filtros sem contatos no recorte'
                     : 'Selecione funil, tags, canal, DDD ou contatos',
@@ -21678,7 +21727,30 @@ function App() {
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
                         <h3 className={`${sectionTitle} text-lg`}>Quem vai receber?</h3>
-                        <p className={`${subtle} mt-0.5`}>Filtros se cruzam (AND). Contatos únicos também entram no recorte. Contagens já refletem o recorte atual.</p>
+                        <p className={`${subtle} mt-0.5`}>
+                          {disparoConfig.combinar
+                            ? 'Os filtros se somam: entra quem atende a qualquer um deles.'
+                            : 'Os filtros se cruzam: entra só quem atende a todos ao mesmo tempo.'}
+                          {' '}Contagens já refletem o recorte atual.
+                        </p>
+                        {/* Escolha explícita E/OU: antes o app mandava "combinar" conforme o
+                            número de grupos e o backend cruzava tudo em E de qualquer jeito. */}
+                        <div className="mt-2 inline-flex rounded-[10px] border border-line bg-surf p-0.5 text-[11px]">
+                          {[
+                            { valor: false, rotulo: 'E (cruzar)', dica: 'Quem está na etapa E tem o DDD' },
+                            { valor: true, rotulo: 'OU (somar)', dica: 'Quem está na etapa OU tem o DDD' },
+                          ].map(opcao => (
+                            <button
+                              key={String(opcao.valor)}
+                              type="button"
+                              title={opcao.dica}
+                              onClick={() => setDisparoConfig(c => ({ ...c, combinar: opcao.valor }))}
+                              className={`rounded-[8px] px-2.5 py-1 font-medium transition ${Boolean(disparoConfig.combinar) === opcao.valor ? 'bg-primary text-white' : 'text-muted hover:text-ink'}`}
+                            >
+                              {opcao.rotulo}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                       {audienceCount > 0 && (
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -21849,15 +21921,26 @@ function App() {
                       <div className="space-y-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className={subtle}>Busque por nome, telefone, empresa, CNPJ ou #id e marque contatos únicos.</p>
-                          {disparoContatos.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => setDisparoContatos([])}
-                              className="text-[11px] font-medium text-muted hover:text-red"
-                            >
-                              Limpar contatos ({disparoContatos.length})
-                            </button>
-                          )}
+                          <div className="flex items-center gap-3">
+                            {disparoContatosBuscaList.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setDisparoContatos(disparoContatosBuscaList.map(c => Number(c.id) || c.id))}
+                                className="text-[11px] font-medium text-muted hover:text-primary"
+                              >
+                                Selecionar todos ({disparoContatosBuscaList.length})
+                              </button>
+                            )}
+                            {disparoContatos.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setDisparoContatos([])}
+                                className="text-[11px] font-medium text-muted hover:text-red"
+                              >
+                                Limpar contatos ({disparoContatos.length})
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div className="relative">
                           <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
@@ -21886,7 +21969,7 @@ function App() {
                           </div>
                         ) : (
                           <VerticalScrollArrows className="max-h-[22rem]" contentClassName="space-y-1 pr-0.5" contentRole="listbox" contentAriaLabel="Contatos disponíveis" contentAriaMultiselectable="true">
-                            {disparoContatosBuscaList.map(contact => {
+                            {disparoContatosVisiveis.map(contact => {
                               const on = disparoContatosSet.has(String(contact.id));
                               const stage = contact.custom_attributes?.Funil_Vendas || '';
                               const company = contact.additional_attributes?.company_name
@@ -21927,10 +22010,19 @@ function App() {
                                 </button>
                               );
                             })}
-                            {disparoContatoBusca.trim() === '' && contacts.filter(c => contactHasWhatsappPhone(c) && matchesAudience(c, 'contatos')).length > 80 && (
-                              <p className={`${subtle} px-1 py-2 text-center`}>
-                                Mostrando 80 contatos — digite para refinar a busca.
-                              </p>
+                            {disparoContatosBuscaList.length > disparoContatosVisiveis.length && (
+                              <div className="px-1 py-2 text-center">
+                                <p className={subtle}>
+                                  Mostrando {disparoContatosVisiveis.length} de {disparoContatosBuscaList.length}.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setDisparoContatosLimite(n => n + 200)}
+                                  className="mt-1 text-[11px] font-medium text-primary hover:underline"
+                                >
+                                  Carregar mais
+                                </button>
+                              </div>
                             )}
                           </VerticalScrollArrows>
                         )}
@@ -22253,12 +22345,31 @@ function App() {
                               className="mt-0.5 accent-primary"
                             />
                             <span>
-                              <span className="block font-semibold text-ink">Pular conversas abertas</span>
+                              <span className="block font-semibold text-ink">Pular quem está em atendimento</span>
                               <span className="mt-0.5 block text-[11px] text-muted2">
-                                Não interrompe atendimento em curso no Chatwoot.
+                                Conversa aberta <em>e</em> com atividade nos últimos {disparoConfig.conversaAtivaDias} dia(s).
+                                Conversa aberta e parada há mais tempo não bloqueia o disparo.
                               </span>
                             </span>
                           </label>
+                          <div>
+                            <label className={`${subtle} mb-1.5 block`} htmlFor="disparo-conversa-ativa">
+                              Considerar “em atendimento” até (dias)
+                            </label>
+                            <input
+                              id="disparo-conversa-ativa"
+                              type="number"
+                              min="0"
+                              max="90"
+                              value={disparoConfig.conversaAtivaDias}
+                              onChange={(e) => setDisparoConfig(c => ({
+                                ...c,
+                                conversaAtivaDias: Math.max(0, Math.min(90, Number(e.target.value) || 0)),
+                              }))}
+                              className={`${input} w-full font-mono tabular-nums`}
+                              disabled={!disparoConfig.pularConversasAbertas}
+                            />
+                          </div>
                           <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] border border-line bg-surf px-3 py-2.5 text-xs transition hover:border-line2">
                             <input
                               type="checkbox"
@@ -22342,7 +22453,7 @@ function App() {
                       </div>
                       <div className="flex justify-between gap-2">
                         <span className="text-muted">Cruzamento</span>
-                        <span className="text-right text-ink">{activeAudienceGroups.length ? activeAudienceGroups.join(' + ') : '—'}</span>
+                        <span className="text-right text-ink">{activeAudienceGroups.length ? activeAudienceGroups.join(disparoConfig.combinar ? ' ou ' : ' + ') : '—'}</span>
                       </div>
                       <div className="flex justify-between gap-2">
                         <span className="text-muted">Mensagens</span>
@@ -22399,6 +22510,66 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Conferência do público: mostra a perda ANTES de disparar. */}
+                  <div className="rounded-[10px] border border-line bg-surf2/40 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-fg">Conferir quem vai receber</p>
+                        <p className="text-[12px] text-muted">
+                          Calcula o público com os mesmos filtros do envio, sem disparar nada.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={previewDisparo}
+                        disabled={disparoPreviewLoading}
+                        className={`${btnSecondaryLg} px-3 disabled:opacity-45`}
+                      >
+                        {disparoPreviewLoading ? 'Calculando…' : 'Conferir público'}
+                      </button>
+                    </div>
+                    {disparoPreview?.error && (
+                      <p className="mt-2 text-[12px] text-status-danger">{disparoPreview.error}</p>
+                    )}
+                    {disparoPreview && !disparoPreview.error && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-sm text-fg">
+                          <span className="text-lg font-semibold">{disparoPreview.apos_filtros}</span>
+                          <span className="text-muted"> de {disparoPreview.publico} selecionados vão receber</span>
+                        </p>
+                        {(() => {
+                          const d = disparoPreview.descartados || {};
+                          const partes = [
+                            d.conversas_abertas > 0 ? `${d.conversas_abertas} em atendimento ativo` : null,
+                            d.cooldown > 0 ? `${d.cooldown} em cooldown` : null,
+                            d.opt_out > 0 ? `${d.opt_out} com opt-out` : null,
+                            d.duplicados > 0 ? `${d.duplicados} telefone repetido` : null,
+                          ].filter(Boolean);
+                          return partes.length ? (
+                            <p className="text-[12px] text-muted">Descartados: {partes.join(' · ')}</p>
+                          ) : null;
+                        })()}
+                        {disparoPreview.apos_filtros === 0 && (
+                          <p className="text-[12px] text-status-warning">
+                            Ninguém restou. Reveja o público ou afrouxe os filtros na etapa Ritmo.
+                          </p>
+                        )}
+                        {disparoPreview.amostra?.length > 0 && (
+                          <details className="text-[12px] text-muted">
+                            <summary className="cursor-pointer select-none">
+                              Ver amostra ({disparoPreview.amostra.length})
+                            </summary>
+                            <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+                              {disparoPreview.amostra.map(c => (
+                                <li key={c.id}>{c.nome || 'Sem nome'} · {c.telefone}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {disparoResult && (
                     <div className={`rounded-[10px] border p-3 text-sm leading-snug ${disparoResult.error ? 'border-status-danger/30 bg-status-danger/10 text-status-danger' : disparoResult.configured && disparoResult.ok ? 'border-status-success/30 bg-status-success/10 text-status-success' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
                       {disparoResult.error ? (
@@ -22422,9 +22593,37 @@ function App() {
                         </div>
                       ) : !disparoResult.configured
                         ? 'Registrado, mas o webhook do n8n não está configurado (DISPARO_WEBHOOK_URL).'
-                        : disparoResult.campanhaId
-                          ? `Disparo iniciado! Campanha #${disparoResult.campanhaId}${disparoResult.totalEnfileirados != null ? ` — ${disparoResult.totalEnfileirados} na fila` : ''}.`
-                          : disparoResult.ok ? 'Disparo iniciado no n8n.' : 'O n8n recebeu, mas retornou um aviso.'}
+                        : (
+                          <div className="space-y-1">
+                            <p className="font-semibold">
+                              {disparoResult.campanhaId
+                                ? `Disparo iniciado! Campanha #${disparoResult.campanhaId}${disparoResult.totalEnfileirados != null ? ` — ${disparoResult.totalEnfileirados} na fila` : ''}.`
+                                : disparoResult.ok ? 'Disparo iniciado no n8n.' : 'O n8n recebeu, mas retornou um aviso.'}
+                            </p>
+                            {/* Mostrar a perda TAMBÉM no sucesso: antes só aparecia no erro,
+                                então uma campanha de 258 leads virava "1 na fila" sem explicação. */}
+                            {disparoResult.resumo && (
+                              <p className="text-[12px] opacity-90">
+                                {disparoResult.resumo.apos_filtros} de {disparoResult.resumo.publico} selecionados entraram.
+                                {(() => {
+                                  const d = disparoResult.resumo.descartados || {};
+                                  const partes = [
+                                    d.conversas_abertas > 0 ? `${d.conversas_abertas} em atendimento ativo` : null,
+                                    d.cooldown > 0 ? `${d.cooldown} em cooldown` : null,
+                                    d.opt_out > 0 ? `${d.opt_out} com opt-out` : null,
+                                    d.duplicados > 0 ? `${d.duplicados} telefone repetido` : null,
+                                  ].filter(Boolean);
+                                  return partes.length ? ` Descartados: ${partes.join(' · ')}.` : '';
+                                })()}
+                              </p>
+                            )}
+                            {disparoResult.campanhas?.some(c => !c.ok) && (
+                              <p className="text-[12px] text-status-warning">
+                                Instâncias que falharam: {disparoResult.campanhas.filter(c => !c.ok).map(c => `${c.instancia} (${c.erro})`).join('; ')}
+                              </p>
+                            )}
+                          </div>
+                        )}
                     </div>
                   )}
                 </div>
