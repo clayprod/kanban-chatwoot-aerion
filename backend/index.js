@@ -38,6 +38,7 @@ const {
   processContactFollowups,
 } = require('./contactFollowups');
 const { selecionarPublico: selecionarPublicoDisparo } = require('./disparoAudiencia');
+const { verificarNumerosWhatsapp } = require('./whatsappNumeros');
 const {
   AI_FOLLOWUP_LOG_TABLE,
   carregarConfig: carregarConfigAiFollowup,
@@ -1479,12 +1480,30 @@ async function aplicarFiltrosChatwoot(publico, { cooldownDias, pularConversasAbe
 async function resolverPublicoComFiltros({ destinatarios, antiBan, inboxIds }) {
   const { publico: publicoBruto, descartados: descartesSeletor, totalBase } =
     await resolverPublicoDisparo(destinatarios);
-  const { publico, descartados } = await aplicarFiltrosChatwoot(publicoBruto, {
+  const { publico: aposChatwoot, descartados } = await aplicarFiltrosChatwoot(publicoBruto, {
     cooldownDias: antiBan.cooldownDias,
     pularConversasAbertas: antiBan.pularConversasAbertas,
     conversaAtivaDias: antiBan.conversaAtivaDias,
     inboxIds,
   });
+
+  // Número sem WhatsApp é o maior fator de reputação da conta: bater em número que
+  // não existe é o padrão de quem comprou lista, e era a causa dos ~40% de erro das
+  // instâncias. A Evolution é quem sabe — heurística de fixo x celular não serve,
+  // porque tem fixo com WhatsApp Business ativo na base.
+  let publico = aposChatwoot;
+  let verificacaoIndisponivel = false;
+  if (aposChatwoot.length) {
+    const { existentes, indisponivel } = await verificarNumerosWhatsapp(
+      aposChatwoot.map(c => c.telefone)
+    );
+    verificacaoIndisponivel = indisponivel;
+    const soDigitos = (v) => String(v || '').replace(/[^0-9]/g, '');
+    publico = aposChatwoot.filter(c => existentes.has(soDigitos(c.telefone)));
+    descartados.sem_whatsapp = aposChatwoot.length - publico.length;
+  } else {
+    descartados.sem_whatsapp = 0;
+  }
   const resumo = {
     base: totalBase,
     publico: publicoBruto.length,
@@ -1496,6 +1515,7 @@ async function resolverPublicoComFiltros({ destinatarios, antiBan, inboxIds }) {
       duplicados: descartesSeletor.duplicados,
     },
     so_contatos_manuais: antiBan.soContatosManuais,
+    verificacao_whatsapp_indisponivel: verificacaoIndisponivel,
     filtros: {
       cooldownDias: antiBan.cooldownDias,
       pularConversasAbertas: antiBan.pularConversasAbertas,
@@ -1733,6 +1753,7 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
         if (descartados.conversas_abertas > 0) {
           partes.push(`${descartados.conversas_abertas} em atendimento ativo (${antiBan.conversaAtivaDias}d)`);
         }
+        if (descartados.sem_whatsapp > 0) partes.push(`${descartados.sem_whatsapp} sem WhatsApp`);
         if (descartados.opt_out > 0) partes.push(`${descartados.opt_out} com opt-out`);
         if (descartados.duplicados > 0) partes.push(`${descartados.duplicados} telefone(s) duplicado(s)`);
         const detalhe = partes.length ? ` Descartados: ${partes.join('; ')}.` : '';

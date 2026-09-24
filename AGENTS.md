@@ -44,6 +44,45 @@ Regra do usuário (2026-07-16): as buscas da aba Contratos/Resultados são imedi
 de BUSCA de licitações finalizadas (por empresa, descrição, órgão) — independente da busca de
 editais; não pré-popular com o acervo dos jobs.
 
+## Disparo WhatsApp: politica anti-ban (regra obrigatoria)
+
+Os numeros da Aerion sao ativo de negocio: se o WhatsApp bloquear a conta, nao existe
+recurso rapido. Medido em 2026-09-24, as tres instancias estavam com **~60% de taxa de
+sucesso** (287, 352 e 319 erros acumulados) — o erro dominante era `{"exists": false}`
+da Evolution, ou seja, mensagem para numero que nao tem WhatsApp. Bater repetidamente em
+numero inexistente e o padrao de quem comprou lista, e um dos sinais mais fortes que o
+anti-abuso do WhatsApp usa.
+
+Regras para qualquer feature que mande mensagem:
+
+1. **Verificar antes de enfileirar.** Todo publico passa por `verificarNumerosWhatsapp`
+   (`backend/whatsappNumeros.js`), que consulta `POST /chat/whatsappNumbers/{instancia}`
+   na Evolution. NAO use heuristica de fixo x celular: `551136466600` e fixo e tem
+   WhatsApp Business ativo. Quem decide e a Evolution. A verificacao e fail-open (erro
+   dela nao derruba a campanha) mas devolve `verificacao_indisponivel` — a UI tem que
+   avisar em vez de fingir que verificou.
+2. **Nunca disparar sem preview.** `POST /api/disparo/preview` roda o mesmo calculo do
+   envio e mostra a perda por motivo. Campanha cega ja fez 258 leads virarem 1
+   destinatario sem ninguem perceber.
+3. **Respeitar os tetos.** `DISPARO_MAX_POR_DIA_INSTANCIA` (30/dia por instancia) e
+   `minInterval` >= 30s sao piso, nao sugestao. O pacing real roda no n8n.
+4. **Variar a mensagem.** O pool de `mensagens` faz rodizio (`mensagens[i % n]`) e a
+   personalizacao resolve `{nome}`/`{empresa}` por contato. Campanha com texto unico e
+   identico para centenas de numeros e assinatura de robo — use mais de uma variacao.
+5. **Cooldown e atendimento vivo.** Nao reenviar para quem recebeu mensagem nossa ha
+   pouco (`cooldownDias`) nem interromper conversa com atividade recente
+   (`conversaAtivaDias`). Atencao: `conversations.status = 0` NAO significa atendimento
+   em curso nesta base (2040 abertas x 3 resolvidas) — sempre combinar com
+   `last_activity_at`.
+6. **Opt-out e absoluto.** `whatsapp_opt_out`, `opt_out`, `nao_contatar`, `bloqueado`
+   valem em qualquer modo, inclusive em selecao manual de contatos.
+7. **Fixar o numero do lead.** `fixarNumero` faz o contato receber sempre da instancia da
+   ultima conversa dele. Lead que recebe de numeros diferentes a cada campanha reporta.
+8. **A IA de follow-up divide o mesmo numero.** `backend/aiFollowups.js` posta pelo
+   Chatwoot, que sai pela mesma instancia Evolution do inbox. O teto dela
+   (`AI_FOLLOWUP_MAX_PER_DAY`) e um orcamento SEPARADO do disparo — ao subir um, lembrar
+   que os dois somam no mesmo numero.
+
 ## Deploy
 
 NUNCA subir código local/dev para produção. Prod = branch `main` no GitHub via CI (ghcr).

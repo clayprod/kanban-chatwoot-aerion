@@ -22540,6 +22540,7 @@ function App() {
                         {(() => {
                           const d = disparoPreview.descartados || {};
                           const partes = [
+                            d.sem_whatsapp > 0 ? `${d.sem_whatsapp} sem WhatsApp` : null,
                             d.conversas_abertas > 0 ? `${d.conversas_abertas} em atendimento ativo` : null,
                             d.cooldown > 0 ? `${d.cooldown} em cooldown` : null,
                             d.opt_out > 0 ? `${d.opt_out} com opt-out` : null,
@@ -22549,6 +22550,12 @@ function App() {
                             <p className="text-[12px] text-muted">Descartados: {partes.join(' · ')}</p>
                           ) : null;
                         })()}
+                        {disparoPreview.verificacao_whatsapp_indisponivel && (
+                          <p className="text-[12px] text-status-warning">
+                            Não deu para confirmar quem tem WhatsApp (Evolution fora do ar). Os números
+                            seguem no público sem verificação — disparar assim castiga a reputação da conta.
+                          </p>
+                        )}
                         {disparoPreview.apos_filtros === 0 && (
                           <p className="text-[12px] text-status-warning">
                             Ninguém restou. Reveja o público ou afrouxe os filtros na etapa Ritmo.
@@ -22608,6 +22615,7 @@ function App() {
                                 {(() => {
                                   const d = disparoResult.resumo.descartados || {};
                                   const partes = [
+                                    d.sem_whatsapp > 0 ? `${d.sem_whatsapp} sem WhatsApp` : null,
                                     d.conversas_abertas > 0 ? `${d.conversas_abertas} em atendimento ativo` : null,
                                     d.cooldown > 0 ? `${d.cooldown} em cooldown` : null,
                                     d.opt_out > 0 ? `${d.opt_out} com opt-out` : null,
