@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
-    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js"
+    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js tests/disparoMensagens.test.js"
   },
   "keywords": [],
   "author": "",

@@ -39,6 +39,7 @@ const {
 } = require('./contactFollowups');
 const { selecionarPublico: selecionarPublicoDisparo } = require('./disparoAudiencia');
 const { verificarNumerosWhatsapp } = require('./whatsappNumeros');
+const { validarVariacaoMensagens, variacoesExigidas } = require('./disparoMensagens');
 const {
   AI_FOLLOWUP_LOG_TABLE,
   carregarConfig: carregarConfigAiFollowup,
@@ -1586,6 +1587,7 @@ app.post('/api/disparo/preview', requireAdmin, async (req, res) => {
     });
     return res.json({
       ...resumo,
+      variacoes_exigidas: variacoesExigidas(publico.length),
       inboxes_considerados: inboxParaInstancia.size,
       amostra: publico.slice(0, 50).map(c => ({ id: c.id, nome: c.nome, telefone: c.telefone })),
     });
@@ -1808,6 +1810,19 @@ app.post('/api/disparo/send', requireAdmin, async (req, res) => {
   const totalDestinatarios = plano
     ? plano.reduce((sum, g) => sum + g.contatos.length, 0)
     : destinatarios.contatos.length;
+  // Variação obrigatória: campanha grande com texto (ou mídia) único é o padrão de
+  // automação mais fácil de detectar. Barra antes de gravar log ou acionar o n8n.
+  const problemaVariacao = validarVariacaoMensagens(mensagens, totalDestinatarios);
+  if (problemaVariacao) {
+    return res.status(400).json({
+      configured: true,
+      error: problemaVariacao.erro,
+      detail: problemaVariacao.detalhe,
+      variacao: problemaVariacao,
+      resumo,
+    });
+  }
+
   const destinatariosAuditoria = plano
     ? plano.flatMap(g => g.contatos.map(c => ({
         instancia: g.instancia.nome || g.instancia.instancia_nome || String(g.instancia.id),

@@ -8995,6 +8995,7 @@ function App() {
         errorDetail: data?.detail || formatted.detail || formatDisparoApiError(error, 'Falha no envio.'),
         errorKind: formatted.kind,
         resumo: data?.resumo || null,
+        variacao: data?.variacao || null,
       });
     } finally {
       setDisparoSending(false);
@@ -22550,6 +22551,21 @@ function App() {
                             <p className="text-[12px] text-muted">Descartados: {partes.join(' · ')}</p>
                           ) : null;
                         })()}
+                        {disparoPreview.variacoes_exigidas > 1 && (() => {
+                          const distintos = new Set(
+                            disparoMensagens
+                              .map(m => String(m.texto || m.legenda || '').replace(/\s+/g, ' ').trim().toLowerCase())
+                              .filter(Boolean)
+                          ).size;
+                          const ok = distintos >= disparoPreview.variacoes_exigidas;
+                          return (
+                            <p className={`text-[12px] ${ok ? 'text-muted' : 'text-status-warning'}`}>
+                              {ok
+                                ? `${distintos} de ${disparoPreview.variacoes_exigidas} variações exigidas — ok.`
+                                : `Este público exige ${disparoPreview.variacoes_exigidas} mensagens diferentes (há ${distintos}). Texto repetido para muita gente denuncia automação.`}
+                            </p>
+                          );
+                        })()}
                         {disparoPreview.verificacao_whatsapp_indisponivel && (
                           <p className="text-[12px] text-status-warning">
                             Não deu para confirmar quem tem WhatsApp (Evolution fora do ar). Os números
@@ -22585,6 +22601,15 @@ function App() {
                           <p className="text-[13px] opacity-95">
                             {disparoResult.errorDetail || disparoResult.error}
                           </p>
+                          {disparoResult.variacao && (
+                            <p className="text-[12px] opacity-80">
+                              {disparoResult.variacao.contatos} contatos · exigidas {disparoResult.variacao.exigidas} ·
+                              {' '}textos distintos {disparoResult.variacao.textos_distintos}
+                              {disparoResult.variacao.midias_distintas > 0
+                                ? ` · mídias distintas ${disparoResult.variacao.midias_distintas}`
+                                : ''}
+                            </p>
+                          )}
                           {disparoResult.resumo?.descartados && (
                             <p className="text-[12px] opacity-80">
                               {[
@@ -22673,6 +22698,38 @@ function App() {
               });
               if (!q) return list;
               return list.filter(c => normalizeText(`${c.nome || ''} ${c.campanha_id || c.id || ''}`).includes(q));
+            })();
+            // Um disparo vira uma campanha POR INSTANCIA (cada lead sai do numero que
+            // ja falava com ele). Sem agrupar, abrir uma delas mostra "8 contatos" num
+            // disparo de 64 e parece que falhou. Agrupa pelo nome-base + dia.
+            const gruposCampanhas = (() => {
+              const mapa = new Map();
+              for (const c of campanhasFiltradas) {
+                const nome = String(c.nome || '');
+                const partes = nome.split(' · ');
+                const base = partes.length > 1 ? partes.slice(0, -1).join(' · ') : nome;
+                const instancia = partes.length > 1 ? partes[partes.length - 1] : null;
+                const dia = String(c.data_criacao || c.created_at || '').slice(0, 10);
+                const chave = base + '@@' + dia;
+                if (!mapa.has(chave)) mapa.set(chave, { chave, base, dia, itens: [] });
+                mapa.get(chave).itens.push({ ...c, _instancia: instancia });
+              }
+              return [...mapa.values()].map(g => {
+                const soma = (campo) => g.itens.reduce((s, c) => s + n(c[campo]), 0);
+                const total = soma('total_contatos');
+                const enviados = soma('enviados');
+                const erros = soma('erros');
+                const ativa = g.itens.some(c => ['ativa', 'running', 'em_andamento'].includes(String(c.status || '').toLowerCase()));
+                return {
+                  ...g,
+                  total,
+                  enviados,
+                  erros,
+                  pct: total ? (enviados / total) * 100 : 0,
+                  status: ativa ? 'ativa' : (g.itens[0]?.status || '—'),
+                  criada: g.itens.map(c => c.data_criacao || c.created_at).sort()[0],
+                };
+              });
             })();
             const enviosFiltrados = (() => {
               let list = disparoEnvios;
@@ -22815,7 +22872,57 @@ function App() {
                           </div>
                         ) : (
                           <ul className="space-y-1.5">
-                            {campanhasFiltradas.map(c => {
+                            {gruposCampanhas.map(grupo => {
+                              // Rodada dividida entre instâncias: card consolidado + cada fatia dentro.
+                              if (grupo.itens.length > 1) {
+                                const pctGrupo = Math.min(100, Math.max(0, grupo.pct));
+                                return (
+                                  <li key={grupo.chave} className="rounded-[12px] border border-line bg-bg2/70 px-3 py-2.5">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <p className="truncate text-[13px] font-semibold text-ink">{grupo.base}</p>
+                                        <p className="mt-0.5 text-[10px] text-muted2">
+                                          {grupo.itens.length} instâncias · {fmtDateTime(grupo.criada)}
+                                        </p>
+                                      </div>
+                                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${campanhaStatusClass(grupo.status)}`}>
+                                        {grupo.status}
+                                      </span>
+                                    </div>
+                                    <div className="mt-2 flex items-center gap-3 text-[11px] tabular-nums">
+                                      <span className="font-medium text-status-success">{grupo.enviados}<span className="font-normal text-muted2"> ok</span></span>
+                                      <span className={grupo.erros > 0 ? 'font-medium text-status-danger' : 'text-muted2'}>{grupo.erros}<span className="font-normal text-muted2"> err</span></span>
+                                      <span className="text-muted2">{grupo.total} tot</span>
+                                      <span className="ml-auto font-mono text-muted2">{pctGrupo.toFixed(0)}%</span>
+                                    </div>
+                                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-line">
+                                      <div className={`h-full rounded-full ${grupo.erros > grupo.enviados ? 'bg-status-warning' : 'bg-primary'}`} style={{ width: `${pctGrupo}%` }} />
+                                    </div>
+                                    <ul className="mt-2 space-y-1 border-t border-line pt-2">
+                                      {grupo.itens.map(c => {
+                                        const cid = c.campanha_id ?? c.id;
+                                        const sel = String(disparoCampanhaSel) === String(cid);
+                                        return (
+                                          <li key={cid}>
+                                            <button
+                                              type="button"
+                                              onClick={() => carregarDetalheCampanha(cid, c)}
+                                              className={`flex w-full items-center gap-2 rounded-[8px] px-2 py-1 text-left text-[11px] transition ${sel ? 'bg-primary/[0.12] text-ink' : 'text-muted hover:bg-bg2 hover:text-ink'}`}
+                                            >
+                                              <span className="min-w-0 flex-1 truncate">{c._instancia || ('#' + cid)}</span>
+                                              <span className="shrink-0 font-mono tabular-nums text-muted2">
+                                                {n(c.enviados)}/{n(c.total_contatos)}
+                                                {n(c.erros) > 0 ? ' · ' + n(c.erros) + ' err' : ''}
+                                              </span>
+                                            </button>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </li>
+                                );
+                              }
+                              const c = grupo.itens[0];
                               const id = c.campanha_id ?? c.id;
                               const status = String(c.status || '—');
                               const total = n(c.total_contatos);

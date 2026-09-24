@@ -66,9 +66,16 @@ Regras para qualquer feature que mande mensagem:
    destinatario sem ninguem perceber.
 3. **Respeitar os tetos.** `DISPARO_MAX_POR_DIA_INSTANCIA` (30/dia por instancia) e
    `minInterval` >= 30s sao piso, nao sugestao. O pacing real roda no n8n.
-4. **Variar a mensagem.** O pool de `mensagens` faz rodizio (`mensagens[i % n]`) e a
-   personalizacao resolve `{nome}`/`{empresa}` por contato. Campanha com texto unico e
-   identico para centenas de numeros e assinatura de robo — use mais de uma variacao.
+4. **Variar a mensagem (bloqueante).** `validarVariacaoMensagens`
+   (`backend/disparoMensagens.js`) exige 1 variacao a cada
+   `DISPARO_CONTATOS_POR_VARIACAO` contatos (default 25), com teto
+   `DISPARO_MAX_VARIACOES` (default 6), e o `/api/disparo/send` devolve 400 se o pool
+   nao atender. Campanha com midia tambem precisa de arquivos diferentes: o WhatsApp
+   compara o hash do anexo. A comparacao normaliza espaco e caixa, entao mudar
+   " Oi " para "OI" nao conta como variacao. Campanha pequena (ate o limite) segue
+   passando com uma mensagem so. Atencao: `{nome}` NAO deve ser usado como muleta de
+   variacao nesta base — tem contato cadastrado como "A.C.COMPCELL COMERCIO DE
+   INFORMATICA LTDA" e "~Raul Saroa", e personalizar com isso piora a mensagem.
 5. **Cooldown e atendimento vivo.** Nao reenviar para quem recebeu mensagem nossa ha
    pouco (`cooldownDias`) nem interromper conversa com atividade recente
    (`conversaAtivaDias`). Atencao: `conversations.status = 0` NAO significa atendimento
