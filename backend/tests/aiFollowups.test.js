@@ -6,6 +6,7 @@ const {
   dentroDaJanela,
   montarPrompt,
   buscarCandidatos,
+  nomeCurtoEmpresa,
   runAiFollowupTick,
 } = require('../aiFollowups');
 
@@ -117,6 +118,49 @@ test('avisa para não tirar primeiro nome do cadastro', () => {
   assert.match(system, /APENAS se ele aparecer no histórico/);
   assert.match(user, /não use como primeiro nome/);
   assert.match(user, /DRONE FLORIANO/);
+});
+
+test('encurta razão social sem deixar conectivo ou sufixo juridico', () => {
+  // "Como estão os projetos em andamento na Leandro Martins Imagens Aéreas?" saiu de
+  // verdade e soou a cobrança de cartório.
+  assert.equal(nomeCurtoEmpresa('Leandro Martins Imagens Aéreas'), 'Leandro Martins');
+  assert.equal(nomeCurtoEmpresa('GESTÃO ENGENHARIA E COMÉRCIO LTDA.'), 'GESTÃO ENGENHARIA');
+  assert.equal(nomeCurtoEmpresa('Aerion Technologies S/A'), 'Aerion Technologies');
+  // Nunca terminar em conectivo ou traço solto.
+  assert.equal(nomeCurtoEmpresa('WEPRO DO BRASIL LTDA'), 'WEPRO');
+  assert.equal(nomeCurtoEmpresa('SERTEC – ENGENHARIA E AEROLEVANTAMENTOS LTDA.'), 'SERTEC');
+  // Curto demais ou vazio.
+  assert.equal(nomeCurtoEmpresa('Mafra'), 'Mafra');
+  assert.equal(nomeCurtoEmpresa(''), null);
+  assert.equal(nomeCurtoEmpresa(null), null);
+});
+
+test('o prompt entrega a empresa encurtada e como contexto, nao como vocativo', () => {
+  const { system, user } = montarPrompt({
+    contato: { ...CANDIDATO, empresa: 'Leandro Martins Imagens Aéreas LTDA' },
+    historico: [{ autor: 'nós', texto: 'Oi', em: '2026-09-01T12:00:00.000Z' }],
+    followupsAnteriores: 0,
+    diasSilencio: 28,
+    agora: new Date('2026-09-29T15:00:00.000Z'),
+  });
+  assert.match(user, /Empresa \(contexto/);
+  assert.match(user, /Leandro Martins/);
+  assert.doesNotMatch(user, /Imagens Aéreas/, 'a razão social completa nao vai para o modelo');
+  assert.match(system, /não coisa para recitar/);
+  assert.match(system, /jamais a razão/);
+});
+
+test('o prompt proibe formulas de circunstancia', () => {
+  const { system } = montarPrompt({
+    contato: CANDIDATO,
+    historico: [{ autor: 'nós', texto: 'Oi', em: '2026-09-01T12:00:00.000Z' }],
+    followupsAnteriores: 0,
+    diasSilencio: 28,
+    agora: new Date('2026-09-29T15:00:00.000Z'),
+  });
+  assert.match(system, /Espero que esteja tudo bem/);
+  assert.match(system, /Estou à disposição/);
+  assert.match(system, /retomando o assunto/);
 });
 
 test('mensagem válida passa em todas as barreiras', () => {

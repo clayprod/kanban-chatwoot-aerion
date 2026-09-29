@@ -289,6 +289,30 @@ const carregarContextoConversa = async (pool, { accountId, contactId, limite = 4
     }));
 };
 
+// Sufixos juridicos e ruido de cadastro. "Leandro Martins Imagens Aéreas LTDA ME"
+// citado inteiro numa mensagem de WhatsApp soa a cobrança de cartório.
+const SUFIXOS_EMPRESA = /\s*[-–,]?\s*\b(ltda|me|epp|eireli|s\/?a|s\.a\.?|mei|cia|c\/o)\b\.?\s*$/gi;
+
+// Forma curta e pronunciavel do nome da empresa: sem sufixo juridico e com no maximo
+// duas palavras, que e como uma pessoa se refere a um cliente em conversa.
+const nomeCurtoEmpresa = (nome) => {
+  let limpo = String(nome || '').trim();
+  if (!limpo) return null;
+  let anterior;
+  do { anterior = limpo; limpo = limpo.replace(SUFIXOS_EMPRESA, '').trim(); } while (limpo !== anterior);
+  limpo = limpo.replace(/[.,;]+$/, '').trim();
+  if (!limpo) return null;
+  // Cortar em 2 palavras cruas produz "WEPRO DO" e "SERTEC –": nunca terminar em
+  // conectivo ou pontuação solta.
+  const CONECTIVOS = new Set(['de', 'do', 'da', 'dos', 'das', 'e', 'em', 'no', 'na', '-', '–', '&']);
+  const palavras = limpo.split(/\s+/).filter(Boolean);
+  const escolhidas = palavras.slice(0, 2);
+  while (escolhidas.length > 1 && CONECTIVOS.has(escolhidas[escolhidas.length - 1].toLowerCase())) {
+    escolhidas.pop();
+  }
+  return escolhidas.join(' ').replace(/[\s\-–&.,;]+$/, '').trim() || null;
+};
+
 const diasDesde = (data, now = new Date()) => {
   const t = new Date(data).getTime();
   if (!Number.isFinite(t)) return null;
@@ -298,8 +322,17 @@ const diasDesde = (data, now = new Date()) => {
 const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, agora = new Date() }) => {
   const system = [
     'Você escreve mensagens curtas de follow-up comercial no WhatsApp, em nome da Aerion, empresa brasileira de tecnologia.',
-    'Escreva em português do Brasil, tom profissional e direto, como um vendedor experiente — nunca como robô ou telemarketing.',
+'Escreva em português do Brasil, tom profissional e direto, como um vendedor experiente — nunca como robô ou telemarketing.',
+    'Soe como alguém que já conversou com essa pessoa e está retomando o assunto, não como',
+    'e-mail corporativo nem atendimento. Claro e respeitoso, mas solto.',
     'Regras que não se quebram:',
+    '- Evite fórmulas de circunstância. Nada de "Espero que esteja tudo bem", "Gostaria de',
+    '  saber se", "Estou à disposição", "Fico no aguardo", "Venho por meio desta". Vá direto',
+    '  ao ponto com naturalidade.',
+    '- O nome da empresa é CONTEXTO para você entender o negócio, não coisa para recitar.',
+    '  Na maioria das vezes nem mencione: "por aí", "aí no seu time", "nos seus projetos"',
+    '  soam melhor. Se precisar citar, use a forma curta que te passei e jamais a razão',
+    '  social completa com LTDA/ME/EIRELI.',
     '- No máximo 3 frases curtas.',
     '- Faça no máximo UMA pergunta, sempre fácil de responder.',
     '- Nunca cite preço, desconto, prazo de entrega ou condição comercial.',
@@ -336,11 +369,12 @@ const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, a
   const hoje = new Intl.DateTimeFormat('pt-BR', {
     timeZone: TZ, day: '2-digit', month: 'long', year: 'numeric',
   }).format(agora);
+  const empresaCurta = nomeCurtoEmpresa(contato.empresa);
 
   const user = [
     `Hoje é ${hoje}.`,
     `Contato (cadastro, pode ser razão social — não use como primeiro nome): ${contato.name || 'sem nome'}`,
-    contato.empresa ? `Empresa: ${contato.empresa}` : null,
+    empresaCurta ? `Empresa (contexto — não recite, prefira não citar): ${empresaCurta}` : null,
     `Etapa do funil: ${contato.funil || 'não informada'}`,
     `Dias sem resposta: ${diasSilencio ?? 'desconhecido'}`,
     `Follow-ups automáticos já enviados a este contato: ${followupsAnteriores}`,
@@ -554,6 +588,7 @@ const runAiFollowupTick = async (pool, {
 
 module.exports = {
   AI_FOLLOWUP_LOG_TABLE,
+  nomeCurtoEmpresa,
   MENSAGEM_MAX_CHARS,
   ETAPAS_PADRAO,
   carregarConfig,
