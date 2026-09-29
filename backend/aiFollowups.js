@@ -259,7 +259,7 @@ const diasDesde = (data, now = new Date()) => {
   return Math.floor((now.getTime() - t) / 86400000);
 };
 
-const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio }) => {
+const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, agora = new Date() }) => {
   const system = [
     'Você escreve mensagens curtas de follow-up comercial no WhatsApp, em nome da Aerion, empresa brasileira de tecnologia.',
     'Escreva em português do Brasil, tom profissional e direto, como um vendedor experiente — nunca como robô ou telemarketing.',
@@ -268,7 +268,15 @@ const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio })
     '- Faça no máximo UMA pergunta, sempre fácil de responder.',
     '- Nunca cite preço, desconto, prazo de entrega ou condição comercial.',
     '- Nunca invente fato, número, reunião ou combinado que não esteja no histórico.',
-    '- Nunca use placeholder entre chaves: escreva o nome real da pessoa.',
+    '- CADA linha do histórico vem com quanto tempo faz. Respeite isso: evento, feira,',
+    '  promoção ou prazo citado numa mensagem antiga JÁ PASSOU. Nunca convide alguém para',
+    '  algo que já aconteceu nem fale no futuro de data que ficou para trás. Na dúvida sobre',
+    '  se algo ainda está de pé, não mencione.',
+    '- Use o nome da pessoa APENAS se ele aparecer no histórico como nome de quem fala.',
+    '  O cadastro do contato costuma ser razão social ou apelido do comercial ("DRONE',
+    '  FLORIANO", "Felipe GRS80"): nunca extraia um primeiro nome dali. Sem nome confiável,',
+    '  comece sem vocativo ("Oi, tudo bem?").',
+    '- Nunca use placeholder entre chaves.',
     '- No máximo um emoji, e só se o histórico já tiver tom informal.',
     '- Se o histórico não der contexto para uma mensagem útil, devolva confianca baixa.',
     '',
@@ -276,12 +284,26 @@ const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio })
     '{"mensagem": "<texto pronto para enviar>", "confianca": <numero de 0 a 1>, "motivo": "<por que este follow-up faz sentido agora>"}',
   ].join('\n');
 
+  // Sem a idade de cada mensagem o modelo trata o assunto mais recente como atual e
+  // convida gente para feira que aconteceu meses atrás. A data crua também confunde;
+  // "há N dias" é o que ele usa bem.
   const linhas = historico.length
-    ? historico.map((h) => `[${h.autor}] ${h.texto}`).join('\n')
+    ? historico.map((h) => {
+        const dias = diasDesde(h.em, agora);
+        const quando = dias === null
+          ? 'data desconhecida'
+          : dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
+        return `[${h.autor} — ${quando}] ${h.texto}`;
+      }).join('\n')
     : '(sem histórico textual)';
 
+  const hoje = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TZ, day: '2-digit', month: 'long', year: 'numeric',
+  }).format(agora);
+
   const user = [
-    `Contato: ${contato.name || 'sem nome'}`,
+    `Hoje é ${hoje}.`,
+    `Contato (cadastro, pode ser razão social — não use como primeiro nome): ${contato.name || 'sem nome'}`,
     contato.empresa ? `Empresa: ${contato.empresa}` : null,
     `Etapa do funil: ${contato.funil || 'não informada'}`,
     `Dias sem resposta: ${diasSilencio ?? 'desconhecido'}`,
@@ -416,6 +438,7 @@ const runAiFollowupTick = async (pool, {
         historico,
         followupsAnteriores: Number(candidato.followups_anteriores || 0),
         diasSilencio: diasDesde(candidato.ultima_em, now),
+        agora: now,
       });
       const ia = await chatCompletionJson({ system, user, maxTokens: 500, temperature: 0.4 });
       if (!ia.ok) {

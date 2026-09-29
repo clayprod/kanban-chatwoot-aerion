@@ -80,7 +80,42 @@ test('o prompt leva histórico, etapa e follow-ups anteriores', () => {
   assert.match(user, /3\. Follow-up 1/);
   assert.match(user, /Dias sem resposta: 4/);
   assert.match(user, /já enviados a este contato: 1/);
-  assert.match(user, /\[cliente\] tenho interesse/);
+  assert.match(user, /\[cliente — [^\]]+\] tenho interesse/);
+});
+
+test('o histórico leva a idade de cada mensagem e a data de hoje', () => {
+  // Regressão real: sem isso a IA leu um disparo de maio sobre a DroneShow (16-18/jun)
+  // e, em setembro, convidou contatos para comparecer a um evento que já tinha passado.
+  const agora = new Date('2026-09-29T15:00:00.000Z');
+  const { system, user } = montarPrompt({
+    contato: CANDIDATO,
+    historico: [
+      { autor: 'nós', texto: 'A Aerion estará na DroneShow, 16 a 18 de Junho.', em: '2026-05-07T12:00:00.000Z' },
+      { autor: 'cliente', texto: 'Legal!', em: '2026-09-28T12:00:00.000Z' },
+    ],
+    followupsAnteriores: 0,
+    diasSilencio: 1,
+    agora,
+  });
+  assert.match(user, /Hoje é 29 de setembro de 2026/);
+  assert.match(user, /há 145 dias] A Aerion estará na DroneShow/);
+  assert.match(user, /ontem] Legal!/);
+  assert.match(system, /JÁ PASSOU/);
+  assert.match(system, /Nunca convide alguém para/);
+});
+
+test('avisa para não tirar primeiro nome do cadastro', () => {
+  // "DRONE FLORIANO" virou "Olá, Floriano!" numa mensagem real.
+  const { system, user } = montarPrompt({
+    contato: { ...CANDIDATO, name: 'DRONE FLORIANO' },
+    historico: [{ autor: 'nós', texto: 'Bom dia!', em: '2026-09-01T12:00:00.000Z' }],
+    followupsAnteriores: 0,
+    diasSilencio: 28,
+    agora: new Date('2026-09-29T15:00:00.000Z'),
+  });
+  assert.match(system, /APENAS se ele aparecer no histórico/);
+  assert.match(user, /não use como primeiro nome/);
+  assert.match(user, /DRONE FLORIANO/);
 });
 
 test('mensagem válida passa em todas as barreiras', () => {
