@@ -82,6 +82,11 @@ const carregarConfig = () => {
     maxPorDia: inteiro('AI_FOLLOWUP_MAX_PER_DAY', 20),
     maxPorTick: inteiro('AI_FOLLOWUP_MAX_PER_TICK', 3),
     cooldownDias: inteiro('AI_FOLLOWUP_COOLDOWN_DAYS', 5),
+    // Coordenacao com o disparo em massa: os dois saem pela MESMA instancia
+    // Evolution, entao o orcamento tem que ser do numero, nao de cada sistema.
+    instanciaCapDiario: inteiro('AI_FOLLOWUP_INSTANCE_DAILY_CAP', 40),
+    instanciaCapHorario: inteiro('AI_FOLLOWUP_INSTANCE_HOURLY_CAP', 12),
+    gapSegundos: inteiro('AI_FOLLOWUP_MIN_GAP_SECONDS', 300),
     minConfianca: decimal('AI_FOLLOWUP_MIN_CONFIDENCE', 0.6),
     horaInicio: Number.isFinite(horaInicio) ? horaInicio : 9,
     horaFim: Number.isFinite(horaFim) ? horaFim : 18,
@@ -137,7 +142,25 @@ const dentroDaJanela = (config, now = new Date()) => {
 const buscarCandidatos = async (pool, { accountId, config, limite }) => {
   const { rows } = await pool.query(
     `
-    WITH ultima_mensagem AS (
+    WITH carga_inbox AS (
+      -- Tudo que saiu de cada numero nas ultimas 24h: campanha de disparo, vendedor
+      -- humano e follow-up da IA entram na MESMA conta. O que derruba o numero e o
+      -- volume total dele, nao o de cada sistema isolado.
+      SELECT cv.inbox_id,
+             COUNT(*) FILTER (
+               WHERE m.created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                     AT TIME ZONE 'America/Sao_Paulo'
+             )::int AS hoje,
+             COUNT(*) FILTER (WHERE m.created_at >= NOW() - INTERVAL '1 hour')::int AS ultima_hora,
+             MAX(m.created_at) AS ultimo_envio
+        FROM messages m
+        JOIN conversations cv ON cv.id = m.conversation_id
+       WHERE m.account_id = $1
+         AND m.message_type = 1
+         AND m.created_at >= NOW() - INTERVAL '1 day'
+       GROUP BY cv.inbox_id
+    ),
+    ultima_mensagem AS (
       SELECT DISTINCT ON (conv.contact_id)
              conv.contact_id,
              conv.id AS conversation_id,
@@ -158,10 +181,14 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            um.conversation_id,
            um.created_at AS ultima_em,
            COALESCE(ja.total, 0) AS followups_anteriores,
-           conv.assignee_id
+           conv.assignee_id,
+           conv.inbox_id,
+           COALESCE(carga.hoje, 0) AS instancia_hoje,
+           COALESCE(carga.ultima_hora, 0) AS instancia_ultima_hora
       FROM contacts c
       JOIN ultima_mensagem um ON um.contact_id = c.id
       JOIN conversations conv ON conv.id = um.conversation_id
+      LEFT JOIN carga_inbox carga ON carga.inbox_id = conv.inbox_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS total
           FROM ${AI_FOLLOWUP_LOG_TABLE} l
@@ -201,6 +228,12 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            NOT IN ('true', '1', 'yes', 'sim')
        AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'nao_contatar')), ''), 'false')
            NOT IN ('true', '1', 'yes', 'sim')
+       -- Nao entrar num lote em andamento: se o numero acabou de mandar algo (campanha
+       -- disparando de 2 em 2 minutos, por exemplo), a IA espera o proximo tick.
+       AND (carga.ultimo_envio IS NULL OR carga.ultimo_envio <= NOW() - make_interval(secs => $7))
+       AND COALESCE(carga.hoje, 0) < $8
+       AND COALESCE(carga.ultima_hora, 0) < $9
+     -- Cliente parado ha mais tempo primeiro.
      ORDER BY um.created_at ASC
      LIMIT $6
     `,
@@ -211,6 +244,9 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
       config.maxPorContato,
       config.cooldownDias,
       limite,
+      config.gapSegundos,
+      config.instanciaCapDiario,
+      config.instanciaCapHorario,
     ]
   );
   return rows;

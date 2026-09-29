@@ -85,10 +85,23 @@ Regras para qualquer feature que mande mensagem:
    valem em qualquer modo, inclusive em selecao manual de contatos.
 7. **Fixar o numero do lead.** `fixarNumero` faz o contato receber sempre da instancia da
    ultima conversa dele. Lead que recebe de numeros diferentes a cada campanha reporta.
-8. **A IA de follow-up divide o mesmo numero.** `backend/aiFollowups.js` posta pelo
-   Chatwoot, que sai pela mesma instancia Evolution do inbox. O teto dela
-   (`AI_FOLLOWUP_MAX_PER_DAY`) e um orcamento SEPARADO do disparo — ao subir um, lembrar
-   que os dois somam no mesmo numero.
+8. **Orcamento e do NUMERO, nao de cada sistema.** `backend/aiFollowups.js` posta pelo
+   Chatwoot e sai pela mesma instancia Evolution do disparo. Contar so o que cada
+   sistema mandou nao protege nada: medido em 29/09, o inbox `comercial_aerion` fez
+   **71 envios num dia, com 24 numa unica hora**, somando campanha + vendedor humano —
+   muito acima do `DISPARO_MAX_POR_DIA_INSTANCIA` de 30, que governa apenas a campanha.
+
+   A CTE `carga_inbox` em `buscarCandidatos` conta TODO outbound
+   (`messages.message_type = 1`) do inbox nas ultimas 24h — campanha, humano e IA na
+   mesma regua — e a IA se retira sozinha quando o numero esta carregado:
+   - `AI_FOLLOWUP_MIN_GAP_SECONDS` (default 300): se o numero enviou algo ha menos
+     que isso, a IA pula o tick. E o anti-lote — enquanto uma campanha dispara de 2 em
+     2 minutos naquele numero, a IA simplesmente nao entra na fila.
+   - `AI_FOLLOWUP_INSTANCE_DAILY_CAP` (default 40) e
+     `AI_FOLLOWUP_INSTANCE_HOURLY_CAP` (default 12): tetos por numero, nao por sistema.
+
+   Regra para features novas que enviem pelo WhatsApp: consultar a mesma carga antes de
+   mandar. Nunca criar um orcamento proprio paralelo.
 
 ## Deploy
 

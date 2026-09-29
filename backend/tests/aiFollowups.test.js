@@ -5,6 +5,7 @@ const {
   validarMensagem,
   dentroDaJanela,
   montarPrompt,
+  buscarCandidatos,
   runAiFollowupTick,
 } = require('../aiFollowups');
 
@@ -36,7 +37,7 @@ const fakePool = ({ candidatos = [], historico = [], enviadosHoje = 0 }) => {
         return { rows: [{ id: gravados.length }] };
       }
       // a query de candidatos também tem COUNT(*)::int — testar por ela primeiro
-      if (sql.includes('WITH ultima_mensagem')) return { rows: candidatos };
+      if (sql.includes('ultima_mensagem AS (')) return { rows: candidatos };
       if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: enviadosHoje }] };
       if (sql.includes('SELECT m.content')) return { rows: historico };
       throw new Error(`query inesperada: ${sql.slice(0, 60)}`);
@@ -132,6 +133,46 @@ test('barra mensagem com placeholder, tema comercial, tamanho ou confiança baix
   assert.match(validarMensagem('x'.repeat(601), 0.9, CONFIG_BASE), /longa demais/);
   assert.match(validarMensagem('Oi Paloma, tudo certo?', 0.2, CONFIG_BASE), /abaixo do mínimo/);
   assert.match(validarMensagem('Oi Paloma, tudo certo?', null, CONFIG_BASE), /confiança ausente/);
+});
+
+test('a busca coordena com o disparo pela carga do numero, nao por sistema', async () => {
+  // O follow-up sai pela MESMA instancia Evolution do disparo em massa. Medido em
+  // 29/09: o inbox comercial_aerion fez 71 envios num dia, com 24 numa unica hora,
+  // somando campanha + vendedor humano. Contar so o que a IA mandou nao protege nada.
+  let sqlVisto = null;
+  let paramsVistos = null;
+  const pool = {
+    async query(sql, params) { sqlVisto = sql; paramsVistos = params; return { rows: [] }; },
+  };
+  await buscarCandidatos(pool, {
+    accountId: 2,
+    limite: 3,
+    config: {
+      etapas: ['17. Nurturing'],
+      silencioDias: 3,
+      maxPorContato: 2,
+      cooldownDias: 5,
+      gapSegundos: 300,
+      instanciaCapDiario: 40,
+      instanciaCapHorario: 12,
+    },
+  });
+
+  // A carga considera TODO outbound do numero, nao so o da IA.
+  assert.match(sqlVisto, /carga_inbox/);
+  assert.match(sqlVisto, /m\.message_type = 1/);
+  assert.doesNotMatch(
+    sqlVisto.split('carga_inbox')[1].split('ultima_mensagem')[0],
+    /ai_followup_log/,
+    'a carga do numero nao pode olhar so a tabela da IA'
+  );
+  // Anti-lote: nao entra enquanto o numero acabou de disparar.
+  assert.match(sqlVisto, /carga\.ultimo_envio <= NOW\(\) - make_interval\(secs => \$7\)/);
+  assert.match(sqlVisto, /COALESCE\(carga\.hoje, 0\) < \$8/);
+  assert.match(sqlVisto, /COALESCE\(carga\.ultima_hora, 0\) < \$9/);
+  assert.deepEqual(paramsVistos.slice(6), [300, 40, 12]);
+  // Cliente parado ha mais tempo primeiro.
+  assert.match(sqlVisto, /ORDER BY um\.created_at ASC/);
 });
 
 test('desligado não consulta nada', async () => {
