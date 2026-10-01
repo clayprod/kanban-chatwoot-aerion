@@ -79,8 +79,11 @@ const carregarConfig = () => {
     etapas: lista('AI_FOLLOWUP_STAGES', ETAPAS_PADRAO),
     silencioDias: inteiro('AI_FOLLOWUP_SILENCE_DAYS', 3),
     maxPorContato: inteiro('AI_FOLLOWUP_MAX_PER_CONTACT', 2),
-    maxPorDia: inteiro('AI_FOLLOWUP_MAX_PER_DAY', 20),
-    maxPorTick: inteiro('AI_FOLLOWUP_MAX_PER_TICK', 3),
+    maxPorDia: inteiro('AI_FOLLOWUP_MAX_PER_DAY', 30),
+    // 1 por tick e regra de seguranca, nao preferencia: o loop do tick envia sem
+    // pausa entre contatos, entao qualquer valor > 1 vira rajada de mensagens em
+    // segundos pelo mesmo numero. Quem controla o ritmo e o intervalo do cron.
+    maxPorTick: inteiro('AI_FOLLOWUP_MAX_PER_TICK', 1),
     cooldownDias: inteiro('AI_FOLLOWUP_COOLDOWN_DAYS', 5),
     // Coordenacao com o disparo em massa: os dois saem pela MESMA instancia
     // Evolution, entao o orcamento tem que ser do numero, nao de cada sistema.

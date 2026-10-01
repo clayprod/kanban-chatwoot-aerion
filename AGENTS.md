@@ -100,6 +100,16 @@ Regras para qualquer feature que mande mensagem:
    - `AI_FOLLOWUP_INSTANCE_DAILY_CAP` (default 40) e
      `AI_FOLLOWUP_INSTANCE_HOURLY_CAP` (default 12): tetos por numero, nao por sistema.
 
+   `AI_FOLLOWUP_MAX_PER_TICK` e 1 e deve continuar 1: o loop do tick envia sem pausa
+   entre contatos, entao qualquer valor maior vira rajada de mensagens em segundos pelo
+   mesmo numero. Quem controla o ritmo e o intervalo do cron (`AI_FOLLOWUP_CRON`,
+   default `*/5 * * * *`), nao o tamanho do lote.
+
+   Os defaults no codigo SAO os valores de producao, de proposito: as env vars vivem em
+   `docker service update` e ja se perderam em deploy mais de uma vez. Perder env nunca
+   pode ligar envio sozinho (`enabled` default false, `dryRun` default true) nem
+   afrouxar protecao. Ha teste cobrindo esses defaults.
+
    Regra para features novas que enviem pelo WhatsApp: consultar a mesma carga antes de
    mandar. Nunca criar um orcamento proprio paralelo.
 

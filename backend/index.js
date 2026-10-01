@@ -22709,15 +22709,17 @@ const registerBackgroundSchedules = () => {
   // Follow-up automático com IA: cutuca leads parados usando o contexto da própria
   // conversa. Fica inerte enquanto AI_FOLLOWUP_ENABLED não for 1.
   //
-  // Cadência de hora em hora, não porque o tick custe token — ele só roda uma query
-  // e o gasto com o modelo é limitado por AI_FOLLOWUP_MAX_PER_DAY — mas porque é o
-  // que espalha os envios pela janela comercial. Rodar uma vez por dia faria os 20
-  // follow-ups saírem numa rajada só, que é exatamente o padrão que queima número
-  // no WhatsApp. Ajustável por AI_FOLLOWUP_CRON.
+  // Um tick a cada 5 minutos, enviando no máximo 1 contato por vez. O tick em si não
+  // custa token (só uma query); quem limita gasto é AI_FOLLOWUP_MAX_PER_DAY. O que a
+  // cadência curta compra é espalhamento: com 1 por tick, duas mensagens do mesmo
+  // número ficam a 5+ minutos de distância, e o gap por instância faz a IA revezar
+  // entre os números em vez de martelar um. Rodar de hora em hora deixava a fila
+  // parada; rodar uma vez por dia sairia em rajada, que é o que queima número.
+  // Default aqui (e não só em env) para sobreviver a deploy que limpe as variáveis.
   let aiFollowupRodando = false;
   const aiFollowupCron = cron.validate(process.env.AI_FOLLOWUP_CRON || '')
     ? process.env.AI_FOLLOWUP_CRON
-    : '0 * * * *';
+    : '*/5 * * * *';
   cron.schedule(aiFollowupCron, async () => {
     if (!dataLayerReady || aiFollowupRodando) return;
     const config = carregarConfigAiFollowup();

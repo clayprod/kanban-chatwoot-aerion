@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  carregarConfig,
   validarMensagem,
   dentroDaJanela,
   montarPrompt,
@@ -68,6 +69,50 @@ test('a janela comercial respeita horário e dia útil', () => {
   assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-09-23T08:00:00.000Z')), false);
   // Domingo.
   assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-09-20T17:00:00.000Z')), false);
+});
+
+// A janela e calculada em America/Sao_Paulo, nao no fuso do container (que varia no
+// Swarm). Estes casos travam as bordas e as armadilhas de UTC.
+test('janela: bordas de horario em Sao Paulo', () => {
+  // Quarta-feira 2026-09-30. SP = UTC-3.
+  const sp = (h, m = 0) => new Date(Date.UTC(2026, 8, 30, h + 3, m)); // h = hora em SP
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(8, 59)), false, '08:59 ainda fechado');
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(9, 0)), true, '09:00 abre');
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(12, 30)), true);
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(17, 59)), true, '17:59 ainda vale');
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(18, 0)), false, '18:00 fecha');
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(23, 0)), false, 'nunca de madrugada');
+  assert.equal(dentroDaJanela(CONFIG_BASE, sp(3, 0)), false);
+});
+
+test('janela: fim de semana bloqueado o dia inteiro', () => {
+  // 2026-10-03 sabado, 2026-10-04 domingo.
+  const sab = (h) => new Date(Date.UTC(2026, 9, 3, h + 3));
+  const dom = (h) => new Date(Date.UTC(2026, 9, 4, h + 3));
+  for (const h of [9, 12, 15, 17]) {
+    assert.equal(dentroDaJanela(CONFIG_BASE, sab(h)), false, `sabado ${h}h`);
+    assert.equal(dentroDaJanela(CONFIG_BASE, dom(h)), false, `domingo ${h}h`);
+  }
+});
+
+test('janela: armadilha de fuso — o dia que vale e o de Sao Paulo, nao o UTC', () => {
+  // Segunda 2026-10-05 01:00 UTC = domingo 2026-10-04 22:00 em SP. Em UTC parece
+  // dia util; em SP e domingo de noite. Tem que barrar.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-10-05T01:00:00.000Z')), false);
+  // Sabado 2026-10-03 01:00 UTC = sexta 2026-10-02 22:00 em SP: sexta, mas fora do
+  // horario. Barra pela hora, nao pelo dia.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-10-03T01:00:00.000Z')), false);
+  // Sexta 2026-10-02 20:00 UTC = sexta 17:00 em SP: ultimo tick da semana, vale.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-10-02T20:00:00.000Z')), true);
+});
+
+test('janela: feriado nacional em dia util tambem barra', () => {
+  // 2026-09-07, Independencia, cai numa segunda-feira.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-09-07T15:00:00.000Z')), false);
+  // 2026-12-25, Natal, numa sexta.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-12-25T15:00:00.000Z')), false);
+  // 2026-09-08, terca comum logo apos o feriado: volta a valer.
+  assert.equal(dentroDaJanela(CONFIG_BASE, new Date('2026-09-08T15:00:00.000Z')), true);
 });
 
 test('o prompt leva histórico, etapa e follow-ups anteriores', () => {
@@ -161,6 +206,36 @@ test('o prompt proibe formulas de circunstancia', () => {
   assert.match(system, /Espero que esteja tudo bem/);
   assert.match(system, /Estou à disposição/);
   assert.match(system, /retomando o assunto/);
+});
+
+test('defaults sao seguros sem nenhuma env var', () => {
+  // As variaveis vivem em `docker service update` e ja se perderam em deploy mais de
+  // uma vez. Se isso acontecer, o comportamento tem que continuar correto sozinho.
+  const salvos = {};
+  for (const k of Object.keys(process.env)) {
+    if (k.startsWith('AI_FOLLOWUP_')) { salvos[k] = process.env[k]; delete process.env[k]; }
+  }
+  try {
+    const cfg = carregarConfig();
+    // 1 por tick e seguranca: o loop do tick nao pausa entre contatos, entao >1 vira
+    // rajada pelo mesmo numero.
+    assert.equal(cfg.maxPorTick, 1, 'default nao pode permitir lote');
+    assert.equal(cfg.maxPorDia, 30);
+    // Nasce inerte e em modo sombra: perder env nunca pode LIGAR envio sozinho.
+    assert.equal(cfg.enabled, false, 'sem env, desligado');
+    assert.equal(cfg.dryRun, true, 'sem env, modo sombra');
+    // Protecoes do numero continuam de pe.
+    assert.equal(cfg.gapSegundos, 300);
+    assert.equal(cfg.instanciaCapDiario, 40);
+    assert.equal(cfg.instanciaCapHorario, 12);
+    // Janela comercial e silencio minimo.
+    assert.equal(cfg.horaInicio, 9);
+    assert.equal(cfg.horaFim, 18);
+    assert.equal(cfg.silencioDias, 3);
+    assert.equal(cfg.maxPorContato, 2);
+  } finally {
+    Object.assign(process.env, salvos);
+  }
 });
 
 test('mensagem válida passa em todas as barreiras', () => {
