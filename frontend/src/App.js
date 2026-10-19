@@ -24189,14 +24189,6 @@ function App() {
               setRfbFilters(nextFilters);
               setRfbCapitalRange(capitalRange);
               setRfbAberturaRange(aberturaRange);
-            // Janela de até 5 números de página; com total progressivo só mostra até a próxima conhecida.
-            const rfbLastKnownPage = rfbProgressive ? (rfbHasMore ? rfbPage + 1 : rfbPage) : rfbTotalPages;
-            const rfbPageWindow = (() => {
-              const size = 5;
-              const start = Math.max(1, Math.min(rfbPage - 2, rfbLastKnownPage - size + 1));
-              const end = Math.min(rfbLastKnownPage, start + size - 1);
-              return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-            })();
               setRfbOnlyMatriz(onlyMatriz);
               setRfbMei(mei);
               setRfbSimples(simples);
@@ -24273,6 +24265,14 @@ function App() {
               if (rfbLoading || nextPage < 1 || (nextPage > rfbPage && !rfbCanGoNext)) return;
               handleRfbSearch(nextPage, rfbPageSize, rfbOrderBy, null, true);
             };
+            // Janela de até 5 números de página; com total progressivo só mostra até a próxima conhecida.
+            const rfbLastKnownPage = rfbProgressive ? (rfbHasMore ? rfbPage + 1 : rfbPage) : rfbTotalPages;
+            const rfbPageWindow = (() => {
+              const size = 5;
+              const start = Math.max(1, Math.min(rfbPage - 2, rfbLastKnownPage - size + 1));
+              const end = Math.min(rfbLastKnownPage, start + size - 1);
+              return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+            })();
             const handleRfbOrderChange = (nextOrder) => {
               setRfbOrderBy(nextOrder);
               if (rfbHasSearched && rfbActiveSearchRef.current) {
