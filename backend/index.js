@@ -22352,14 +22352,15 @@ app.get('/api/rfb/search', async (req, res) => {
     const rfbEmpJoin = hasNarrowFilter && !useSqlOrder
       ? `JOIN LATERAL (SELECT razao_social, capital_social, porte_da_empresa, natureza_juridica FROM rfb_empresas WHERE cnpj_basico = e.cnpj_basico LIMIT 1) emp ON true`
       : `JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico`;
+    const detailJoins = `LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
+      LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
+      LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
+      LEFT JOIN rfb_natureza nat ON emp.natureza_juridica = nat.codigo`;
     const baseQuery = `
       FROM rfb_estabelecimentos e
       ${allJoins.join('\n      ')}
       ${rfbEmpJoin}
-      LEFT JOIN rfb_municipios m ON e.municipio = m.codigo
-      LEFT JOIN rfb_cnaes c ON e.cnae_fiscal_principal = c.codigo
-      LEFT JOIN rfb_simples s ON e.cnpj_basico = s.cnpj_basico
-      LEFT JOIN rfb_natureza nat ON emp.natureza_juridica = nat.codigo
+      ${detailJoins}
       ${whereClause}
     `;
 
@@ -22376,7 +22377,7 @@ app.get('/api/rfb/search', async (req, res) => {
     const candidateSetSearch = hasNarrowFilter || hasTextCandidateSearch;
     const MERGEJOIN_OPT = candidateSetSearch ? "; SET enable_mergejoin = off" : '';
     const SESSION_OPTS = `SET statement_timeout = '120s'; SET random_page_cost = 1.0; SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0${MERGEJOIN_OPT}`;
-    const selectQuery = `
+    const selectCols = `
         SELECT
           e.cnpj_basico || e.cnpj_ordem || e.cnpj_dv AS cnpj,
           e.cnpj_basico, e.cnpj_ordem,
@@ -22422,6 +22423,8 @@ app.get('/api/rfb/search', async (req, res) => {
           (SELECT json_agg(json_build_object('codigo', c2.codigo, 'descricao', c2.descricao) ORDER BY c2.codigo)
            FROM rfb_cnaes c2
            WHERE c2.codigo = ANY(string_to_array(NULLIF(TRIM(e.cnae_fiscal_secundaria), ''), ','))) AS cnaes_secundarios
+      `;
+    const selectQuery = `${selectCols}
         ${baseQuery}
       `;
 
@@ -22520,6 +22523,116 @@ app.get('/api/rfb/search', async (req, res) => {
     // nunca para artificialmente em 100 ou 10.000 resultados.
     const queryLimit     = limit + 1;
     const countQueryFull = skipCount ? null : `${ctePrefix} SELECT COUNT(*) FROM (SELECT 1 ${baseQuery} LIMIT 10001) __c`;
+
+    // Ordenação global por capital com filtros: antes só ordenava a página (cnpj_basico
+    // aleatório → empresas de capital alto ficavam de fora). Duas estratégias, medidas em prod:
+    //  1) candidatas-e-ordena: materializa as candidatas (teto RFB_CAPITAL_CAND_CAP) e ordena
+    //     por capital — busca seletiva (6k candidatas) 0,7s; andar pelo índice de capital
+    //     filtrando levava 63s.
+    //  2) estouro do teto sem CTE de texto: busca ampla; andar pelo índice de capital e filtrar
+    //     encontra o topo cedo (SP+ativas 13s).
+    // Se nada couber no tempo, cai na ordenação da página (order_scope 'page').
+    const capitalGlobalSort = order_by === 'capital_desc' && !useSqlOrder
+      && hasCapitalOrderBlocker && !cleanCnpjFilter;
+    if (capitalGlobalSort) {
+      const CAND_CAP = Math.max(1000, parseInt(process.env.RFB_CAPITAL_CAND_CAP, 10) || 200000);
+      const buildWarnings = () => {
+        const w = [];
+        if (cnaeSecondarySkippedNoGeo) w.push('cnae_secundario_omitido_sem_uf: sem filtro de UF/município a busca usa só CNAE principal (secundário nacional estoura o tempo).');
+        if (cnpjFilterMovedToNome) w.push('filtro_cnpj_textual_movido_para_nome: o termo textual foi pesquisado como nome/razão social.');
+        return w;
+      };
+      const sendGlobal = (rows, total, progressive, hasMore) => {
+        for (const row of rows) {
+          const first = (row.socios_nomes || '').split(' · ')[0];
+          row.primeiro_socio = first.replace(/\s*\(.*\)\s*$/, '').trim() || null;
+        }
+        const payload = {
+          results: rows,
+          total,
+          page: parseInt(page, 10) || 1,
+          page_size: limit,
+          progressive,
+          has_more: hasMore,
+          order_scope: 'global',
+          capital_index_ready: capitalIndexStatus.ready,
+        };
+        const warnings = buildWarnings();
+        if (warnings.length) payload.warnings = warnings;
+        res.json(payload);
+      };
+      const withTx = async (timeoutSec, fn) => {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN READ ONLY');
+          await client.query(`SET LOCAL statement_timeout = '${timeoutSec}s'; SET LOCAL random_page_cost = 1.0; SET LOCAL work_mem = '128MB'; SET LOCAL max_parallel_workers_per_gather = 0${candidateSetSearch ? '; SET LOCAL enable_mergejoin = off' : ''}`);
+          const out = await fn(client);
+          await client.query('COMMIT');
+          return out;
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          if (err?.code === '57014' || /statement timeout|canceling statement/i.test(err?.message || '')) return null;
+          throw err;
+        } finally {
+          client.release();
+        }
+      };
+
+      // 1) candidatas-e-ordena
+      const candCte = `_cap_cand AS MATERIALIZED (
+          SELECT e.cnpj_basico, e.cnpj_ordem, ${capitalExpr} AS cap
+          FROM rfb_estabelecimentos e
+          ${allJoins.join('\n          ')}
+          ${rfbEmpJoin}
+          ${whereClause}
+          LIMIT ${CAND_CAP + 1})`;
+      const keyQuery = `WITH ${[...allCtes, candCte].join(',\n')}
+        SELECT cnpj_basico, cnpj_ordem, COUNT(*) OVER ()::INT AS cand_n
+        FROM _cap_cand
+        ORDER BY cap DESC NULLS LAST, cnpj_basico, cnpj_ordem
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      const byKeys = (client, keys) => client.query(
+        `${selectCols}
+         FROM rfb_estabelecimentos e
+         JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+         ${detailJoins}
+         WHERE (e.cnpj_basico, e.cnpj_ordem) IN (SELECT x, y FROM unnest($1::text[], $2::text[]) AS t(x, y))`,
+        [keys.map((k) => k.cnpj_basico), keys.map((k) => k.cnpj_ordem)]
+      );
+      const candResult = await withTx(20, async (client) => {
+        const keys = await client.query(keyQuery, [...params, limit, offset]);
+        if (keys.rows.length === 0) return { rows: [], candN: offset };
+        const candN = keys.rows[0].cand_n;
+        if (candN > CAND_CAP) return { overflow: true };
+        const detail = await byKeys(client, keys.rows);
+        const pos = new Map(keys.rows.map((k, i) => [`${k.cnpj_basico}|${k.cnpj_ordem}`, i]));
+        const rows = detail.rows.sort((a, b) => pos.get(`${a.cnpj_basico}|${a.cnpj_ordem}`) - pos.get(`${b.cnpj_basico}|${b.cnpj_ordem}`));
+        return { rows, candN };
+      });
+      if (candResult && !candResult.overflow) {
+        return sendGlobal(candResult.rows, candResult.candN, false, offset + candResult.rows.length < candResult.candN);
+      }
+
+      // 2) busca ampla sem CTE de texto: ordem pelo índice de capital, filtrando por cima
+      if (candResult?.overflow && !candidateSetSearch && capitalIndexStatus.ready) {
+        const wideQuery = `${selectCols}
+          FROM rfb_estabelecimentos e
+          ${allJoins.join('\n          ')}
+          JOIN rfb_empresas emp ON e.cnpj_basico = emp.cnpj_basico
+          ${detailJoins}
+          ${whereClause}
+          ORDER BY ${ORDER_MAP.capital_desc}, emp.cnpj_basico, e.cnpj_ordem
+          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        const wide = await withTx(45, (client) => client.query(wideQuery, [...params, limit + 1, offset]));
+        if (wide) {
+          const hasMore = wide.rows.length > limit;
+          const rows = hasMore ? wide.rows.slice(0, limit) : wide.rows;
+          const total = offset + rows.length + (hasMore ? 1 : 0);
+          return sendGlobal(rows, total, hasMore, hasMore);
+        }
+      }
+      console.warn('[rfb/search] ordenação global por capital estourou o tempo; usando ordem da página');
+    }
 
     let dataRows, countRow;
     if (skipCount) {
