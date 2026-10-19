@@ -5,7 +5,8 @@ node_modules
 nul
 frontend/nul.css
 Webshare 10 proxies.txt
-backend/data/
+backend/data/*
+!backend/data/aerionCatalog.json
 backend/scripts/__pycache__/
 
 # Local agent / IDE settings (often accumulate credentials in allow-lists)

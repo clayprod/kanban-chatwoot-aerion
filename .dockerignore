@@ -1,0 +1,12 @@
+.git
+.agents
+.codex
+**/node_modules
+**/.env
+**/.env.*
+**/*.log
+**/__pycache__
+frontend/build
+backend/data/rfb
+backend/data/incoming
+backend/.impeccable

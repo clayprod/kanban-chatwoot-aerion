@@ -56,7 +56,6 @@ const {
   isEmbeddingsEnabled,
   rerankPncpItems,
   embedQuery,
-  knnPcaItens,
   runPcaEmbedBackfillBatch,
   getEmbeddingsStats,
 } = require('./embeddings');
@@ -82,6 +81,14 @@ const {
   getPncpProxyPoolSnapshot,
 } = require('./pncpProxyPool');
 const { fetch: undiciFetch, ProxyAgent } = require('undici');
+const { QUALITY_VERSION, normalizeProfile, classifyItem, applyQuality, evaluateResult,
+  matchesTerm, termPattern, buildPcaPredicate, unique: uniqueQualityTerms } = require('./searchQuality');
+const { registerSearchGuidance, createSearchInterpreter } = require('./searchGuidance');
+const { createSearchQualityTables, reviewSearchBatch, backfillPcaClassifications, queueCandidates, persistRejectedJobCandidates } = require('./searchQualityStore');
+const { scanSearchTerm } = require('./searchScan');
+const { createTechnicalTables, createTechnicalAnalysis, technicalFilterClause } = require('./technicalAnalysis');
+const { guardLegacyRequirement } = require('./technicalRules');
+const { seedTechnicalCatalog } = require('./technicalCatalogSeed');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -3702,7 +3709,7 @@ const processWatchlistNotifications = async (limit = 20) => {
             JOIN ${PCA_ITENS_TABLE} i ON i.id = s.item_id
             JOIN ${PCA_PLANOS_TABLE} p ON p.id = s.plano_id
             LEFT JOIN ${PCA_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
-            WHERE s.id = $1
+            WHERE s.id = $1 AND NOT s.quality_hidden
           `,
           [notification.signal_id]
         );
@@ -3713,7 +3720,7 @@ const processWatchlistNotifications = async (limit = 20) => {
             SELECT s.*, w.nome AS watchlist_nome
             FROM ${EDITAL_SIGNALS_TABLE} s
             LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
-            WHERE s.id = $1
+            WHERE s.id = $1 AND NOT s.quality_hidden
           `,
           [notification.signal_id]
         );
@@ -4033,7 +4040,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENAI_AI_MODEL = process.env.OPENAI_AI_MODEL || 'gpt-4.1-mini';
 const GROQ_AI_MODEL = process.env.GROQ_AI_MODEL || 'llama-3.3-70b-versatile';
 const OPENROUTER_AI_MODEL = process.env.OPENROUTER_AI_MODEL || 'openai/gpt-4o-mini';
-const AI_RELATIONS_VERSION = 'v5';
+const AI_RELATIONS_VERSION = 'v6-quality';
 
 // Cache simples para termos correlatos (evita chamadas repetidas)
 const termosCache = new Map();
@@ -4503,7 +4510,7 @@ const getDbAllowlistTermsForQuery = (normalizedQuery = '') => {
   const out = [];
   for (const [vertical, termos] of ALLOWLIST_CACHE.byVertical) {
     const tokens = vertical.split(/\s+/).filter(Boolean);
-    if (tokens.length && tokens.every((tok) => q.includes(tok))) {
+    if (tokens.length && tokens.every((tok) => matchesTerm(q, tok))) {
       for (const t of termos) out.push(t.termo);
     }
   }
@@ -4512,13 +4519,14 @@ const getDbAllowlistTermsForQuery = (normalizedQuery = '') => {
 
 const getQuerySpecificAllowlist = (query = '') => {
   const q = normalizeSearchText(query);
+  if (q.trim() === 'autel') return [];
   const terms = [];
 
   // Semente hardcoded (nunca regride): vertical casa quando todos os tokens do
   // nome aparecem na query (drone→'drone', autel→'autel', 'suporte monitor'→ambos).
   for (const { vertical, termos } of HARDCODED_ALLOWLIST_SEED) {
     const tokens = vertical.split(/\s+/).filter(Boolean);
-    if (tokens.length && tokens.every((tok) => q.includes(tok))) {
+    if (tokens.length && tokens.every((tok) => matchesTerm(q, tok))) {
       terms.push(...termos);
     }
   }
@@ -4780,9 +4788,11 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
   const priority = options.priority || 'sync';
 
   const allItems = [];
-  let page = 1;
+  allItems.complete = false;
+  let page = Math.max(1, Number(options.startPage) || 1);
+  const lastPage = page + maxPages - 1;
 
-  while (page <= maxPages) {
+  while (page <= lastPage) {
     const itensData = await withPncpTransientRetry(
       () => withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
         pagina: page,
@@ -4797,18 +4807,21 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
         : [];
 
     if (pageItems.length === 0) {
+      allItems.complete = true;
       break;
     }
 
     allItems.push(...pageItems);
 
-    if (pageItems.length < pageSize) {
+    if (pageItems.length < pageSize && options.requireEmptyPage !== true) {
+      allItems.complete = true;
       break;
     }
 
     page += 1;
   }
 
+  allItems.nextPage = allItems.complete ? null : page;
   return allItems;
 };
 
@@ -5350,7 +5363,7 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
   const priority = options.priority || 'sync';
   const maxPages = Math.max(1, Math.min(15, Number(options.maxPages) || (normalizedQuery ? 8 : 1)));
   const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || (normalizedQuery ? 100 : 50)));
-  const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}|p:${maxPages}`;
+  const cacheKey = `${cnpj}/${ano}/${sequencial}|q:${normalizedQuery}|p:${maxPages}|quality:${QUALITY_VERSION}`;
   const cached = pncpCompraEnrichmentCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < (cached.ttl || PNCP_ENRICHMENT_CACHE_TTL)) {
     return cached.value;
@@ -5374,31 +5387,29 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
     let valorItensPertinentes = null;
     let itensPertinentes = [];
     let itensOk = false;
+    let qualityItems = [];
+    let qualityItemsComplete = false;
+    let qualityItemsNextPage = 1;
     try {
       const itens = await fetchPncpCompraItens(cnpj, ano, sequencial, { pageSize, maxPages, priority });
-      itensOk = true;
+      itensOk = itens.complete === true;
+      qualityItemsComplete = itens.complete === true;
+      qualityItemsNextPage = itens.nextPage;
+      qualityItems = itens.map(item => ({ numeroItem: item.numeroItem, descricao: item.descricao,
+        informacaoComplementar: item.informacaoComplementar, valorTotal: item.valorTotal,
+        quantidade: item.quantidade, unidadeMedida: item.unidadeMedida, valorUnitarioEstimado: item.valorUnitarioEstimado,
+        materialOuServico: item.materialOuServico, materialOuServicoNome: item.materialOuServicoNome }));
       totalItens = itens.length;
       itensResumoTexto = itens
         .map(item => `${item?.descricao || ''} ${item?.itemCategoriaNome || ''} ${item?.catalogoCodigoItem || ''} ${item?.numeroItem || ''}`.trim())
         .filter(Boolean)
-        .slice(0, 20)
         .join(' | ');
 
       if (normalizedQuery && itens.length) {
         let pertinentes = itens.filter(item => isPncpCompraItemRelevantToQuery(item, normalizedQuery));
         // Compra de 1 item ou nenhum match estrito: usa o(s) item(ns) com valor como fallback
         // para não ficar só com o total da licitação.
-        if (!pertinentes.length && itens.length === 1) {
-          pertinentes = itens;
-        } else if (
-          !pertinentes.length && itens.length > 0 && itens.length <= 5
-          // Só assume "todos pertinentes" se ao menos um token da busca aparece no
-          // texto dos itens — senão fabricava pertinência para compra sem relação
-          // (ex.: busca por marca "autel" trazendo cirurgia cardíaca com 122M).
-          && containsAnyTermStrictFlexible(itensResumoTexto, tokenizeSearchTerms(normalizedQuery))
-        ) {
-          pertinentes = itens.filter(item => Number(item?.valorTotal) > 0);
-        }
+        // No fallback by item count: a single unrelated item is still unrelated.
         const totalPertinente = pertinentes.reduce((sum, item) => {
           const value = Number(item?.valorTotal);
           return sum + (Number.isFinite(value) && value > 0 ? value : 0);
@@ -5453,6 +5464,9 @@ const getPncpCompraEnrichment = async (cnpj, ano, sequencial, query = '', option
       itens_pertinentes_count: itensPertinentes.length,
       itens_resumo_texto: itensResumoTexto,
       total_itens: totalItens,
+      quality_items: qualityItems,
+      quality_items_complete: qualityItemsComplete,
+      quality_items_next_page: qualityItemsNextPage,
     };
 
     // Completo = detalhe veio E a listagem de itens não falhou. Se o PNCP cortou
@@ -5572,6 +5586,9 @@ const mergePncpEnrichmentIntoRawItem = (item, enrichment) => {
     itens_pertinentes_count: enrichment.itens_pertinentes_count ?? item?.itens_pertinentes_count ?? null,
     itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || item?.__itens_resumo_texto || '',
     total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
+    quality_items: enrichment.quality_items || item?.quality_items || [],
+    quality_items_complete: enrichment.quality_items_complete === true,
+    quality_items_next_page: enrichment.quality_items_next_page ?? item?.quality_items_next_page ?? 1,
   };
 };
 
@@ -5676,6 +5693,9 @@ const mergePncpEnrichmentIntoNormalizedItem = (item, enrichment) => {
     itens_pertinentes_count: enrichment.itens_pertinentes_count ?? item?.itens_pertinentes_count ?? null,
     itens_resumo_texto: enrichment.itens_resumo_texto || item?.itens_resumo_texto || '',
     total_itens: enrichment.total_itens ?? item?.total_itens ?? null,
+    quality_items: enrichment.quality_items || item?.quality_items || [],
+    quality_items_complete: enrichment.quality_items_complete === true,
+    quality_items_next_page: enrichment.quality_items_next_page ?? item?.quality_items_next_page ?? 1,
   };
 };
 
@@ -7532,6 +7552,16 @@ app.post('/api/licitacoes/opportunities', async (req, res) => {
     );
 
     const created = rows[0];
+    const technicalId = toIntOrNull(body.metadados?.technical_analysis_id);
+    if (technicalId) {
+      const ids = extractPncpCompraIdentifiers({ numero_controle_pncp: body.metadados?.pncp_numero_controle || body.numero_compra, url: normalizedLinks.pncp });
+      if (ids.cnpj) {
+        const linked = await client.query(`UPDATE ${LICITACAO_TABLE} SET technical_analysis_id=$3 WHERE account_id=$1 AND id=$2
+          AND EXISTS(SELECT 1 FROM technical_jobs WHERE id=$3 AND account_id=$1 AND context->>'notice_key'=$4) RETURNING technical_analysis_id`,
+        [accountId, created.id, technicalId, `${ids.cnpj}/${ids.ano}/${ids.sequencial}`]);
+        if (linked.rows[0]) created.technical_analysis_id = linked.rows[0].technical_analysis_id;
+      }
+    }
     if (linkedContacts.length > 0) {
       let hasPrincipal = false;
       for (const item of linkedContacts) {
@@ -8345,12 +8375,12 @@ app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements/ai/chat',
       : null;
     const modeloHint = toNullableText(body.modelo_produto_hint);
 
-    const system = `Você é o assistente de checklist de itens de licitação da Aerion (drones enterprise Autel e acessórios).
+    const system = `Você é o assistente de checklist de itens de licitação de qualquer setor.
 Trabalha DENTRO de um item de participação em um fluxo de 2 passos:
 1) EXTRAIR requisitos do edital (sem avaliar)
 2) AVALIAR conformidade com o produto de referência (modelo / ficha / URL)
 
-${AUTEL_PRODUCT_BRIEF}
+Use somente as fontes fornecidas. Nome de modelo ou memória de marca não comprovam especificações.
 
 ## Intenção atual
 ${intent === 'extract'
@@ -8392,7 +8422,7 @@ ${intent === 'extract'
 - "ok": evidência clara de atendimento; "nao_ok": evidência clara de NÃO atendimento; "verificar": só quando NÃO houver base suficiente.
 - Em ok/nao_ok, preencha observacao curta (1 linha) citando a fonte (ex.: "site: 42 min voo", "ficha: IP43 < IP54").
 - Em verificar, observacao DEVE dizer o que falta (ex.: "peso decolagem não consta na página").
-- Prioridade: texto/URL colado > specs da URL > modelo informado > resumo Autel (só apoio).
+- Use somente fontes fornecidas; nome de modelo e conhecimento de marca não comprovam atendimento.
 - NÃO deixe tudo em "verificar" se a página/ficha já dá números claros (ex.: 42 min ≥ 40 min → ok; IP43 vs IP54 mínimo → nao_ok; zoom híbrido 160x ≥ 100x → ok; térmica 640×512 → ok).
 - Em MODO AVALIAR é OBRIGATÓRIO alterar status de todos os requisitos em que houver evidência; proibido devolver a lista intacta com 100% verificar se houver dados de produto.
 - assistant_message deve incluir contagem: "N ok / N nao_ok / N verificar" e se a fonte de URL estava incompleta.
@@ -8542,6 +8572,12 @@ Caminho usual: (1) lista do edital (2) comparar produto (3) aplicar prévia. Nem
       assistantMessage = `${assistantMessage}\n\nFontes/notas de leitura: ${sourceNotes.join(' | ')}`;
     }
 
+    const guardedRequirements = proposal.requirements.map(guardLegacyRequirement);
+    if (guardedRequirements.some((row, i) => row.status !== proposal.requirements[i].status)) {
+      proposal.requirements = guardedRequirements;
+      const validated = countProposalStatuses(guardedRequirements);
+      assistantMessage = `Prévia: ${validated.ok} OK · ${validated.nao_ok} não atende · ${validated.verificar} verificar. Exigências numéricas sem prova estruturada ficaram pendentes. Use o catálogo e a análise técnica automática para comparação validada com a ficha.`;
+    }
     res.json({
       assistant_message: assistantMessage,
       proposal,
@@ -8997,6 +9033,10 @@ const normalizePncpItem = (item, matchedTermo = null) => {
   valor_total_estimado: item.valor_total_estimado ?? item.valorTotalEstimado ?? null,
   valor_total_homologado: item.valor_total_homologado ?? item.valorTotalHomologado ?? null,
   total_itens: item.total_itens ?? null,
+  quality_items: item.quality_items || [],
+  quality_items_complete: item.quality_items_complete === true,
+  quality_items_next_page: item.quality_items_next_page ?? 1,
+  search_quality: item.search_quality || null,
   itens_resumo_texto: item.itens_resumo_texto || item.__itens_resumo_texto || '',
   cancelado: item.cancelado,
   modo_disputa: {
@@ -9593,7 +9633,12 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       contract_focus = 'aquisicao',
     } = req.query;
 
-    const qText = String(q || '').trim();
+    let requestedProfile = null;
+    if (req.query.search_profile) {
+      try { requestedProfile = normalizeProfile(JSON.parse(req.query.search_profile)); }
+      catch { return res.status(400).json({ error: 'Perfil de busca inválido.' }); }
+    }
+    const qText = String(requestedProfile?.terms[0] || q || '').trim();
     const normalizedStatus = normalizeSearchText(status);
     const mappedStatus = normalizedStatus === 'suspenso' ? 'suspensa' : status;
     const orgaoFilterRaw = String(orgao_cnpj || '').trim();
@@ -9644,7 +9689,7 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
     const queryLooksSpecific = isSpecificNoticeIdentifierQuery(qText)
       || /\d{4,}/.test(qText)
       || qTokensForAi.length >= 7;
-    const shouldUseAi = iaForcada
+    const shouldUseAi = requestedProfile ? [...requestedProfile.terms, ...requestedProfile.related_terms].length > 1 : iaForcada
       && qText
       && qText.length >= 3
       && !hasEntityOnlySearch
@@ -9652,7 +9697,8 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     // Se usar_ia está ativado e há um termo de busca
     const pncpSearchCacheKey = JSON.stringify({
-      version: 9,
+      version: 10,
+      search_profile: req.query.search_profile || null,
       q: normalizeSearchText(qText),
       tipos_documento,
       status: mappedStatus,
@@ -9709,9 +9755,10 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
 
     if (shouldUseAi) {
       // Buscar termos correlatos com IA
-      const termosResult = await getTermosCorrelatos(qText);
+      const termosResult = requestedProfile ? { positivos: [...requestedProfile.terms.slice(1), ...requestedProfile.related_terms], fonte: 'perfil_confirmado' }
+        : await getTermosCorrelatos(qText);
       fonteIA = termosResult.fonte;
-      iaPositivos = rankPositiveSearchTerms(qText, mergeUniqueTerms(
+      iaPositivos = requestedProfile ? termosResult.positivos : rankPositiveSearchTerms(qText, mergeUniqueTerms(
         deterministicPositiveTerms,
         termosResult.positivos || termosResult.correlatos || []
       ), 5);
@@ -10199,26 +10246,11 @@ app.get('/api/licitacoes/pncp/search', async (req, res) => {
       });
     }
 
-    allItems = allItems
-      .filter(item => {
-        if (!iaRealmenteUsada) {
-          return true;
-        }
-        const matchedTermo = item?.__matched_termo;
-        if (!matchedTermo || matchedTermo === qText) {
-          return pncpItemHasSemanticEvidence(item, qText, termosUsados.slice(1));
-        }
-        if (!pncpItemHasSemanticEvidence(item, qText, termosUsados.slice(1))) {
-          return false;
-        }
-        const contextOk = isPncpItemRelevantToQuery(item, qText);
-        if (!contextOk) {
-          return false;
-        }
-
-        return true;
-      })
-      .map(item => normalizePncpItem(item, item.__matched_termo || qText || entityQuerySeed));
+    const liveProfile = normalizeProfile(requestedProfile, { q: qText,
+      palavras_chave: [qText], usar_ia: iaRealmenteUsada, termos_negativos: splitPncpTerms(negative_terms) });
+    if (!requestedProfile && liveProfile.match_mode === 'expanded') liveProfile.related_terms = termosUsados.slice(1);
+    allItems = allItems.map(item => normalizePncpItem(item, item.__matched_termo || qText || entityQuerySeed));
+    if (qText) allItems = applyQuality(allItems, liveProfile).items;
 
     if (shouldApplyReceivingProposalLocally) {
       allItems = allItems.filter(item => isPncpReceivingProposalOpen(item));
@@ -11228,6 +11260,7 @@ const buildDeepSearchItemsSnapshot = async ({
     })
     : cachedItems;
   let items = sourceItems.map(item => normalizePncpItem(item, item.__matched_termo || qText));
+  if (filters.orgao_cnpj || filters.unidade_codigo) items = items.filter(item => matchesWatchlistEntityFilters(item, filters));
   if (shouldApplyReceivingProposalLocally) {
     items = items.filter(item => isPncpReceivingProposalOpen(item));
   }
@@ -11243,7 +11276,13 @@ const buildDeepSearchItemsSnapshot = async ({
       return String(id) === String(filters.modo_disputa_id);
     });
   }
-  items = items.map(item => decoratePncpSearchItem(item, {
+  const profile = normalizeProfile(filters.search_profile, { ...filters, q: qText, palavras_chave: terms, termos_negativos: negativeTerms });
+  const pendingCandidates = items.filter(item => {
+    const quality = evaluateResult(item, profile);
+    return !item.quality_items_complete && (!quality.accepted || quality.status === 'pending_classification');
+  });
+  const qualityResult = applyQuality(items, profile);
+  items = qualityResult.items.map(item => decoratePncpSearchItem(item, {
     qText,
     positiveTerms: terms,
     negativeTerms,
@@ -11259,6 +11298,8 @@ const buildDeepSearchItemsSnapshot = async ({
   items = items.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
   return {
     items,
+    pending_candidates: pendingCandidates,
+    rejected_items: qualityResult.rejected_items,
     summary: createPncpSearchSummary(items),
     query_plan: {
       mode: 'deep_background',
@@ -11266,6 +11307,7 @@ const buildDeepSearchItemsSnapshot = async ({
       negative_terms: negativeTerms,
       raw_unique_collected: rawItems.length,
       filtered_total: items.length,
+      quality_audit: qualityResult.audit,
       filters_applied: {
         status: mappedStatus || null,
         receiving_proposal_local: shouldApplyReceivingProposalLocally,
@@ -11878,7 +11920,7 @@ const countPncpJobResults = async (jobId, accountId = null, { includeHidden = fa
     sql += ` AND account_id = $${params.length}`;
   }
   if (!includeHidden) {
-    sql += ` AND visibility <> 'hidden'`;
+    sql += ` AND visibility <> 'hidden' AND quality_hidden = FALSE`;
     // Suspenso/revogado após captura — fora da lista aberta.
     sql += ` AND visibility <> 'stale_status'`;
   }
@@ -11913,7 +11955,7 @@ const sumPncpJobResultsValue = async (jobId, accountId = null, { includeHidden =
     sql += ` AND account_id = $${params.length}`;
   }
   if (!includeHidden) {
-    sql += ` AND visibility <> 'hidden'`;
+    sql += ` AND visibility <> 'hidden' AND quality_hidden = FALSE`;
     sql += ` AND visibility <> 'stale_status'`;
   }
   if (!includePipeline) {
@@ -11943,7 +11985,7 @@ const refreshPncpJobSummaryTotals = async (job) => {
  * "Na lista" = só visíveis (disponíveis para importar); pipeline fica no chip próprio.
  */
 const countPncpJobResultsByVisibility = async (jobId, accountId = null, { reconcile = false } = {}) => {
-  const empty = { all: 0, list: 0, visible: 0, hidden: 0, pipeline: 0, stale_status: 0 };
+  const empty = { all: 0, list: 0, visible: 0, hidden: 0, pipeline: 0, stale_status: 0, quality_hidden: 0 };
   if (!jobId) return empty;
   if (reconcile && accountId != null) {
     await reconcilePncpJobPipelineVisibility(jobId, accountId).catch((err) => {
@@ -11952,19 +11994,20 @@ const countPncpJobResultsByVisibility = async (jobId, accountId = null, { reconc
   }
   const params = [jobId];
   let sql = `
-    SELECT visibility, COUNT(*)::int AS cnt
+    SELECT visibility, quality_hidden, COUNT(*)::int AS cnt
       FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
      WHERE job_id = $1`;
   if (accountId != null) {
     params.push(accountId);
     sql += ' AND account_id = $2';
   }
-  sql += ' GROUP BY visibility';
+  sql += ' GROUP BY visibility, quality_hidden';
   const { rows } = await pool.query(sql, params).catch(() => ({ rows: [] }));
   const counts = { ...empty };
   for (const row of rows) {
     const vis = String(row.visibility || 'visible');
     const n = Number(row.cnt || 0);
+    if (row.quality_hidden) { counts.quality_hidden += n; counts.all += n; continue; }
     if (vis === 'hidden') counts.hidden = n;
     else if (vis === 'pipeline') counts.pipeline = n;
     else if (vis === 'stale_status') counts.stale_status = n;
@@ -11998,7 +12041,7 @@ const countPncpJobResultsByMatchedTerm = async (jobId, accountId = null, { inclu
     sql += ` AND account_id = $${params.length}`;
   }
   if (!includeHidden) {
-    sql += ` AND visibility <> 'hidden'`;
+    sql += ` AND visibility <> 'hidden' AND quality_hidden = FALSE`;
   }
   if (!includePipeline) {
     sql += ` AND visibility <> 'pipeline'`;
@@ -12070,8 +12113,14 @@ const upsertTermRun = (termRuns, run) => {
   return termRuns;
 };
 
-const persistPncpJobResults = async (job, items = []) => {
-  if (!job?.id || !job?.account_id || !Array.isArray(items) || !items.length) return;
+const persistPncpJobResults = async (job, items = [], rejectedItems = []) => {
+  if (!job?.id || !job?.account_id || !Array.isArray(items)) return;
+  const profile = normalizeProfile(job.filters?.search_profile, { ...(job.filters || {}), palavras_chave: job.terms,
+    termos_negativos: job.negative_terms });
+  const result = applyQuality(items, profile);
+  await persistRejectedJobCandidates(pool, { id: job.id, accountId: job.account_id,
+    items: [...rejectedItems, ...result.rejected_items], getKey: getPncpSearchResultKey });
+  items = result.items;
   const rows = items
     .map(item => {
       const key = String(getPncpSearchResultKey(item) || '').trim();
@@ -12118,10 +12167,11 @@ const persistPncpJobResults = async (job, items = []) => {
           commercial_stage = EXCLUDED.commercial_stage,
           deadline_at = COALESCE(EXCLUDED.deadline_at, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.deadline_at),
           value_estimated = COALESCE(EXCLUDED.value_estimated, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.value_estimated),
-          value_matched = COALESCE(EXCLUDED.value_matched, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.value_matched),
+          value_matched = EXCLUDED.value_matched,
           matched_term = COALESCE(EXCLUDED.matched_term, ${PNCP_SEARCH_JOB_RESULTS_TABLE}.matched_term),
           -- Reexecução não desfaz hide/pipeline do usuário.
           visibility = ${PNCP_SEARCH_JOB_RESULTS_TABLE}.visibility,
+          quality_hidden = FALSE,
           -- Prefer payload com mais dados de valor (item + total).
           payload = CASE
             WHEN COALESCE((EXCLUDED.payload->>'valor_itens_pertinentes')::numeric, 0) >
@@ -12137,7 +12187,7 @@ const persistPncpJobResults = async (job, items = []) => {
           updated_at = NOW()
       `,
       params
-    ).catch(error => console.warn('[PNCP Search Job Results] persist falhou:', error.message));
+    );
   }
 };
 
@@ -12404,7 +12454,8 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
   if (!job) return;
   const filters = job.filters || {};
   const qText = String(filters.q || '').trim();
-  let terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 12);
+  const profile = normalizeProfile(filters.search_profile, { ...filters, palavras_chave: job.terms, termos_negativos: job.negative_terms });
+  const terms = uniqueQualityTerms([...profile.terms, ...profile.related_terms]);
   const negativeTerms = mergeUniqueTerms(splitPncpTerms(filters.negative_terms || ''), job.negative_terms || []);
   const mappedStatus = normalizeSearchText(filters.status) === 'suspenso' ? 'suspensa' : filters.status;
   const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
@@ -12624,6 +12675,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
     };
 
     const persistSliceProgress = async (states, activeRun, sessionRawFrom) => {
+      try {
       const snapshotSource = rawItems.slice(sessionRawFrom);
       let classifiedThisSlice = 0;
       if (snapshotSource.length) {
@@ -12638,10 +12690,17 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           enrichValues: false,
         });
         classifiedThisSlice = Array.isArray(pageSnapshot.items) ? pageSnapshot.items.length : 0;
+        await queueCandidates(pool, { accountId: job.account_id, source: 'job', id: job.id,
+          profile: filters.search_profile || profile, items: pageSnapshot.pending_candidates || [], getKey: getPncpSearchResultKey });
+        await pool.query(`INSERT INTO search_scan_audit(account_id,source,source_id,term,stats)
+          VALUES($1,'job',$2,$3,$4::jsonb)`, [job.account_id, job.id, activeRun?.term || null,
+          JSON.stringify({ ...pageSnapshot.query_plan.quality_audit, page: activeRun?.pages_completed,
+            errors: activeRun?.errors || [], coverage_kind: 'partial', version: QUALITY_VERSION })]);
         if (activeRun) {
           activeRun.classified_added = Number(activeRun.classified_added || 0) + classifiedThisSlice;
         }
-        await persistPncpJobResults(job, pageSnapshot.items);
+        await persistPncpJobResults(job, pageSnapshot.items, pageSnapshot.rejected_items);
+        if (activeRun) activeRun.last_persisted_page = activeRun.pages_completed;
         job.items = pageSnapshot.items.slice(0, 200);
         job.summary = {
           ...(pageSnapshot.summary || {}),
@@ -12685,6 +12744,16 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       await persistPncpDeepJob(job);
       lastSnapshotAt = Date.now();
       return classifiedThisSlice;
+      } catch (error) {
+        if (activeRun) {
+          activeRun.pages_completed = Number(activeRun.last_persisted_page || 0);
+          activeRun.next_page = activeRun.pages_completed + 1;
+          activeRun.stop_reason = 'page_error_partial';
+          const state = states.find(s => s.run === activeRun);
+          if (state) { state.page = activeRun.next_page; state.done = false; }
+        }
+        throw error;
+      }
     };
 
     // Complemento consulta/proposta: intercala cedo (abertos úteis) e retoma página.
@@ -13311,6 +13380,27 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       job.term_runs = termRuns;
     }
 
+    // Daily head probes are complemented by a bounded, persisted rotation.
+    // The job already owns the heavy slot and every request remains bulk-gated.
+    if (incrementalRefresh) {
+      const rotation = { ...(job.progress?.search_rotation || {}) };
+      for (const term of terms) {
+        rotation[term] = await scanSearchTerm({ state: rotation[term] || { next_page: PNCP_DEEP_INCREMENTAL_PAGES + 1 },
+          headPages: 0, tailPages: 2, pageSize: 100,
+          fetchPage: pagina => withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina }, { retries: 0 }), { priority: 'bulk' }),
+          processPage: async items => {
+            for (const item of items) {
+              const key = getPncpRawItemKey(item);
+              if (!key || seen.has(key)) continue;
+              seen.add(key); rawItems.push({ ...item, __matched_termo: term });
+            }
+          } });
+        job.progress.search_rotation = rotation;
+        await persistPncpDeepJob(job);
+        if (rotation[term].errors.length) break;
+      }
+    }
+
     // Refresh de situacao/datas em itens que reapareceram no probe (já estavam no acervo).
     if (dupRefreshItems.length && !PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) {
       try {
@@ -13357,9 +13447,9 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       await clearPncpJobResults(jobId);
     }
     // Com preserve: UPSERT só acrescenta/atualiza; resultados antigos permanecem.
-    if (finalSnapshot.items.length) {
-      await persistPncpJobResults(job, finalSnapshot.items);
-    }
+    await queueCandidates(pool, { accountId: job.account_id, source: 'job', id: job.id,
+      profile: filters.search_profile || profile, items: finalSnapshot.pending_candidates || [], getKey: getPncpSearchResultKey });
+    await persistPncpJobResults(job, finalSnapshot.items, finalSnapshot.rejected_items);
     job.items = finalSnapshot.items.slice(0, 200);
     // Total canônico = o que está na tabela de resultados (mesma fonte do popup).
     await refreshPncpJobSummaryTotals(job);
@@ -13393,7 +13483,9 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
       term_runs: termRuns,
       terms_planned: terms,
       terms_executed: termRuns.filter(r => r?.term && r?.source !== 'pncp_consulta_complement').map(r => r.term),
-      partial: false,
+      partial: incrementalRefresh || termRuns.some(run => !['empty_page', 'short_page', 'total_reached'].includes(run.stop_reason)),
+      coverage_kind: incrementalRefresh ? 'incremental_with_rotation' :
+        termRuns.every(run => ['empty_page', 'short_page', 'total_reached'].includes(run.stop_reason)) ? 'completed_scan' : 'partial',
       results_persisted: job.total,
       preserve_results: preserveResults,
       sequential: false,
@@ -13458,7 +13550,7 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
     const accountId = getAccountId(req);
     const { rows } = await pool.query(
       `SELECT j.id, j.nome, j.status, j.filters, j.terms, j.negative_terms, j.accepted_positive_terms, j.accepted_negative_terms,
-              j.suggested_positive_terms, j.suggested_negative_terms, j.progress, j.term_runs, j.summary,
+              j.suggested_positive_terms, j.suggested_negative_terms, j.progress, j.term_runs, j.summary, j.query_plan,
               COALESCE(rc.cnt, j.total, 0)::int AS total,
               j.error, j.watchlist_id, j.started_at, j.updated_at, j.completed_at,
               w.whatsapp_enabled, w.whatsapp_number, w.whatsapp_min_score
@@ -13466,6 +13558,7 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
          LEFT JOIN (
            SELECT job_id, COUNT(*)::int AS cnt
              FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+            WHERE NOT quality_hidden AND visibility = 'visible'
             GROUP BY job_id
          ) rc ON rc.job_id = j.id
         LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = j.watchlist_id
@@ -13482,13 +13575,21 @@ app.get('/api/licitacoes/pncp/search/jobs', async (req, res) => {
 app.post('/api/licitacoes/pncp/search/deep-start', async (req, res) => {
   cleanupPncpDeepJobs();
   const accountId = getAccountId(req);
-  const filters = req.body?.filters || {};
+  const filters = { ...(req.body?.filters || {}) };
+  const profile = normalizeProfile(filters.search_profile, { ...filters,
+    palavras_chave: mergeUniqueTerms([filters.q], req.body?.accepted_positive_terms || []),
+    termos_negativos: splitPncpTerms(filters.negative_terms || '') });
+  if (!profile.terms.length) return res.status(400).json({ error: 'Informe os termos da busca.' });
+  filters.search_profile = profile;
+  filters.match_mode = profile.match_mode;
+  filters.contract_focus = profile.item_kind === 'service' ? 'servicos' : profile.item_kind === 'material' ? 'aquisicao' : 'todos';
+  filters.intencao = profile.objective;
   const acceptedPositive = Array.isArray(req.body?.accepted_positive_terms) ? req.body.accepted_positive_terms : [];
   const acceptedNegative = Array.isArray(req.body?.accepted_negative_terms) ? req.body.accepted_negative_terms : [];
   const suggestedPositive = Array.isArray(req.body?.suggested_positive_terms) ? req.body.suggested_positive_terms : [];
   const suggestedNegative = Array.isArray(req.body?.suggested_negative_terms) ? req.body.suggested_negative_terms : [];
-  const terms = mergeUniqueTerms([filters.q], req.body?.terms || [], acceptedPositive).filter(Boolean).slice(0, 12);
-  const negativeTerms = mergeUniqueTerms(splitPncpTerms(filters.negative_terms || ''), acceptedNegative);
+  const terms = mergeUniqueTerms(profile.terms, profile.related_terms).slice(0, 40);
+  const negativeTerms = mergeUniqueTerms(profile.excluded_terms, acceptedNegative);
   const signature = buildPncpJobSignature({ filters, terms, negativeTerms });
   const { rows: recentRows } = await pool.query(
     `SELECT *
@@ -13550,6 +13651,34 @@ app.post('/api/licitacoes/pncp/search/deep-start', async (req, res) => {
   PNCP_DEEP_SEARCH_JOBS.set(jobId, job);
   setImmediate(() => runPncpDeepSearchJob(jobId));
   res.json({ job_id: jobId, status: 'queued' });
+});
+
+app.put('/api/licitacoes/pncp/search/deep/:jobId/profile', async (req, res) => {
+  const accountId = getAccountId(req);
+  const job = await loadPncpDeepJob(req.params.jobId, accountId);
+  if (!job) return res.status(404).json({ error: 'Busca não encontrada.' });
+  if (['running', 'queued', 'paused_rate_limit'].includes(job.status) || isPncpDeepSearchWorkerAlive(job.id)) {
+    return res.status(409).json({ error: 'Pare a coleta antes de alterar os critérios. O acervo será preservado.' });
+  }
+  const profile = normalizeProfile(req.body?.profile);
+  if (!profile.terms.length || !profile.confirmed_at) return res.status(400).json({ error: 'Confira e confirme os critérios da busca.' });
+  job.filters = { ...job.filters, q: profile.terms[0], search_profile: profile, match_mode: profile.match_mode };
+  job.filters.contract_focus = profile.item_kind === 'service' ? 'servicos' : profile.item_kind === 'material' ? 'aquisicao' : 'todos';
+  job.filters.intencao = profile.objective;
+  job.terms = uniqueQualityTerms([...profile.terms, ...profile.related_terms]);
+  job.negative_terms = profile.excluded_terms;
+  job.term_runs = [];
+  job.progress = { ...job.progress, signature: buildPncpJobSignature({ filters: job.filters, terms: job.terms,
+    negativeTerms: job.negative_terms }), coverage: 'pending_new_profile' };
+  await persistPncpDeepJob(job);
+  if (PNCP_DEEP_SEARCH_JOBS.has(job.id)) PNCP_DEEP_SEARCH_JOBS.set(job.id, job);
+  if (job.watchlist_id) await pool.query(`UPDATE ${EDITAL_WATCHLIST_TABLE}
+    SET palavras_chave=$1,termos_negativos=$2,filtros=$3::jsonb,scan_state='{}'::jsonb
+    WHERE id=$4 AND account_id=$5`, [job.terms, job.negative_terms, JSON.stringify(job.filters), job.watchlist_id, accountId]);
+  const review = await reviewSearchBatch(pool, { source: 'job', id: job.id, accountId, profile, limit: 25 });
+  await refreshPncpJobSummaryTotals(job);
+  await persistPncpDeepJob(job);
+  res.json({ ok: true, profile, review });
 });
 
 app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
@@ -13683,13 +13812,13 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
     const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId, { reconcile: true });
     // list/all/active/visible: só visibility=visible; pipeline: já no board;
     // hidden/descartados: só hidden; everything: inclui tudo (debug).
-    const visibilityClause = (scope === 'hidden' || scope === 'descartados' || scope === 'discarded')
+    const visibilityClause = (scope === 'quality' ? ` AND quality_hidden = TRUE` : (scope === 'hidden' || scope === 'descartados' || scope === 'discarded')
       ? ` AND visibility = 'hidden'`
       : scope === 'pipeline'
         ? ` AND visibility = 'pipeline'`
         : (scope === 'everything' || scope === 'with_hidden')
           ? ''
-          : ` AND visibility = 'visible'`; // list | all | active | visible | default
+          : ` AND visibility = 'visible' AND quality_hidden = FALSE`) + technicalFilterClause(req.query.technical); // list | all | active | visible | default
 
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE job_id = $1 AND account_id = $2${visibilityClause}`,
@@ -13700,7 +13829,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
     if (total > 0 || visibilityCounts.all > 0) {
       const { rows } = total > 0
         ? await pool.query(
-          `SELECT payload, visibility, result_key
+          `SELECT payload, visibility, result_key, quality_review
              FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
             WHERE job_id = $1 AND account_id = $2${visibilityClause}
             ORDER BY ${orderSql}
@@ -13711,6 +13840,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
       let pageItems = rows.map(row => {
         const payload = row.payload && typeof row.payload === 'object' ? { ...row.payload } : row.payload;
         if (payload && typeof payload === 'object') {
+          if (row.quality_review) payload.search_quality = row.quality_review;
           payload.__visibility_db = row.visibility || 'visible';
           payload.__result_key = row.result_key || null;
         }
@@ -14020,8 +14150,14 @@ const handlePncpSearchJobTerms = async (req, res) => {
 
     const prevTerms = [...(job.terms || [])];
     const prevNeg = [...(job.negative_terms || [])];
-    job.terms = mergeUniqueTerms(job.terms || [], positiveTerms).slice(0, 12);
+    job.terms = mergeUniqueTerms(job.terms || [], positiveTerms).slice(0, 40);
     job.negative_terms = mergeUniqueTerms(job.negative_terms || [], negativeTerms);
+    if (job.filters?.search_profile) {
+      const profile = normalizeProfile(job.filters.search_profile, job.filters);
+      profile.terms = uniqueQualityTerms([...profile.terms, ...positiveTerms]);
+      profile.excluded_terms = uniqueQualityTerms([...profile.excluded_terms, ...negativeTerms]);
+      job.filters.search_profile = profile;
+    }
     const addedPositive = job.terms.filter(t => !prevTerms.some(p => normalizeSearchText(p) === normalizeSearchText(t)));
     const addedNegative = job.negative_terms.filter(t => !prevNeg.some(p => normalizeSearchText(p) === normalizeSearchText(t)));
     if (!addedPositive.length && !addedNegative.length) {
@@ -14179,6 +14315,12 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
     }
 
     job.filters = nextFilters;
+    if (job.filters.search_profile) {
+      const profile = normalizeProfile(job.filters.search_profile, job.filters);
+      if (incoming.q && incoming.q !== profile.terms[0]) profile.terms = uniqueQualityTerms([incoming.q, ...profile.terms.slice(1)]);
+      profile.excluded_terms = uniqueQualityTerms(job.negative_terms);
+      job.filters.search_profile = profile;
+    }
     if (nextFilters.q && String(nextFilters.q).trim()) {
       job.nome = String(nextFilters.q).trim().slice(0, 160);
       // Garante que o termo principal exista nas frentes
@@ -15248,6 +15390,7 @@ const buildEditalWatchlistFilters = (value) => {
     'tipos_documento', 'status', 'modalidade_licitacao_id', 'tipo_id',
     'modo_disputa_id', 'uf', 'esfera_id', 'orgao_cnpj', 'unidade_codigo',
     'ordenacao',
+    'match_mode', 'item_kind',
   ].forEach(key => {
     if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
       filters[key] = String(source[key]);
@@ -15256,6 +15399,7 @@ const buildEditalWatchlistFilters = (value) => {
   filters.tipos_documento = filters.tipos_documento || 'edital';
   filters.status = filters.status || 'recebendo_proposta';
   filters.ordenacao = filters.ordenacao || 'relevancia_desc';
+  if (source.search_profile) filters.search_profile = normalizeProfile(source.search_profile, source);
   return filters;
 };
 
@@ -15288,7 +15432,7 @@ const listEditalSignalsQuery = `
          COUNT(*) OVER(PARTITION BY s.watchlist_id)::int AS watchlist_total_count
   FROM ${EDITAL_SIGNALS_TABLE} s
   LEFT JOIN ${EDITAL_WATCHLIST_TABLE} w ON w.id = s.watchlist_id
-  WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+  WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL AND (NOT s.quality_hidden OR s.status IN ('promovido','descartado'))
     AND ($5::bigint IS NULL OR s.watchlist_id = $5)
   ORDER BY w.nome ASC NULLS LAST, s.score DESC NULLS LAST, s.criado_em DESC
   LIMIT $3 OFFSET $4
@@ -15302,7 +15446,7 @@ const runEditalWatchlistMatching = async () => {
   for (const watch of watches) {
     let positivos = Array.isArray(watch.palavras_chave) ? [...watch.palavras_chave] : [];
     let negativos = Array.isArray(watch.termos_negativos) ? [...watch.termos_negativos] : [];
-    if (watch.usar_ia && positivos[0]) {
+    if (!watch.filtros?.search_profile && watch.usar_ia && positivos[0] && normalizeSearchText(positivos[0]) !== 'autel') {
       try {
         const r = await getTermosCorrelatos(positivos[0]);
         positivos = Array.from(new Set([...positivos, ...(r.positivos || r.correlatos || [])])).slice(0, 8);
@@ -15314,6 +15458,15 @@ const runEditalWatchlistMatching = async () => {
     if (!positivos.length) continue;
 
     const filters = buildEditalWatchlistFilters(watch.filtros || {});
+    const qualityProfile = normalizeProfile(filters.search_profile, { q: positivos[0], palavras_chave: watch.palavras_chave,
+      termos_negativos: negativos, usar_ia: watch.usar_ia });
+    if (!filters.search_profile && qualityProfile.match_mode === 'expanded') qualityProfile.related_terms = positivos.slice(1);
+    positivos = uniqueQualityTerms([...qualityProfile.terms, ...qualityProfile.related_terms]);
+    const scanState = { ...(watch.scan_state || {}) };
+    let verificationBudget = 10;
+    const scanSignature = buildPncpJobSignature({ filters, terms: positivos, negativeTerms: negativos });
+    if (scanState.signature !== scanSignature) { scanState.terms = {}; scanState.signature = scanSignature; }
+    scanState.terms = scanState.terms || {};
     const baseParams = {
       tipos_documento: filters.tipos_documento,
       status: filters.status === 'todos' ? undefined : filters.status,
@@ -15328,7 +15481,25 @@ const runEditalWatchlistMatching = async () => {
     };
     const seen = new Set();
     const processEditalCandidate = async (raw, term, key) => {
-      const normalized = normalizePncpItem(raw, term);
+      let normalized = normalizePncpItem(raw, term);
+      if (verificationBudget > 0 && (!evaluateResult(normalized, qualityProfile).accepted || qualityProfile.item_kind !== 'all')) {
+        verificationBudget--;
+        const ids = extractPncpCompraIdentifiers(normalized);
+        if (ids.cnpj && ids.ano && ids.sequencial) normalized = mergePncpEnrichmentIntoRawItem(normalized,
+          await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial, qualityProfile.terms[0], { priority: 'sync' }));
+      }
+      const quality = applyQuality([normalized], qualityProfile);
+      scanState.candidates = (scanState.candidates || 0) + 1;
+      scanState.rejected = (scanState.rejected || 0) + quality.audit.rejected;
+      if (!quality.items.length) {
+        await queueCandidates(pool, { accountId: watch.account_id, source: 'edital', id: watch.id,
+          profile: qualityProfile, items: [normalized], getKey: getPncpSearchResultKey });
+        return;
+      }
+      normalized = quality.items[0];
+      if (normalized.search_quality.status === 'pending_classification') await queueCandidates(pool, {
+        accountId: watch.account_id, source: 'edital', id: watch.id, profile: qualityProfile,
+        items: [normalized], getKey: getPncpSearchResultKey });
 
       if (!matchesWatchlistEntityFilters(normalized, filters)) return;
       // modo_disputa não é suportado pela /api/search/: resolve via detalhe só
@@ -15347,7 +15518,8 @@ const runEditalWatchlistMatching = async () => {
         return;
       }
       let decorated = decoratePncpSearchItem(normalized, {
-        qText: term,
+        qText: qualityProfile.terms[0],
+        contractFocus: qualityProfile.item_kind === 'service' ? 'servicos' : qualityProfile.item_kind === 'material' ? 'aquisicao' : 'todos',
         positiveTerms: positivos,
         negativeTerms: negativos,
         orgaoFilterRaw: filters.orgao_cnpj,
@@ -15363,7 +15535,8 @@ const runEditalWatchlistMatching = async () => {
           ON CONFLICT (account_id, watchlist_id, chave_externa) DO NOTHING
           RETURNING id
         `,
-        [watch.account_id, watch.id, key, JSON.stringify(decorated), Number(decorated.score) || 0, positivos.slice(0, 8), negativos.slice(0, 8)]
+        [watch.account_id, watch.id, key, JSON.stringify(decorated), Number(decorated.score) || 0,
+         [normalized.search_quality.term], negativos.slice(0, 8)]
       );
       if (r.rowCount > 0) {
         inserted += 1;
@@ -15393,21 +15566,18 @@ const runEditalWatchlistMatching = async () => {
       }
     };
 
-    for (const term of positivos.slice(0, 6)) {
-      let data;
-      try {
-        data = await withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina: 1, tam: 50 }), { priority: 'sync' });
-      } catch (e) {
-        console.warn('[editais] busca PNCP falhou para watchlist', watch.id, e.message);
-        continue;
-      }
-      const rawItems = Array.isArray(data?.items) ? data.items : [];
-      for (const raw of rawItems) {
-        const key = getPncpRawItemKey(raw);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        await processEditalCandidate(raw, term, key);
-      }
+    for (const term of positivos) {
+      scanState.terms[term] = await scanSearchTerm({ state: scanState.terms[term],
+        fetchPage: pagina => withPncpGate(() => fetchPncpSearchStable({ ...baseParams, q: term, pagina, tam: 50 }), { priority: 'sync' }),
+        processPage: async rawItems => {
+          for (const raw of rawItems) {
+            const key = getPncpRawItemKey(raw);
+            if (!key || seen.has(key)) continue;
+            await processEditalCandidate(raw, term, key);
+            seen.add(key);
+          }
+        } });
+      await pool.query(`UPDATE ${EDITAL_WATCHLIST_TABLE} SET scan_state=$2::jsonb WHERE id=$1`, [watch.id, JSON.stringify(scanState)]);
     }
 
     // Complemento por data: contratações abertas cujo objeto casa com os termos
@@ -15942,7 +16112,7 @@ app.get('/api/licitacoes/editais/watchlist', async (req, res) => {
                   COUNT(*) FILTER (WHERE status = 'novo')::int AS novo_count,
                   COUNT(*)::int AS total_count
              FROM ${EDITAL_SIGNALS_TABLE}
-            WHERE account_id = $1 AND watchlist_id IS NOT NULL
+            WHERE account_id = $1 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado'))
             GROUP BY watchlist_id
          ) sc ON sc.watchlist_id = w.id
         WHERE w.account_id = $1
@@ -16101,7 +16271,7 @@ app.get('/api/licitacoes/editais/signals', async (req, res) => {
       pool.query(listEditalSignalsQuery, [accountId, status, limit, offset, watchlistId]),
       pool.query(
         `SELECT COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE}
-          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL
+          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado'))
             AND ($3::bigint IS NULL OR watchlist_id = $3)`,
         [accountId, status, watchlistId]
       ),
@@ -16119,7 +16289,7 @@ app.get('/api/licitacoes/editais/signals/stats', async (req, res) => {
   try {
     const accountId = getAccountId(req);
     const { rows } = await pool.query(
-      `SELECT status, COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE} WHERE account_id = $1 AND watchlist_id IS NOT NULL GROUP BY status`,
+      `SELECT status, COUNT(*)::int AS total FROM ${EDITAL_SIGNALS_TABLE} WHERE account_id = $1 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado')) GROUP BY status`,
       [accountId]
     );
     const base = { novo: 0, visto: 0, promovido: 0, descartado: 0 };
@@ -16386,7 +16556,7 @@ const normalizeForTsQuery = (term) => {
   if (!cleaned) return '';
   const tokens = cleaned.split(' ').filter(Boolean);
   if (!tokens.length) return '';
-  return tokens.map(t => `${t}:*`).join(' & ');
+  return tokens.map(t => `${t}`).join(' & ');
 };
 
 const buildTsQuery = (terms) => {
@@ -16525,8 +16695,9 @@ const upsertPcaPlano = async (planoRaw) => {
           (plano_id, numero_item, descricao, classificacao_codigo, classificacao_nome,
            categoria_item, quantidade, unidade_medida, valor_unitario, valor_total,
            mes_previsto, data_estimada_inicio, data_estimada_conclusao,
-           futura_contratacao_id, futura_contratacao_nome, codigo_item_catalogo, chave_estavel, payload_raw)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
+           futura_contratacao_id, futura_contratacao_nome, codigo_item_catalogo, chave_estavel, payload_raw,
+           official_item_kind, classification_version)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19,$20)
         ON CONFLICT (plano_id, chave_estavel)
         WHERE chave_estavel IS NOT NULL
         DO UPDATE SET
@@ -16545,7 +16716,9 @@ const upsertPcaPlano = async (planoRaw) => {
           futura_contratacao_id = EXCLUDED.futura_contratacao_id,
           futura_contratacao_nome = EXCLUDED.futura_contratacao_nome,
           codigo_item_catalogo = EXCLUDED.codigo_item_catalogo,
-          payload_raw = EXCLUDED.payload_raw
+          payload_raw = EXCLUDED.payload_raw,
+          official_item_kind = EXCLUDED.official_item_kind,
+          classification_version = EXCLUDED.classification_version
       `,
       [
         planoId,
@@ -16575,6 +16748,8 @@ const upsertPcaPlano = async (planoRaw) => {
         pickFirst(item, ['codigoItem', 'codigoItemCatalogo']),
         chaveEstavel,
         JSON.stringify(item),
+        ({ material: 'M', service: 'S' })[classifyItem(item).kind] || null,
+        QUALITY_VERSION,
       ]
     );
     inseridos += 1;
@@ -16593,15 +16768,19 @@ const matchPcaItens = async ({
   termoOriginal = '',
   accountId = null,
   catalogoClasses = [],
+  searchProfile = null,
 }) => {
+  const qualityProfile = normalizeProfile(searchProfile, { q: termoOriginal, palavras_chave: positivos, termos_negativos: negativos });
+  positivos = uniqueQualityTerms([...qualityProfile.terms, ...qualityProfile.related_terms]);
+  negativos = qualityProfile.excluded_terms;
   const tsPos = buildTsQuery(positivos);
   if (!tsPos) {
     return { items: [], total: 0 };
   }
   const tsNeg = buildTsQuery(negativos);
   const params = [tsPos, tsNeg];
-  let where = `i.descricao_tsv @@ to_tsquery('portuguese', $1)
-    AND ($2 = '' OR NOT (i.descricao_tsv @@ to_tsquery('portuguese', $2)))`;
+  let where = `i.descricao_tsv @@ to_tsquery('portuguese', $1) AND $2::text IS NOT NULL`;
+  where += ` AND (${buildPcaPredicate(qualityProfile, params)})`;
 
   if (filtros.ano_pca) { params.push(toIntOrNull(filtros.ano_pca)); where += ` AND p.ano_pca = $${params.length}`; }
   if (filtros.valor_min) { params.push(toNullableNumber(filtros.valor_min)); where += ` AND i.valor_total >= $${params.length}`; }
@@ -16609,6 +16788,7 @@ const matchPcaItens = async ({
   if (filtros.mes_previsto) { params.push(toIntOrNull(filtros.mes_previsto)); where += ` AND i.mes_previsto = $${params.length}`; }
   if (filtros.orgao_cnpj) { params.push(normalizeCnpj(filtros.orgao_cnpj)); where += ` AND p.orgao_cnpj = $${params.length}`; }
   if (filtros.unidade_codigo) { params.push(String(filtros.unidade_codigo)); where += ` AND p.codigo_unidade = $${params.length}`; }
+  if (filtros.match_after_id) { params.push(String(filtros.match_after_id)); where += ` AND i.id > $${params.length}::bigint`; }
 
   // accountId entra no WHERE (exclui já no pipe) e nos subselects de status.
   const accountIdNum = toIntOrNull(accountId) || -1;
@@ -16638,10 +16818,10 @@ const matchPcaItens = async ({
   params.push(toIntOrNull(tam) || 50, offset);
 
   const boostExpr = termoOriginal
-    ? `(CASE WHEN immutable_unaccent(lower(i.descricao)) ILIKE immutable_unaccent(lower($${params.length + 1}))
+    ? `(CASE WHEN immutable_unaccent(lower(i.descricao)) ~ $${params.length + 1}
               THEN 0.5 ELSE 0 END)`
     : '0';
-  if (termoOriginal) params.push(`%${termoOriginal}%`);
+  if (termoOriginal) params.push(termPattern(termoOriginal, true));
 
   // tsquery só do termo ORIGINAL: usado para separar match direto (60–100, pode
   // ser "alta") de match apenas por correlato/expansão IA (teto 55, "média").
@@ -16669,7 +16849,7 @@ const matchPcaItens = async ({
     SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
            i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
            i.futura_contratacao_id, i.futura_contratacao_nome, i.codigo_item_catalogo,
-           i.classificacao_nome, i.data_estimada_inicio,
+           i.classificacao_nome, i.data_estimada_inicio, i.payload_raw, i.official_item_kind,
            p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
            p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
            p.data_atualizacao, p.responsaveis, p.contatos,
@@ -16690,7 +16870,7 @@ const matchPcaItens = async ({
            -- em [0,1), impedindo texto grande com termos genéricos estourar 100.
            LEAST(100::numeric, (
              CASE
-               WHEN $${tsOriginalIdx} = '' OR i.descricao_tsv @@ to_tsquery('portuguese', $${tsOriginalIdx})
+               WHEN $${tsOriginalIdx} = '' OR ${boostExpr} > 0
                  THEN LEAST(100::numeric, ROUND(
                    (60 + ts_rank_cd(i.descricao_tsv, to_tsquery('portuguese', $1), 33) * 40 + ${boostExpr} * 40)::numeric
                  ))
@@ -16701,12 +16881,12 @@ const matchPcaItens = async ({
            )) AS score,
            -- Insumos para o breakdown "por que este score" (reconstruído em JS):
            ts_rank_cd(i.descricao_tsv, to_tsquery('portuguese', $1), 33)::numeric AS rank_raw,
-           ($${tsOriginalIdx} <> '' AND i.descricao_tsv @@ to_tsquery('portuguese', $${tsOriginalIdx})) AS orig_match,
+           ($${tsOriginalIdx} <> '' AND ${boostExpr} > 0) AS orig_match,
            ${catmatHitExpr} AS catmat_hit
     FROM ${PCA_ITENS_TABLE} i
     JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
     WHERE ${where}
-    ORDER BY score DESC, i.id ASC
+    ORDER BY ${filtros.match_after_id !== undefined ? 'i.id ASC' : 'score DESC, i.id ASC'}
     LIMIT $${limitIdx} OFFSET $${offsetIdx}
   `;
 
@@ -16759,8 +16939,10 @@ const matchPcaItens = async ({
     // rank_raw/orig_match/catmat_hit são insumos internos — não vazam crus.
     const { rank_raw, orig_match, catmat_hit, ...cleanRow } = row;
     const decorated = decoratePcaScoredRow(cleanRow);
+    const searchQuality = evaluateResult({ ...row.payload_raw, descricao: row.descricao, quality_is_pca: true }, qualityProfile);
     return {
       ...decorated,
+      search_quality: searchQuality,
       termos_matched: termosMatched,
       termos_matched_detalhe: termosDetalhe,
       score_origem: termosDetalhe.length ? origemDominante : (row.orig_match === true ? 'original' : 'ia'),
@@ -16771,138 +16953,13 @@ const matchPcaItens = async ({
   let finalItems = items;
   let finalTotal = countResult.rows[0]?.total || 0;
 
-  // Busca híbrida (lexical + vetorial) — só entra em jogo se pgvector estiver
-  // disponível e os dois flags de env estiverem ligados. Qualquer falha aqui
-  // cai de volta para o resultado lexical puro, sem afetar a resposta padrão.
-  const vectorOn = pcaVectorAvailable && process.env.PCA_VECTOR_SEARCH === '1' && isEmbeddingsEnabled();
-  if (vectorOn) {
+  // Similarity may order verified candidates, never admit vector-only rows.
+  // Keyset monitoring must retain id order so its continuation is stable.
+  if (filtros.match_after_id === undefined && qualityProfile.match_mode === 'expanded'
+    && pcaVectorAvailable && process.env.PCA_VECTOR_SEARCH === '1' && isEmbeddingsEnabled()) {
     try {
-      const queryText = [termoOriginal, ...positivos].filter(Boolean).join(' ').slice(0, 2000);
-      const queryVec = queryText ? await embedQuery(queryText) : null;
-      if (queryVec) {
-        // Reconstrói os mesmos filtros opcionais + exclusões de pipeline usadas
-        // na busca lexical, mas com uma lista de params própria e limpa (knnPcaItens
-        // injeta o vetor e o limit como últimos params, então não dá pra reusar `params`).
-        const vParams = [];
-        let vWhere = '';
-        if (filtros.ano_pca) { vParams.push(toIntOrNull(filtros.ano_pca)); vWhere += ` AND p.ano_pca = $${vParams.length}`; }
-        if (filtros.valor_min) { vParams.push(toNullableNumber(filtros.valor_min)); vWhere += ` AND i.valor_total >= $${vParams.length}`; }
-        if (filtros.valor_max) { vParams.push(toNullableNumber(filtros.valor_max)); vWhere += ` AND i.valor_total <= $${vParams.length}`; }
-        if (filtros.mes_previsto) { vParams.push(toIntOrNull(filtros.mes_previsto)); vWhere += ` AND i.mes_previsto = $${vParams.length}`; }
-        if (filtros.orgao_cnpj) { vParams.push(normalizeCnpj(filtros.orgao_cnpj)); vWhere += ` AND p.orgao_cnpj = $${vParams.length}`; }
-        if (filtros.unidade_codigo) { vParams.push(String(filtros.unidade_codigo)); vWhere += ` AND p.codigo_unidade = $${vParams.length}`; }
-
-        vParams.push(accountIdNum);
-        const vAccountSignalParam = vParams.length;
-        vWhere += `
-          AND NOT EXISTS (
-            SELECT 1
-              FROM ${PCA_SIGNALS_TABLE} s_pipe
-             WHERE s_pipe.account_id = $${vAccountSignalParam}
-               AND s_pipe.item_id = i.id
-               AND s_pipe.status = 'promovido'
-               AND s_pipe.promovido_para_opportunity_id IS NOT NULL
-          )
-          AND NOT EXISTS (
-            SELECT 1
-              FROM ${LICITACAO_TABLE} o_pipe
-             WHERE o_pipe.account_id = $${vAccountSignalParam}
-               AND o_pipe.metadados->'pca_item_ids' @> to_jsonb(i.id)
-          )`;
-
-        vParams.push(tsNeg);
-        const vTsNegIdx = vParams.length;
-        vWhere += ` AND ($${vTsNegIdx} = '' OR NOT (i.descricao_tsv @@ to_tsquery('portuguese', $${vTsNegIdx})))`;
-
-        const knnRows = await knnPcaItens({ pool, queryVec, whereSql: vWhere, params: vParams, limit: 200 });
-        const relevantKnn = knnRows.filter((row) => Number(row.vector_sim) >= 0.45);
-
-        // Todo item lexical que não teve match vetorial relevante fica marcado como tal.
-        const itemsById = new Map(finalItems.map((it) => [String(it.item_id), it]));
-        for (const it of finalItems) it.match_source = 'lexical';
-
-        if (relevantKnn.length) {
-          const newIds = [];
-          for (const row of relevantKnn) {
-            const idKey = String(row.item_id);
-            const existing = itemsById.get(idKey);
-            if (existing) {
-              const ajuste = Math.round(Math.max(0, Math.min(10, 30 * (row.vector_sim - 0.45))));
-              if (ajuste > 0) {
-                existing.score = Math.min(100, (Number(existing.score) || 0) + ajuste);
-                existing.score_breakdown = [
-                  ...(existing.score_breakdown || []),
-                  { label: 'Similaridade vetorial', value: ajuste },
-                ];
-              }
-              existing.match_source = 'both';
-              existing.vector_similarity = Number(row.vector_sim);
-            } else {
-              newIds.push(row.item_id);
-            }
-          }
-
-          let vectorOnlyItems = [];
-          if (newIds.length) {
-            const { rows: newRows } = await pool.query(
-              `SELECT i.id AS item_id, i.descricao, i.valor_total, i.valor_unitario, i.quantidade,
-                      i.unidade_medida, i.mes_previsto, i.numero_item, i.categoria_item,
-                      i.futura_contratacao_id, i.futura_contratacao_nome, i.codigo_item_catalogo,
-                      i.classificacao_nome, i.data_estimada_inicio,
-                      p.id AS plano_id, p.id_pca_pncp, p.orgao_cnpj, p.orgao_razao_social,
-                      p.codigo_unidade, p.unidade_nome, p.ano_pca, p.data_publicacao,
-                      p.data_atualizacao, p.responsaveis, p.contatos,
-                      FALSE AS ja_promovido,
-                      NULL::bigint AS promovido_para_opportunity_id,
-                      (
-                        SELECT s2.status
-                        FROM ${PCA_SIGNALS_TABLE} s2
-                        WHERE s2.account_id = $2
-                          AND s2.item_id = i.id
-                        ORDER BY s2.criado_em DESC
-                        LIMIT 1
-                      ) AS signal_status
-                 FROM ${PCA_ITENS_TABLE} i
-                 JOIN ${PCA_PLANOS_TABLE} p ON p.id = i.plano_id
-                WHERE i.id = ANY($1)`,
-              [newIds, accountIdNum]
-            );
-            const simById = new Map(relevantKnn.map((row) => [String(row.item_id), Number(row.vector_sim)]));
-            vectorOnlyItems = newRows.map((row) => {
-              const sim = simById.get(String(row.item_id)) || 0;
-              const score = Math.max(30, Math.min(55, Math.round(30 + ((sim - 0.45) / 0.30) * 25)));
-              return {
-                ...row,
-                score,
-                score_label: getPncpScoreLabel(score),
-                match_source: 'vector',
-                vector_similarity: sim,
-                termos_matched: [],
-                termos_matched_detalhe: [],
-                score_origem: 'vetorial',
-                catmat_match: false,
-                score_breakdown: [{ label: 'Match semântico (vetorial)', value: score }],
-              };
-            });
-          }
-
-          // A query lexical JÁ paginou no SQL — re-fatiar aqui seria dupla
-          // paginação. Itens vector-only entram só na página 1 (append + sort);
-          // nas demais páginas o vetorial apenas ajusta/anota os itens da página.
-          const paginaNum = Math.max(0, (toIntOrNull(pagina) || 1) - 1);
-          if (paginaNum === 0 && vectorOnlyItems.length) {
-            finalItems = [...finalItems, ...vectorOnlyItems.slice(0, 50)];
-            // total aproximado no modo híbrido
-            finalTotal = (countResult.rows[0]?.total || 0) + vectorOnlyItems.length;
-          }
-          finalItems.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
-        }
-      }
-    } catch (error) {
-      console.warn('[pca-vector] falha na busca híbrida, retornando lexical:', error.message);
-      finalItems = items;
-      finalTotal = countResult.rows[0]?.total || 0;
-    }
+      finalItems = await rerankPncpItems(items, qualityProfile.objective || termoOriginal, { timeoutMs: 15000, topN: 60 });
+    } catch (error) { console.warn('[pca-vector] reordenação indisponível:', error.message); }
   }
 
   return { items: finalItems, total: finalTotal };
@@ -17254,7 +17311,7 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
     let positivos = Array.isArray(watch.palavras_chave) ? [...watch.palavras_chave] : [];
     let negativos = Array.isArray(watch.termos_negativos) ? [...watch.termos_negativos] : [];
 
-    if (watch.usar_ia && positivos[0]) {
+    if (!watch.search_profile && watch.usar_ia && positivos[0] && normalizeSearchText(positivos[0]) !== 'autel') {
       try {
         const r = await getTermosCorrelatos(positivos[0]);
         positivos = Array.from(new Set([...positivos, ...(r.positivos || [])]));
@@ -17264,11 +17321,17 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
     }
     if (!positivos.length) continue;
 
-    const filtros = {};
+    const qualityProfile = normalizeProfile(watch.search_profile, { q: positivos[0], palavras_chave: watch.palavras_chave,
+      termos_negativos: negativos, usar_ia: watch.usar_ia });
+    if (!watch.search_profile && qualityProfile.match_mode === 'expanded') qualityProfile.related_terms = positivos.slice(1);
+    positivos = uniqueQualityTerms([...qualityProfile.terms, ...qualityProfile.related_terms]);
+    const scanSignature = buildPncpJobSignature({ filters: { ...qualityProfile, ...(watch.filtros || {}), valor_minimo: watch.valor_minimo, valor_maximo: watch.valor_maximo }, terms: positivos, negativeTerms: negativos });
+    const state = watch.scan_state?.signature === scanSignature ? watch.scan_state : { signature: scanSignature, next_item_id: '0' };
+    const filtros = { ...(watch.filtros || {}), match_after_id: state.next_item_id || '0' };
     if (watch.valor_minimo) filtros.valor_min = watch.valor_minimo;
     if (watch.valor_maximo) filtros.valor_max = watch.valor_maximo;
 
-    const { items } = await matchPcaItens({
+    const { items, total } = await matchPcaItens({
       positivos,
       negativos,
       filtros,
@@ -17279,6 +17342,7 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
       catalogoClasses: Array.isArray(watch.catalogo_classes) ? watch.catalogo_classes : [],
       // Exclui itens já no pipeline desta conta (não gera sinal novo de promovido).
       accountId: watch.account_id,
+      searchProfile: qualityProfile,
     });
     for (const item of items) {
       const r = await pool.query(
@@ -17319,6 +17383,11 @@ const executePcaWatchlistMatching = async ({ watchlistId = null } = {}) => {
         }).catch((err) => console.warn('[pca] push/inbox falhou:', err.message));
       }
     }
+    const nextId = items.length ? String(items[items.length - 1].item_id) : '0';
+    await pool.query(`UPDATE ${PCA_WATCHLIST_TABLE} SET scan_state=$2::jsonb WHERE id=$1`, [watch.id,
+      JSON.stringify({ ...state, next_item_id: items.length < 500 ? '0' : nextId,
+        remaining: Math.max(0, Number(total) - items.length), complete: items.length < 500,
+        coverage_kind: items.length < 500 ? 'cycle_completed' : 'partial_rotating', updated_at: new Date().toISOString() })]);
   }
   const notifications = await processWatchlistNotifications().catch(error => {
     console.warn('[pca] notificacoes falharam:', error.message);
@@ -17530,6 +17599,66 @@ app.get('/api/licitacoes/pca/bootstrap/status', async (_req, res) => {
   }
 });
 
+registerSearchGuidance(app, {
+  pool, getAccountId,
+  interpret: createSearchInterpreter(() => [
+    { url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: OPENAI_AI_MODEL },
+    { url: 'https://api.groq.com/openai/v1/chat/completions', key: GROQ_API_KEY, model: GROQ_AI_MODEL },
+  ]),
+  preview: async ({ profile, source, filters, accountId }) => {
+    if (source === 'pca') {
+      const result = await matchPcaItens({ positivos: [...profile.terms, ...profile.related_terms],
+        negativos: profile.excluded_terms, filtros: filters, accountId, tam: 10,
+        termoOriginal: profile.terms[0], searchProfile: profile });
+      return { ...result, coverage: { local_inventory: true },
+        items: result.items.map(item => ({ ...item.payload_raw, ...item, quality_is_pca: true })) };
+    }
+    const collected = new Map();
+    const deadline = Date.now() + 18000;
+    let pages = 0;
+    const errors = [];
+    const terms = [...profile.terms, ...profile.related_terms];
+    for (const term of terms.slice(0, 3)) {
+      if (Date.now() >= deadline) break;
+      try {
+        const data = await withPncpGate(() => fetchPncpSearchStable({ q: term, pagina: 1, tam: 20,
+          tipos_documento: filters.tipos_documento || 'edital', ordenacao: '-data',
+          ...(filters.uf ? { uf: filters.uf } : {}),
+          ...(filters.modalidade_licitacao_id ? { modalidade_licitacao_id: filters.modalidade_licitacao_id } : {}),
+          ...(filters.tipo_id ? { tipo_id: filters.tipo_id } : {}),
+          ...(filters.esfera_id ? { esfera_id: filters.esfera_id } : {}),
+          ...(filters.status && !['todos', 'recebendo_proposta'].includes(filters.status) ? { status: filters.status } : {}),
+        }, { retries: 0 }), { priority: 'interactive' });
+        pages++;
+        for (const raw of data.items || []) {
+          const key = getPncpRawItemKey(raw);
+          if (key) collected.set(key, { ...raw, __matched_termo: term });
+        }
+      } catch (error) { errors.push(error.message); }
+    }
+    const items = [];
+    let enriched = 0;
+    for (let raw of collected.values()) {
+      if (enriched < 10 && Date.now() < deadline && (!evaluateResult(raw, profile).accepted || profile.item_kind !== 'all' || filters.modo_disputa_id)) {
+        const ids = extractPncpCompraIdentifiers(raw);
+        if (ids.cnpj && ids.ano && ids.sequencial) {
+          raw = mergePncpEnrichmentIntoRawItem(raw, await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial,
+            profile.terms[0], { priority: 'interactive', maxPages: 8 }));
+          enriched++;
+        }
+      }
+      const item = normalizePncpItem(raw, raw.__matched_termo);
+      if (!matchesWatchlistEntityFilters(item, filters)) continue;
+      if (filters.status === 'recebendo_proposta' && !isPncpReceivingProposalOpen(item)) continue;
+      if (filters.modo_disputa_id && item.modo_disputa?.id && String(item.modo_disputa.id) !== String(filters.modo_disputa_id)) continue;
+      items.push(item);
+    }
+    return { items, coverage: { pages_requested: pages, terms_requested: Math.min(3, terms.length),
+      terms_planned: terms.length, candidates: collected.size, items_enriched: enriched, errors },
+      warning: errors.length ? 'A amostra está parcial: houve falha na consulta ao PNCP.' : null };
+  },
+});
+
 app.get('/api/licitacoes/pca/search', async (req, res) => {
   try {
     const accountId = getAccountId(req);
@@ -17538,8 +17667,17 @@ app.get('/api/licitacoes/pca/search', async (req, res) => {
     let positivos = [];
     let negativos = [];
     let fonte = null;
+    let searchProfile = null;
+    if (req.query.search_profile) {
+      try { searchProfile = normalizeProfile(JSON.parse(req.query.search_profile), { q }); }
+      catch { return res.status(400).json({ error: 'Perfil de busca inválido.' }); }
+    }
 
-    if (req.query.positivos_override) {
+    if (searchProfile) {
+      positivos = [...searchProfile.terms, ...searchProfile.related_terms];
+      negativos = searchProfile.excluded_terms;
+      fonte = 'perfil_confirmado';
+    } else if (req.query.positivos_override) {
       try { positivos = JSON.parse(req.query.positivos_override); } catch { positivos = []; }
       try { negativos = JSON.parse(req.query.negativos_override || '[]'); } catch { negativos = []; }
       fonte = 'override';
@@ -17566,6 +17704,7 @@ app.get('/api/licitacoes/pca/search', async (req, res) => {
       termoOriginal: q,
       catalogoClasses: parseAtoOuArray(req.query.catalogo_classes),
       accountId,
+      searchProfile,
     });
 
     res.json({ q, positivos, negativos, fonte_ia: fonte, total, items });
@@ -17611,7 +17750,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
         WITH paged AS MATERIALIZED (
           SELECT s.*
           FROM ${PCA_SIGNALS_TABLE} s
-          WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL
+          WHERE s.account_id = $1 AND s.status = $2 AND s.watchlist_id IS NOT NULL AND (NOT s.quality_hidden OR s.status IN ('promovido','descartado'))
             AND ($5::bigint IS NULL OR s.watchlist_id = $5)
           ORDER BY s.criado_em DESC, s.id DESC
           LIMIT $3 OFFSET $4
@@ -17633,7 +17772,7 @@ app.get('/api/licitacoes/pca/signals', async (req, res) => {
         `
           SELECT watchlist_id, COUNT(*)::int AS total
           FROM ${PCA_SIGNALS_TABLE}
-          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL
+          WHERE account_id = $1 AND status = $2 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado'))
             AND ($3::bigint IS NULL OR watchlist_id = $3)
           GROUP BY watchlist_id
         `,
@@ -17663,7 +17802,7 @@ app.get('/api/licitacoes/pca/signals/stats', async (req, res) => {
         `
           SELECT status, COUNT(*)::int AS total
           FROM ${PCA_SIGNALS_TABLE}
-          WHERE account_id = $1 AND watchlist_id IS NOT NULL
+          WHERE account_id = $1 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado'))
           GROUP BY status
         `,
         [accountId]
@@ -18334,7 +18473,7 @@ app.get('/api/licitacoes/pca/watchlist', async (req, res) => {
                     COUNT(*) FILTER (WHERE status = 'novo')::int AS novo_count,
                     COUNT(*)::int AS total_count
                FROM ${PCA_SIGNALS_TABLE}
-              WHERE account_id = $1 AND watchlist_id IS NOT NULL
+              WHERE account_id = $1 AND watchlist_id IS NOT NULL AND (NOT quality_hidden OR status IN ('promovido','descartado'))
               GROUP BY watchlist_id
            ) sc ON sc.watchlist_id = w.id
           WHERE w.account_id = $1
@@ -18367,8 +18506,8 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
         INSERT INTO ${PCA_WATCHLIST_TABLE}
           (account_id, nome, palavras_chave, termos_negativos, usar_ia,
            valor_minimo, valor_maximo, orgao_filtros, uasg_filtros,
-           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo, catalogo_classes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14)
+           whatsapp_enabled, whatsapp_number, whatsapp_min_score, ativo, catalogo_classes, search_profile, filtros)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)
         RETURNING *
       `,
       [accountId,
@@ -18384,7 +18523,9 @@ app.post('/api/licitacoes/pca/watchlist', async (req, res) => {
        waNumber,
        waMinScore,
        b.ativo !== false,
-       asTextArray(b.catalogo_classes)]
+       asTextArray(b.catalogo_classes),
+       b.search_profile ? JSON.stringify(normalizeProfile(b.search_profile)) : null,
+       JSON.stringify(b.filtros || {})]
     );
     const created = decorateWatchlistWhatsapp(rows[0]);
     res.status(201).json(created);
@@ -18440,6 +18581,8 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
                whatsapp_min_score = CASE WHEN $14::boolean THEN $15 ELSE whatsapp_min_score END,
                ativo = COALESCE($11, ativo),
                catalogo_classes = COALESCE($16, catalogo_classes),
+               search_profile = COALESCE($17::jsonb, search_profile),
+               filtros = COALESCE($18::jsonb, filtros),
                atualizado_em = NOW()
          WHERE id = $12 AND account_id = $13
          RETURNING *
@@ -18458,13 +18601,15 @@ app.put('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
        id, accountId,
        touchingWhatsapp,
        waMinScore,
-       b.catalogo_classes !== undefined ? asTextArray(b.catalogo_classes) : null]
+       b.catalogo_classes !== undefined ? asTextArray(b.catalogo_classes) : null,
+       b.search_profile ? JSON.stringify(normalizeProfile(b.search_profile)) : null,
+       b.filtros ? JSON.stringify(b.filtros) : null]
     );
     if (!rows[0]) return res.status(404).json({ error: 'não encontrado' });
     const updated = decorateWatchlistWhatsapp(rows[0]);
     res.json(updated);
     const matchingRelevant = ['ativo', 'palavras_chave', 'termos_negativos', 'usar_ia',
-      'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros', 'catalogo_classes']
+      'valor_minimo', 'valor_maximo', 'orgao_filtros', 'uasg_filtros', 'catalogo_classes', 'search_profile', 'filtros']
       .some((key) => Object.prototype.hasOwnProperty.call(b, key));
     if (updated.ativo && matchingRelevant && !pcaBootstrapState.running) {
       setImmediate(() => runPcaWatchlistMatching({ watchlistId: updated.id }).catch((error) => {
@@ -18506,6 +18651,168 @@ app.delete('/api/licitacoes/pca/watchlist/:id', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Erro ao remover watchlist', details: error.message });
   }
+});
+
+// Quality review is bounded and owns the same heavy slot as other scanners.
+// No outbound messages are generated by reclassification of the historical corpus.
+const verifyPendingSearchCandidates = async (limit = 4) => {
+  const { rows } = await pool.query(`SELECT * FROM search_pending_candidates
+    WHERE status='pending' AND next_attempt_at <= NOW() ORDER BY next_attempt_at LIMIT $1`, [limit]);
+  for (const row of rows) {
+    if (!canRunPncpPriority('bulk')) break;
+    try {
+      const table = row.source === 'job' ? PNCP_SEARCH_JOBS_TABLE : EDITAL_WATCHLIST_TABLE;
+      const { rows: parents } = await pool.query(`SELECT * FROM ${table} WHERE id=$1 AND account_id=$2`, [row.source_id, row.account_id]);
+      const parent = parents[0];
+      if (!parent) {
+        await pool.query(`UPDATE search_pending_candidates SET status='orphaned' WHERE account_id=$1 AND source=$2 AND source_id=$3 AND result_key=$4`,
+          [row.account_id, row.source, row.source_id, row.result_key]);
+        continue;
+      }
+      const filters = parent.filters || parent.filtros || {};
+      const profile = normalizeProfile(filters.search_profile, { ...filters,
+        palavras_chave: parent.terms || parent.palavras_chave, termos_negativos: parent.negative_terms || parent.termos_negativos });
+      const item = { ...row.payload };
+      const ids = extractPncpCompraIdentifiers(item);
+      if (!ids.cnpj || !ids.ano || !ids.sequencial) throw new Error('Identificador PNCP ainda não disponível');
+      const details = await fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk', maxPages: 2,
+        startPage: item.quality_items_next_page || 1 });
+      const byNumber = new Map((item.quality_items || []).map(i => [String(i.numeroItem || i.numero_item || i.descricao), i]));
+      for (const detail of details) byNumber.set(String(detail.numeroItem || detail.descricao), detail);
+      item.quality_items = [...byNumber.values()];
+      item.quality_items_complete = details.complete;
+      item.quality_items_next_page = details.nextPage;
+      let quality = evaluateResult(item, profile);
+      const entitiesMatch = matchesWatchlistEntityFilters(item, filters);
+      const statusMatches = filters.status !== 'recebendo_proposta' || isPncpReceivingProposalOpen(item);
+      if (!entitiesMatch || !statusMatches) quality = { ...quality, accepted: false, status: 'rejected', reason: 'filters_mismatch' };
+      item.search_quality = quality;
+      if (quality.accepted && entitiesMatch && statusMatches) {
+        const accepted = applyQuality([item], profile).items[0];
+        if (row.source === 'job') {
+          const job = normalizePncpSearchJobRow(parent);
+          await persistPncpJobResults(job, [decoratePncpSearchItem(accepted, { qText: profile.terms[0],
+            positiveTerms: [...profile.terms, ...profile.related_terms], negativeTerms: profile.excluded_terms })]);
+          await refreshPncpJobSummaryTotals(job); await persistPncpDeepJob(job);
+        } else {
+          const decorated = decoratePncpSearchItem(accepted, { qText: profile.terms[0], positiveTerms: profile.terms });
+          // Deferred verification adds evidence, never replays historical notifications.
+          await pool.query(`INSERT INTO ${EDITAL_SIGNALS_TABLE}(account_id,watchlist_id,fonte,chave_externa,payload,score,termos_matched)
+            VALUES($1,$2,'pncp',$3,$4::jsonb,$5,$6) ON CONFLICT(account_id,watchlist_id,chave_externa)
+            DO UPDATE SET payload=EXCLUDED.payload,score=EXCLUDED.score,quality_hidden=FALSE`,
+            [row.account_id, row.source_id, row.result_key, JSON.stringify(decorated), decorated.score, [quality.term]]);
+        }
+      }
+      if (details.complete && !quality.accepted) {
+        const tableName = row.source === 'job' ? PNCP_SEARCH_JOB_RESULTS_TABLE : EDITAL_SIGNALS_TABLE;
+        const parentColumn = row.source === 'job' ? 'job_id' : 'watchlist_id';
+        const keyColumn = row.source === 'job' ? 'result_key' : 'chave_externa';
+        const preserve = row.source === 'job' ? "visibility IN ('hidden','pipeline')" : "status NOT IN ('novo','visto')";
+        await pool.query(`INSERT INTO search_quality_history(account_id,source,source_id,result_key,previous_review,review)
+          SELECT $1,$4,$2::text,$3,quality_review,$5::jsonb FROM ${tableName}
+          WHERE account_id=$1 AND ${parentColumn}=$2::${row.source === 'job' ? 'uuid' : 'bigint'} AND ${keyColumn}=$3`,
+          [row.account_id, row.source_id, row.result_key, row.source, JSON.stringify(quality)]);
+        await pool.query(`UPDATE ${tableName} SET quality_hidden=NOT (${preserve}),quality_review=$4::jsonb,payload=payload || $5::jsonb
+          WHERE account_id=$1 AND ${parentColumn}=$2 AND ${keyColumn}=$3`,
+          [row.account_id, row.source_id, row.result_key, JSON.stringify(quality), JSON.stringify(item)]);
+      }
+      await pool.query(`UPDATE search_pending_candidates SET payload=$5::jsonb,attempts=attempts+1,
+        status=$6,next_attempt_at=NOW()+INTERVAL '5 minutes',updated_at=NOW()
+        WHERE account_id=$1 AND source=$2 AND source_id=$3 AND result_key=$4`,
+        [row.account_id, row.source, row.source_id, row.result_key, JSON.stringify(item), details.complete ? 'verified' : 'pending']);
+      await pool.query(`INSERT INTO search_scan_audit(account_id,source,source_id,term,stats) VALUES($1,$2,$3,$4,$5::jsonb)`,
+        [row.account_id, row.source, row.source_id, quality.term, JSON.stringify({ candidates: 1,
+          accepted: quality.accepted ? 1 : 0, rejected: details.complete && !quality.accepted ? 1 : 0,
+          reason: quality.reason, coverage_kind: 'item_verification', complete: details.complete })]);
+    } catch (error) {
+      await pool.query(`UPDATE search_pending_candidates SET attempts=attempts+1,next_attempt_at=NOW()+INTERVAL '15 minutes',updated_at=NOW()
+        WHERE account_id=$1 AND source=$2 AND source_id=$3 AND result_key=$4`, [row.account_id, row.source, row.source_id, row.result_key]);
+      console.warn('[search-quality] verificação pendente:', error.message);
+    }
+  }
+};
+
+let searchQualityMaintenanceRunning = false;
+const runSearchQualityMaintenance = async () => {
+  if (searchQualityMaintenanceRunning || !dataLayerReady) return;
+  searchQualityMaintenanceRunning = true;
+  let lock;
+  let locked = false;
+  try {
+    lock = await pool.connect();
+    locked = (await lock.query('SELECT pg_try_advisory_lock(7349001) AS locked')).rows[0]?.locked === true;
+    if (!locked) return;
+    await withPncpHeavyJobSlot('search-quality-review', async () => {
+      await backfillPcaClassifications(pool, 1000);
+      await verifyPendingSearchCandidates();
+      const sources = [
+        { source: 'job', table: PNCP_SEARCH_JOBS_TABLE },
+        { source: 'edital', table: EDITAL_WATCHLIST_TABLE },
+        { source: 'pca', table: PCA_WATCHLIST_TABLE },
+      ];
+      let enrichBudget = 5;
+      for (const { source, table } of sources) {
+        let batches = 0;
+        const { rows } = await pool.query(`SELECT * FROM ${table} ORDER BY updated_at DESC NULLS LAST LIMIT 500`.replace(
+          'updated_at DESC', source === 'job' ? 'updated_at DESC' : 'atualizado_em DESC'));
+        for (const row of rows) {
+          if (batches >= 2) break;
+          if (source === 'job' && (['queued', 'running', 'paused_rate_limit'].includes(row.status) || isPncpDeepSearchWorkerAlive(row.id))) continue;
+          const filters = source === 'job' ? row.filters || {} : row.filtros || {};
+          const profile = normalizeProfile(source === 'pca' ? row.search_profile : filters.search_profile,
+            { ...filters, q: filters.q || row.palavras_chave?.[0] || row.terms?.[0], palavras_chave: row.palavras_chave || row.terms,
+              termos_negativos: row.termos_negativos || row.negative_terms, usar_ia: row.usar_ia });
+          // The user's explicit correction applies to the existing AUTEL search.
+          if (source === 'job' && normalizeSearchText(filters.q || '') === 'autel' && !filters.search_profile?.confirmed_at) {
+            await pool.query(`UPDATE ${table} SET filters=jsonb_set(filters,'{search_profile}',$2::jsonb),terms=$3 WHERE id=$1`,
+              [row.id, JSON.stringify(profile), profile.terms]);
+            const memory = PNCP_DEEP_SEARCH_JOBS.get(row.id);
+            if (memory) { memory.filters.search_profile = profile; memory.terms = profile.terms; }
+          }
+          if (source === 'job') await reconcilePncpJobPipelineVisibility(row.id, row.account_id);
+          const review = await reviewSearchBatch(pool, { source, id: row.id, accountId: row.account_id, profile, limit: 100,
+            enrich: async item => {
+              if (enrichBudget <= 0 || !canRunPncpPriority('bulk')) return item;
+              const ids = extractPncpCompraIdentifiers(item);
+              if (!ids.cnpj || !ids.ano || !ids.sequencial) return item;
+              enrichBudget--;
+              return mergePncpEnrichmentIntoRawItem(item, await getPncpCompraEnrichment(ids.cnpj, ids.ano, ids.sequencial,
+                profile.terms[0], { priority: 'bulk' }));
+            } });
+          if (review.reviewed && !review.skipped) batches++;
+          if (source === 'job' && review.reviewed) {
+            const job = await loadPncpDeepJob(row.id, row.account_id);
+            if (job) { await refreshPncpJobSummaryTotals(job); await persistPncpDeepJob(job); }
+          }
+        }
+      }
+    });
+  } finally {
+    if (locked) await lock.query('SELECT pg_advisory_unlock(7349001)').catch(() => {});
+    lock?.release(); searchQualityMaintenanceRunning = false;
+  }
+};
+
+app.get('/api/licitacoes/search/quality/audit', async (req, res) => {
+  const accountId = getAccountId(req);
+  const days = Math.max(1, Math.min(365, Number(req.query.days) || 90));
+  const [reviews, scans, jobs, watches, publications] = await Promise.all([
+    pool.query('SELECT * FROM search_quality_reviews WHERE account_id=$1 ORDER BY updated_at DESC', [accountId]),
+    pool.query(`SELECT source,source_id,term,DATE(created_at) AS day,
+      SUM((stats->>'candidates')::int)::int AS candidates,SUM((stats->>'accepted')::int)::int AS accepted,
+      SUM((stats->>'rejected')::int)::int AS rejected FROM search_scan_audit
+      WHERE account_id=$1 AND created_at >= NOW()-$2::int*INTERVAL '1 day' GROUP BY 1,2,3,4 ORDER BY day DESC`, [accountId, days]),
+    pool.query(`SELECT id,nome,status,term_runs,query_plan,progress FROM ${PNCP_SEARCH_JOBS_TABLE} WHERE account_id=$1`, [accountId]),
+    pool.query(`SELECT id,nome,'edital' AS source,scan_state FROM ${EDITAL_WATCHLIST_TABLE} WHERE account_id=$1
+      UNION ALL SELECT id,nome,'pca' AS source,scan_state FROM ${PCA_WATCHLIST_TABLE} WHERE account_id=$1`, [accountId]),
+    pool.query(`SELECT LEFT(COALESCE(payload->>'data_publicacao_pncp',payload->>'data_publicacao',''),10) AS publication_date,
+      COUNT(*)::int AS collected,COUNT(*) FILTER(WHERE quality_hidden)::int AS quality_hidden
+      FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE} WHERE account_id=$1
+      AND COALESCE(payload->>'data_publicacao_pncp',payload->>'data_publicacao','') >= TO_CHAR(NOW()-$2::int*INTERVAL '1 day','YYYY-MM-DD')
+      GROUP BY 1 ORDER BY 1 DESC`, [accountId, days]),
+  ]);
+  res.json({ days, reviews: reviews.rows, scans: scans.rows, jobs: jobs.rows, watches: watches.rows,
+    publications: publications.rows, warning: 'O relatório mede o acervo e as coletas da plataforma. Não representa o total de publicações do PNCP; períodos sem auditoria registrada não comprovam ausência de oportunidades.' });
 });
 
 // ============ FIM PCA ============
@@ -19722,6 +20029,7 @@ const chatCompletionJson = async ({
   maxTokens = 2200,
   temperature = 0.25,
   timeoutMs = 45000,
+  maxProviderAttempts = Infinity,
 }) => {
   const providers = getAiChatProviders();
   if (!providers.length) {
@@ -19742,7 +20050,7 @@ const chatCompletionJson = async ({
     return { ok: false, error: 'Mensagens vazias para a IA' };
   }
   const errors = [];
-  for (const provider of providers) {
+  for (const provider of providers.slice(0, maxProviderAttempts)) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -19780,6 +20088,8 @@ const chatCompletionJson = async ({
           provider: provider.name,
           model: provider.model,
           raw: content,
+          usage: data.usage || null,
+          truncated: data.choices?.[0]?.finish_reason === 'length',
         };
       } catch (parseErr) {
         errors.push(`${provider.name}:JSON parse fail`);
@@ -19793,6 +20103,31 @@ const chatCompletionJson = async ({
   }
   return { ok: false, error: errors.join(' | ') || 'Falha em todos os providers de IA' };
 };
+
+const technicalAnalysis = createTechnicalAnalysis({
+  pool, getAccountId: req => {
+    const requested = req.query.account_id ?? req.body?.account_id;
+    if (requested != null && Number(requested) !== CHATWOOT_ACCOUNT_ID) throw Object.assign(new Error('Conta não autorizada.'), { status: 403 });
+    return CHATWOOT_ACCOUNT_ID;
+  },
+  authorize: async (req, write) => {
+    if (req.auth?.role === 'admin') return true;
+    const user = await getUserById(Number(req.auth?.uid));
+    const level = user?.page_permissions?.['Licitações'];
+    return write ? level === 'edit' : ['view', 'edit'].includes(level);
+  },
+  ai: args => chatCompletionJson(args), getIds: extractPncpCompraIdentifiers,
+  getNotice: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`), { priority: 'bulk' }),
+  getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk', maxPages: 2, startPage, requireEmptyPage: true }),
+  getFiles: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'bulk' }),
+  gate: work => withPncpGate(work, { priority: 'bulk' }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
+  isEligible: item => getPncpReceivingProposalVerdict(item).verdict === 'open',
+});
+technicalAnalysis.register(app);
+const technicalAnalysisTimer = setInterval(() => {
+  if (dataLayerReady) technicalAnalysis.tick().catch(error => console.error('[technical-analysis]', error.message));
+}, 15000);
+technicalAnalysisTimer.unref();
 
 // --- Checklist técnico IA: fetch seguro de páginas de produto + helpers ---
 const isPrivateIpAddress = (ip) => {
@@ -20312,7 +20647,7 @@ REGRAS:
 - Use ok/nao_ok quando houver evidência na ficha/URL/modelo; verificar só se faltar dado.
 - observacao: 1 linha com base (ex: "site: IP43 < IP54 exigido", "ficha: 42min >= 40min").
 - NÃO invente requisitos. NÃO omita itens. Total items = ${compact.length}.
-- Se o produto for EVO Max / Autel e a ficha trouxer números, JULGUE (não deixe tudo verificar).`;
+- Não presuma especificações por marca ou modelo. Números exigem evidência e validação independente.`;
 
   const user = `MODELO: ${modelo || '(não informado)'}
 
@@ -22900,6 +23235,13 @@ const registerBackgroundSchedules = () => {
   }, { timezone: 'America/Sao_Paulo' });
 
   // Atualização PCA diária, com horário explícito para não depender do timezone do container.
+  cron.schedule('*/5 * * * *', () => {
+    runSearchQualityMaintenance().catch(error => console.warn('[search-quality] revisão adiada:', error.message));
+  }, { timezone: 'America/Sao_Paulo' });
+  cron.schedule('*/15 * * * *', () => {
+    if (dataLayerReady && !pcaBootstrapState.running) runPcaWatchlistMatching()
+      .catch(error => console.warn('[pca] continuação das assinaturas:', error.message));
+  }, { timezone: 'America/Sao_Paulo' });
   cron.schedule('45 7 * * *', async () => {
     if (!dataLayerReady) {
       console.log('[pca] daily sync adiado: camada de dados ainda não inicializada');
@@ -23157,6 +23499,10 @@ const initializeDataLayer = async () => {
   }
 
   await createLicitacaoTables();
+  await createSearchQualityTables(pool);
+  await createTechnicalTables(pool);
+  const catalogSeed = await seedTechnicalCatalog(pool, CHATWOOT_ACCOUNT_ID);
+  if (catalogSeed.inserted) console.log(`[technical-catalog] ${catalogSeed.inserted} produtos importados com preço de distribuição.`);
   await initFeedback({ pool });
   await initEmbeddings({ pool });
   await initPcaVectorSupport();

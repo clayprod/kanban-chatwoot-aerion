@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
+import SearchGuide from './SearchGuide';
+import SearchEvidence from './SearchEvidence';
+import SearchQualityPanel from './SearchQualityPanel';
+import SearchWatchlistReview from './SearchWatchlistReview';
+import ProductCatalog from './ProductCatalog';
+import TechnicalResult from './TechnicalResult';
 import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
@@ -239,6 +245,7 @@ const LIC_SUB_LABELS = {
   editais: 'Busca Editais',
   editais_watchlist: 'Busca Editais',
   board: 'Pipeline',
+  products: 'Produtos e análise técnica',
   resultados: 'Contratos/Resultados',
   pca: 'PCA — Contratações anuais',
   sinais: 'PCA — Contratações anuais', // legado: redireciona para pca
@@ -5189,6 +5196,7 @@ const statusFilterLabel = (s) => ({
 }[s] || s);
 
 function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
+  const [searchProfile, setSearchProfile] = useState(null);
   const [q, setQ] = useState('');
   const [usarIa, setUsarIa] = useState(true);
   const [positivos, setPositivos] = useState([]);
@@ -5281,7 +5289,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     return () => document.removeEventListener('visibilitychange', refreshWhenVisible);
   }, [fetchBootstrapStatus]);
 
-  const runSearch = async (overridePositivos, overrideNegativos) => {
+  const runSearch = async (overridePositivos, overrideNegativos, profileOverride) => {
     if (!q.trim() && !overridePositivos?.length) {
       setError('Digite uma palavra-chave para buscar.');
       return;
@@ -5291,7 +5299,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
     setError(null);
     try {
       const params = {
-        q: q.trim(),
+        q: profileOverride?.terms?.[0] || q.trim(),
+        search_profile: (profileOverride || searchProfile) ? JSON.stringify(profileOverride || searchProfile) : undefined,
         usar_ia: overridePositivos ? 'false' : (usarIa ? 'true' : 'false'),
         ano_pca: filtros.ano_pca || undefined,
         valor_min: filtros.valor_min || undefined,
@@ -5386,6 +5395,8 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
       await axios.post('/api/licitacoes/pca/watchlist', {
         nome: saveName || q.trim() || watchlistTerms[0],
         palavras_chave: watchlistTerms,
+        search_profile: searchProfile,
+        filtros,
         termos_negativos: negativos,
         usar_ia: usarIa,
         valor_minimo: filtros.valor_min ? Number(filtros.valor_min) : null,
@@ -5541,45 +5552,16 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
           </div>
         )}
 
-        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto] lg:items-center">
-          <div className="relative flex h-[42px] min-w-0 items-center rounded-[11px] border border-line bg-bg2 sm:col-span-2 lg:col-span-1">
-            <MagnifyingGlassIcon className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
-            <input
-              type="text"
-              placeholder='Buscar PCAs — ex: "drone", "raio-x", "veículo blindado"…'
-              value={q}
-              onChange={e => setQ(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && runSearch()}
-              className="h-full w-full min-w-0 rounded-[11px] bg-transparent pl-10 pr-28 text-base sm:text-sm font-semibold text-ink outline-none placeholder:text-muted"
-            />
-            <button
-              type="button"
-              onClick={() => setUsarIa(v => !v)}
-              title={usarIa ? 'Busca IA ativada — expande termos correlatos' : 'Busca IA desativada'}
-              className={`absolute right-2 shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${usarIa ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
-            >
-              ✦ Busca IA
-            </button>
-          </div>
-          <button type="button" onClick={() => runSearch()} disabled={loading} className={`${btnPrimaryControl} w-full lg:w-auto lg:px-6`}>
-            {loading ? 'Buscando…' : 'Buscar'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowFilters(v => !v)}
-            className={`${btnSecondaryControl} w-full lg:w-auto ${showFilters || filtrosAtivos > 0 ? 'border-primary/40 text-primary' : ''}`}
-          >
-            Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSaveDialog(true)}
-            disabled={!q.trim() && !positivos.length}
-            className={`${btnSecondaryControl} w-full sm:col-span-2 lg:col-span-1 lg:w-auto`}
-            title="Salva esta busca como assinatura monitorada (sinais + WhatsApp opcional)"
-          >
-            Salvar e monitorar
-          </button>
+        <SearchQualityPanel />
+        <SearchGuide source="pca" filters={filtros} activating={loading}
+          onRestoreFilters={restored => setFiltros(prev => ({ ...prev, ...restored }))}
+          onCriteriaChange={() => setSearchProfile(null)} onActivate={async profile => {
+          setSearchProfile(profile); setQ(profile.terms[0]); setUsarIa(false);
+          await runSearch(profile.terms, profile.excluded_terms, profile);
+        }} />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setShowFilters(v => !v)} className={btnSecondaryControl}>Filtros{filtrosAtivos > 0 ? ' (' + filtrosAtivos + ')' : ''}</button>
+          <button type="button" onClick={() => setSaveDialog(true)} disabled={!searchProfile || loading} className={btnSecondaryControl}>Salvar e monitorar busca confirmada</button>
         </div>
 
         {(positivos.length > 0 || negativos.length > 0) && (
@@ -5806,6 +5788,7 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
                         />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-ink">{item.descricao}</div>
+                          <SearchEvidence item={item} />
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
                             <span>{formatPcaQuantity(item.quantidade)} {item.unidade_medida || ''}</span>
                             <span>{formatPcaCurrency(item.valor_total)}</span>
@@ -7021,6 +7004,7 @@ function PcaSignalsPanel({ onPromoted, watchlistId = null, compact = false, onCh
 
 function PcaWatchlistsPanel({ onPromoted, listRefreshVersion = 0 }) {
   const [watchlists, setWatchlists] = useState([]);
+  const [reviewTarget, setReviewTarget] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState({});
@@ -7132,6 +7116,7 @@ function PcaWatchlistsPanel({ onPromoted, listRefreshVersion = 0 }) {
 
   return (
     <div className="mt-3 space-y-3">
+      {reviewTarget && <SearchWatchlistReview key={reviewTarget.id} source="pca" row={reviewTarget} onClose={() => setReviewTarget(null)} onSaved={() => loadWatchlists({ background: true })} />}
       {error && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-status-danger/30 bg-status-danger/10 px-3 py-2.5 text-sm text-status-danger">
           <span>{error}</span>
@@ -7193,6 +7178,7 @@ function PcaWatchlistsPanel({ onPromoted, listRefreshVersion = 0 }) {
                   </div>
                 </button>
                 <div className={cardActionBar}>
+                  <button type="button" onClick={() => setReviewTarget(w)} className={btnSecondaryXs}>Revisar critérios</button>
                   <button type="button" onClick={() => openResults(w)} className={btnSecondaryXs}>
                     Resultados
                   </button>
@@ -7289,6 +7275,7 @@ function PcaWatchlistsPanel({ onPromoted, listRefreshVersion = 0 }) {
 
 function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountChange, listRefreshVersion = 0 }) {
   const [watchlists, setWatchlists] = useState([]);
+  const [reviewTarget, setReviewTarget] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState({});
@@ -7441,6 +7428,7 @@ function EditalWatchlistsPanel({ onSignalsChanged, onImportSignal, onNewCountCha
                   </div>
                 </button>
                 <div className={cardActionBar}>
+                  <button type="button" onClick={() => setReviewTarget(w)} className={btnSecondaryXs}>Revisar critérios</button>
                   <button type="button" onClick={() => openResults(w)} className={btnSecondaryXs}>
                     Resultados
                   </button>
@@ -8074,6 +8062,7 @@ function App() {
   });
   const [pncpSuggestedTerms, setPncpSuggestedTerms] = useState({ positivos: [], negativos: [], fonte: null });
   const [pncpAcceptedPositiveTerms, setPncpAcceptedPositiveTerms] = useState([]);
+  const [pncpGuideJob, setPncpGuideJob] = useState(null);
   const [pncpAcceptedNegativeTerms, setPncpAcceptedNegativeTerms] = useState([]);
   const [pncpCustomTermInput, setPncpCustomTermInput] = useState('');
   const [pncpActiveJobTermInput, setPncpActiveJobTermInput] = useState('');
@@ -8133,6 +8122,8 @@ function App() {
   const [pncpResultLocalQuery, setPncpResultLocalQuery] = useState('');
   // list = disponíveis (sem descartados e sem já no pipeline); pipeline = já no board; hidden = Descartados.
   const [pncpResultScope, setPncpResultScope] = useState('list');
+  const [pncpTechnicalFilter, setPncpTechnicalFilter] = useState('');
+  const pncpTechnicalFilterRef = useRef('');
   const [pncpJobResultsPage, setPncpJobResultsPage] = useState(1);
   const [pncpJobResultsPageSize, setPncpJobResultsPageSize] = useState(25);
   // Preferência de ordenação da lista do modal (independente do form de nova busca).
@@ -11125,6 +11116,7 @@ function App() {
           tam: effectiveTam,
           ordenacao: effectiveOrdenacao,
           scope: effectiveScope,
+          technical: overrides.technical ?? pncpTechnicalFilterRef.current,
         },
       });
     } catch (error) {
@@ -11438,6 +11430,7 @@ function App() {
           termos_negativos: Array.from(new Set([...(splitTermsInput(pncpSearchFilters.negative_terms || '')), ...pncpAcceptedNegativeTerms])).filter(Boolean),
           usar_ia: pncpSearchFilters.usar_ia,
           filtros: {
+            search_profile: pncpSearchFilters.search_profile,
             tipos_documento: pncpSearchFilters.tipos_documento,
             status: pncpSearchFilters.status,
             modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id,
@@ -11558,10 +11551,12 @@ function App() {
     // deixava "Iniciar busca" travado em "Iniciando…" até recarregar a página.
     setPncpSearchLoading(true);
     const effectiveFilters = { ...pncpSearchFilters, ...overrides };
+    if (!effectiveFilters.search_profile) { setPncpSearchLoading(false); return; }
     try {
       const response = await axios.post('/api/licitacoes/pncp/search/deep-start', {
         filters: {
           q: effectiveFilters.q,
+          search_profile: effectiveFilters.search_profile,
           tipos_documento: effectiveFilters.tipos_documento,
           status: effectiveFilters.status,
           modalidade_licitacao_id: effectiveFilters.modalidade_licitacao_id || undefined,
@@ -11576,8 +11571,8 @@ function App() {
           ordenacao: effectiveFilters.ordenacao,
           usar_ia: effectiveFilters.usar_ia ? 'true' : 'false',
         },
-        terms: [effectiveFilters.q, ...pncpAcceptedPositiveTerms].filter(Boolean),
-        accepted_positive_terms: pncpAcceptedPositiveTerms,
+        terms: effectiveFilters.search_profile ? [...effectiveFilters.search_profile.terms, ...effectiveFilters.search_profile.related_terms] : [effectiveFilters.q, ...pncpAcceptedPositiveTerms].filter(Boolean),
+        accepted_positive_terms: effectiveFilters.search_profile?.related_terms || pncpAcceptedPositiveTerms,
         accepted_negative_terms: pncpAcceptedNegativeTerms,
         suggested_positive_terms: pncpSuggestedTerms.positivos || [],
         suggested_negative_terms: pncpSuggestedTerms.negativos || [],
@@ -12832,6 +12827,7 @@ function App() {
         metadados: {
           pncp_id: item.id,
           pncp_numero_controle: item.numero_controle_pncp,
+          technical_analysis_id: item.technical_analysis_id || null,
           pncp_situacao: item.situacao?.nome,
           pncp_tipo: item.tipo?.nome,
           pncp_esfera: item.esfera?.nome,
@@ -14999,6 +14995,7 @@ function App() {
         { name: 'Pipeline', view: 'Licitações', sub: 'board', icon: ViewColumnsIcon, badge: operationalLicitacaoCount, badgeLabel: 'oportunidades nas fases operacionais (2–12)' },
         { name: 'Contratos/Resultados', view: 'Licitações', sub: 'resultados', icon: BanknotesIcon },
         { name: 'PCA', view: 'Licitações', sub: 'pca', icon: ViewfinderCircleIcon },
+        { name: 'Produtos', view: 'Licitações', sub: 'products', icon: CheckBadgeIcon },
       ],
     },
     {
@@ -16009,6 +16006,7 @@ function App() {
 
           {activeView === 'Licitações' && (
             <>
+              {licitacaoSubview === 'products' && <ProductCatalog />}
               {licitacaoSubview === 'overview' && (
                 <div className="mt-4 space-y-4">
                   {/* KPIs — pipeline 2–12 (sem PCA): Ativas | Suspensas | Oportunidades | Prazos */}
@@ -16451,7 +16449,7 @@ function App() {
                     <div className="min-w-0">
                       <h3 className={`${sectionTitle} text-base`}>Nova busca de editais</h3>
                       <p className={`${subtle} mt-0.5`}>
-                        Defina termos e filtros de partida. A busca vira um job persistente que continua rodando até concluir, parar ou falhar.
+                        Defina seu interesse e os filtros. A coleta continuará em segundo plano após sua confirmação.
                       </p>
                     </div>
                     <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondarySm}`}>
@@ -16459,96 +16457,36 @@ function App() {
                     </button>
                   </div>
 
-                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-                    <div className="flex min-h-[42px] min-w-0 flex-wrap items-center gap-1.5 rounded-[11px] border border-line bg-bg2 py-1.5 pl-3 pr-2">
-                      <MagnifyingGlassIcon className="h-4 w-4 shrink-0 text-muted" />
-                      {pncpAcceptedPositiveTerms.map(term => (
-                        <button
-                          key={term}
-                          type="button"
-                          onClick={() => setPncpAcceptedPositiveTerms(prev => prev.filter(item => item !== term))}
-                          title="Remover termo da nova busca"
-                          className="inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 font-display text-[11.5px] font-semibold uppercase tracking-wide text-primary hover:bg-primary/20"
-                        >
-                          <span className="truncate">{term}</span> <span className="text-primary/70 normal-case">×</span>
-                        </button>
-                      ))}
-                      <input
-                        type="text"
-                        placeholder={pncpAcceptedPositiveTerms.length ? 'outro termo… (vírgula adiciona)' : 'drones para mapeamento — vírgula adiciona termo'}
-                        value={pncpSearchFilters.q}
-                        onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, q: event.target.value }))}
-                        onKeyDown={(event) => {
-                          const value = String(pncpSearchFilters.q || '').trim();
-                          if (event.key === ',') {
-                            event.preventDefault();
-                            if (value) {
-                              setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, value])));
-                              setPncpSearchFilters(prev => ({ ...prev, q: '' }));
-                            }
-                          } else if (event.key === 'Enter') {
-                            runPncpSearch(1);
-                          } else if (event.key === 'Backspace' && !value && pncpAcceptedPositiveTerms.length) {
-                            setPncpAcceptedPositiveTerms(prev => prev.slice(0, -1));
-                          }
-                        }}
-                        className="h-7 min-w-0 flex-1 basis-[8rem] bg-transparent text-base sm:text-sm font-semibold text-ink outline-none placeholder:text-muted"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setPncpSearchFilters(prev => ({ ...prev, usar_ia: !prev.usar_ia }))}
-                        title={pncpSearchFilters.usar_ia ? 'IA expande termos correlatos ao iniciar a busca' : 'IA desligada'}
-                        className={`shrink-0 rounded-md px-2 py-1 text-[10.5px] font-bold transition ${pncpSearchFilters.usar_ia ? 'bg-cyan/10 text-cyan' : 'bg-bg text-muted2'}`}
-                      >
-                        ✦ IA
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => runPncpSearch(1)}
-                      disabled={pncpSearchLoading || (!String(pncpSearchFilters.q || '').trim() && pncpAcceptedPositiveTerms.length === 0)}
-                      className={`${btnPrimaryControl} w-full shrink-0 sm:w-auto sm:px-8`}
-                    >
-                      {pncpSearchLoading ? 'Iniciando…' : 'Iniciar busca'}
-                    </button>
-                  </div>
-
-                  {(pncpSuggestedTerms.positivos.length > 0 || pncpSuggestedTerms.negativos.length > 0 || pncpAcceptedNegativeTerms.length > 0 || pncpSuggestionLoading) && (
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-                      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted2">Sugestões para a nova busca</span>
-                      {pncpSuggestionLoading && <span>pensando…</span>}
-                      {pncpSuggestedTerms.positivos.filter(term => !pncpAcceptedPositiveTerms.includes(term) && normalizeText(term) !== normalizeText(pncpSearchFilters.q)).slice(0, 6).map(term => (
-                        <button
-                          key={term}
-                          type="button"
-                          onClick={() => setPncpAcceptedPositiveTerms(prev => Array.from(new Set([...prev, term])))}
-                          className="rounded-lg border border-line bg-bg2 px-2 py-0.5 font-display text-[11px] font-semibold uppercase tracking-wide hover:border-primary hover:text-primary"
-                        >
-                          + {term}
-                        </button>
-                      ))}
-                      {pncpAcceptedNegativeTerms.map(term => (
-                        <button
-                          key={`neg-${term}`}
-                          type="button"
-                          onClick={() => setPncpAcceptedNegativeTerms(prev => prev.filter(item => item !== term))}
-                          className="rounded-lg bg-amber/15 px-2 py-0.5 font-display text-[11px] font-semibold uppercase tracking-wide text-amber hover:bg-amber/25"
-                        >
-                          − {term} <span className="normal-case">×</span>
-                        </button>
-                      ))}
-                      {pncpSuggestedTerms.negativos.filter(term => !pncpAcceptedNegativeTerms.includes(term)).slice(0, 4).map(term => (
-                        <button
-                          key={`negsug-${term}`}
-                          type="button"
-                          onClick={() => setPncpAcceptedNegativeTerms(prev => Array.from(new Set([...prev, term])))}
-                          className="rounded-lg border border-line bg-bg2 px-2 py-0.5 font-display text-[11px] font-semibold uppercase tracking-wide hover:border-amber hover:text-amber"
-                        >
-                          − {term}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <SearchQualityPanel />
+                  <SearchGuide key={pncpGuideJob?.id || 'new'} source="edital"
+                    onRestoreFilters={restored => setPncpSearchFilters(prev => ({ ...prev, ...restored }))}
+                    initialProfile={pncpGuideJob?.filters?.search_profile || (pncpGuideJob ? {
+                      description: pncpGuideJob.filters?.q || pncpGuideJob.nome, objective: pncpGuideJob.filters?.q || pncpGuideJob.nome,
+                      terms: [pncpGuideJob.filters?.q || pncpGuideJob.terms?.[0]].filter(Boolean), related_terms: [], excluded_terms: pncpGuideJob.negative_terms || [],
+                      match_mode: 'literal', item_kind: 'all',
+                    } : null)}
+                    filters={pncpGuideJob?.filters || {
+                      tipos_documento: pncpSearchFilters.tipos_documento, status: pncpSearchFilters.status,
+                      modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id, uf: pncpSearchFilters.uf,
+                      esfera_id: pncpSearchFilters.esfera_id, tipo_id: pncpSearchFilters.tipo_id,
+                      modo_disputa_id: pncpSearchFilters.modo_disputa_id,
+                      orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
+                      unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
+                      negative_terms: pncpSearchFilters.negative_terms,
+                    }} activating={pncpSearchLoading}
+                    onCancel={pncpGuideJob ? () => setPncpGuideJob(null) : undefined}
+                    onActivate={async profile => {
+                      if (pncpGuideJob) {
+                        setPncpSearchLoading(true);
+                        try {
+                          await axios.put('/api/licitacoes/pncp/search/deep/' + pncpGuideJob.id + '/profile', { profile });
+                          setPncpGuideJob(null); await loadPncpSearchJobs();
+                        } catch (e) { alert(e.response?.data?.error || 'Não foi possível salvar os critérios.'); }
+                        finally { setPncpSearchLoading(false); }
+                      } else {
+                        await runPncpSearch(1, { q: profile.terms[0], search_profile: profile, usar_ia: false, negative_terms: profile.excluded_terms.join('; ') });
+                      }
+                    }} />
 
                   <div className="grid min-w-0 grid-cols-1 gap-2">
                     <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
@@ -16577,7 +16515,6 @@ function App() {
                           <option key={uf} value={uf}>{uf}</option>
                         ))}
                       </select>
-                      <input value={pncpSearchFilters.negative_terms} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, negative_terms: event.target.value }))} onKeyDown={(event) => event.key === 'Enter' && runPncpSearch(1)} placeholder="Excluir termos (partida)" className={`${input} h-8 w-full min-w-0 rounded-[10px] text-xs sm:col-span-2 xl:col-span-1`} />
                     </div>
                     <div className="flex min-w-0">
                       <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondarySm} w-full sm:w-auto`}>
@@ -16815,7 +16752,7 @@ function App() {
                                       ? 'Aguardando limite do PNCP — retoma sozinho'
                                       : <>coletando · <span className="font-display font-semibold uppercase tracking-wide text-muted">{job.progress?.current_term || 'preparando…'}</span></>)
                                     : (finished
-                                      ? (age ? `atualizado ${age}` : 'encerrada')
+                                      ? (job.query_plan?.partial ? 'coleta parcial · atualização com continuidade' : (age ? `atualizado ${age}` : 'encerrada'))
                                       : '\u00a0')}
                                 </p>
                               </div>
@@ -16830,6 +16767,9 @@ function App() {
                               >
                                 Resultados
                               </button>
+                              <button type="button" disabled={live} className={btnSecondaryXs}
+                                title={live ? 'Pare a coleta para revisar os critérios' : 'Conferir objetivo, termos e amostra'}
+                                onClick={() => { setPncpGuideJob(job); window.scrollTo({ top: 0, behavior: 'auto' }); }}>Revisar critérios</button>
                               {live ? (
                                 <button
                                   type="button"
@@ -18062,6 +18002,13 @@ function App() {
                                       Só o que passou no filtro. Universo bruto fica na Auditoria.
                                     </p>
                                   </div>
+                                  <label className="mt-2 block text-xs text-muted">Análise técnica
+                                    <select className={`${select} mt-1 w-full text-xs`} value={pncpTechnicalFilter} onChange={event => {
+                                      const technical = event.target.value; setPncpTechnicalFilter(technical); pncpTechnicalFilterRef.current = technical;
+                                      setPncpJobResultsPage(1); pncpJobResultsPageRef.current = 1;
+                                      if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { technical });
+                                    }}><option value="">Todas</option><option value="full">Com item plenamente atendido</option><option value="uncertain">Com dúvidas técnicas</option><option value="no_full">Sem atendimento pleno</option><option value="pending">Sem análise concluída</option></select>
+                                  </label>
                                   <div className="mt-1.5 grid min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,11rem)_minmax(0,8.5rem)] sm:items-center">
                                     <input
                                       className={`${input} h-7 w-full min-w-0 text-xs`}
@@ -18221,6 +18168,8 @@ function App() {
                                               ) : item.titulo}
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
+                                            <SearchEvidence item={item} />
+                                            <TechnicalResult item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} />
                                             <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
                                               {item.orgao?.nome || 'n/d'}
@@ -19319,6 +19268,7 @@ function App() {
                           <div>
                             <h4 className={oppSectionTitle}>Itens de participação</h4>
                             <p className="mt-0.5 text-[11px] text-muted">Expanda o item para o checklist técnico e o assistente de conformidade</p>
+                            <TechnicalResult opportunityId={selectedOpportunity.id} />
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <button
@@ -19389,6 +19339,7 @@ function App() {
 
                                 {isExpanded && (
                                   <div className="border-t border-line bg-surf p-3 sm:p-3.5">
+                                    <TechnicalResult opportunityId={selectedOpportunity.id} itemNumber={item.numero_item} />
                                     <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-line bg-bg2/40 p-2.5 sm:grid-cols-3 lg:grid-cols-6">
                                       <div className="min-w-0 col-span-2">
                                         <label className="mb-1 block text-[10px] font-medium text-muted">Descrição</label>
