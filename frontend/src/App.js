@@ -24189,6 +24189,14 @@ function App() {
               setRfbFilters(nextFilters);
               setRfbCapitalRange(capitalRange);
               setRfbAberturaRange(aberturaRange);
+            // Janela de até 5 números de página; com total progressivo só mostra até a próxima conhecida.
+            const rfbLastKnownPage = rfbProgressive ? (rfbHasMore ? rfbPage + 1 : rfbPage) : rfbTotalPages;
+            const rfbPageWindow = (() => {
+              const size = 5;
+              const start = Math.max(1, Math.min(rfbPage - 2, rfbLastKnownPage - size + 1));
+              const end = Math.min(rfbLastKnownPage, start + size - 1);
+              return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+            })();
               setRfbOnlyMatriz(onlyMatriz);
               setRfbMei(mei);
               setRfbSimples(simples);
@@ -25716,7 +25724,7 @@ function App() {
                               </p>
                               <p className="mt-0.5 text-xs text-muted">
                                 {rfbLoading
-                                  ? 'Atualizando a página…'
+                                  ? `Carregando a página ${rfbPage}…`
                                   : `Exibindo ${rfbResultFrom.toLocaleString('pt-BR')}–${rfbResultTo.toLocaleString('pt-BR')} · página ${rfbPage}${rfbProgressive ? '' : ` de ${rfbTotalPages}`}.`}
                                 {!rfbLoading && rfbOrderScope !== 'global' && ' A ordenação é aplicada dentro de cada página.'}
                               </p>
@@ -25786,7 +25794,10 @@ function App() {
                       <div className="rounded-[16px] border border-line bg-surf px-4 py-10 text-center" role="status" aria-live="polite">
                         <ArrowPathIcon className="mx-auto h-5 w-5 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
                         <p className="mt-3 text-sm font-semibold text-ink">Buscando empresas</p>
-                        <p className="mt-1 text-xs text-muted">Carregando até {rfbPageSize} resultados desta página.</p>
+                        <p className="mt-1 text-xs text-muted">
+                          Pesquisando todas as empresas que combinam com os filtros e ordenando pelo critério escolhido.
+                          Os resultados aparecem de {rfbPageSize} em {rfbPageSize}; buscas amplas podem levar alguns segundos.
+                        </p>
                       </div>
                     )}
 
@@ -26073,9 +26084,35 @@ function App() {
                             <ChevronLeftIcon className="h-4 w-4" aria-hidden="true" />
                             Anterior
                           </button>
-                          <span className="min-w-[6.5rem] text-center text-xs font-medium tabular-nums text-ink" aria-current="page">
-                            Página {rfbPage}{rfbProgressive ? '' : ` de ${rfbTotalPages}`}
-                          </span>
+                          <div className="flex items-center gap-1" role="group" aria-label="Ir para a página">
+                            {rfbPageWindow[0] > 1 && (
+                              <>
+                                <button type="button" onClick={() => handleRfbPageChange(1)} disabled={rfbLoading} className={btnSecondarySm} aria-label="Página 1">1</button>
+                                {rfbPageWindow[0] > 2 && <span className="px-0.5 text-xs text-muted" aria-hidden="true">…</span>}
+                              </>
+                            )}
+                            {rfbPageWindow.map(n => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => n !== rfbPage && handleRfbPageChange(n)}
+                                disabled={rfbLoading}
+                                aria-label={`Página ${n}`}
+                                aria-current={n === rfbPage ? 'page' : undefined}
+                                className={n === rfbPage
+                                  ? 'min-w-[2rem] rounded-[10px] bg-primary px-2 py-1.5 text-xs font-semibold tabular-nums text-white'
+                                  : btnSecondarySm}
+                              >
+                                {n}
+                              </button>
+                            ))}
+                            {!rfbProgressive && rfbPageWindow[rfbPageWindow.length - 1] < rfbTotalPages && (
+                              <>
+                                {rfbPageWindow[rfbPageWindow.length - 1] < rfbTotalPages - 1 && <span className="px-0.5 text-xs text-muted" aria-hidden="true">…</span>}
+                                <button type="button" onClick={() => handleRfbPageChange(rfbTotalPages)} disabled={rfbLoading} className={btnSecondarySm} aria-label={`Página ${rfbTotalPages}`}>{rfbTotalPages.toLocaleString('pt-BR')}</button>
+                              </>
+                            )}
+                          </div>
                           <button
                             type="button"
                             onClick={() => handleRfbPageChange(rfbPage + 1)}
