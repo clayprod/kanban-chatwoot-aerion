@@ -21280,6 +21280,45 @@ function runRFBUpdateCheck() {
   });
 }
 
+// Uma base RFB sem índices faz toda busca estourar o statement_timeout. O import
+// já barra o swap sem índices; isto recria o que faltar se algo os perder por fora
+// (índice INVALID de um CONCURRENTLY interrompido, restore, DROP manual).
+let rfbEnsureIndexesRunning = false;
+function runRFBEnsureIndexes(reason) {
+  if (rfbEnsureIndexesRunning || rfbImportState.status === 'running') return Promise.resolve();
+  rfbEnsureIndexesRunning = true;
+  return new Promise((resolve) => {
+    const scriptPath = path.join(__dirname, 'scripts', 'rfb_import.py');
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const py = spawn(pythonCmd, [scriptPath, '--ensure-indexes'], {
+      env: { ...process.env },
+      cwd: path.join(__dirname, 'scripts'),
+    });
+    let lastMessage = '';
+    let buf = '';
+    py.stdout.on('data', (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line.trim());
+          lastMessage = msg.message || lastMessage;
+          if (/ausentes|recriando|warn/i.test(msg.message || '')) console.log(`[rfb] índices (${reason}): ${msg.message}`);
+        } catch (_) { /* linha não-JSON */ }
+      }
+    });
+    py.stderr.on('data', (chunk) => console.error('[rfb_import --ensure-indexes]', chunk.toString()));
+    const finish = (code) => {
+      rfbEnsureIndexesRunning = false;
+      if (code !== 0) console.error(`[rfb] ensure-indexes (${reason}) falhou, código ${code}: ${lastMessage}`);
+      resolve();
+    };
+    py.on('error', (err) => { console.error('[rfb] ensure-indexes spawn error:', err.message); finish(-1); });
+    py.on('close', finish);
+  });
+}
+
 async function checkAndStartRFBImport(reason = 'scheduled-check') {
   if (rfbImportState.status === 'running' || rfbUpdateCheckRunning) return;
   rfbUpdateCheckRunning = true;
@@ -21287,6 +21326,7 @@ async function checkAndStartRFBImport(reason = 'scheduled-check') {
     const result = await runRFBUpdateCheck();
     if (!result.has_updates) {
       console.log(`[rfb] Base local atualizada (${reason}). remote=${result.remote_files}, tracked=${result.tracked_files}`);
+      runRFBEnsureIndexes(reason);
       return;
     }
     const append = result.suggested_mode === 'append';
@@ -21427,25 +21467,9 @@ const createRFBTables = async () => {
     WHERE status = 'running'
       AND started_at < NOW() - INTERVAL '12 hours'
   `);
-  // Índices críticos — criados em background para não bloquear o startup
-  setImmediate(async () => {
-    const criticalIndexes = [
-      `CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem ON rfb_estabelecimentos(cnpj_ordem)`,
-      `CREATE INDEX IF NOT EXISTS idx_rfb_est_basico ON rfb_estabelecimentos(cnpj_basico)`,
-      `CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico ON rfb_socios(cnpj_basico)`,
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfb_emp_capital_desc
-         ON rfb_empresas ((NULLIF(replace(replace(capital_social,'.',''),',','.'), '')::NUMERIC) DESC NULLS LAST, cnpj_basico)`,
-    ];
-    for (const idx of criticalIndexes) {
-      const name = idx.match(/idx_rfb_\w+/)?.[0] || '?';
-      try {
-        await pool.query(idx);
-        console.log(`[rfb] Índice ${name} OK`);
-      } catch (e) {
-        console.log(`[rfb] Índice ${name}: ${e.message}`);
-      }
-    }
-  });
+  // Índices da busca: o script confere todos (INDEX_SPECS em rfb_import.py) e recria o
+  // que faltar com CONCURRENTLY, em background para não bloquear o startup.
+  setImmediate(() => { runRFBEnsureIndexes('startup'); });
 };
 
 // Cache em memória para listas de referência

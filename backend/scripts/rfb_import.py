@@ -431,49 +431,150 @@ def import_csv(conn, csv_path, table):
     return total
 
 
-def create_indexes(conn, suffix=''):
-    """Cria índices. suffix='' para produção, suffix='_new' para staging."""
-    s = suffix  # alias curto
-    progress('running', f'Criando índices{" (staging)" if s else ""}...')
-    idxs = [
-        f'CREATE UNIQUE INDEX IF NOT EXISTS idx_rfb_est_unique{s} ON rfb_estabelecimentos{s}(cnpj_basico, cnpj_ordem, cnpj_dv)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_basico{s}    ON rfb_estabelecimentos{s}(cnpj_basico)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_ordem{s}     ON rfb_estabelecimentos{s}(cnpj_ordem)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_uf{s}        ON rfb_estabelecimentos{s}(uf)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_municipio{s} ON rfb_estabelecimentos{s}(municipio)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae{s}      ON rfb_estabelecimentos{s}(cnae_fiscal_principal)',
-        f"CREATE INDEX IF NOT EXISTS idx_rfb_est_cnae_sec_arr{s} ON rfb_estabelecimentos{s} USING gin(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ','))",
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_situacao{s}  ON rfb_estabelecimentos{s}(situacao_cadastral)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_est_porte{s}     ON rfb_empresas{s}(porte_da_empresa)',
-        f"CREATE INDEX IF NOT EXISTS idx_rfb_emp_capital_desc{s} ON rfb_empresas{s} ((NULLIF(replace(replace(capital_social,'.',''),',','.'), '')::NUMERIC) DESC NULLS LAST, cnpj_basico)",
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_basico{s} ON rfb_socios{s}(cnpj_basico)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao{s}     ON rfb_empresas{s}(razao_social text_pattern_ops)',
-        f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_nome{s}   ON rfb_socios{s}(nome_do_socio text_pattern_ops)',
-    ]
+# Índices que a busca da RFB exige. `required`: sem eles a busca estoura o
+# statement_timeout (varredura de tabelas de 16 GB), então o swap não é feito sem eles.
+# `unique`: tenta UNIQUE e cai para índice comum se houver duplicatas (as tabelas
+# não têm PK e o import usa ON CONFLICT DO NOTHING, que sem constraint não deduplica).
+_TRGM = 'USING gin(immutable_unaccent(lower({col})) gin_trgm_ops)'
+INDEX_SPECS = [
+    # name, table, body, unique, required
+    ('idx_rfb_est_basico',       'rfb_estabelecimentos', '(cnpj_basico)', False, True),
+    ('idx_rfb_emp_basico',       'rfb_empresas',         '(cnpj_basico)', True,  True),
+    ('idx_rfb_socios_basico',    'rfb_socios',           '(cnpj_basico)', False, True),
+    ('idx_rfb_simples_basico',   'rfb_simples',          '(cnpj_basico)', False, True),
+    ('idx_rfb_est_unique',       'rfb_estabelecimentos', '(cnpj_basico, cnpj_ordem, cnpj_dv)', True, True),
+    ('idx_rfb_est_cnae',         'rfb_estabelecimentos', '(cnae_fiscal_principal)', False, True),
+    ('idx_rfb_est_municipio',    'rfb_estabelecimentos', '(municipio)', False, True),
+    ('idx_rfb_est_uf',           'rfb_estabelecimentos', '(uf)', False, True),
+    ('idx_rfb_emp_razao_trgm',   'rfb_empresas',         _TRGM.format(col='razao_social'), False, True),
+    ('idx_rfb_socios_trgm',      'rfb_socios',           _TRGM.format(col='nome_do_socio'), False, True),
+    ('idx_rfb_est_fantasia_trgm', 'rfb_estabelecimentos', _TRGM.format(col='nome_fantasia'), False, True),
+    ('idx_rfb_emp_capital_desc', 'rfb_empresas',
+     "((NULLIF(replace(replace(capital_social,'.',''),',','.'), '')::NUMERIC) DESC NULLS LAST, cnpj_basico)", False, True),
+    ('idx_rfb_est_cnae_sec_arr', 'rfb_estabelecimentos',
+     "USING gin(string_to_array(NULLIF(TRIM(cnae_fiscal_secundaria), ''), ','))", False, True),
+    ('idx_rfb_est_situacao',     'rfb_estabelecimentos', '(situacao_cadastral)', False, False),
+    ('idx_rfb_est_ordem',        'rfb_estabelecimentos', '(cnpj_ordem)', False, False),
+    ('idx_rfb_est_porte',        'rfb_empresas',         '(porte_da_empresa)', False, False),
+    ('idx_rfb_emp_razao',        'rfb_empresas',         '(razao_social text_pattern_ops)', False, False),
+    ('idx_rfb_socios_nome',      'rfb_socios',           '(nome_do_socio text_pattern_ops)', False, False),
+    ('idx_rfb_est_logradouro_trgm', 'rfb_estabelecimentos', _TRGM.format(col='logradouro'), False, False),
+    ('idx_rfb_est_bairro_trgm',  'rfb_estabelecimentos', _TRGM.format(col='bairro'), False, False),
+]
+
+
+def _ensure_extensions(conn):
     with conn.cursor() as cur:
-        try:
-            cur.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
-            cur.execute('CREATE EXTENSION IF NOT EXISTS unaccent')
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION immutable_unaccent(text)
-                RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
-                  SELECT public.unaccent($1);
-                $$
-            """)
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_emp_razao_trgm{s}      ON rfb_empresas{s} USING gin(immutable_unaccent(lower(razao_social)) gin_trgm_ops)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_socios_trgm{s}         ON rfb_socios{s} USING gin(immutable_unaccent(lower(nome_do_socio)) gin_trgm_ops)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_fantasia_trgm{s}   ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(nome_fantasia)) gin_trgm_ops)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_logradouro_trgm{s} ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(logradouro)) gin_trgm_ops)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_rfb_est_bairro_trgm{s}     ON rfb_estabelecimentos{s} USING gin(immutable_unaccent(lower(bairro)) gin_trgm_ops)')
-        except Exception as ex:
-            print(f'[warn] índices trigrama: {ex}')
-            conn.rollback()
-        for idx in idxs:
-            try:
-                cur.execute(idx)
-            except Exception:
-                conn.rollback()
+        cur.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
+        cur.execute('CREATE EXTENSION IF NOT EXISTS unaccent')
+        cur.execute("""
+            CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+            RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+              SELECT public.unaccent($1);
+            $$
+        """)
     conn.commit()
+
+
+def _build_index(conn, spec, suffix='', concurrently=False):
+    """Cria UM índice em transação própria. Falha de um nunca desfaz os outros."""
+    name, table, body, unique, _required = spec
+    variants = [True, False] if unique else [False]
+    conn.commit()
+    conn.autocommit = concurrently  # CONCURRENTLY não roda dentro de transação
+    try:
+        for use_unique in variants:
+            ddl = (f"CREATE {'UNIQUE ' if use_unique else ''}INDEX "
+                   f"{'CONCURRENTLY ' if concurrently else ''}IF NOT EXISTS "
+                   f"{name}{suffix} ON {table}{suffix} {body}")
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(ddl)
+                conn.commit()
+                return True
+            except Exception as e:
+                if not conn.autocommit:
+                    conn.rollback()
+                progress('running', f'[warn] índice {name}{suffix}'
+                         f'{" (UNIQUE)" if use_unique else ""} falhou: {str(e).strip()[:200]}')
+                if concurrently:
+                    # CONCURRENTLY falho deixa um índice INVALID que bloqueia o IF NOT EXISTS.
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {name}{suffix}')
+                    except Exception:
+                        pass
+        return False
+    finally:
+        conn.autocommit = False
+
+
+def create_indexes(conn, suffix='', tables=None, concurrently=False):
+    """Cria os índices de INDEX_SPECS. suffix='' para produção, '_new' para staging.
+    Cada índice roda isolado (antes todos dividiam uma transação e o rollback de uma
+    falha apagava os já criados, sem aviso). Devolve os nomes que falharam."""
+    progress('running', f'Criando índices{" (staging)" if suffix else ""}...')
+    try:
+        _ensure_extensions(conn)
+    except Exception as e:
+        conn.rollback()
+        progress('running', f'[warn] extensões/immutable_unaccent: {e}')
+    with conn.cursor() as cur:
+        cur.execute("SET maintenance_work_mem = '768MB'")
+        cur.execute('SET statement_timeout = 0')
+    conn.commit()
+    failed = []
+    for spec in INDEX_SPECS:
+        if tables is not None and spec[1] not in tables:
+            continue
+        progress('running', f'Índice {spec[0]}{suffix}...')
+        if not _build_index(conn, spec, suffix, concurrently):
+            failed.append(spec[0])
+    return failed
+
+
+def verify_indexes(conn, tables, suffix='', required_only=True):
+    """Nomes de índices esperados que não existem ou estão INVALID nas tabelas."""
+    tbls = [t + suffix for t in tables]
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT c.relname FROM pg_index i
+               JOIN pg_class c ON c.oid = i.indexrelid
+               JOIN pg_class t ON t.oid = i.indrelid
+               WHERE t.relname = ANY(%s) AND i.indisvalid AND i.indisready""",
+            (tbls,),
+        )
+        present = {r[0] for r in cur.fetchall()}
+    conn.commit()
+    return [name for name, table, _b, _u, required in INDEX_SPECS
+            if table in tables and (required or not required_only) and f'{name}{suffix}' not in present]
+
+
+def ensure_indexes(conn):
+    """Recria na produção o que faltar (CONCURRENTLY, sem bloquear a busca)."""
+    tables = {s[1] for s in INDEX_SPECS}
+    missing = verify_indexes(conn, tables, required_only=False)
+    if not missing:
+        progress('done', 'Índices da RFB completos', percent=100)
+        return 0
+    progress('running', f'Índices ausentes: {", ".join(missing)} — recriando em produção')
+    # Índice INVALID (CONCURRENTLY interrompido) bloquearia o IF NOT EXISTS.
+    conn.commit()
+    conn.autocommit = True
+    try:
+        for name in missing:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {name}')
+    finally:
+        conn.autocommit = False
+    missing_tables = {s[1] for s in INDEX_SPECS if s[0] in missing}
+    create_indexes(conn, tables=missing_tables, concurrently=True)
+    still = verify_indexes(conn, tables)
+    if still:
+        progress('error', f'Índices obrigatórios ainda ausentes: {", ".join(still)}', error='indexes_missing')
+        return 1
+    progress('done', 'Índices da RFB recriados', percent=100)
+    return 0
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -597,6 +698,8 @@ def main():
                         help='Importa apenas arquivos faltantes (não em rfb_arquivos) direto nas '
                              'tabelas de produção sem truncar. Ideal para preencher gaps sem '
                              'reimportar tudo.')
+    parser.add_argument('--ensure-indexes', action='store_true',
+                        help='Recria na produção (CONCURRENTLY) os índices da busca que estiverem faltando.')
     parser.add_argument('--check-updates', action='store_true',
                         help='Compara a pasta remota mais recente com rfb_arquivos sem baixar/importar.')
     args = parser.parse_args()
@@ -619,6 +722,13 @@ def main():
     except Exception as e:
         progress('error', f'Falha ao conectar ao banco: {e}', error=str(e))
         sys.exit(1)
+
+    if args.ensure_indexes:
+        try:
+            code = ensure_indexes(conn)
+        finally:
+            conn.close()
+        sys.exit(code)
 
     if args.check_updates:
         try:
@@ -816,13 +926,25 @@ def main():
                  '— swap cancelado, tabelas de produção preservadas', error='import_failed')
         sys.exit(1)
 
-    create_indexes(conn, suffix=idx_suffix)
+    create_indexes(conn, suffix=idx_suffix, tables=set(tbls_affected))
 
     if args.staging:
         clone_production_indexes(conn, set(tbls_affected))
+        # Nunca promove staging sem os índices da busca: uma base sem índice
+        # é pior que uma base antiga (toda busca estoura o timeout).
+        missing = verify_indexes(conn, set(tbls_affected), idx_suffix)
+        if missing:
+            drop_staging_tables(conn)
+            conn.close()
+            progress('error', f'Índices obrigatórios ausentes na staging: {", ".join(missing)} '
+                     '— swap cancelado, tabelas de produção preservadas', error='indexes_missing')
+            sys.exit(1)
         swap_staging_tables(conn, set(tbls_affected))
         for rec in pending_records:
             record_imported_file(conn, *rec)
+        after = verify_indexes(conn, set(tbls_affected))
+        if after:
+            progress('running', f'[warn] índices ausentes após o swap: {", ".join(after)}')
     elif args.append:
         progress('running', 'Append concluído — índices atualizados nas tabelas de produção')
 
