@@ -520,6 +520,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       if (analysis?.result && req.body.summary === true) {
         analysis = { ...analysis, summary_only: true, result: { ...analysis.result, sources: undefined, notes: undefined, items: analysis.result.items.map(i => ({
           number: i.number, description: i.description, in_scope: i.in_scope,
+          product_matches: (i.products || []).map(p => ({ product_id: p.product_id, product_name: p.product_name, status: p.status, counts: p.counts, sale_price: p.sale_price })),
           recommended_product: i.recommended_product ? { product_id: i.recommended_product.product_id, product_name: i.recommended_product.product_name } : null,
         })) } };
       }

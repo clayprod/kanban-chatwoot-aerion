@@ -15,38 +15,76 @@ function Evidence({ fact }) {
   return <div className="mt-1 text-xs text-muted"><blockquote className="whitespace-pre-wrap border-l-2 border-line pl-2">{fact.quote}</blockquote>
     {String(fact.source_id).startsWith('package:') ? <span>Composição do pacote e complementos listados nesta análise.</span> : <a href={`/api/licitacoes/technical/sources/${encodeURIComponent(fact.source_id)}`} target="_blank" rel="noreferrer" className="text-primary underline">Fonte · {fact.location}</a>}</div>;
 }
-export function TechnicalItem({ item }) {
+export function ProductMatchSummary({ items = [], onSelect, documentsComplete }) {
+  const relevant = items.filter(i => i.in_scope);
+  return <span className="block space-y-3">
+    <span className="block text-xs font-semibold text-ink">Compatibilidade com seus produtos</span>
+    {relevant.slice(0, 3).map(item => {
+      const matches = (item.product_matches || item.products || []).map(p => documentsComplete === false && p.status === 'full' ? { ...p, status: 'uncertain' } : p);
+      const full = matches.filter(p => p.status === 'full');
+      const candidates = full.length ? full : matches.filter(p => p.status === 'uncertain');
+      const displayed = (candidates.length ? candidates : matches).slice(0, 3);
+      return <span key={item.number} className="block space-y-2">
+        <span className="block truncate text-xs text-muted" title={item.description}>Item {item.number}{item.description ? ` · ${item.description}` : ''}</span>
+        {displayed.map(p => {
+          const total = Number(p.counts?.total), ok = Number(p.counts?.ok);
+          const percent = total > 0 && Number.isFinite(ok) ? Math.max(0, Math.min(100, Math.floor(ok / total * 100))) : null;
+          const fullMatch = p.status === 'full';
+          return <button key={p.product_id} type="button" onClick={() => onSelect?.(item.number, p.product_id)} aria-label={`Comparar ${p.product_name} no item ${item.number}`} className={`block w-full rounded-lg border px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-primary ${fullMatch ? 'border-status-success/40 bg-status-success/5 hover:bg-status-success/10' : 'border-line bg-bg2/40 hover:border-primary'}`}>
+            <span className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <span className="min-w-0 text-xs font-semibold text-ink">{p.product_name}</span>
+              <span className={`text-xs font-semibold tabular-nums ${fullMatch ? 'text-status-success' : p.status === 'failed' ? 'text-status-danger' : 'text-muted'}`}>{percent === null ? 'Sem percentual' : `${percent}% comprovado`} · {labels[p.status] || 'Verificar'}</span>
+            </span>
+            {percent !== null && <span className="mt-2 block h-1 overflow-hidden rounded-full bg-line" role="progressbar" aria-label={`${p.product_name}, item ${item.number}: exigências comprovadas`} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+              <span className={`block h-full rounded-full ${fullMatch ? 'bg-status-success' : p.status === 'failed' ? 'bg-status-danger' : 'bg-primary'}`} style={{ width: `${percent}%` }} />
+            </span>}
+            <span className="mt-1 block text-[11px] text-muted">{total > 0 ? `${p.counts.ok}/${p.counts.total} exigências comprovadas` : 'Exigências ainda não quantificadas'}{Number(p.counts?.verificar) > 0 ? ` · ${p.counts.verificar} a verificar` : ''}{Number(p.counts?.nao_ok) > 0 ? ` · ${p.counts.nao_ok} não atendidas` : ''}</span>
+          </button>;
+        })}
+        {candidates.length > 3 && <span className="block text-[11px] text-muted">+ {candidates.length - 3} produtos na análise detalhada</span>}
+        {!displayed.length && <span className="block text-xs text-muted">Nenhum produto comparado para este item.</span>}
+      </span>;
+    })}
+    {relevant.length > 3 && <button type="button" className="text-xs font-semibold text-primary underline" onClick={() => onSelect?.(relevant[3].number, null)}>Ver os outros {relevant.length - 3} itens</button>}
+    {documentsComplete === false && <span className="block text-xs text-status-warning">Leitura incompleta: os percentuais consideram apenas as exigências já extraídas.</span>}
+    <span className="block text-[11px] font-normal text-muted">Percentual de exigências técnicas comprovadas por item. Clique no produto para comparar.</span>
+  </span>;
+}
+export function TechnicalItem({ item, highlightProductId }) {
   if (!item) return <p className="text-xs text-muted">Este item ainda não tem análise técnica automática vinculada.</p>;
   if (!item.in_scope) return <p className="text-xs text-muted">Item fora do escopo desta busca e do catálogo.</p>;
-  const product = item.recommended_product || item.potential_product;
+  const product = item.products?.find(p => String(p.product_id) === String(highlightProductId)) || item.recommended_product || item.potential_product;
   return <div className="space-y-2 text-sm">
     {product ? <p className={`font-semibold ${product.status === 'full' ? 'text-status-success' : 'text-ink'}`}>
       {product.product_name} · {labels[product.status]} · {money(product.sale_price)}
     </p> : <p className="text-muted">Nenhum produto com atendimento comprovado para este item.</p>}
-    {item.products?.map(p => <details key={p.product_id} className="border-t border-line pt-2">
+    {item.products?.filter(p => !highlightProductId || String(p.product_id) === String(highlightProductId)).map(p => <details key={p.product_id} open={String(highlightProductId) === String(p.product_id) || undefined} className="border-t border-line pt-2">
       <summary className="cursor-pointer text-xs font-semibold">{p.product_name} · {labels[p.status]} · {p.counts.ok}/{p.counts.total} exigências comprovadas · {money(p.sale_price)}</summary>
       {!!p.configuration?.additions?.length && <div className="my-2 rounded-lg bg-bg2 p-3 text-xs"><p className="font-semibold">Configuração para este edital</p><p>Pacote original: {money(p.configuration.base_price)}</p><ul>{p.configuration.additions.map(a => <li key={a.product_id}>{a.quantity} × {a.name} · {money(a.unit_price * a.quantity)}</li>)}</ul><p className="mt-1 font-semibold">Total com complementos: {money(p.sale_price)}</p></div>}
       {p.configuration?.missing?.map((note, i) => <p key={i} className="my-1 text-xs text-status-warning">{note}</p>)}
       <p className="my-2 text-xs text-muted">{p.price_comparison ? `Referência unitária: ${money(p.price_comparison.reference)} · ${p.price_comparison.relation === 'below' ? 'abaixo da referência' : p.price_comparison.relation === 'above' ? 'acima da referência' : 'igual à referência'}` : 'Preço sem comparação segura: confira unidade, composição e referência.'}</p>
       <ol className="space-y-3">{p.requirements.map(r => <li key={r.requirement.id} className="border-l-2 border-line pl-3">
         <p className="text-xs font-medium">{rowLabels[r.status]} · {r.requirement.label}</p><p className="text-xs text-muted">{r.reason}</p>
-        <Evidence fact={r.requirement} />{r.evidence.map(f => <Evidence key={f.id} fact={f} />)}
+        <div className="mt-2 grid gap-3 sm:grid-cols-2"><div className="min-w-0"><p className="text-xs font-semibold">O edital exige</p><Evidence fact={r.requirement} /></div><div className="min-w-0"><p className="text-xs font-semibold">O produto oferece</p>{r.evidence.length ? r.evidence.map(f => <Evidence key={f.id} fact={f} />) : <p className="mt-1 text-xs text-muted">Especificação não comprovada nas fontes cadastradas.</p>}</div></div>
       </li>)}</ol>
     </details>)}
     {!item.products?.length && <p className="text-xs text-muted">{item.requirements?.length || 0} exigências extraídas. Cadastre uma ficha de produto pertinente para comparar.</p>}
   </div>;
 }
-export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, expanded = false }) {
+export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
-  const key = opportunityId ? `opportunity:${opportunityId}` : JSON.stringify([item?.numero_controle_pncp || item?.id || item?.url, item?.technical_analysis_id, item?.score, item?.data_atualizacao_pncp, profile]);
+  const [selection, setSelection] = useState(null);
+  const detailsRef = useRef(null);
+  const detailLoad = useRef(null);
+  const key = opportunityId ? `opportunity:${opportunityId}` : JSON.stringify([item?.numero_controle_pncp || item?.id || item?.url, item?.technical_analysis_id, item?.score, item?.data_atualizacao_pncp, profile, itemNumber == null ? 'summary' : 'full']);
   const currentKey = useRef(key);
   useEffect(() => {
     let ignore = false; let timer;
     currentKey.current = key;
-    setAnalysis(null); setError(''); setDetailError('');
+    setAnalysis(null); setError(''); setDetailError(''); setSelection(null);
     const refresh = () => {
-      load(key, () => opportunityId ? axios.get(`/api/licitacoes/opportunities/${opportunityId}/technical`) : axios.post('/api/licitacoes/technical/notice', { item, profile, summary: true }))
+      load(key, () => opportunityId ? axios.get(`/api/licitacoes/opportunities/${opportunityId}/technical`) : axios.post('/api/licitacoes/technical/notice', { item, profile, summary: itemNumber == null }))
         .then(data => { if (ignore) return; setAnalysis(data.analysis); setEnabled(data.enabled); if (data.analysis) timer = setTimeout(refresh, ['queued', 'running'].includes(data.analysis.status) ? 20000 : 60000); })
         .catch(e => { if (!ignore) setError(e.response?.data?.error || 'Análise técnica indisponível.'); });
     };
@@ -56,32 +94,48 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
   }, [key]);
   if (error) return <p className="mt-2 text-xs text-muted">{error}</p>;
   if (!analysis) return opportunityId ? null : <p className="mt-2 text-xs text-muted">{enabled ? 'Análise automática: aguardando elegibilidade e catálogo.' : 'Análise automática configurável em Licitações → Produtos.'}</p>;
-  if (!analysis.result) return <p className="mt-2 text-xs text-muted">Análise técnica · {analysis.stage_label}{analysis.error ? ` · ${analysis.error}` : ''}</p>;
+  if (!analysis.result) return <div className="mt-3 space-y-1 rounded-lg border border-line bg-bg2/40 px-3 py-2 text-xs"><p className="font-semibold text-ink">Compatibilidade com seus produtos</p><p className="text-muted">Análise técnica · {analysis.stage_label}{analysis.error ? ` · ${analysis.error}` : ''}</p><p className="text-[11px] text-muted">Produtos e percentuais aparecerão após a comparação das fichas com o edital.</p></div>;
   const result = analysis.result;
   const loadDetails = async () => {
     if (!analysis.summary_only) return;
+    if (detailLoad.current?.key === key) return detailLoad.current.promise;
     const expectedKey = key;
     setDetailError('');
-    try { const { data } = await axios.get(`/api/licitacoes/technical/jobs/${analysis.id}`); if (currentKey.current === expectedKey) setAnalysis(data); }
-    catch { if (currentKey.current === expectedKey) setDetailError('Não foi possível carregar as evidências. Feche e abra a análise para tentar novamente.'); }
+    const promise = (async () => {
+      try { const { data } = await axios.get(`/api/licitacoes/technical/jobs/${analysis.id}`); if (currentKey.current === expectedKey) setAnalysis(data); }
+      catch { if (currentKey.current === expectedKey) setDetailError('Não foi possível carregar as evidências. Feche e abra a análise para tentar novamente.'); }
+      finally { if (detailLoad.current?.key === expectedKey) detailLoad.current = null; }
+    })();
+    detailLoad.current = { key, promise };
+    return promise;
   };
-  if (itemNumber != null) return <div className="my-2 rounded-lg border border-line p-3"><TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} /></div>;
-  const names = [...new Set(result.items.filter(i => i.in_scope && i.recommended_product).map(i => i.recommended_product.product_name))];
-  return <details open={expanded || undefined} className="mt-2 text-xs text-ink" onClick={e => e.stopPropagation()} onToggle={event => { if (event.currentTarget.open) loadDetails(); }}>
+  const selectMatch = async (number, productId) => {
+    if (onOpenMatch) { onOpenMatch(number, productId); return; }
+    const expectedKey = key;
+    setSelection({ number: String(number), productId: productId == null ? null : String(productId) });
+    if (detailsRef.current) detailsRef.current.open = true;
+    await loadDetails();
+    if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
+  };
+  if (itemNumber != null) return <div className="my-2 rounded-lg border border-line p-3"><TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} /></div>;
+  return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>
+    <ProductMatchSummary items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />
+    <details ref={detailsRef} open={expanded || undefined} onToggle={event => { if (event.currentTarget.open) loadDetails(); }}>
     <summary className="cursor-pointer space-y-1 rounded focus-visible:ring-2 focus-visible:ring-primary">
       <span className={`inline-block rounded-md border px-2 py-1 font-semibold ${result.full_items > 0 ? 'border-status-success/40 text-status-success' : 'border-line text-muted'}`}>
-        {result.full_items}/{result.relevant_items} itens pertinentes atendidos plenamente{names.length ? ` · ${names.join(', ')}` : ''}
+        Ver análise completa · {result.full_items}/{result.relevant_items} itens pertinentes atendidos plenamente
       </span>
-      <span className="block text-muted">Nota {result.score} · base {result.base_score} + técnica {result.technical_bonus} + preço {result.commercial_bonus}</span>
-      {analysis.updated_at && <span className="block text-muted">Verificação: {new Date(analysis.updated_at).toLocaleString('pt-BR')}</span>}
     </summary>
     <div className="mt-2 space-y-3 border-l-2 border-line pl-3">
+      <p className="text-muted">Nota {result.score} · base {result.base_score} + técnica {result.technical_bonus} + preço {result.commercial_bonus}</p>
+      {analysis.updated_at && <p className="text-muted">Verificação: {new Date(analysis.updated_at).toLocaleString('pt-BR')}</p>}
       {analysis.summary_only ? <p className="text-muted">{detailError || 'Carregando exigências e evidências…'}</p> : <>
       {!result.documents_complete && <p className="text-status-warning">Documentação incompleta. Atendimento pleno não confirmado.</p>}
       {result.notes?.map((note, i) => <p key={i} className="text-muted">{note}</p>)}
-      {result.items.map(i => <div key={i.number} className="space-y-1"><h5 className="font-semibold">Item {i.number} · {i.description}</h5><TechnicalItem item={i} /></div>)}
+      {selection && <button type="button" className="rounded border border-line px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setSelection(null)}>Ver todos os itens</button>}
+      {result.items.filter(i => !selection || String(i.number) === selection.number).map(i => <div key={i.number} className="space-y-1"><h5 className="font-semibold">Item {i.number} · {i.description}</h5><TechnicalItem item={i} highlightProductId={selection?.productId} /></div>)}
       <p className="text-muted">Atendimento técnico não substitui a revisão das condições jurídicas e comerciais do edital.</p>
       </>}
     </div>
-  </details>;
+  </details></div>;
 }

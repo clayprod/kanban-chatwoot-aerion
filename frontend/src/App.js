@@ -7,6 +7,8 @@ import SearchWatchlistReview from './SearchWatchlistReview';
 import ProductCatalog from './ProductCatalog';
 import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
 import TechnicalResult from './TechnicalResult';
+import OpportunityPreview from './OpportunityPreview';
+import { createPncpOpportunityPreview } from './pncpPreview';
 import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
@@ -7994,6 +7996,11 @@ function App() {
   const [licitacaoSearch, setLicitacaoSearch] = useState('');
   const [licitacaoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
+  const [pncpPreviewLoading, setPncpPreviewLoading] = useState(false);
+  const [pncpPreviewError, setPncpPreviewError] = useState('');
+  const pncpPreviewRequest = useRef(0);
+  const selectedOpportunityIdentity = selectedOpportunity?.__preview || selectedOpportunity?.id || null;
+  useEffect(() => { if (selectedOpportunityIdentity == null) pncpPreviewRequest.current++; }, [selectedOpportunityIdentity]);
   const [selectedCommercialRequirements, setSelectedCommercialRequirements] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
   const [itemRequirementsMap, setItemRequirementsMap] = useState({});
@@ -12384,11 +12391,11 @@ function App() {
   useEffect(() => {
     if (!pncpJobModalOpen) return undefined;
     const onKey = (event) => {
-      if (event.key === 'Escape') closePncpSearchJobModal();
+      if (event.key === 'Escape' && !selectedOpportunity) closePncpSearchJobModal();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pncpJobModalOpen]);
+  }, [pncpJobModalOpen, selectedOpportunity]);
 
   useEffect(() => {
     if (!pncpDeleteJobConfirm) return undefined;
@@ -12766,6 +12773,21 @@ function App() {
     return allItems;
   };
 
+  const previewPncpOpportunity = async (item, focus = null) => {
+    const request = ++pncpPreviewRequest.current;
+    const profile = activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] };
+    setSelectedOpportunity(createPncpOpportunityPreview(item, profile, focus));
+    setSelectedItems(mapPncpImportItemsToDraft(item.itens_pertinentes || []));
+    setItemRequirementsMap({}); setSelectedCommercialRequirements([]); setSelectedLinkedContacts([]); setSelectedComments([]);
+    setPncpPreviewLoading(true); setPncpPreviewError('');
+    try {
+      const items = await fetchAllPncpItemsForImport(item);
+      if (request === pncpPreviewRequest.current && items.length) setSelectedItems(mapPncpImportItemsToDraft(items));
+    } catch {
+      if (request === pncpPreviewRequest.current) setPncpPreviewError('Não foi possível carregar todos os itens. Os itens disponíveis continuam abaixo.');
+    } finally { if (request === pncpPreviewRequest.current) setPncpPreviewLoading(false); }
+  };
+
   // Importar licitação do PNCP para criar uma oportunidade
   const importPncpLicitacao = async (item) => {
     setPncpImportingId(item.id);
@@ -12871,6 +12893,7 @@ function App() {
   };
 
   const openOpportunity = async (opportunity) => {
+    const request = ++pncpPreviewRequest.current;
     setSelectedOpportunity(opportunity);
     try {
       const [requirementsResponse, contactsResponse, itemsResponse, commentsResponse] = await Promise.all([
@@ -12879,6 +12902,7 @@ function App() {
         axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items`),
         axios.get(`/api/licitacoes/opportunities/${opportunity.id}/comments`),
       ]);
+      if (request !== pncpPreviewRequest.current) return;
       const requirements = Array.isArray(requirementsResponse.data) ? requirementsResponse.data : [];
       setSelectedCommercialRequirements(requirements.filter(item => item.tipo === 'comercial'));
       setSelectedLinkedContacts(contactsResponse.data || []);
@@ -12897,8 +12921,9 @@ function App() {
         const itemRequirementsResponse = await axios.get(`/api/licitacoes/opportunities/${opportunity.id}/items/${item.id}/requirements`);
         requirementsByItem[item.id] = Array.isArray(itemRequirementsResponse.data) ? itemRequirementsResponse.data : [];
       }));
-      setItemRequirementsMap(requirementsByItem);
+      if (request === pncpPreviewRequest.current) setItemRequirementsMap(requirementsByItem);
     } catch (error) {
+      if (request !== pncpPreviewRequest.current) return;
       console.error('Error loading licitação details:', error);
       setSelectedCommercialRequirements([]);
       setSelectedItems([]);
@@ -12958,7 +12983,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedOpportunity || !hasItemsDrivingOpportunityValue) {
+    if (!selectedOpportunity || selectedOpportunity.__preview || !hasItemsDrivingOpportunityValue) {
       return;
     }
     const currentValue = parseCurrency(selectedOpportunity.valor_oportunidade);
@@ -18143,7 +18168,10 @@ function App() {
                                     {visiblePncpResults.map((item) => (
                                       <div
                                         key={item.__result_key || item.id || item.numero_controle_pncp || item.url}
-                                        className="overflow-hidden rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40"
+                                        className="cursor-pointer overflow-hidden rounded-[12px] border border-line bg-surf p-3.5 transition hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-primary"
+                                        role="button" tabIndex={0} aria-label={`Pré-visualizar ${item.titulo || 'edital'}`}
+                                        onClick={event => { if (!event.target.closest('button,a,input,select,textarea,summary,details')) previewPncpOpportunity(item); }}
+                                        onKeyDown={event => { if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) { event.preventDefault(); previewPncpOpportunity(item); } }}
                                       >
                                         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7.5rem,9.5rem)]">
                                           <div className="min-w-0 overflow-hidden">
@@ -18183,12 +18211,12 @@ function App() {
                                             </div>
                                             <h4 className="truncate text-sm font-semibold text-ink" title={item.titulo || ''}>
                                               {item.url ? (
-                                                <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{item.titulo}</a>
+                                                <button type="button" onClick={() => previewPncpOpportunity(item)} className="text-left hover:underline">{item.titulo}</button>
                                               ) : item.titulo}
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
                                             <SearchEvidence item={item} />
-                                            <TechnicalResult item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} />
+                                            <TechnicalResult item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, { number: String(number), productId: productId == null ? null : String(productId) })} />
                                             <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
                                               {item.orgao?.nome || 'n/d'}
@@ -18926,7 +18954,7 @@ function App() {
                       <div className="flex items-start justify-between gap-3 px-4 py-3.5 sm:px-5">
                         <div className="min-w-0 flex-1">
                           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
-                            Licitação · oportunidade
+                            {selectedOpportunity.__preview ? 'Pré-visualização do edital' : 'Licitação · oportunidade'}
                           </p>
                           <h3 id="licitacao-detail-title" className="mt-0.5 font-display text-base font-semibold leading-snug text-ink sm:text-lg" style={{ textWrap: 'balance' }}>
                             {selectedOpportunity.titulo || 'Oportunidade'}
@@ -18970,7 +18998,7 @@ function App() {
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-                          <button
+                          {!selectedOpportunity.__preview && <button
                             type="button"
                             onClick={() => printLicitacaoConformidadeReport({
                               opportunity: selectedOpportunity,
@@ -18982,14 +19010,14 @@ function App() {
                           >
                             <PrinterIcon className="h-4 w-4" aria-hidden />
                             <span className="hidden sm:inline">PDF</span>
-                          </button>
-                          <button
+                          </button>}
+                          {selectedOpportunity.__preview ? <button type="button" className={btnPrimarySm} disabled={!canEditPage('Licitações') || selectedOpportunity.__preview.__visibility === 'pipeline'} onClick={() => { const item = selectedOpportunity.__preview; setSelectedOpportunity(null); pncpPreviewRequest.current++; importPncpLicitacao(item); }}>Importar para o pipeline</button> : <button
                             type="button"
                             onClick={deleteSelectedOpportunity}
                             className={`${btnDangerGhost} !h-8 !px-3 !text-xs`}
                           >
                             Excluir
-                          </button>
+                          </button>}
                           <button
                             type="button"
                             onClick={() => {
@@ -19007,6 +19035,7 @@ function App() {
 
                     {/* Body */}
                     <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="space-y-3.5 p-3.5 sm:p-5">
+                      {selectedOpportunity.__preview ? <OpportunityPreview key={selectedOpportunity.__preview.numero_controle_pncp || selectedOpportunity.__preview.id} opportunity={selectedOpportunity} items={selectedItems} loading={pncpPreviewLoading} error={pncpPreviewError} sectionClass={oppSection} /> : <>
                       <section className={oppSection}>
                         <div className={oppSectionHead}>
                           <h4 className={oppSectionTitle}>Dados do processo</h4>
@@ -20202,6 +20231,7 @@ function App() {
                           )}
                         </VerticalScrollArrows>
                       </section>
+                      </>}
                     </VerticalScrollArrows>
                   </div>
                     );

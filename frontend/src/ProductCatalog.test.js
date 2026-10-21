@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import axios from 'axios';
 import ProductCatalog from './ProductCatalog';
-import TechnicalResult, { TechnicalItem } from './TechnicalResult';
+import TechnicalResult, { TechnicalItem, ProductMatchSummary } from './TechnicalResult';
 jest.mock('axios', () => ({ get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() }));
 beforeEach(() => {
   jest.clearAllMocks();
@@ -68,4 +68,24 @@ test('catalogue separates accessories, opens original contents and exposes the c
   expect(screen.getByLabelText(/Bateria avulsa/)).toBeChecked();
   fireEvent.click(screen.getByRole('tab', { name: /Acessórios/ }));
   expect(screen.getByRole('tab', { name: /Acessórios/ })).toHaveAttribute('aria-selected', 'true');
+});
+test('card percentages are proven requirements per item, and uncertainty is never labelled full', () => {
+  const select = jest.fn();
+  render(<ProductMatchSummary documentsComplete={false} onSelect={select} items={[{ number: '2', description: 'Drone com RTK', in_scope: true, product_matches: [{ product_id: '9', product_name: 'Modelo A', status: 'uncertain', counts: { ok: 17, total: 20, verificar: 3, nao_ok: 0 } }] }]} />);
+  expect(screen.getByText('Item 2 · Drone com RTK')).toBeVisible();
+  expect(screen.getByText(/85% comprovado/)).toBeVisible();
+  expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '85');
+  expect(screen.getByText(/Leitura incompleta/)).toBeVisible();
+  expect(screen.queryByText(/Atende plenamente/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Comparar Modelo A no item 2' }));
+  expect(select).toHaveBeenCalledWith('2', '9');
+});
+test('a product click opens the pipeline preview callback without loading duplicate inline evidence', async () => {
+  const open = jest.fn();
+  axios.post.mockResolvedValue({ data: { analysis: { id: '555', status: 'completed', summary_only: true, result: { full_items: 1, relevant_items: 1, documents_complete: true, items: [{ number: '3', in_scope: true, product_matches: [{ product_id: '8', product_name: 'Modelo completo', status: 'full', counts: { ok: 20, total: 20 } }] }] } }, enabled: true } });
+  render(<TechnicalResult item={{ id: 'preview-match-callback' }} onOpenMatch={open} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Comparar Modelo completo no item 3' }));
+  expect(open).toHaveBeenCalledWith('3', '8');
+  expect(axios.get).not.toHaveBeenCalled();
+  expect(screen.getByText(/100% comprovado · Atende plenamente/)).toBeVisible();
 });
