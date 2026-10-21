@@ -6,7 +6,7 @@
   "scripts": {
     "test:ecommerce": "node --test tests/ecommerce.test.js tests/ecommerce.integration.test.js",
     "dev": "nodemon index.js",
-    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js tests/disparoMensagens.test.js tests/searchQuality.test.js tests/searchQuality.integration.test.js tests/technicalRules.test.js tests/technicalAnalysis.integration.test.js tests/technicalDocuments.integration.test.js tests/leadStage.test.js"
+    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js tests/disparoMensagens.test.js tests/searchQuality.test.js tests/searchQuality.integration.test.js tests/technicalRules.test.js tests/technicalAnalysis.integration.test.js tests/technicalDocuments.integration.test.js tests/leadStage.test.js tests/aiSettings.test.js"
   },
   "keywords": [],
   "author": "",

@@ -164,6 +164,14 @@ const carregarConfig = () => {
     minConfianca: decimal('AI_FOLLOWUP_MIN_CONFIDENCE', 0.6),
     horaInicio: Number.isFinite(horaInicio) ? horaInicio : 9,
     horaFim: Number.isFinite(horaFim) ? horaFim : 18,
+    almoco: (() => {
+      // "0" ou "off" desliga a pausa; formato "12-13".
+      const bruto = String(process.env.AI_FOLLOWUP_LUNCH ?? '12-13').trim().toLowerCase();
+      if (!bruto || bruto === '0' || bruto === 'off') return null;
+      const [de, ate] = bruto.split('-').map((v) => Number.parseInt(v, 10));
+      if (!Number.isFinite(de) || !Number.isFinite(ate) || ate <= de) return null;
+      return { de, ate };
+    })(),
     chatwootBaseUrl: String(process.env.CHATWOOT_BASE_URL || '').replace(/\/+$/, ''),
     chatwootToken: process.env.CHATWOOT_API_TOKEN || '',
   };
@@ -208,7 +216,12 @@ const horaEmSaoPaulo = (now = new Date()) => Number.parseInt(
 const dentroDaJanela = (config, now = new Date()) => {
   if (!isBrazilBusinessDay(now)) return false;
   const hora = horaEmSaoPaulo(now);
-  return hora >= config.horaInicio && hora < config.horaFim;
+  if (hora < config.horaInicio || hora >= config.horaFim) return false;
+  // Ninguem responde proposta no meio do almoco, e mensagem comercial nesse horario
+  // irrita. A pausa vale para a IA; vendedor humano decide por conta.
+  const almoco = config.almoco;
+  if (almoco && hora >= almoco.de && hora < almoco.ate) return false;
+  return true;
 };
 
 // Candidatos: quem está numa etapa elegível, calado há N dias, com a última

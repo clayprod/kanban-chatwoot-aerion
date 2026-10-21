@@ -49,6 +49,12 @@ const {
   runAiFollowupTick,
 } = require('./aiFollowups');
 const {
+  createAiSettingsTable,
+  carregarSettings,
+  resolverFlag,
+  gravarSetting,
+} = require('./aiSettings');
+const {
   STAGE_LOG_TABLE,
   carregarConfigStage,
   createStageLogTable,
@@ -12506,7 +12512,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
   const filters = job.filters || {};
   const qText = String(filters.q || '').trim();
   const profile = normalizeProfile(filters.search_profile, { ...filters, palavras_chave: job.terms, termos_negativos: job.negative_terms });
-  const terms = uniqueQualityTerms([...profile.terms, ...profile.related_terms]);
+  let terms = uniqueQualityTerms([...profile.terms, ...profile.related_terms]);
   const negativeTerms = mergeUniqueTerms(splitPncpTerms(filters.negative_terms || ''), job.negative_terms || []);
   const mappedStatus = normalizeSearchText(filters.status) === 'suspenso' ? 'suspensa' : filters.status;
   const shouldApplyReceivingProposalLocally = normalizeSearchText(mappedStatus) === 'recebendo_proposta';
@@ -13078,7 +13084,8 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
     while (states.some((s) => !s.done) && safetyRounds < maxRounds) {
       if (PNCP_DEEP_SEARCH_CANCELLED.has(jobId)) throw new Error('cancelled');
       // Termos anexados no meio da corrida entram no rodízio.
-      terms = mergeUniqueTerms([qText], job.terms || []).filter(Boolean).slice(0, 12);
+      const liveProfile = normalizeProfile(job.filters?.search_profile, { ...filters, palavras_chave: job.terms });
+      terms = uniqueQualityTerms([...liveProfile.terms, ...liveProfile.related_terms]);
       const known = new Set(states.map((s) => normalizeSearchText(s.term)));
       terms.forEach((t, i) => {
         const key = normalizeSearchText(t);
@@ -14366,8 +14373,9 @@ app.post('/api/licitacoes/pncp/search/deep/:jobId/filters', async (req, res) => 
     }
 
     job.filters = nextFilters;
-    if (job.filters.search_profile) {
+    if (job.filters.search_profile || incoming.item_kind) {
       const profile = normalizeProfile(job.filters.search_profile, job.filters);
+      if (['all', 'material', 'service'].includes(incoming.item_kind)) profile.item_kind = incoming.item_kind;
       if (incoming.q && incoming.q !== profile.terms[0]) profile.terms = uniqueQualityTerms([incoming.q, ...profile.terms.slice(1)]);
       profile.excluded_terms = uniqueQualityTerms(job.negative_terms);
       job.filters.search_profile = profile;
@@ -23126,6 +23134,27 @@ app.get('/api/rfb/search', async (req, res) => {
   }
 });
 
+// Liga/desliga da automação. Mora no banco justamente para sobreviver a deploy:
+// as env já foram apagadas seis vezes e o worker ficou parado sem ninguém notar.
+app.post('/api/ai-settings', requireAdmin, async (req, res) => {
+  const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run'];
+  const body = req.body || {};
+  const alvos = Object.keys(body).filter((k) => permitidas.includes(k));
+  if (!alvos.length) {
+    return res.status(400).json({ error: `Informe ao menos uma de: ${permitidas.join(', ')}.` });
+  }
+  try {
+    for (const chave of alvos) {
+      await gravarSetting(pool, chave, body[chave] ? '1' : '0', req.auth?.sub || null);
+    }
+    const settings = await carregarSettings(pool, { agora: Date.now() + 10 ** 6 });
+    res.json({ ok: true, settings: Object.fromEntries(settings) });
+  } catch (error) {
+    console.error('[ai-settings] gravar falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível salvar a configuração.' });
+  }
+});
+
 // Observabilidade da classificação de etapa: o que a IA moveu, sugeriu e por quê.
 app.get('/api/ai-stages', requireAdmin, async (req, res) => {
   const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
@@ -23293,7 +23322,14 @@ const registerBackgroundSchedules = () => {
     : '*/5 * * * *';
   cron.schedule(aiFollowupCron, async () => {
     if (!dataLayerReady || aiFollowupRodando) return;
-    const config = carregarConfigAiFollowup();
+    const configEnv = carregarConfigAiFollowup();
+    // Env e piso; o banco e quem manda, porque deploy nao apaga linha de tabela.
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'followup_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'followup_dry_run', configEnv.dryRun),
+    };
     if (!config.enabled) return;
     aiFollowupRodando = true;
     try {
@@ -23352,7 +23388,13 @@ const registerBackgroundSchedules = () => {
   let aiStageRodando = false;
   cron.schedule('*/15 * * * *', async () => {
     if (!dataLayerReady || aiStageRodando) return;
-    const config = carregarConfigStage();
+    const configEnv = carregarConfigStage();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'stage_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'stage_dry_run', configEnv.dryRun),
+    };
     if (!config.enabled) return;
     aiStageRodando = true;
     try {
@@ -23633,6 +23675,7 @@ const initializeDataLayer = async () => {
   await createContactReminderTable(pool);
   await createAiFollowupTable(pool);
   await createStageLogTable(pool);
+  await createAiSettingsTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

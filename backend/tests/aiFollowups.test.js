@@ -90,6 +90,18 @@ test('janela: bordas de horario em Sao Paulo', () => {
   assert.equal(dentroDaJanela(CONFIG_BASE, sp(3, 0)), false);
 });
 
+test('janela: pausa de almoco', () => {
+  // Mensagem comercial caindo 12h30 incomoda e nao e respondida.
+  const cfg = { ...CONFIG_BASE, almoco: { de: 12, ate: 13 } };
+  const sp = (h, m = 0) => new Date(Date.UTC(2026, 8, 30, h + 3, m)); // quarta
+  assert.equal(dentroDaJanela(cfg, sp(11, 59)), true, '11:59 ainda vale');
+  assert.equal(dentroDaJanela(cfg, sp(12, 0)), false, 'almoco comeca');
+  assert.equal(dentroDaJanela(cfg, sp(12, 30)), false);
+  assert.equal(dentroDaJanela(cfg, sp(13, 0)), true, 'volta as 13h');
+  // Desligavel: quem nao quer pausa poe AI_FOLLOWUP_LUNCH=off.
+  assert.equal(dentroDaJanela({ ...CONFIG_BASE, almoco: null }, sp(12, 30)), true);
+});
+
 test('janela: fim de semana bloqueado o dia inteiro', () => {
   // 2026-10-03 sabado, 2026-10-04 domingo.
   const sab = (h) => new Date(Date.UTC(2026, 9, 3, h + 3));
