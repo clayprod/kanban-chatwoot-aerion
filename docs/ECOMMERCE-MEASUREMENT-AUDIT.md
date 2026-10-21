@@ -11,7 +11,7 @@ Verificação em 21/10/2026 no WordPress em produção, configuração publicada
 | Pixel | 1668777180919759, Site Aerion, associado à conta 1318645390292737; último evento indicado pela API em 20/10 | Pixel existente confirmado. Isso não valida compras nem qualidade de correspondência. |
 | Facebook for WooCommerce | `facebook_config.pixel_id=0`, `use_s2s=false` | A integração instalada não comprova envio de compras pelo servidor/CAPI. |
 | Consentimento | Google Consent Mode v2 começa negado; WP Consent API indica statistics/marketing negados no primeiro acesso | Preservar consentimento ao configurar novos eventos e testar aceitação/recusa. |
-| Google Shopping | Feed público `/loja/google-merchant.xml`, 11 ofertas | HUBSAN Mini 7 recebe marca fixa Autel Robotics. O feed existente não comprova aprovação no Merchant Center nem vínculo com Ads. |
+| Google Shopping | Feed público `/loja/google-merchant.xml`, 11 ofertas | HUBSAN Mini 7 recebe marca fixa Autel Robotics e `in_stock` apesar da página informar pré-venda com entrega em 05/02/2027. O feed existente não comprova aprovação no Merchant Center nem vínculo com Ads. |
 | Fontes do dashboard | WooCommerce e Meta conectados; GA4 e Google Ads não configurados no backend | Não tratar fontes ausentes como zero nem afirmar que todas as plataformas já estão conectadas. |
 
 ## Contrato de eventos preparado no WordPress
@@ -23,6 +23,8 @@ Compra exige `is_paid()` e data de pagamento. A página de um pedido Pix/boleto 
 `value` representa produtos após descontos, sem frete, impostos ou taxas. `shipping`, `tax`, `currency` e `items` permanecem separados. Reembolsos futuros exigem evento/ajuste próprio, não repetição da compra. Pix aprovado sem retorno do comprador exige uma integração de pagamento/servidor para completar cobertura; browser-only não resolve esse cenário.
 
 O feed canônico em `class-aerion-google-merchant.php` usa marca do cadastro/taxonomia, com identificação por nome/SKU para HUBSAN e Autel quando não houver cadastro. Não inventa marca para outros produtos. MPN/GTIN originais ainda exigem conferência com fabricante; SKU interno não é automaticamente um MPN válido. Não marcar `identifier_exists=false` para contornar identificador ausente de produto que possui identificador do fabricante.
+
+A disponibilidade do feed segue a pré-venda efetivamente exibida pela loja: `preorder` e `availability_date` em ISO 8601, com o fuso do WordPress. Encomendas usam `backorder`; sem uma data válida e não vencida a oferta é omitida até correção do cadastro, sem informar estoque imediato. Referências: [disponibilidade](https://support.google.com/merchants/answer/6324448) e [data de disponibilidade](https://support.google.com/merchants/answer/6324470).
 
 ## Próxima validação das plataformas
 

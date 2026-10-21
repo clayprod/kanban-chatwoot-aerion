@@ -25,9 +25,16 @@ fs.mkdirSync(out, { recursive: true });
       const response = await page.goto(`https://aerion.com.br${route}`, { waitUntil: 'networkidle2', timeout: 60000 });
       let clicked = false;
       if (accept) {
+        await page.screenshot({ path: path.join(out, 'consent-before.png'), fullPage: false });
         const buttons = await page.$$('.moove-gdpr-infobar-allow-all');
         for (const button of buttons) {
           if (await button.isVisible()) { await button.click(); clicked = true; await new Promise(resolve => setTimeout(resolve, 1500)); break; }
+        }
+        if (!clicked) {
+          const settings = await page.$$('.gdpr-nav-tab-title, .moove-gdpr-infobar-settings-btn, .change-settings-button');
+          for (const button of settings) { if (await button.isVisible()) { await button.click(); break; } }
+          const modalButtons = await page.$$('.moove-gdpr-modal-allow-all');
+          for (const button of modalButtons) { if (await button.isVisible()) { await button.click(); clicked = true; await new Promise(resolve => setTimeout(resolve, 1500)); break; } }
         }
       }
       const state = await page.evaluate(() => ({
