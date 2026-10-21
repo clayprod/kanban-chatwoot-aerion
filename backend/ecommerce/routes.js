@@ -5,6 +5,22 @@ const { createProviders, storeUrl } = require('./providers');
 const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, transaction, createSync, encrypt, decrypt } = require('./store');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+function validateGoogleIdentity(value) {
+  let account = value;
+  if (typeof account === 'string') {
+    try { account = JSON.parse(account); } catch { throw new Error('JSON das credenciais Google inválido.'); }
+  }
+  if (!account?.client_email || !account.private_key) throw new Error('Informe as credenciais da conta técnica Google.');
+  if (account.type === 'service_account') return { type: account.type, client_email: account.client_email, private_key: account.private_key };
+  if (account.type !== 'workload_identity'
+    || !/^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$/.test(account.client_email)
+    || !/^\/\/iam\.googleapis\.com\/projects\/\d+\/locations\/global\/workloadIdentityPools\/[a-z0-9-]+\/providers\/[a-z0-9-]+$/.test(account.audience)
+    || typeof account.issuer !== 'string' || !/^https:\/\/[^/?#@\s]+(?:\/[^?#\s]*)?$/.test(account.issuer)
+    || !['subject', 'token_audience', 'key_id'].every(field => typeof account[field] === 'string' && account[field].length > 0 && account[field].length <= 256)) {
+    throw new Error('Credenciais de identidade federada Google inválidas.');
+  }
+  return Object.fromEntries(['type', 'client_email', 'private_key', 'audience', 'issuer', 'subject', 'token_audience', 'key_id'].map(field => [field, account[field]]));
+}
 function validateConfig(provider, config) {
   const missing = fields => fields.some(name => !config[name]);
   if (provider === 'woocommerce') {
@@ -16,18 +32,17 @@ function validateConfig(provider, config) {
   }
   if (provider === 'ga4') {
     if (!/^\d+$/.test(config.property_id || '')) throw new Error('Informe o ID numérico da propriedade GA4.');
-    if (typeof config.service_account === 'string') {
-      try { config.service_account = JSON.parse(config.service_account); } catch { throw new Error('JSON da conta de serviço inválido.'); }
-    }
-    if (config.service_account?.type !== 'service_account' || !config.service_account.client_email || !config.service_account.private_key) throw new Error('Informe o JSON da conta de serviço do Google.');
-    config.service_account = { type: 'service_account', client_email: config.service_account.client_email, private_key: config.service_account.private_key };
+    config.service_account = validateGoogleIdentity(config.service_account);
   }
   if (provider === 'google_ads') {
     for (const field of ['customer_id', 'login_customer_id']) {
       config[field] = String(config[field] || '').replace(/-/g, '');
       if ((field === 'customer_id' || config[field]) && !/^\d{10}$/.test(config[field])) throw new Error('IDs do Google Ads devem ter 10 dígitos.');
     }
-    if (missing(['client_id', 'client_secret'])) throw new Error('Informe OAuth Client ID e Client Secret do Google Cloud.');
+    config.auth_type = config.auth_type || 'oauth';
+    if (!['oauth', 'google_identity'].includes(config.auth_type)) throw new Error('Tipo de autenticação Google inválido.');
+    if (config.auth_type === 'google_identity') config.service_account = validateGoogleIdentity(config.service_account);
+    else if (missing(['client_id', 'client_secret'])) throw new Error('Informe OAuth Client ID e Client Secret do Google Cloud.');
   }
   if (provider === 'meta_ads') {
     config.account_id = String(config.account_id || '').replace(/^act_/, '');
@@ -95,6 +110,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     res.clearCookie('ecommerce_oauth', { path: '/api/ecommerce/oauth/google/callback', secure: true, httpOnly: true, sameSite: 'lax' });
     if (!consumed.rowCount || !req.query.code || req.query.error) return res.status(400).send('Autorização cancelada ou expirada. Retorne ao painel e tente novamente.');
     const { config } = await loadConfig('google_ads');
+    if (config.auth_type === 'google_identity') return res.status(400).send('Esta conexão usa uma conta técnica, sem autorização OAuth de usuário.');
     if (consumed.rows[0].context !== hash(JSON.stringify([config.customer_id, config.client_id]))) return res.status(400).send('A conexão foi alterada. Retorne ao painel e autorize novamente.');
     const result = await providers.exchangeCode(config, String(req.query.code), callbackUrl());
     if (!result.refresh_token) return res.status(400).send('O Google não forneceu acesso offline. Revogue o acesso anterior e autorize novamente.');
@@ -164,14 +180,14 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
         try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
         const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id' }[provider];
         const changed = old && old.config[identity] !== merged[identity];
-        if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id)) delete merged.refresh_token;
+        if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id || (previous.auth_type || 'oauth') !== merged.auth_type)) delete merged.refresh_token;
         const config = Object.fromEntries(PUBLIC_FIELDS[provider].map(k => [k, merged[k] || '']));
         const secrets = Object.fromEntries(SECRET_FIELDS[provider].filter(k => merged[k] !== undefined).map(k => [k, merged[k]]));
         if (changed) {
           await client.query('DELETE FROM ecommerce_records WHERE provider=$1', [provider]);
           if (provider === 'woocommerce') await client.query('DELETE FROM ecommerce_webhooks');
         }
-        const enabled = req.body.enabled !== false && (provider !== 'google_ads' || Boolean(merged.refresh_token));
+        const enabled = req.body.enabled !== false && (provider !== 'google_ads' || merged.auth_type === 'google_identity' || Boolean(merged.refresh_token));
         await client.query(`INSERT INTO ecommerce_connections(provider,config,secrets,enabled) VALUES($1,$2,$3,$4)
           ON CONFLICT(provider) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=EXCLUDED.enabled,
           cursor=NULL,status='pending',error=NULL,info=CASE WHEN $5 THEN '{}'::jsonb ELSE ecommerce_connections.info END,
@@ -199,6 +215,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
   });
   router.post('/connections/google_ads/authorize', async (req, res) => {
     const { config } = await loadConfig('google_ads');
+    if (config.auth_type === 'google_identity') return res.status(400).json({ error: 'Esta conexão usa uma conta técnica, sem autorização OAuth de usuário.' });
     const redirectUri = callbackUrl();
     const state = crypto.randomBytes(32).toString('hex');
     await pool.query("INSERT INTO ecommerce_oauth_states(state_hash,expires_at,context) VALUES($1,now()+interval '10 minutes',$2)", [hash(state), hash(JSON.stringify([config.customer_id, config.client_id]))]);

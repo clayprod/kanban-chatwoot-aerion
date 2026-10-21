@@ -59,3 +59,18 @@ test('connection form keeps previously saved credentials on the server', async (
   await waitFor(() => expect(axios.put).toHaveBeenCalledWith('/api/ecommerce/connections/woocommerce', expect.objectContaining({ url: 'https://loja.aerion.com.br' })));
   expect(axios.put.mock.calls[0][1].consumer_secret).toBeUndefined();
 });
+
+test('Google Ads technical identity preserves saved JSON and does not offer user OAuth', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? {
+    connections: [{ provider: 'google_ads', config: { customer_id: '1234567890', auth_type: 'google_identity' }, enabled: true, status: 'pending' }], encryptionReady: true,
+  } : report }));
+  axios.put.mockResolvedValue({ data: { saved: true } });
+  render(<EcommerceView section="connections" isAdmin onNavigate={jest.fn()} />);
+  const field = await screen.findByLabelText('Credenciais da conta técnica Google Ads (JSON)');
+  expect(field).toHaveValue('');
+  expect(screen.queryByLabelText('OAuth Client Secret')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Autorizar Google Ads/ })).not.toBeInTheDocument();
+  fireEvent.submit(field.closest('form'));
+  await waitFor(() => expect(axios.put).toHaveBeenCalledWith('/api/ecommerce/connections/google_ads', expect.objectContaining({ auth_type: 'google_identity' })));
+  expect(axios.put.mock.calls[0][1].service_account).toBeUndefined();
+});

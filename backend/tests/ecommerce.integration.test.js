@@ -149,6 +149,25 @@ test('Ecommerce API and resumable sync with isolated PostgreSQL schema', { skip:
       assert(!JSON.stringify(row).includes('private-refresh-token'));
       assert.equal(row.enabled, true);
     });
+    await t.test('technical Google identity stays encrypted, enables sync and rejects user OAuth', async () => {
+      const identity = { type: 'workload_identity', client_email: 'reader@aerion-project.iam.gserviceaccount.com', private_key: 'private-vps-identity-key',
+        audience: '//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/aerion/providers/vps-production',
+        issuer: 'https://crm.example.com', subject: 'ecommerce-reader', token_audience: 'aerion-ecommerce', key_id: 'key-1' };
+      const result = await request('/connections/google_ads', { method: 'PUT', body: { auth_type: 'google_identity', service_account: JSON.stringify(identity) } });
+      assert.equal(result.response.status, 200);
+      let row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='google_ads'")).rows[0];
+      assert.equal(row.enabled, true);
+      assert.equal(decrypt(row.secrets, encryptionKey(env)).service_account.private_key, identity.private_key);
+      assert.equal(decrypt(row.secrets, encryptionKey(env)).refresh_token, undefined);
+      assert(!(await request('/status')).text.includes(identity.private_key));
+      assert.equal((await request('/connections/google_ads/authorize', { method: 'POST' })).response.status, 400);
+      await request('/connections/google_ads', { method: 'PUT', body: { enabled: true } });
+      row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='google_ads'")).rows[0];
+      assert.equal(decrypt(row.secrets, encryptionKey(env)).service_account.private_key, identity.private_key);
+      await request('/connections/google_ads', { method: 'PUT', body: { auth_type: 'oauth' } });
+      row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='google_ads'")).rows[0];
+      assert.equal(row.enabled, false);
+    });
     await t.test('per-provider PostgreSQL lock prevents two workers from fetching the same source', async () => {
       const client = await pool.connect();
       await client.query('SELECT pg_advisory_lock(735101)');

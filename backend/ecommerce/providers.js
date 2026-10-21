@@ -66,9 +66,33 @@ function createProviders({ transport = request, env = process.env } = {}) {
     return result.access_token;
   };
   async function googleToken(config, serviceAccount = false) {
-    const key = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
+    const scope = serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
+    const account = serviceAccount || config.auth_type === 'google_identity' ? config.service_account : null;
+    const key = crypto.createHash('sha256').update(JSON.stringify([config, scope])).digest('hex');
     return cached(key, async () => {
-      const body = serviceAccount ? serviceAccountGrant(config.service_account) : {
+      if (account?.type === 'workload_identity') {
+        const now = Math.floor(Date.now() / 1000);
+        const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+        const content = `${encode({ alg: 'RS256', typ: 'JWT', kid: account.key_id })}.${encode({
+          iss: account.issuer, sub: account.subject, aud: account.token_audience, iat: now, exp: now + 300,
+        })}`;
+        let signature;
+        try { signature = crypto.sign('RSA-SHA256', Buffer.from(content), account.private_key).toString('base64url'); }
+        catch { throw new ProviderError('A chave da identidade federada Google é inválida.'); }
+        const { data: federated } = await json('https://sts.googleapis.com/v1/token', {
+          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ audience: account.audience,
+            grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+            requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+            subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+            scope: 'https://www.googleapis.com/auth/cloud-platform', subject_token: `${content}.${signature}` }).toString(),
+        }, transport);
+        if (!federated.access_token) throw new ProviderError('A federação Google não retornou um token de acesso.');
+        const { data } = await json(`https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(account.client_email)}:generateAccessToken`,
+          postJson({ scope: [scope], lifetime: '3600s' }, { Authorization: `Bearer ${federated.access_token}` }), transport);
+        return { access_token: data.accessToken, expires_in: Math.max(0, (Date.parse(data.expireTime) - Date.now()) / 1000) };
+      }
+      const body = account ? serviceAccountGrant(account, scope) : {
         grant_type: 'refresh_token', client_id: config.client_id, client_secret: config.client_secret, refresh_token: config.refresh_token,
       };
       return (await json('https://oauth2.googleapis.com/token', {
@@ -209,11 +233,11 @@ function createProviders({ transport = request, env = process.env } = {}) {
     },
   };
 }
-function serviceAccountGrant(account) {
+function serviceAccountGrant(account, scope = 'https://www.googleapis.com/auth/analytics.readonly') {
   const now = Math.floor(Date.now() / 1000);
   const encode = object => Buffer.from(JSON.stringify(object)).toString('base64url');
   const content = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ iss: account.client_email,
-    scope: 'https://www.googleapis.com/auth/analytics.readonly', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 })}`;
+    scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 })}`;
   let signature;
   try { signature = crypto.sign('RSA-SHA256', Buffer.from(content), account.private_key).toString('base64url'); }
   catch { throw new ProviderError('A chave privada da conta de serviço GA4 é inválida.'); }

@@ -29,11 +29,11 @@ async function createTables(pool) {
 }
 const PUBLIC_FIELDS = {
   woocommerce: ['url', 'report_user'], ga4: ['property_id'],
-  google_ads: ['customer_id', 'login_customer_id', 'client_id'], meta_ads: ['account_id'],
+  google_ads: ['customer_id', 'login_customer_id', 'client_id', 'auth_type'], meta_ads: ['account_id'],
 };
 const SECRET_FIELDS = {
   woocommerce: ['consumer_key', 'consumer_secret', 'report_password', 'webhook_secret'],
-  ga4: ['service_account'], google_ads: ['client_secret', 'refresh_token'], meta_ads: ['access_token'],
+  ga4: ['service_account'], google_ads: ['client_secret', 'refresh_token', 'service_account'], meta_ads: ['access_token'],
 };
 const lockId = provider => ({ woocommerce: 735101, ga4: 735102, google_ads: 735103, meta_ads: 735104 }[provider]);
 function publicConnection(row) {

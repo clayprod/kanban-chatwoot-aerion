@@ -118,6 +118,61 @@ test('Google Ads reporting converts micros, keeps account currency and omits dev
   assert.equal(requests[1].options.headers['developer-token'], undefined);
   assert(!requests[0].url.includes('secret'));
 });
+
+test('federated identity signs short assertions and keeps Analytics and Ads token caches separate', async () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const account = { type: 'workload_identity', client_email: 'reader@aerion-project.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    audience: '//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/aerion/providers/vps-production',
+    issuer: 'https://crm.aerion.com.br', subject: 'ecommerce-reader', token_audience: 'aerion-ecommerce', key_id: 'rotation-1' };
+  const config = validateConfig('google_ads', { customer_id: '1234567890', auth_type: 'google_identity', service_account: JSON.stringify(account) });
+  assert.equal(validateConfig('ga4', { property_id: '123', service_account: JSON.stringify(account) }).service_account.type, 'workload_identity');
+  const requests = [];
+  const providers = createProviders({ transport: async (url, options) => {
+    requests.push({ url, options });
+    if (url.includes('sts.googleapis.com')) {
+      const body = new URLSearchParams(options.body);
+      assert.equal(body.get('audience'), account.audience);
+      const [header, payload, signature] = body.get('subject_token').split('.');
+      assert(crypto.verify('RSA-SHA256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url')));
+      const claims = JSON.parse(Buffer.from(payload, 'base64url'));
+      assert.equal(claims.iss, account.issuer); assert.equal(claims.sub, account.subject);
+      assert.equal(claims.aud, account.token_audience); assert.equal(claims.exp - claims.iat, 300);
+      assert.equal(JSON.parse(Buffer.from(header, 'base64url')).kid, 'rotation-1');
+      return Response.json({ access_token: 'federated' });
+    }
+    if (url.includes('iamcredentials.googleapis.com')) {
+      const { scope, lifetime } = JSON.parse(options.body);
+      assert.equal(options.headers.Authorization, 'Bearer federated'); assert.equal(lifetime, '3600s');
+      return Response.json({ accessToken: scope[0].endsWith('adwords') ? 'ads-token' : 'analytics-token', expireTime: new Date(Date.now() + 3600000).toISOString() });
+    }
+    if (url.includes('analyticsdata.googleapis.com')) {
+      assert.equal(options.headers.Authorization, 'Bearer analytics-token'); return Response.json({ rows: [] });
+    }
+    assert.equal(options.headers.Authorization, 'Bearer ads-token');
+    return Response.json({ results: [{ customer: { currencyCode: 'BRL', timeZone: 'America/Sao_Paulo' } }] });
+  } });
+  // Identical config apart from provider: each API must receive its own scope and cached token.
+  const shared = { ...config, property_id: '123' };
+  await providers.test('ga4', shared);
+  await providers.test('google_ads', shared);
+  await providers.test('ga4', shared);
+  await providers.test('google_ads', shared);
+  assert.equal(requests.filter(r => r.url.includes('sts.googleapis.com')).length, 2);
+  assert.deepEqual(requests.filter(r => r.url.includes('iamcredentials.googleapis.com')).map(r => JSON.parse(r.options.body).scope),
+    [['https://www.googleapis.com/auth/analytics.readonly'], ['https://www.googleapis.com/auth/adwords']]);
+  for (const bad of [{ audience: 'https://evil.example/' }, { client_email: 'reader@example.com' }, { type: 'external_account' }, { subject: '' }]) {
+    assert.throws(() => validateConfig('ga4', { property_id: '123', service_account: JSON.stringify({ ...account, ...bad }) }));
+  }
+});
+
+test('federation failures never expose upstream tokens or the signing key', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const config = { property_id: '123', service_account: { type: 'workload_identity', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    audience: 'pool', issuer: 'https://crm.aerion.com.br', subject: 'reader', token_audience: 'reports', key_id: 'key' } };
+  const providers = createProviders({ transport: async () => new Response('private-upstream-assertion', { status: 403 }) });
+  await assert.rejects(providers.test('ga4', config), error => error.retrySeconds === 3600 && !error.message.includes('private-upstream'));
+});
 test('Meta selects one purchase action instead of summing overlapping action types and paginates by cursor', async () => {
   const requests = [];
   const providers = createProviders({ transport: async (url, options) => {

@@ -38,6 +38,25 @@ O plugin expõe somente `GET /wp-json/aerion-reports/v1/health`, `/links` e `/vi
 3. Informe o ID numérico da propriedade (não o Measurement ID `G-...`) e o JSON da conta de serviço.
 4. Teste o acesso. A importação usa apenas o escopo `analytics.readonly`.
 
+Quando a organização bloqueia a criação de chaves de contas de serviço, use **Workload Identity Federation**, preservando `iam.disableServiceAccountKeyCreation`. A VPS pode emitir uma asserção OIDC RS256 com validade de cinco minutos, validada por um provedor exclusivo com JWKS carregado, emissor e audiência definidos e condição sobre o subject. Conceda `roles/iam.workloadIdentityUser` na conta técnica somente ao principal desse subject; não conceda papéis de projeto à identidade. O conector troca a asserção no STS e solicita ao IAM Credentials um token temporário restrito ao escopo da plataforma.
+
+O campo de credenciais aceita também este formato operacional (valores ilustrativos, sem credenciais reais):
+
+```json
+{
+  "type": "workload_identity",
+  "client_email": "reader@PROJECT_ID.iam.gserviceaccount.com",
+  "audience": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+  "issuer": "https://dominio-do-crm",
+  "subject": "ecommerce-reader",
+  "token_audience": "aerion-ecommerce",
+  "key_id": "ID_DA_CHAVE_DO_EMISSOR",
+  "private_key": "CHAVE_PRIVADA_PEM_DO_EMISSOR_DA_VPS"
+}
+```
+
+A chave acima pertence ao emissor OIDC da VPS, não à conta de serviço Google. Mantenha-a no armazenamento privado operacional e cifrada no CRM; nunca a inclua no repositório. Habilite também as APIs IAM Service Account Credentials e Security Token Service. Rotacione a chave atualizando o JWKS e as credenciais cifradas antes de remover a chave anterior. A autenticação federada não concede acesso aos dados: ainda é necessário adicionar a conta técnica como Visualizador na propriedade GA4.
+
 São importados totais diários, aquisição por origem/mídia/campanha/conteúdo, páginas de entrada e ocorrências dos eventos `view_item`, `add_to_cart`, `begin_checkout` e `purchase`. Usuários ativos são exibidos por dia; não são somados como pessoas únicas do período. O fuso da propriedade e os avisos de cobertura retornados pelo GA4 são preservados. Ausência de eventos não comprova que a tag esteja funcionando: validar no navegador, DebugView e, para Meta, Events Manager.
 
 ## Google Ads
@@ -49,6 +68,8 @@ São importados totais diários, aquisição por origem/mídia/campanha/conteúd
 5. Clique em **Autorizar Google Ads**, entre com uma conta que tenha acesso de leitura ao anunciante e conclua a autorização. O refresh token é obtido no backend e armazenado cifrado.
 
 A API usa o escopo `adwords`, que não é um escopo exclusivo de leitura. A restrição vem do papel da conta Google e dos conectores, que só executam consultas. O callback valida estado temporário, cookie e identidade da configuração; o estado só pode ser consumido uma vez.
+
+Alternativamente, selecione **Conta técnica Google** em Autenticação Google Ads e informe as credenciais JSON da conta de serviço ou da identidade federada descrita acima. Nesse modo, Client ID/Secret e autorização OAuth de usuário não são necessários. Adicione o e-mail técnico ao anunciante com acesso **Somente leitura** e mantenha a aprovação de produção da API no projeto Google Cloud. Os tokens do Analytics e do Ads são emitidos e armazenados em cache separadamente por escopo. Para retornar ao OAuth de usuário, selecione esse modo, salve e autorize novamente.
 
 ## Meta Ads
 

@@ -83,15 +83,16 @@ const FIELDS = {
     ['report_user', 'Usuário técnico dos relatórios Aerion · opcional', 'text', 'Usuário com permissão aerion_read_reports'],
     ['report_password', 'Application Password desse usuário · opcional', 'password', 'Senha de aplicativo do WordPress'],
   ],
-  ga4: [['property_id', 'ID numérico da propriedade', 'text', '123456789'], ['service_account', 'JSON da conta de serviço', 'textarea', 'Cole o JSON gerado no Google Cloud']],
+  ga4: [['property_id', 'ID numérico da propriedade', 'text', '123456789'], ['service_account', 'Credenciais de leitura Google (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
   google_ads: [['customer_id', 'ID da conta anunciante', 'text', '123-456-7890'], ['login_customer_id', 'ID da conta administradora · se utilizada', 'text', 'Opcional'],
-    ['client_id', 'OAuth Client ID', 'text', '…apps.googleusercontent.com'], ['client_secret', 'OAuth Client Secret', 'password', 'Segredo do aplicativo Google Cloud']],
+    ['client_id', 'OAuth Client ID', 'text', '…apps.googleusercontent.com'], ['client_secret', 'OAuth Client Secret', 'password', 'Segredo do aplicativo Google Cloud'],
+    ['service_account', 'Credenciais da conta técnica Google Ads (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
   meta_ads: [['account_id', 'ID da conta de anúncios', 'text', 'act_123456789'], ['access_token', 'Token do usuário de sistema · ads_read', 'password', 'Token com acesso de análise à conta']],
 };
 const HELP = {
   woocommerce: 'No WooCommerce, gere uma chave de leitura em Configurações → Avançado → API REST. Para UTMs Aerion, instale o plugin de relatórios e configure o usuário técnico abaixo.',
   ga4: 'Habilite a Analytics Data API no Google Cloud. Conceda à conta de serviço acesso de leitor à propriedade GA4. O ID da propriedade é numérico; não use o código G- da tag.',
-  google_ads: 'Habilite a Google Ads API no projeto Google Cloud e obtenha acesso de produção. Configure um cliente OAuth do tipo aplicativo Web. Salve e autorize com uma conta que tenha acesso de leitura ao Google Ads.',
+  google_ads: 'Habilite a Google Ads API no projeto Google Cloud e obtenha acesso de produção. Use uma conta técnica com acesso Somente leitura ao anunciante ou autorize um usuário por OAuth.',
   meta_ads: 'Use um aplicativo da Aerion no Meta Business e um usuário de sistema com acesso de análise à conta de anúncios. Gere o token com ads_read. O Pixel é conferido na loja; os resultados vêm da Insights API.',
 };
 function ConnectionForm({ provider, connection, status, onUpdate }) {
@@ -99,6 +100,8 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [failure, setFailure] = useState(false);
+  const technicalAccount = provider === 'google_ads' && form.auth_type === 'google_identity';
+  const fields = FIELDS[provider].filter(([key]) => provider !== 'google_ads' || (key === 'service_account' ? technicalAccount : !technicalAccount || !['client_id', 'client_secret'].includes(key)));
   const action = async (kind, event) => {
     event?.preventDefault(); setBusy(kind); setMessage(null);
     try {
@@ -124,7 +127,11 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
     </summary>
     <p className="mt-4 max-w-3xl text-sm text-muted">{HELP[provider]}</p>
     <form onSubmit={event => action('save', event)} className="mt-5 space-y-4" autoComplete="off">
-      <div className="grid gap-4 lg:grid-cols-2">{FIELDS[provider].map(([key, label, type, placeholder]) => <label key={key} className={`block space-y-1.5 ${type === 'textarea' ? 'lg:col-span-2' : ''}`}>
+      {provider === 'google_ads' && <label className="block space-y-1.5"><span className="text-xs font-medium text-ink">Autenticação Google Ads</span>
+        <select className={select} value={form.auth_type || 'oauth'} onChange={event => setForm(p => ({ ...p, auth_type: event.target.value }))}>
+          <option value="oauth">Autorizar usuário Google (OAuth)</option><option value="google_identity">Conta técnica Google</option>
+        </select></label>}
+      <div className="grid gap-4 lg:grid-cols-2">{fields.map(([key, label, type, placeholder]) => <label key={key} className={`block space-y-1.5 ${type === 'textarea' ? 'lg:col-span-2' : ''}`}>
         <span className="text-xs font-medium text-ink">{label}</span>
         {type === 'textarea' ? <textarea className={`${input} min-h-32 w-full py-2 font-mono text-xs`} value={form[key] || ''}
           onChange={event => setForm(p => ({ ...p, [key]: event.target.value }))} spellCheck={false} maxLength={30000}
@@ -134,11 +141,11 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
             placeholder={type === 'password' && connection ? 'Salvo · deixe vazio para manter' : placeholder} autoComplete={type === 'password' ? 'new-password' : 'off'} />}
       </label>)}</div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.enabled !== false} onChange={event => setForm(p => ({ ...p, enabled: event.target.checked }))} />Ativar sincronização automática</label>
-      {provider === 'google_ads' && <p className="break-all text-xs text-muted">URI de redirecionamento para cadastrar no Google Cloud: <span className="select-all text-ink">{status.oauthRedirectUri || 'Configure ECOMMERCE_PUBLIC_URL no servidor.'}</span></p>}
+      {provider === 'google_ads' && !technicalAccount && <p className="break-all text-xs text-muted">URI de redirecionamento para cadastrar no Google Cloud: <span className="select-all text-ink">{status.oauthRedirectUri || 'Configure ECOMMERCE_PUBLIC_URL no servidor.'}</span></p>}
       {provider === 'woocommerce' && <p className="break-all text-xs text-muted">Configure webhooks de pedido criado, atualizado e excluído para <span className="select-all text-ink">{window.location.origin}/api/ecommerce/webhooks/woocommerce</span>, usando o segredo acima.</p>}
       <div className="flex flex-wrap gap-2">
         <button className={btnPrimary} disabled={Boolean(busy) || !status.encryptionReady} type="submit">{busy === 'save' ? 'Salvando…' : 'Salvar conexão'}</button>
-        {provider === 'google_ads' && <button type="button" className={btnSecondarySm} disabled={!connection || Boolean(busy) || !status.oauthRedirectUri} onClick={() => action('authorize')}>Autorizar Google Ads <ArrowTopRightOnSquareIcon className="h-4 w-4" /></button>}
+        {provider === 'google_ads' && !technicalAccount && <button type="button" className={btnSecondarySm} disabled={!connection || Boolean(busy) || connection?.config?.auth_type === 'google_identity' || !status.oauthRedirectUri} onClick={() => action('authorize')}>Autorizar Google Ads <ArrowTopRightOnSquareIcon className="h-4 w-4" /></button>}
         <button type="button" className={btnSecondarySm} disabled={!connection || Boolean(busy)} onClick={() => action('test')}>{busy === 'test' ? 'Testando…' : 'Testar acesso salvo'}</button>
         <button type="button" className={btnSecondarySm} disabled={!connection?.enabled || Boolean(busy)} onClick={() => action('sync')}>Sincronizar agora</button>
       </div>
