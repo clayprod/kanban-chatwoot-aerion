@@ -36,6 +36,7 @@ import {
   DocumentMagnifyingGlassIcon,
   BookOpenIcon,
   ChatBubbleLeftRightIcon,
+  SparklesIcon,
   UsersIcon,
   CheckBadgeIcon,
   BanknotesIcon,
@@ -109,6 +110,7 @@ import {
   getNewEditalSignalsCount,
 } from './navigationBadges';
 import NotificationsView from './NotificationsView';
+import AutomationView from './AutomationView';
 import { registerPushServiceWorker } from './pushClient';
 import { typeLabel } from './notificationCatalog';
 import {
@@ -147,6 +149,7 @@ const VIEW_LABELS = {
   Licitações: 'Licitações',
   Processo: 'Processo',
   'Disparo WhatsApp': 'Disparo WhatsApp',
+  'Automação': 'Automação',
   Notificações: 'Notificações',
   Usuários: 'Usuários',
 };
@@ -558,6 +561,12 @@ const processBlueprint = {
       tab: 'Disparo WhatsApp',
       use: 'Campanhas de disparo com seleção de público (DDD/lista), templates e acompanhamento de envio.',
       routine: 'Campanhas de cadência outbound alinhadas ao volume de contatos do plano comercial.'
+    },
+    {
+      group: 'Prospecção',
+      tab: 'Automação',
+      use: 'O que a IA fez sozinha: follow-ups enviados e etapas do funil corrigidas a partir das respostas do cliente.',
+      routine: 'Conferir de manhã: se um worker está parado ou escrevendo besteira, aparece aqui antes de virar problema.'
     },
     {
       group: 'Administração',
@@ -14985,6 +14994,7 @@ function App() {
         { name: 'Busca de leads', view: 'Busca Lead B2B', icon: MagnifyingGlassIcon },
         { name: 'Radar Trends', view: 'Radar Trends', icon: ChartBarIcon, accessView: 'Busca Lead B2B' },
         { name: 'Disparo WhatsApp', view: 'Disparo WhatsApp', icon: ChatBubbleLeftRightIcon },
+        { name: 'Automação', view: 'Automação', icon: SparklesIcon, adminOnly: true },
       ],
     },
     {
@@ -23812,6 +23822,8 @@ function App() {
               )}
             </div>
           )}
+
+          {activeView === 'Automação' && <AutomationView />}
 
           {activeView === 'Radar Trends' && (
             <RadarTrendsPage

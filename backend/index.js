@@ -1,4 +1,5 @@
 const express = require('express');
+const { createEcommerce } = require('./ecommerce/routes');
 const { Pool } = require('pg');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -109,7 +110,9 @@ app.use(cors({
   credentials: true,
 }));
 // Limite alto para o pool de mensagens do disparo (mídia em base64).
-app.use(express.json({ limit: '30mb' }));
+app.use(express.json({ limit: '30mb', verify: (req, res, buffer) => {
+  if (req.originalUrl.split('?')[0] === '/api/ecommerce/webhooks/woocommerce') req.ecommerceRawBody = Buffer.from(buffer);
+} }));
 
 const AUTH_EMAIL = process.env.AUTH_EMAIL;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
@@ -122,6 +125,8 @@ const AUTH_PUBLIC_PATHS = new Set([
   '/auth/login',
   '/auth/logout',
   '/auth/status',
+  '/ecommerce/webhooks/woocommerce',
+  '/ecommerce/oauth/google/callback',
   '/call-transcripts',
   '/licitacoes/pncp/modalidades',
   '/licitacoes/pncp/modos-disputa',
@@ -376,7 +381,7 @@ pool.on('error', (err) => {
 // independent of Chatwoot Administrator flag.
 const CHATWOOT_ACCOUNT_ID = Number.parseInt(process.env.CHATWOOT_ACCOUNT_ID || '2', 10) || 2;
 const APP_ACCESS_TABLE = 'app_user_access';
-const APP_PAGE_VIEWS = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo', 'Disparo WhatsApp', 'Radar Trends', 'Metas', 'Usuários'];
+const APP_PAGE_VIEWS = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo', 'Disparo WhatsApp', 'Radar Trends', 'Metas', 'Usuários', 'Ecommerce'];
 const APP_PERM_LEVELS = new Set(['none', 'view', 'edit']);
 const CALL_TRANSCRIPTS_WEBHOOK_TOKEN = String(process.env.CALL_TRANSCRIPTS_WEBHOOK_TOKEN || '').trim()
   || (AUTH_TOKEN_SECRET
@@ -576,6 +581,8 @@ const mapUserAccessRow = (u) => {
     pagePermissions = Object.fromEntries(APP_PAGE_VIEWS.map((k) => [k, 'edit']));
   }
   const role = isAppAdmin ? 'admin' : 'member';
+  // Ecommerce contains financial data: legacy broad access never grants it implicitly.
+  if (!isAppAdmin && !['view', 'edit'].includes(u.page_permissions?.Ecommerce)) pagePermissions.Ecommerce = 'none';
   return {
     id: u.id,
     email: u.email,
@@ -640,6 +647,9 @@ const requireAdmin = (req, res, next) => {
   if (req.auth && req.auth.role === 'admin') return next();
   return res.status(403).json({ error: 'Acesso restrito a administradores.' });
 };
+
+const ecommerce = createEcommerce({ pool, getUserById });
+app.use('/api/ecommerce', ecommerce.router);
 
 const requireBoardEdit = async (req, res, next) => {
   if (req.auth?.role === 'admin') return next();
@@ -23201,6 +23211,9 @@ app.post('/api/rfb/import/start', (req, res) => {
 let dataLayerReady = false;
 let backgroundSchedulesRegistered = false;
 const registerBackgroundSchedules = () => {
+  cron.schedule('* * * * *', () => {
+    ecommerce.tick().catch(() => console.warn('[ecommerce] sincronização indisponível; nova tentativa no próximo ciclo'));
+  });
   if (backgroundSchedulesRegistered) return;
   backgroundSchedulesRegistered = true;
 
@@ -23558,6 +23571,7 @@ const registerBackgroundSchedules = () => {
 };
 
 const initializeDataLayer = async () => {
+  await ecommerce.ensure();
   await createHistoryTable();
   await createActivityTable();
   await createContactReminderTable(pool);
