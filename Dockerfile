@@ -27,6 +27,9 @@ COPY frontend/nginx.conf /etc/nginx/nginx.conf
 WORKDIR /app
 COPY --from=backend-builder /app/backend ./
 
+# Production WordPress deployments consume this bridge from the CI/GHCR image.
+COPY integrations/wordpress/aerion-ecommerce-reports.php /opt/aerion-integrations/wordpress/aerion-ecommerce-reports.php
+
 # Install Python dependencies for RFB import script
 RUN pip3 install --break-system-packages --no-cache-dir -r scripts/requirements.txt
 
