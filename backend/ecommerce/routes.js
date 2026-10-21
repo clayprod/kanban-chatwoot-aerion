@@ -1,0 +1,220 @@
+const express = require('express');
+const crypto = require('node:crypto');
+const { PROVIDERS, dateRange, buildReport, verifyWebhook, encryptionKey } = require('./domain');
+const { createProviders, storeUrl } = require('./providers');
+const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, transaction, createSync, encrypt, decrypt } = require('./store');
+
+const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+function validateConfig(provider, config) {
+  const missing = fields => fields.some(name => !config[name]);
+  if (provider === 'woocommerce') {
+    config.url = storeUrl(config.url);
+    if (missing(['consumer_key', 'consumer_secret', 'webhook_secret'])) throw new Error('Informe chave REST, segredo REST e segredo do webhook.');
+    if (!/^ck_[a-f0-9]+$/i.test(config.consumer_key) || !/^cs_[a-f0-9]+$/i.test(config.consumer_secret)) throw new Error('Chaves WooCommerce inválidas.');
+    if (config.webhook_secret.length < 32) throw new Error('O segredo do webhook precisa ter pelo menos 32 caracteres.');
+    if (Boolean(config.report_user) !== Boolean(config.report_password)) throw new Error('Informe usuário e Application Password para os relatórios Aerion.');
+  }
+  if (provider === 'ga4') {
+    if (!/^\d+$/.test(config.property_id || '')) throw new Error('Informe o ID numérico da propriedade GA4.');
+    if (typeof config.service_account === 'string') {
+      try { config.service_account = JSON.parse(config.service_account); } catch { throw new Error('JSON da conta de serviço inválido.'); }
+    }
+    if (config.service_account?.type !== 'service_account' || !config.service_account.client_email || !config.service_account.private_key) throw new Error('Informe o JSON da conta de serviço do Google.');
+    config.service_account = { type: 'service_account', client_email: config.service_account.client_email, private_key: config.service_account.private_key };
+  }
+  if (provider === 'google_ads') {
+    for (const field of ['customer_id', 'login_customer_id']) {
+      config[field] = String(config[field] || '').replace(/-/g, '');
+      if ((field === 'customer_id' || config[field]) && !/^\d{10}$/.test(config[field])) throw new Error('IDs do Google Ads devem ter 10 dígitos.');
+    }
+    if (missing(['client_id', 'client_secret'])) throw new Error('Informe OAuth Client ID e Client Secret do Google Cloud.');
+  }
+  if (provider === 'meta_ads') {
+    config.account_id = String(config.account_id || '').replace(/^act_/, '');
+    if (!/^\d+$/.test(config.account_id) || !config.access_token) throw new Error('Informe o ID da conta de anúncios e o token da Meta.');
+  }
+  return config;
+}
+function createEcommerce({ pool, getUserById, env = process.env, providers = createProviders({ env }) }) {
+  let ready;
+  const ensure = () => {
+    if (!ready) ready = createTables(pool).catch(error => { ready = null; throw error; });
+    return ready;
+  };
+  const sync = createSync({ pool, providers, env });
+  const seal = value => encrypt(value, encryptionKey(env));
+  const unseal = value => decrypt(value, encryptionKey(env));
+  const router = express.Router();
+  const loadConfig = async provider => {
+    const row = (await pool.query('SELECT * FROM ecommerce_connections WHERE provider=$1', [provider])).rows[0];
+    if (!row) throw Object.assign(new Error('Configure esta conexão primeiro.'), { status: 400 });
+    return { row, config: { ...row.config, ...unseal(row.secrets) } };
+  };
+  const admin = async (req, res, next) => {
+    try {
+      const user = req.auth?.uid ? await getUserById(req.auth.uid) : req.auth;
+      if (user?.role !== 'admin') return res.status(403).json({ error: 'Somente administradores podem configurar conexões.' });
+      next();
+    } catch { res.status(503).json({ error: 'Não foi possível validar o acesso.' }); }
+  };
+  router.use(async (req, res, next) => {
+    try { await ensure(); next(); } catch { res.status(503).json({ error: 'Ecommerce indisponível: verifique o banco de dados.' }); }
+  });
+  // These two endpoints use their own authentication, not the CRM session cookie.
+  router.post('/webhooks/woocommerce', async (req, res) => {
+    const contentType = req.get('content-type') || '';
+    // WooCommerce activation uses a form-encoded webhook_id ping, not an order event.
+    // Acknowledge it without enqueuing data; all JSON order events require HMAC.
+    if (contentType.startsWith('application/x-www-form-urlencoded') && !req.get('x-wc-webhook-topic')) return res.sendStatus(204);
+    const { row, config } = await loadConfig('woocommerce');
+    if (!row.enabled) return res.status(409).json({ error: 'Conexão desativada.' });
+    if (!verifyWebhook(req.ecommerceRawBody, req.get('x-wc-webhook-signature'), config.webhook_secret)) return res.status(401).json({ error: 'Assinatura inválida.' });
+    const delivery = String(req.get('x-wc-webhook-delivery-id') || '');
+    const topic = String(req.get('x-wc-webhook-topic') || '');
+    const resourceId = Number(req.body?.id);
+    // The activation ping has no order ID; acknowledge it only after signature verification.
+    if (req.body?.webhook_id && !req.body?.id) return res.sendStatus(204);
+    if (!delivery || delivery.length > 200 || !['order.created', 'order.updated', 'order.deleted', 'order.restored', 'order.trashed'].includes(topic)
+      || !Number.isSafeInteger(resourceId) || resourceId <= 0) return res.status(400).json({ error: 'Webhook inválido.' });
+    await pool.query('INSERT INTO ecommerce_webhooks(delivery_id,topic,resource_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [delivery, topic, resourceId]);
+    await pool.query("UPDATE ecommerce_connections SET next_run_at=now() WHERE provider='woocommerce'");
+    res.sendStatus(202);
+  });
+  const publicUrl = () => {
+    let url;
+    try { url = new URL(env.ECOMMERCE_PUBLIC_URL); } catch { throw Object.assign(new Error('Configure ECOMMERCE_PUBLIC_URL no servidor para autorizar o Google Ads.'), { status: 400 }); }
+    if (url.protocol !== 'https:' || url.username || url.password) throw Object.assign(new Error('ECOMMERCE_PUBLIC_URL precisa ser HTTPS.'), { status: 400 });
+    return url.origin;
+  };
+  const callbackUrl = () => `${publicUrl()}/api/ecommerce/oauth/google/callback`;
+  router.get('/oauth/google/callback', async (req, res) => {
+    const state = String(req.query.state || '');
+    const cookie = (req.get('cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith('ecommerce_oauth='))?.slice('ecommerce_oauth='.length);
+    if (!/^[a-f0-9]{64}$/.test(state) || !cookie || !verifyStateCookie(cookie, state)) return res.status(400).send('Autorização inválida ou expirada. Retorne ao painel e tente novamente.');
+    const consumed = await pool.query('DELETE FROM ecommerce_oauth_states WHERE state_hash=$1 AND expires_at>now() RETURNING context', [hash(state)]);
+    res.clearCookie('ecommerce_oauth', { path: '/api/ecommerce/oauth/google/callback', secure: true, httpOnly: true, sameSite: 'lax' });
+    if (!consumed.rowCount || !req.query.code || req.query.error) return res.status(400).send('Autorização cancelada ou expirada. Retorne ao painel e tente novamente.');
+    const { config } = await loadConfig('google_ads');
+    if (consumed.rows[0].context !== hash(JSON.stringify([config.customer_id, config.client_id]))) return res.status(400).send('A conexão foi alterada. Retorne ao painel e autorize novamente.');
+    const result = await providers.exchangeCode(config, String(req.query.code), callbackUrl());
+    if (!result.refresh_token) return res.status(400).send('O Google não forneceu acesso offline. Revogue o acesso anterior e autorize novamente.');
+    config.refresh_token = result.refresh_token;
+    const secrets = Object.fromEntries(SECRET_FIELDS.google_ads.map(k => [k, config[k]]));
+    await pool.query("UPDATE ecommerce_connections SET secrets=$1,status='pending',error=NULL,enabled=true,next_run_at=now() WHERE provider='google_ads'", [seal(secrets)]);
+    res.redirect(`${publicUrl()}/?ecommerce=connections&google=connected`);
+  });
+  router.use(async (req, res, next) => {
+    try {
+      if (req.get('origin')) {
+        let origin;
+        try { origin = new URL(req.get('origin')); } catch { return res.status(403).json({ error: 'Origem não autorizada.' }); }
+        const local = env.NODE_ENV !== 'production' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
+          && ['localhost', '127.0.0.1', '::1'].includes(req.hostname);
+        if (!local && origin.host !== req.get('host') && origin.origin !== env.ECOMMERCE_PUBLIC_URL) {
+          return res.status(403).json({ error: 'Origem não autorizada.' });
+        }
+      }
+      const user = req.auth?.uid ? await getUserById(req.auth.uid) : req.auth;
+      if (user?.role === 'admin' || ['view', 'edit'].includes(user?.page_permissions?.Ecommerce)) return next();
+      return res.status(403).json({ error: 'Seu usuário não tem permissão para acessar Ecommerce.' });
+    } catch { return res.status(503).json({ error: 'Não foi possível validar sua permissão.' }); }
+  });
+  router.get('/status', async (req, res) => {
+    const rows = (await pool.query('SELECT * FROM ecommerce_connections ORDER BY provider')).rows;
+    let keyReady = true;
+    try { encryptionKey(env); } catch { keyReady = false; }
+    let oauthRedirectUri = null;
+    try { if (env.ECOMMERCE_PUBLIC_URL) oauthRedirectUri = callbackUrl(); } catch { /* Other sources stay available while OAuth is unconfigured. */ }
+    res.json({ connections: rows.map(publicConnection), encryptionReady: keyReady, oauthRedirectUri });
+  });
+  router.get('/report', async (req, res) => {
+    const range = dateRange(req.query);
+    const [{ rows: records }, { rows: connections }] = await Promise.all([
+      pool.query(`SELECT provider,kind,data FROM ecommerce_records WHERE date BETWEEN $1 AND $2 OR (provider='woocommerce' AND kind IN ('link','product','coupon'))`, [range.previousFrom, range.to]),
+      pool.query('SELECT * FROM ecommerce_connections ORDER BY provider'),
+    ]);
+    const ofKind = kind => records.filter(r => r.kind === kind).map(r => r.data);
+    const report = buildReport({ range, orders: ofKind('order'), links: ofKind('link'), visits: ofKind('visit'),
+      metrics: records.filter(r => r.kind === 'metric').map(r => ({ ...r.data, provider: r.provider })), connections: connections.map(publicConnection) });
+    const catalog = new Map(ofKind('product').map(p => [String(p.id), p]));
+    report.products.forEach(product => { product.categories = catalog.get(product.id.split(':')[0])?.categories || []; });
+    report.couponCatalog = ofKind('coupon');
+    res.json(report);
+  });
+  router.use(admin);
+  router.put('/connections/:provider', async (req, res) => {
+    const provider = req.params.provider;
+    if (!PROVIDERS.includes(provider)) return res.status(404).json({ error: 'Plataforma desconhecida.' });
+    // Validate the key before accepting credentials; never fall back to plaintext.
+    encryptionKey(env);
+    const client = await pool.connect();
+    try {
+      await transaction(client, async () => {
+        if (!(await client.query('SELECT pg_try_advisory_xact_lock($1) AS locked', [lockId(provider)])).rows[0].locked) {
+          throw Object.assign(new Error('Aguarde o lote de sincronização atual antes de alterar a conexão.'), { status: 409 });
+        }
+        const old = (await client.query('SELECT * FROM ecommerce_connections WHERE provider=$1 FOR UPDATE', [provider])).rows[0];
+        const previous = old ? { ...old.config, ...unseal(old.secrets) } : {};
+        const merged = { ...previous };
+        for (const field of [...PUBLIC_FIELDS[provider], ...SECRET_FIELDS[provider]]) {
+          if (typeof req.body?.[field] === 'string' && req.body[field].length <= 30000) {
+            if (!SECRET_FIELDS[provider].includes(field) || req.body[field].trim()) merged[field] = req.body[field].trim();
+          }
+        }
+        try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
+        const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id' }[provider];
+        const changed = old && old.config[identity] !== merged[identity];
+        if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id)) delete merged.refresh_token;
+        const config = Object.fromEntries(PUBLIC_FIELDS[provider].map(k => [k, merged[k] || '']));
+        const secrets = Object.fromEntries(SECRET_FIELDS[provider].filter(k => merged[k] !== undefined).map(k => [k, merged[k]]));
+        if (changed) {
+          await client.query('DELETE FROM ecommerce_records WHERE provider=$1', [provider]);
+          if (provider === 'woocommerce') await client.query('DELETE FROM ecommerce_webhooks');
+        }
+        const enabled = req.body.enabled !== false && (provider !== 'google_ads' || Boolean(merged.refresh_token));
+        await client.query(`INSERT INTO ecommerce_connections(provider,config,secrets,enabled) VALUES($1,$2,$3,$4)
+          ON CONFLICT(provider) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=EXCLUDED.enabled,
+          cursor=NULL,status='pending',error=NULL,info=CASE WHEN $5 THEN '{}'::jsonb ELSE ecommerce_connections.info END,
+          last_success_at=CASE WHEN $5 THEN NULL ELSE ecommerce_connections.last_success_at END,
+          last_reconciled_at=CASE WHEN $5 THEN NULL ELSE ecommerce_connections.last_reconciled_at END,next_run_at=now(),updated_at=now()`,
+        [provider, config, seal(secrets), enabled, Boolean(changed)]);
+      });
+      res.json({ saved: true });
+    } finally { client.release(); }
+  });
+  router.post('/connections/:provider/test', async (req, res) => {
+    if (!PROVIDERS.includes(req.params.provider)) return res.sendStatus(404);
+    const { config } = await loadConfig(req.params.provider);
+    const info = await providers.test(req.params.provider, config);
+    await pool.query('UPDATE ecommerce_connections SET info=$2,error=NULL WHERE provider=$1', [req.params.provider, info]);
+    res.json({ ok: true, info });
+  });
+  router.post('/connections/:provider/sync', async (req, res) => {
+    if (!PROVIDERS.includes(req.params.provider)) return res.sendStatus(404);
+    const { row } = await loadConfig(req.params.provider);
+    if (!row.enabled) return res.status(400).json({ error: 'Ative e autorize a conexão antes de sincronizar.' });
+    await pool.query('UPDATE ecommerce_connections SET next_run_at=now() WHERE provider=$1', [row.provider]);
+    setImmediate(() => sync.run(row.provider, { force: true }).catch(() => {}));
+    res.status(202).json({ queued: true });
+  });
+  router.post('/connections/google_ads/authorize', async (req, res) => {
+    const { config } = await loadConfig('google_ads');
+    const redirectUri = callbackUrl();
+    const state = crypto.randomBytes(32).toString('hex');
+    await pool.query("INSERT INTO ecommerce_oauth_states(state_hash,expires_at,context) VALUES($1,now()+interval '10 minutes',$2)", [hash(state), hash(JSON.stringify([config.customer_id, config.client_id]))]);
+    res.cookie('ecommerce_oauth', state, { secure: true, httpOnly: true, sameSite: 'lax', path: '/api/ecommerce/oauth/google/callback', maxAge: 600000 });
+    const query = new URLSearchParams({ client_id: config.client_id, redirect_uri: redirectUri, response_type: 'code',
+      scope: 'https://www.googleapis.com/auth/adwords', access_type: 'offline', prompt: 'consent', state });
+    res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${query}` });
+  });
+  router.use((error, req, res, next) => {
+    if (res.headersSent) return next(error);
+    const status = error.status || (error.retrySeconds ? 502 : 500);
+    res.status(status).json({ error: error.status || error.retrySeconds ? error.message : 'Não foi possível concluir. Verifique a configuração do servidor e a chave de criptografia.' });
+  });
+  return { router, ensure, tick: async () => { await ensure(); await sync.tick(); } };
+}
+function verifyStateCookie(cookie, state) {
+  return Buffer.byteLength(cookie) === Buffer.byteLength(state) && crypto.timingSafeEqual(Buffer.from(cookie), Buffer.from(state));
+}
+module.exports = { createEcommerce, validateConfig, verifyStateCookie };
