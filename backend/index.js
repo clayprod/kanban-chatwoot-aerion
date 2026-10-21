@@ -23182,7 +23182,13 @@ app.get('/api/ai-stages', requireAdmin, async (req, res) => {
         [CHATWOOT_ACCOUNT_ID]
       ),
     ]);
-    const config = carregarConfigStage();
+    const configEnv = carregarConfigStage();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'stage_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'stage_dry_run', configEnv.dryRun),
+    };
     res.json({
       config: {
         enabled: config.enabled,
@@ -23227,7 +23233,13 @@ app.get('/api/ai-followups', requireAdmin, async (req, res) => {
         [CHATWOOT_ACCOUNT_ID]
       ),
     ]);
-    const config = carregarConfigAiFollowup();
+    const configEnv = carregarConfigAiFollowup();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'followup_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'followup_dry_run', configEnv.dryRun),
+    };
     res.json({
       config: {
         enabled: config.enabled,
