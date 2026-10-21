@@ -12,6 +12,7 @@ fs.mkdirSync(out, { recursive: true });
   const results = [];
   try {
     const page = await browser.newPage();
+    await page.setUserAgent((await browser.userAgent()).replace('HeadlessChrome', 'Chrome'));
     const hits = [];
     page.on('request', req => {
       const u = new URL(req.url());

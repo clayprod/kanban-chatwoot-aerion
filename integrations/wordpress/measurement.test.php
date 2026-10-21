@@ -24,6 +24,8 @@ check($options['integrate-woocommerce-customer-data'] === false && $options['int
 $consent = Aerion_Ecommerce_Measurement::consent_options([]);
 check($consent['moove_gdpr_third_party_cookies_enable'] === 1 && $consent['moove_gdpr_advanced_cookies_enable'] === 1, 'Visitors need separate statistics and advertising choices.');
 check($consent['moove_gdpr_third_party_cookies_enable_first_visit'] === 0 && $consent['moove_gdpr_advanced_cookies_enable_first_visit'] === 0, 'Optional tracking stays off until the visitor opts in.');
+check(Aerion_Ecommerce_Measurement::consent_pre_options(false) === false, 'Do not short circuit WordPress when Moove did not supply settings.');
+check(Aerion_Ecommerce_Measurement::consent_pre_options(['existing' => 'value'])['moove_gdpr_third_party_cookies_enable'] === 1, 'Apply policy after Moove own-table pre_option callback.');
 foreach ([[false, null], [true, null], [false, 'paid-date']] as [$paid, $date]) {
     $receipt = new WC_Order($paid, $date);
     $gtm4wp_options = $options;

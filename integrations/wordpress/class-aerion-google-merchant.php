@@ -40,6 +40,17 @@ final class Aerion_Google_Merchant
         }
         return ['status' => $product->is_in_stock() ? 'in_stock' : 'out_of_stock', 'date' => null];
     }
+
+    public static function shipping_ready($product): bool
+    {
+        if ($product->is_virtual()) return true;
+        // The historical catalog flag is not updated when shipping measurements are saved.
+        // Use the same current product measurements used by the checkout quotation instead.
+        foreach (['get_weight', 'get_length', 'get_width', 'get_height'] as $getter) {
+            if (!is_numeric($product->$getter()) || (float) $product->$getter() <= 0) return false;
+        }
+        return true;
+    }
     public static function render(): void
     {
         if(!get_query_var('aerion_merchant_feed'))return;
@@ -62,7 +73,7 @@ final class Aerion_Google_Merchant
         try{
             $out="<?xml version='1.0' encoding='UTF-8'?><rss xmlns:g='http://base.google.com/ns/1.0' version='2.0'><channel><title>".esc_xml(get_bloginfo('name')).' — Loja</title><link>'.esc_xml(wc_get_page_permalink('shop')).'</link><description>Produtos Autel oficiais no Brasil</description>';
             foreach(wc_get_products(['status'=>'publish','limit'=>-1,'orderby'=>'id'])as$p){
-                if((float)$p->get_regular_price()<=0||$p->get_meta('_aerion_shipping_validated',true)!=='yes')continue;
+                if((float)$p->get_regular_price()<=0||!self::shipping_ready($p)||$p->get_sku()===''||$p->get_catalog_visibility()==='hidden')continue;
                 $availability = self::availability($p);
                 if ($availability === null) continue; // No invented shipping date for an undated preorder.
                 $quote=Aerion_Pricing::quote($p,'consumer',0);
@@ -70,6 +81,13 @@ final class Aerion_Google_Merchant
                 $gtin=preg_replace('/\\D/','',(string)$p->get_meta('_aerion_gtin',true));
                 $out.='<item><g:id>'.esc_xml($p->get_sku()).'</g:id><g:title>'.esc_xml($p->get_name()).'</g:title><g:description>'.esc_xml(wp_strip_all_tags($p->get_short_description()?:$p->get_description())).'</g:description><g:link>'.esc_xml($p->get_permalink()).'</g:link><g:image_link>'.esc_xml(wp_get_attachment_image_url($p->get_image_id(),'full')?:wc_placeholder_img_src()).'</g:image_link><g:condition>new</g:condition><g:availability>'.esc_xml($availability['status']).'</g:availability><g:price>'.esc_xml(wc_format_decimal($regular,2).' BRL').'</g:price>';
                 if ($availability['date'] !== null) $out.='<g:availability_date>'.esc_xml($availability['date']).'</g:availability_date>';
+                if (!$p->is_virtual()) {
+                    $out.='<g:shipping_weight>'.esc_xml(wc_format_decimal(wc_get_weight($p->get_weight(),'kg'),3).' kg').'</g:shipping_weight>';
+                    foreach (['length','width','height'] as $dimension) {
+                        $getter='get_'.$dimension;
+                        $out.='<g:shipping_'.$dimension.'>'.esc_xml(wc_format_decimal(wc_get_dimension($p->$getter(),'cm'),2).' cm').'</g:shipping_'.$dimension.'>';
+                    }
+                }
                 if($current>0&&$current<$regular)$out.='<g:sale_price>'.esc_xml(wc_format_decimal($current,2).' BRL').'</g:sale_price>';
                 $brand = self::brand($p);
                 if ($brand !== '') $out.='<g:brand>'.esc_xml($brand).'</g:brand>';

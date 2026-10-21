@@ -9,6 +9,8 @@ final class Aerion_Ecommerce_Measurement
     {
         add_filter('option_gtm4wp-options', [self::class, 'options']);
         add_filter('option_moove_gdpr_plugin_settings', [self::class, 'consent_options']);
+        // Moove reads its own settings table through pre_option at priority 99.
+        add_filter('pre_option_moove_gdpr_plugin_settings', [self::class, 'consent_pre_options'], 100);
         add_action('wp', [self::class, 'guard_unpaid_page'], 1);
         add_filter('gtm4wp_purchase_datalayer', [self::class, 'purchase'], 20, 2);
         add_action('wp_footer', [self::class, 'consent_event'], 101);
@@ -49,6 +51,11 @@ final class Aerion_Ecommerce_Measurement
             'moove_gdpr_advanced_cookies_enable' => 1,
             'moove_gdpr_advanced_cookies_enable_first_visit' => 0,
         ]);
+    }
+
+    public static function consent_pre_options(mixed $options): mixed
+    {
+        return is_array($options) ? self::consent_options($options) : $options;
     }
 
     public static function guard_unpaid_page(): void

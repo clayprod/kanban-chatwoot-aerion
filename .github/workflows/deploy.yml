@@ -99,6 +99,16 @@ jobs:
             integrations/wordpress/class-aerion-google-merchant.php
           retention-days: 14
 
+      - name: Validate GTM operator syntax
+        run: node --check integrations/gtm/configure.cjs
+
+      - name: Export validated GTM integration
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtm-ecommerce-integration-${{ github.sha }}
+          path: integrations/gtm/*.cjs
+          retention-days: 14
+
       - name: Validate technical analysis and catalogue isolation
         working-directory: backend
         run: node --test tests/technicalRules.test.js tests/technicalAnalysis.integration.test.js

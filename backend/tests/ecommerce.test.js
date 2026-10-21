@@ -104,6 +104,50 @@ test('media ratios use weighted totals and unpaid orders exclude failures and ca
   assert.equal(report.summary.cartAbandonmentRate, null);
 });
 
+test('GTM plan preserves lead conversion labels and sends structured GA4 ecommerce', () => {
+  const { buildPlan } = require('../../integrations/gtm/ecommerce.cjs');
+  const live = { tag: [
+    { name: 'Meta - Pixel Base', type: 'html', parameter: [{ key: 'html', value: '1668777180919759' }] },
+    { name: 'Google', type: 'googtag', parameter: [{ key: 'tagId', value: 'G-TRB0NJD7H1' }] },
+    { name: 'Google Ads - Conversão Formulário', type: 'awct', parameter: [{ key: 'conversionLabel', value: 'existing-lead-label' }] },
+  ] };
+  const plan = buildPlan(live);
+  assert.equal(plan.tags.some(t => t.type === 'awct'), false);
+  assert.equal(plan.tags.find(t => t.type === 'gaawe').parameter.find(p => p.key === 'sendEcommerceData').value, 'true');
+  assert.equal(plan.tags.find(t => t.name === 'Meta - Pixel Base').consentSettings.consentStatus, 'needed');
+  assert.throws(() => buildPlan({ tag: [] }), /differs/);
+});
+
+test('Meta browser measurements require consent and deduplicate the same paid transaction', () => {
+  const { metaBootstrap } = require('../../integrations/gtm/ecommerce.cjs');
+  const vm = require('node:vm');
+  const calls = [], listeners = {};
+  let granted = false;
+  const window = { wp_has_consent: () => granted, fbq: (...args) => calls.push(args), dataLayer: [] };
+  const context = { window, document: { addEventListener: (name, fn) => { listeners[name] = fn; } } };
+  const boot = () => vm.runInNewContext(`(${metaBootstrap.toString()})('1668777180919759')`, context);
+  boot(); assert.equal(calls.length, 0);
+  granted = true; boot();
+  assert.equal(calls.filter(c => c[2] === 'PageView').length, 1);
+  const ecommerce = { transaction_id: '123', value: 99.95, currency: 'BRL', items: [{ item_id: 'SKU-123', quantity: 2, price: 49.975 }] };
+  window.aerionMetaSend('purchase', ecommerce);
+  window.aerionMetaSend('purchase', ecommerce);
+  window.aerionMetaSend('aerion_order_unpaid', ecommerce);
+  window.aerionMetaSend('purchase', { ...ecommerce, transaction_id: '' });
+  const purchases = calls.filter(c => c[2] === 'Purchase');
+  assert.equal(purchases.length, 1);
+  assert.equal(purchases[0][3].value, 99.95);
+  assert.equal(purchases[0][3].content_ids[0], 'SKU-123');
+  assert.equal(purchases[0][4].eventID, 'aerion_purchase_123');
+  granted = false;
+  listeners.wp_listen_for_consent_change();
+  window.aerionMetaSend('add_to_cart', ecommerce, 'another-event');
+  assert.equal(calls.filter(c => c[2] === 'AddToCart').length, 0);
+  assert.deepEqual(calls.at(-1), ['consent', 'revoke']);
+  granted = true; listeners.wp_listen_for_consent_change();
+  assert.deepEqual(calls.at(-1), ['consent', 'grant']);
+});
+
 test('unconnected sources are unavailable rather than zero', () => {
   const report = buildReport({ range: dateRange({ from: '2026-10-20', to: '2026-10-21' }) });
   assert.equal(report.summary.revenue, null); assert.equal(report.summary.spend, null); assert.equal(report.summary.sessions, null);

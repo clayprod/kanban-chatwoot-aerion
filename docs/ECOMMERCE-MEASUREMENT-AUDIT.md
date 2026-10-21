@@ -26,6 +26,10 @@ O feed canônico em `class-aerion-google-merchant.php` usa marca do cadastro/tax
 
 A disponibilidade do feed segue a pré-venda efetivamente exibida pela loja: `preorder` e `availability_date` em ISO 8601, com o fuso do WordPress. Encomendas usam `backorder`; sem uma data válida e não vencida a oferta é omitida até correção do cadastro, sem informar estoque imediato. Referências: [disponibilidade](https://support.google.com/merchants/answer/6324448) e [data de disponibilidade](https://support.google.com/merchants/answer/6324470).
 
+Auditoria do catálogo: 30 produtos publicados, 22 disponíveis para compra. Onze dos 22 estavam fora do feed somente porque `_aerion_shipping_validated` ainda era `no`, apesar de terem peso e dimensões cadastrados: kits Alpha/Max/Lite, módulo RTK e carregadores. A fonte revisada verifica as medidas atuais utilizadas na cotação do checkout, permite produtos virtuais sem pacote e exporta peso/dimensões em kg/cm; não altera preços, estoque nem marca dados como fisicamente certificados. Itens sem medidas completas permanecem excluídos. Ofertas sem estoque podem constar no feed como `out_of_stock`, sem significar disponibilidade para compra.
+
+O Moove intercepta suas configurações com `pre_option` na prioridade 99. A política de consentimento aplica as categorias depois dessa leitura na prioridade 100, mantém estatísticas/publicidade desativadas por padrão e expõe escolhas separadas. Apenas filtrar `option_*` não cobre a tabela própria do plugin.
+
 ## Próxima validação das plataformas
 
 - GTM: ativar Tag Manager API no projeto `cybernetic-post-481513-c2` e conceder Publish à identidade técnica. Criar workspace separado, preservar a versão anterior, configurar eventos GA4 a partir do data layer e revisar disparadores/consentimento da Meta. Validar antes de publicar.
@@ -33,6 +37,12 @@ A disponibilidade do feed segue a pré-venda efetivamente exibida pela loja: `pr
 - Google Ads: desbloquear conta e identificar ação de compra. Não reutilizar como compra o label existente de lead/contato. Evitar marcar compra nativa e compra importada do GA4 como duas ações primárias para a mesma venda.
 - Merchant Center: conferir conta, domínio verificado, fonte cadastrada, aprovação de cada oferta, frete/devolução e vínculo com a conta Ads. Feed acessível não prova nenhuma dessas etapas.
 - Meta: conferir Purchase, valor, moeda, catálogo e IDs, consentimento e diagnóstico de eventos. Se adicionar CAPI, usar `Purchase` e o mesmo `event_id` no navegador/servidor, além de idempotência e controle de retentativas. A autorização atual de relatórios não equivale à permissão de administrar públicos/campanhas.
+
+## Configuração reproduzível do GTM
+
+`integrations/gtm/configure.cjs` usa a identidade federada técnica para auditar, preparar e publicar separadamente. Guarda o JSON original da versão publicada e o estado em diretório privado; prepara um workspace próprio e recusa publicar se alguém alterou a versão em produção. A rotina não altera o Default Workspace nem campanhas/orçamentos.
+
+`ecommerce.cjs` gera a tag GA4 com ecommerce estruturado e corrige o Pixel Meta para respeitar consentimento de marketing, enviar SKU/valor/moeda e deduplicar compra por ID. Os testes cobrem consentimento negado, concessão/revogação, dados de produtos e repetição da mesma transação. A tag Google Ads existente é de formulário/contato: seu label não é reutilizado para compras. CAPI e compras primárias Google Ads continuam sendo integrações separadas, dependentes das permissões e ações correspondentes.
 
 ## Recuperação e públicos
 
