@@ -1,4 +1,4 @@
-// Read-only storefront measurement audit. Does not create orders or send test purchases.
+// Storefront measurement audit. --cart uses an anonymous cart; never creates orders or sends test purchases.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
@@ -8,6 +8,7 @@ try { puppeteer = browserRequire('puppeteer'); } catch { puppeteer = browserRequ
 const out = path.join(__dirname, '..', '.tmp', 'measurement');
 fs.mkdirSync(out, { recursive: true });
 (async () => {
+  console.error('Launching measurement audit browser');
   const browser = await puppeteer.launch({ headless: true, channel: 'chrome' });
   const results = [];
   try {
@@ -22,6 +23,7 @@ fs.mkdirSync(out, { recursive: true });
     });
     await page.setViewport({ width: 1365, height: 1000 });
     const visit = async (route, accept = false) => {
+      console.error(`Auditing ${route}${accept ? ' with consent' : ''}`);
       hits.length = 0;
       const response = await page.goto(`https://aerion.com.br${route}`, { waitUntil: 'networkidle2', timeout: 60000 });
       // Storefront defers secondary scripts until the first real interaction.
@@ -58,6 +60,28 @@ fs.mkdirSync(out, { recursive: true });
     };
     for (const route of ['/loja/', '/loja/produto/hubsan-mini-7/', '/carrinho/']) await visit(route);
     await visit('/loja/produto/hubsan-mini-7/', true);
+    if (process.argv.includes('--cart')) {
+      hits.length = 0;
+      console.error('Auditing anonymous add-to-cart');
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null),
+        page.click('button.single_add_to_cart_button', { timeout: 10000 }),
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      results.push({ step: 'add-to-cart', url: new URL(page.url()).pathname, hits: [...hits], events: await page.evaluate(() => (window.dataLayer || []).filter(x => x.event).map(x => ({ event: x.event, ecommerce: x.ecommerce }))) });
+      fs.writeFileSync(path.join(out, 'browser-audit.json'), JSON.stringify(results, null, 2));
+      console.error('Auditing cart and checkout render');
+      await visit('/carrinho/');
+      const checkout = await page.$eval('a.checkout-button', el => new URL(el.href).pathname);
+      await visit(checkout);
+      // Only render checkout. Never enter customer data or submit the order form.
+      await visit('/carrinho/');
+      const remove = await page.$('a.remove');
+      if (remove) {
+        await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => null), remove.click()]);
+      }
+      results.push({ step: 'anonymous-cart-cleanup', empty: await page.evaluate(() => !!document.querySelector('.cart-empty, .wc-empty-cart-message')) });
+    }
     if (process.argv.includes('--diagnose-meta')) {
       for (const value of [true, 'true']) {
         await page.evaluate(flag => window.dataLayer.push({ event: 'aerion_consent_updated', aerion_marketing_consent: flag }), value);
@@ -71,4 +95,4 @@ fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'browser-audit.json'), JSON.stringify(results, null, 2));
     console.log(JSON.stringify(results, null, 2));
   } finally { await browser.close(); }
-})().catch(e => { console.error(e.message); process.exitCode = 1; });
+})().catch(e => { console.error(e.stack); process.exitCode = 1; });

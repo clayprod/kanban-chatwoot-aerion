@@ -166,6 +166,34 @@ test('Meta browser measurements require consent and deduplicate the same paid tr
   assert.deepEqual(calls.at(-1), ['consent', 'grant']);
 });
 
+test('restored consent recovers current checkout once and never replays prior cart actions', () => {
+  const { metaBootstrap, replayGaPage, buildPlan } = require('../../integrations/gtm/ecommerce.cjs');
+  const vm = require('node:vm'), calls = [];
+  const ecommerce = { value: 99.95, currency: 'BRL', items: [{ item_id: 'SKU-123', price: 99.95, quantity: 1 }] };
+  const window = { wp_has_consent: () => true, fbq: (...args) => calls.push(args), dataLayer: [
+    { event: 'add_to_cart', ecommerce }, { event: 'begin_checkout', ecommerce, 'gtm.uniqueEventId': 3 },
+    { event: 'aerion_consent_updated', aerion_statistics_consent: true },
+  ] };
+  const context = { window, document: { addEventListener() {} } };
+  vm.runInNewContext(`(${metaBootstrap.toString()})('1668777180919759')`, context);
+  window.aerionMetaSend('begin_checkout', ecommerce, 'aerion_begin_checkout_3');
+  assert.equal(calls.filter(c => c[2] === 'InitiateCheckout').length, 1);
+  assert.equal(calls.filter(c => c[2] === 'AddToCart').length, 0);
+  vm.runInNewContext(`(${replayGaPage.toString()})();(${replayGaPage.toString()})();`, context);
+  assert.equal(window.dataLayer.filter(e => e.aerion_consent_replay && e.event === 'begin_checkout').length, 1);
+  assert.equal(window.dataLayer.filter(e => e.aerion_consent_replay && e.event === 'add_to_cart').length, 0);
+  const plan = buildPlan({ tag: [
+    { name: 'Meta - Pixel Base', type: 'html', parameter: [{ key: 'html', value: '1668777180919759' }] },
+    { name: 'Google', type: 'googtag', parameter: [{ key: 'tagId', value: 'G-TRB0NJD7H1' }] },
+    { name: 'Google Ads - Form', type: 'awct', firingTriggerId: ['7', '11', '3'], parameter: [{ key: 'conversionLabel', value: 'keep-label' }] },
+  ] });
+  const ads = plan.tags.find(t => t.type === 'awct');
+  assert.equal(ads.parameter[0].value, 'keep-label');
+  assert.deepEqual(ads.retainedTriggerIds, ['11', '3']);
+  assert.deepEqual(ads.triggers, ['Aerion · Lead confirmado']);
+  assert.equal(plan.triggers.find(t => t.name === 'Aerion · Lead confirmado').customEventFilter[0].parameter[1].value, 'generate_lead');
+});
+
 test('unconnected sources are unavailable rather than zero', () => {
   const report = buildReport({ range: dateRange({ from: '2026-10-20', to: '2026-10-21' }) });
   assert.equal(report.summary.revenue, null); assert.equal(report.summary.spend, null); assert.equal(report.summary.sessions, null);

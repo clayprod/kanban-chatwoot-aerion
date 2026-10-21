@@ -87,8 +87,8 @@ async function main() {
   }
   save('workspace.json', { container: CONTAINER, workspace: workspace.path, baseVersion: live.containerVersionId });
   const upsert = async (kind, spec) => {
-    const { triggers, accountId, containerId, workspaceId, tagId, path: resourcePath, fingerprint, ...body } = spec;
-    if (triggers) body.firingTriggerId = triggers.map(name => triggerIds[name]);
+    const { triggers, retainedTriggerIds, accountId, containerId, workspaceId, tagId, path: resourcePath, fingerprint, ...body } = spec;
+    if (triggers) body.firingTriggerId = [...triggers.map(name => triggerIds[name]), ...(retainedTriggerIds || [])];
     const old = (await request(`${workspace.path}/${kind}`))[kind === 'variables' ? 'variable' : kind === 'triggers' ? 'trigger' : 'tag']?.find(item => item.name === spec.name);
     if (old) return request(old.path, 'PUT', { ...body, fingerprint: old.fingerprint });
     return request(`${workspace.path}/${kind}`, 'POST', body);
