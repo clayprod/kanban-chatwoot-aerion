@@ -6,6 +6,7 @@ import SearchEvidence from './SearchEvidence';
 import SearchQualityPanel from './SearchQualityPanel';
 import SearchWatchlistReview from './SearchWatchlistReview';
 import ProductCatalog from './ProductCatalog';
+import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
 import TechnicalResult from './TechnicalResult';
 import { fetchRfbSearchPage } from './rfbSearch';
 
@@ -8317,7 +8318,8 @@ function App() {
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
-  const [activeView, setActiveView] = useState('Overview');
+  const [activeView, setActiveView] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
+  const [ecommerceSubview, setEcommerceSubview] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'connections' : 'overview');
   const [processActiveSection, setProcessActiveSection] = useState(processBlueprint.map[0]?.id || 'metas-2026');
   const [processQuery, setProcessQuery] = useState('');
   // Dark (Aerion Command) is the only theme — no light/dark toggle.
@@ -8655,6 +8657,7 @@ function App() {
       if (level === 'view' || level === 'edit' || level === 'none') return level;
     }
     const av = authStatus.allowedViews;
+    if (viewName === 'Ecommerce') return 'none';
     if (!av || av.length === 0) return 'edit'; // legado: sem restrição = acesso amplo
     return av.includes(viewName) ? 'edit' : 'none';
   }, [authStatus.role, authStatus.pagePermissions, authStatus.allowedViews]);
@@ -14998,6 +15001,13 @@ function App() {
       ],
     },
     {
+      label: 'Ecommerce',
+      items: ECOMMERCE_SECTIONS.map(section => ({
+        name: section.label, view: 'Ecommerce', sub: section.id, icon: ChartBarIcon,
+        adminOnly: section.id === 'connections',
+      })),
+    },
+    {
       label: 'Licitações',
       items: [
         { name: 'Resumo', view: 'Licitações', sub: 'overview', icon: ScaleIcon },
@@ -15020,7 +15030,8 @@ function App() {
 
   const navigateApp = useCallback((view, sub) => {
     setActiveView(view);
-    if (sub) setLicitacaoSubview(sub);
+    if (sub && view === 'Ecommerce') setEcommerceSubview(sub);
+    else if (sub) setLicitacaoSubview(sub);
     setMobileNavOpen(false);
     setShowNotifications(false);
   }, []);
@@ -15242,11 +15253,11 @@ function App() {
                       <p className="px-3 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.13em] text-muted2">{group.label}</p>
                       {groupItems.map(item => {
                         const active = item.sub
-                          ? activeView === item.view && (
+                          ? activeView === item.view && (item.view === 'Ecommerce' ? ecommerceSubview === item.sub : (
                             licitacaoSubview === item.sub
                             || (item.sub === 'editais' && licitacaoSubview === 'editais_watchlist')
                             || (item.sub === 'pca' && licitacaoSubview === 'sinais') // legado → trata como PCA
-                          )
+                          ))
                           : activeView === item.view && (item.view !== 'Licitações');
                         const Icon = item.icon;
                         return (
@@ -15919,8 +15930,11 @@ function App() {
           <VerticalScrollArrows
             className="min-h-0 flex-1"
             contentClassName="px-3 sm:px-4 pb-[max(3rem,env(safe-area-inset-bottom))] md:px-6 lg:px-8"
-            remeasureKey={`${activeView}:${licitacaoSubview || ''}:${activeTab || ''}`}
+            remeasureKey={`${activeView}:${licitacaoSubview || ''}:${ecommerceSubview}:${activeTab || ''}`}
           >
+          {activeView === 'Ecommerce' && (canViewPage('Ecommerce') ? (
+            <EcommerceView section={ecommerceSubview} isAdmin={authStatus.role === 'admin'} onNavigate={setEcommerceSubview} />
+          ) : <div className="p-6 text-sm text-muted">Seu usuário não tem permissão para acessar Ecommerce.</div>)}
           {activeView === 'Board' && (
             <>
               <div className="mt-2 sm:mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2.5 sm:gap-3">
@@ -23678,7 +23692,7 @@ function App() {
               ) : (
                 <div className={`${card} divide-y divide-line`}>
                   {usersList.map(u => {
-                    const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo'];
+                    const allViews = ['Overview', 'Board', 'Busca Lead B2B', 'Licitações', 'Notificações', 'Processo', 'Ecommerce'];
                     const isAdminUser = Boolean(u.is_app_admin) || u.role === 'admin';
                     const isCwAdmin = u.cw_role === 'admin';
                     const perms = (u.page_permissions && typeof u.page_permissions === 'object')
@@ -23687,6 +23701,7 @@ function App() {
                     const permFor = (v) => {
                       const p = String(perms[v] || '').toLowerCase();
                       if (p === 'view' || p === 'edit' || p === 'none') return p;
+                      if (v === 'Ecommerce') return 'none';
                       // legado: allowed_views
                       if (Array.isArray(u.allowed_views) && u.allowed_views.length) {
                         return u.allowed_views.includes(v) ? 'edit' : 'none';

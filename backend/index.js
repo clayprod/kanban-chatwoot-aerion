@@ -23267,17 +23267,38 @@ const registerBackgroundSchedules = () => {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
         config,
-        notify: ({ tipo, contato, mensagem, motivo }) => notifyAccountUsers(pool, {
-          accountId: CHATWOOT_ACCOUNT_ID,
-          type: tipo === 'sent' ? 'funil.ai_followup_sent' : 'funil.ai_followup_skipped',
-          title: tipo === 'sent'
-            ? `IA enviou follow-up para ${contato.name || 'um contato'}`
-            : `IA segurou um follow-up para ${contato.name || 'um contato'}`,
-          body: tipo === 'sent' ? String(mensagem).slice(0, 180) : String(motivo || '').slice(0, 180),
-          data: { view: 'Board', contact_id: contato.contact_id },
-          dedupeKey: `ai-followup:${tipo}:${contato.contact_id}:${Date.now()}`,
-          onlyUserIds: contato.assignee_id ? [Number(contato.assignee_id)] : null,
+        // Situacao que pede afastamento longo (handoff, recusa) vira lembrete real
+        // em vez de a IA voltar em 5 dias.
+        agendarRetorno: ({ contactId, dueAt, note }) => replaceContactReminder(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID, contactId, dueAt, note, userId: null,
         }),
+        notify: ({ tipo, contato, mensagem, motivo, indicacao }) => {
+          // Indicacao ("fale com o Cap Sa Fortes, 51 9960-7789") e lead novo, e o
+          // ativo mais valioso daquela resposta: nao pode morrer no log.
+          if (tipo === 'indicacao') {
+            const quem = [indicacao?.nome, indicacao?.telefone].filter(Boolean).join(' · ');
+            return notifyAccountUsers(pool, {
+              accountId: CHATWOOT_ACCOUNT_ID,
+              type: 'funil.ia_indicacao',
+              title: `${contato.name || 'Um contato'} indicou outra pessoa`,
+              body: `${quem || 'sem dados'} — ${String(motivo || '').slice(0, 120)}`,
+              data: { view: 'Board', contact_id: contato.contact_id },
+              dedupeKey: `ia-indicacao:${contato.contact_id}:${indicacao?.telefone || indicacao?.nome || ''}`,
+              onlyUserIds: contato.assignee_id ? [Number(contato.assignee_id)] : null,
+            });
+          }
+          return notifyAccountUsers(pool, {
+            accountId: CHATWOOT_ACCOUNT_ID,
+            type: tipo === 'sent' ? 'funil.ai_followup_sent' : 'funil.ai_followup_skipped',
+            title: tipo === 'sent'
+              ? `IA enviou follow-up para ${contato.name || 'um contato'}`
+              : `IA segurou um follow-up para ${contato.name || 'um contato'}`,
+            body: tipo === 'sent' ? String(mensagem).slice(0, 180) : String(motivo || '').slice(0, 180),
+            data: { view: 'Board', contact_id: contato.contact_id },
+            dedupeKey: `ai-followup:${tipo}:${contato.contact_id}:${Date.now()}`,
+            onlyUserIds: contato.assignee_id ? [Number(contato.assignee_id)] : null,
+          });
+        },
       });
       if (resultado.enviados || resultado.dry_run || resultado.falhas || resultado.pulados) {
         console.log('[ai-followup] tick:', resultado);

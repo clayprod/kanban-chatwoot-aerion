@@ -71,6 +71,12 @@ export const NOTIFICATION_TYPES = [
     description: 'Quando chega a hora de ligar ou falar novamente com um contato.',
   },
   {
+    type: 'funil.ia_indicacao',
+    category: 'funil',
+    label: 'Indicação capturada pela IA',
+    description: 'Quando o contato diz que não é ele quem decide e passa o nome de outra pessoa — vira lead novo.',
+  },
+  {
     type: 'funil.ia_etapa_movida',
     category: 'funil',
     label: 'Etapa corrigida pela IA',

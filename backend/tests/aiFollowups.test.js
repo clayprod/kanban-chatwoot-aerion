@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
   carregarConfig,
   estrategiaDaTentativa,
+  SITUACOES_SEM_MENSAGEM,
+  ESPERA_POR_SITUACAO,
   validarMensagem,
   dentroDaJanela,
   montarPrompt,
@@ -248,8 +250,9 @@ test('cada tentativa da sequencia tem estrategia propria', () => {
   assert.notEqual(a, b);
   assert.notEqual(b, c);
   assert.match(a, /retome o assunto/);
-  assert.match(b, /mude o angulo/);
-  assert.match(c, /não vai insistir mais|nao vai insistir mais/);
+  assert.match(b, /TRAGA VALOR/);
+  // A ultima tentativa qualifica o timing para nurture; nunca se despede.
+  assert.match(c, /VALUE-ADD, nunca despedida/);
   // A ultima tentativa fecha o ciclo mesmo quando o teto e menor que 3.
   assert.equal(estrategiaDaTentativa(2, 2), c, 'tentativa final sempre encerra');
 });
@@ -285,6 +288,161 @@ test('primeira tentativa nao lista anteriores', () => {
   });
   assert.match(user, /Tentativa 1 de 3/);
   assert.doesNotMatch(user, /já mandou nesta sequência/);
+});
+
+test('despedida e bloqueada — a cadencia termina em silencio, nao em adeus', () => {
+  // Mensagens que saíram de verdade para clientes e que o Clayton reprovou: o processo
+  // comercial (Chris Voss) termina a cadência em value-add e manda o lead para nurture.
+  // Avisar que "não vou mais insistir" entrega que desistimos e fecha a porta.
+  const reprovadas = [
+    'Oi! Essa é minha última mensagem sobre drones. Você gostaria de receber informações futuras?',
+    'Entendo que o momento pode não ser o ideal. Agradeço pela atenção até aqui e deixo a porta aberta.',
+    'Vou encerrar por aqui, mas agradeço pelo tempo que você dedicou até agora.',
+    'Desculpe incomodar, não vou mais insistir.',
+    'Prefere que eu não insista mais?',
+  ];
+  for (const t of reprovadas) {
+    assert.match(validarMensagem(t, 0.9, CONFIG_BASE) || '', /se despede/, t.slice(0, 40));
+  }
+});
+
+test('pergunta calibrada passa; pergunta fechada de interesse nao', () => {
+  // "Tem interesse?" e "ainda há interesse?" sao as perguntas preguicosas que o
+  // processo manda trocar por calibradas comecando em "Como" / "O que" / "Quando".
+  assert.ok(validarMensagem('Oi, ainda há interesse nos drones?', 0.9, CONFIG_BASE));
+  assert.ok(validarMensagem('Voce tem interesse?', 0.9, CONFIG_BASE));
+  assert.equal(
+    validarMensagem('Oi! Como está o volume de voo da frota de vocês nesse fim de ano?', 0.9, CONFIG_BASE),
+    null
+  );
+  assert.equal(
+    validarMensagem('Quando voces costumam revisar investimento em equipamento?', 0.9, CONFIG_BASE),
+    null
+  );
+});
+
+test('a terceira tentativa e value-add, nao despedida', () => {
+  const terceira = estrategiaDaTentativa(3, 3);
+  assert.match(terceira, /VALUE-ADD/);
+  assert.match(terceira, /nunca despedida/);
+  assert.match(terceira, /TIMING|timing/);
+  assert.doesNotMatch(terceira, /n[aã]o vai insistir/);
+});
+
+// Caso real (contato Mafra, out/2026). O cliente disse que não cuida do assunto e
+// passou o contato de outra pessoa; a IA respondeu perguntando A ELE se NÓS já
+// tínhamos falado com o indicado, e insistiu mais duas vezes. Dois erros de leitura:
+// a frase do handoff estava uma mensagem ANTES do cartão de contato, e as nossas
+// mensagens sem resposta depois disso faziam o fim da conversa parecer silêncio.
+const HISTORICO_HANDOFF = [
+  { autor: 'nós', texto: 'Houve avanço nas ETPs?', em: '2026-09-29T12:00:00.000Z' },
+  { autor: 'cliente', texto: 'Bom dia, não estou a frente da parte das ETPs vc pode falar com o Cap Sá Fortes', em: '2026-09-29T16:00:00.000Z' },
+  { autor: 'cliente', texto: '**Contato:** *Nome:* Cap Sá Fortes GSD-CO *Número (1):* +55 51 9960-7789', em: '2026-09-29T16:01:00.000Z' },
+  { autor: 'nós', texto: 'Obrigado!', em: '2026-09-29T16:20:00.000Z' },
+  { autor: 'nós', texto: 'Já consegui falar com o Cap Sá Fortes?', em: '2026-10-05T12:00:00.000Z' },
+];
+
+test('o foco leva a RAJADA do cliente, nao so a ultima linha', () => {
+  const { user } = montarPrompt({
+    contato: CANDIDATO,
+    historico: HISTORICO_HANDOFF,
+    followupsAnteriores: 2,
+    diasSilencio: 22,
+    maxPorContato: 3,
+    agora: new Date('2026-10-21T15:00:00.000Z'),
+  });
+  // A frase que define a situação vem UMA mensagem antes do cartão de contato.
+  // Destacar só a última linha entregava "Nome: Cap Sá Fortes, Número: ..." sem sentido.
+  const foco = user.split('Histórico completo')[0];
+  assert.match(foco, /não estou a frente da parte das ETPs/);
+  assert.match(foco, /Cap Sá Fortes GSD-CO/);
+  // E tem que dizer que o que veio depois foi insistência nossa, não fato novo.
+  assert.match(foco, /nós mandamos 2 mensagem\(ns\)/);
+  assert.match(foco, /insistência nossa/);
+});
+
+test('nunca passa de "tentativa N de N"', () => {
+  const { user } = montarPrompt({
+    contato: CANDIDATO,
+    historico: HISTORICO_HANDOFF,
+    followupsAnteriores: 7,
+    diasSilencio: 22,
+    maxPorContato: 3,
+    agora: new Date('2026-10-21T15:00:00.000Z'),
+  });
+  assert.match(user, /Tentativa 3 de 3/);
+  assert.doesNotMatch(user, /Tentativa [4-9] de 3/);
+});
+
+test('handoff, recusa, cliente e bola-conosco nunca viram mensagem', () => {
+  for (const s of ['handoff', 'recusa_definitiva', 'virou_cliente', 'aguardando_nos']) {
+    assert.ok(SITUACOES_SEM_MENSAGEM.has(s), `${s} tinha que bloquear`);
+  }
+  // Silêncio e dúvida aberta continuam gerando follow-up.
+  assert.ok(!SITUACOES_SEM_MENSAGEM.has('silencio'));
+  assert.ok(!SITUACOES_SEM_MENSAGEM.has('duvida_aberta'));
+  // Quem já disse o que tinha a dizer sai de cena por muito tempo.
+  assert.ok(ESPERA_POR_SITUACAO.handoff >= 180);
+  assert.ok(ESPERA_POR_SITUACAO.recusa_definitiva >= 365);
+});
+
+test('situacao de handoff nao envia, agenda longe e guarda a indicacao', async () => {
+  const pool = fakePool({ candidatos: [CANDIDATO], historico: HISTORICO_HANDOFF.map((h) => ({
+    content: h.texto, message_type: h.autor === 'cliente' ? 0 : 1, created_at: h.em,
+  })) });
+  let bateu = false;
+  const agendados = [];
+  const avisos = [];
+  const r = await runAiFollowupTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async () => ({
+      ok: true,
+      data: {
+        situacao: 'handoff',
+        acao: 'nao_escrever',
+        motivo: 'não estou a frente da parte das ETPs',
+        mensagem: null,
+        confianca: 0.9,
+        indicacao: { nome: 'Cap Sá Fortes', telefone: '+55 51 9960-7789' },
+      },
+    }),
+    fetchImpl: async () => { bateu = true; return { ok: true, json: async () => ({}) }; },
+    agendarRetorno: async (a) => { agendados.push(a); },
+    notify: async (a) => { avisos.push(a); },
+    config: CONFIG_BASE,
+    now: new Date('2026-10-21T15:00:00.000Z'),
+  });
+
+  assert.equal(bateu, false, 'nao pode mandar nada para quem fez handoff');
+  assert.equal(r.pulados, 1);
+  assert.equal(r.enviados, 0);
+  assert.match(pool.gravados.at(-1).skipReason, /handoff/);
+  assert.equal(agendados.length, 1, 'tem que sair de cena por muito tempo');
+  assert.match(agendados[0].note, /handoff/);
+  const indicacao = avisos.find((a) => a.tipo === 'indicacao');
+  assert.ok(indicacao, 'a indicacao e o ativo da resposta, nao pode sumir');
+  assert.equal(indicacao.indicacao.telefone, '+55 51 9960-7789');
+});
+
+test('guarda dura: situacao bloqueada nao escreve nem se o modelo mandar texto', async () => {
+  const pool = fakePool({ candidatos: [CANDIDATO], historico: HISTORICO_HANDOFF.map((h) => ({
+    content: h.texto, message_type: h.autor === 'cliente' ? 0 : 1, created_at: h.em,
+  })) });
+  let bateu = false;
+  const r = await runAiFollowupTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async () => ({
+      ok: true,
+      // O modelo se contradiz: diz handoff mas pede para escrever. A decisao nao e dele.
+      data: { situacao: 'handoff', acao: 'escrever', mensagem: 'Oi! Já falou com o Cap?', confianca: 0.95 },
+    }),
+    fetchImpl: async () => { bateu = true; return { ok: true, json: async () => ({}) }; },
+    config: CONFIG_BASE,
+    now: new Date('2026-10-21T15:00:00.000Z'),
+  });
+  assert.equal(bateu, false);
+  assert.equal(r.enviados, 0);
+  assert.equal(r.pulados, 1);
 });
 
 test('mensagem válida passa em todas as barreiras', () => {

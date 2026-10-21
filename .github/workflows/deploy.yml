@@ -63,10 +63,25 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      - name: Validate Ecommerce frontend
+        working-directory: frontend
+        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js
+        env:
+          CI: true
+
       - name: Run backend lint (if present)
         working-directory: backend
         run: npm run lint --if-present
         continue-on-error: true
+
+      - name: Validate Ecommerce API, attribution and synchronization
+        working-directory: backend
+        run: npm run test:ecommerce
+        env:
+          ECOMMERCE_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
+
+      - name: Validate WordPress Ecommerce reporting bridge
+        run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/reports.test.php
 
       - name: Validate technical analysis and catalogue isolation
         working-directory: backend

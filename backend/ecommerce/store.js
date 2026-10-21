@@ -1,4 +1,5 @@
 const { encrypt, decrypt, encryptionKey, day, shiftDay, normalizeOrder } = require('./domain');
+const crypto = require('node:crypto');
 
 async function createTables(pool) {
   await pool.query(`
@@ -11,10 +12,11 @@ async function createTables(pool) {
     );
     CREATE TABLE IF NOT EXISTS ecommerce_records (
       provider text NOT NULL, kind text NOT NULL, record_id text NOT NULL,
-      date date, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+      date date, data jsonb NOT NULL, generation text, updated_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (provider, kind, record_id)
     );
     CREATE INDEX IF NOT EXISTS ecommerce_records_period ON ecommerce_records(provider, kind, date);
+    ALTER TABLE ecommerce_records ADD COLUMN IF NOT EXISTS generation text;
     CREATE TABLE IF NOT EXISTS ecommerce_webhooks (
       delivery_id text PRIMARY KEY, topic text NOT NULL, resource_id bigint,
       received_at timestamptz NOT NULL DEFAULT now(), processed_at timestamptz
@@ -22,6 +24,7 @@ async function createTables(pool) {
     CREATE TABLE IF NOT EXISTS ecommerce_oauth_states (
       state_hash text PRIMARY KEY, expires_at timestamptz NOT NULL, context text NOT NULL
     );
+    ALTER TABLE ecommerce_oauth_states ADD COLUMN IF NOT EXISTS context text NOT NULL DEFAULT '';
   `);
 }
 const PUBLIC_FIELDS = {
@@ -39,10 +42,10 @@ function publicConnection(row) {
     last_reconciled_at: row.last_reconciled_at, next_run_at: row.next_run_at,
     progress: row.cursor ? { from: row.cursor.from, to: row.cursor.to, phase: row.cursor.phase || 'metrics', page: row.cursor.page || 1 } : null };
 }
-async function upsertRecord(db, provider, kind, id, date, data) {
-  await db.query(`INSERT INTO ecommerce_records(provider,kind,record_id,date,data) VALUES($1,$2,$3,$4,$5)
-    ON CONFLICT(provider,kind,record_id) DO UPDATE SET date=EXCLUDED.date,data=EXCLUDED.data,updated_at=now()`,
-  [provider, kind, String(id), date, data]);
+async function upsertRecord(db, provider, kind, id, date, data, generation = null) {
+  await db.query(`INSERT INTO ecommerce_records(provider,kind,record_id,date,data,generation) VALUES($1,$2,$3,$4,$5,$6)
+    ON CONFLICT(provider,kind,record_id) DO UPDATE SET date=EXCLUDED.date,data=EXCLUDED.data,generation=EXCLUDED.generation,updated_at=now()`,
+  [provider, kind, String(id), date, data, generation]);
 }
 async function transaction(client, fn) {
   await client.query('BEGIN');
@@ -68,7 +71,7 @@ function createSync({ pool, providers, env = process.env }) {
       }
     }
     const normalized = normalizeOrder(order, refunds);
-    await upsertRecord(client, 'woocommerce', 'order', normalized.id, normalized.paidDay || normalized.createdAt?.slice(0, 10), normalized);
+    await upsertRecord(client, 'woocommerce', 'order', normalized.id, normalized.paidDay || normalized.createdDay, normalized);
   }
   async function run(provider, { force = false } = {}) {
     const client = await pool.connect();
@@ -85,12 +88,19 @@ function createSync({ pool, providers, env = process.env }) {
       const today = day();
       const bootstrap = !row.last_success_at;
       const start = new Date(); start.setUTCFullYear(start.getUTCFullYear() - 1);
+      if (!info.history_from) {
+        info.history_from = day(start);
+        await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
+      }
       const reconcile = !row.last_reconciled_at || day(row.last_reconciled_at) < today;
+      const lastBridgeDay = row.info.bridge_last_success_at ? shiftDay(day(row.info.bridge_last_success_at), -2) : day(start);
+      const visitsFrom = lastBridgeDay < day(start) ? day(start) : lastBridgeDay;
       const initialFrom = bootstrap ? day(start) : reconcile ? shiftDay(today, -89) : shiftDay(today, -2);
       let cursor = row.cursor || (provider === 'woocommerce'
         ? { phase: 'orders', page: 1, from: row.last_success_at ? new Date(new Date(row.last_success_at).getTime() - 120000).toISOString().slice(0, 19) : `${day(start)}T00:00:00`,
-          to: new Date().toISOString().slice(0, 19), visitsFrom: bootstrap ? day(start) : shiftDay(today, -2), reconcile }
+          to: new Date().toISOString().slice(0, 19), visitsFrom, reconcile }
         : { from: initialFrom, to: today, next: initialFrom, reconcile });
+      if (!cursor.generation) cursor.generation = crypto.randomUUID();
       const cycleEnd = provider === 'woocommerce' ? `${cursor.to}Z` : new Date().toISOString();
       // Save the fixed upper bound before any external requests. A failed batch resumes exactly here.
       await client.query('UPDATE ecommerce_connections SET cursor=$2 WHERE provider=$1', [provider, cursor]);
@@ -108,7 +118,13 @@ function createSync({ pool, providers, env = process.env }) {
           const nextPhase = { orders: 'products', products: 'coupons', coupons: 'links', links: 'visits', visits: null };
           if (['links', 'visits'].includes(phase)) {
             if (!config.report_user || !config.report_password) { cursor = null; break; }
-            data = (await providers.bridge(config, phase, { page, per_page: 100, from: cursor.visitsFrom, to: today })).data;
+            try { data = (await providers.bridge(config, phase, { page, per_page: 100, from: cursor.visitsFrom, to: today })).data; }
+            catch {
+              info.tracking_error = 'Relatórios de links Aerion indisponíveis. Vendas continuam atualizadas; revise o plugin e suas credenciais.';
+              await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
+              cursor = null;
+              break;
+            }
           } else {
             data = (await providers.woo(config, phase, { per_page: 100, page,
               ...(phase === 'orders' ? { modified_after: cursor.from, modified_before: cursor.to, dates_are_gmt: 'true', orderby: 'modified', order: 'asc', status: 'any' } : {}) })).data;
@@ -134,8 +150,17 @@ function createSync({ pool, providers, env = process.env }) {
           const completedAt = cursor.to;
           await transaction(client, async () => {
             for (const record of normalized) await upsertRecord(client, provider, record.kind, record.id,
-              record.data.paidDay || record.data.date || record.data.createdAt?.slice(0, 10) || null, record.data);
+              record.data.paidDay || record.data.date || record.data.createdDay || null, record.data, cursor.generation);
+            if (['products', 'coupons', 'links'].includes(phase) && next?.phase !== phase) {
+              const kind = { products: 'product', coupons: 'coupon', links: 'link' }[phase];
+              await client.query('DELETE FROM ecommerce_records WHERE provider=$1 AND kind=$2 AND generation IS DISTINCT FROM $3', [provider, kind, cursor.generation]);
+            }
             await client.query('UPDATE ecommerce_connections SET cursor=$2,last_success_at=COALESCE($3::timestamptz,last_success_at) WHERE provider=$1', [provider, next, next ? null : `${completedAt}Z`]);
+            if (phase === 'visits' && !next) {
+              info.bridge_last_success_at = new Date().toISOString();
+              info.tracking_error = null;
+              await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
+            }
           });
           cursor = next;
         }
@@ -149,10 +174,10 @@ function createSync({ pool, providers, env = process.env }) {
             await client.query("DELETE FROM ecommerce_records WHERE provider=$1 AND kind='metric' AND date BETWEEN $2 AND $3", [provider, from, to]);
             for (let i = 0; i < metrics.length; i++) {
               const metric = metrics[i];
-              const id = require('node:crypto').createHash('sha256').update(JSON.stringify([metric.date, metric.kind, metric.source, metric.medium, metric.campaignId, metric.campaign, metric.content, metric.landing, metric.event])).digest('hex');
+              const id = crypto.createHash('sha256').update(JSON.stringify([metric.date, metric.kind, metric.source, metric.medium, metric.campaignId, metric.campaign, metric.content, metric.landing, metric.event])).digest('hex');
               await upsertRecord(client, provider, 'metric', id, metric.date, metric);
             }
-            await client.query('UPDATE ecommerce_connections SET cursor=$2,last_success_at=now() WHERE provider=$1', [provider, next]);
+            await client.query('UPDATE ecommerce_connections SET cursor=$2,last_success_at=CASE WHEN $2::jsonb IS NULL THEN now() ELSE last_success_at END WHERE provider=$1', [provider, next]);
           });
           cursor = next;
         }

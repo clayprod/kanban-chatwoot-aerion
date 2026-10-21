@@ -14,3 +14,4 @@ backend/scripts/__pycache__/
 .claude/settings.local.*.json
 .codex/auth.json
 .impeccable/live/
+.tmp/

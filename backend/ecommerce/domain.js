@@ -4,9 +4,12 @@ const PROVIDERS = ['woocommerce', 'ga4', 'google_ads', 'meta_ads'];
 const DAY = 86400000;
 const day = (date = new Date()) => new Date(date).toISOString().slice(0, 10);
 const shiftDay = (date, days) => day(new Date(`${date}T12:00:00Z`).getTime() + days * DAY);
-const saoPauloDay = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
-}).format(new Date(date));
+const saoPauloDay = (date = new Date()) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(date)).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
 const amount = value => Math.round((Number(value) || 0) * 100) / 100;
 
 function dateRange(query = {}) {
@@ -62,11 +65,12 @@ function normalizeOrder(order, refunds = []) {
     n + Math.abs(Number(line.total) || 0) + Math.abs(Number(line.total_tax) || 0), 0), 0);
   const unallocatedRefund = amount(Math.max(0, refunds.reduce((sum, refund) => sum + Math.abs(Number(refund.amount) || 0), 0) - allocatedRefunds));
   const paidAt = order.date_paid_gmt ? `${order.date_paid_gmt.replace(/Z$/, '')}Z` : null;
+  const createdAt = order.date_created_gmt ? `${order.date_created_gmt.replace(/Z$/, '')}Z` : null;
   const paid = Boolean(paidAt) && !['pending', 'failed', 'cancelled', 'trash'].includes(order.status);
   return {
     id: String(order.id), number: String(order.number || order.id), status: order.status,
     currency: order.currency || 'BRL', paidAt, paidDay: paidAt ? saoPauloDay(paidAt) : null,
-    createdAt: order.date_created_gmt ? `${order.date_created_gmt.replace(/Z$/, '')}Z` : null,
+    createdAt, createdDay: createdAt ? saoPauloDay(createdAt) : null,
     modifiedAt: order.date_modified_gmt ? `${order.date_modified_gmt.replace(/Z$/, '')}Z` : null,
     paid, items, coupons: (order.coupon_lines || []).map(line => ({ code: line.code, discount: amount(line.discount) })),
     revenue: paid ? amount(items.reduce((sum, item) => sum + item.revenue, 0)) : 0,
@@ -86,12 +90,14 @@ function normalizeOrder(order, refunds = []) {
 }
 
 function buildReport({ orders = [], metrics = [], links = [], visits = [], connections = [], range }) {
-  const currentOrders = orders.filter(o => (o.paidDay || o.createdAt?.slice(0, 10)) >= range.from && (o.paidDay || o.createdAt?.slice(0, 10)) <= range.to);
+  const orderDay = o => o.paidDay || o.createdDay || (o.createdAt ? saoPauloDay(o.createdAt) : '');
+  const currentOrders = orders.filter(o => orderDay(o) >= range.from && orderDay(o) <= range.to);
   const paid = currentOrders.filter(o => o.paid);
   const previous = orders.filter(o => o.paid && o.paidDay >= range.previousFrom && o.paidDay <= range.previousTo);
   const byProvider = provider => metrics.filter(m => m.provider === provider && m.date >= range.from && m.date <= range.to);
   const sum = (rows, key) => amount(rows.reduce((n, row) => n + Number(row[key] || 0), 0));
   const available = provider => connections.some(c => c.provider === provider && c.last_success_at);
+  const wooHistoryFrom = connections.find(c => c.provider === 'woocommerce')?.info?.history_from;
   const traffic = byProvider('ga4');
   const ads = metrics.filter(m => ['google_ads', 'meta_ads'].includes(m.provider) && m.date >= range.from && m.date <= range.to);
   const currencies = [...new Set([...paid.map(o => o.currency), ...ads.map(m => m.currency)].filter(Boolean))];
@@ -131,7 +137,8 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
   const linkReports = links.map(link => {
     const attributed = validPaid.filter(o => o.attribution.linkId === link.link_id);
     const linkVisits = visits.filter(v => v.link_id === link.link_id && v.date >= range.from && v.date <= range.to);
-    return { ...link, landings: sum(linkVisits, 'landings'), visitorDays: sum(linkVisits, 'visitors'),
+    const bridgeAvailable = connections.some(c => c.provider === 'woocommerce' && c.info?.bridge_last_success_at);
+    return { ...link, landings: bridgeAvailable ? sum(linkVisits, 'landings') : null, visitorDays: bridgeAvailable ? sum(linkVisits, 'visitors') : null,
       orders: attributed.length, revenue: sum(attributed, 'revenue'),
       withCoupon: attributed.filter(o => o.coupons.length).length,
       couponOutside: validPaid.filter(o => o.attribution.linkId !== link.link_id && o.coupons.some(c => (link.coupon_codes || []).includes(c.code))).length };
@@ -140,13 +147,13 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
   return {
     range, connections, currencies, summary: {
       revenue: available('woocommerce') ? revenue : null,
-      previousRevenue: available('woocommerce') ? sum(previous.filter(o => o.currency === 'BRL'), 'revenue') : null,
+      previousRevenue: available('woocommerce') && (!wooHistoryFrom || range.previousFrom >= wooHistoryFrom) ? sum(previous.filter(o => o.currency === 'BRL'), 'revenue') : null,
       orders: available('woocommerce') ? validPaid.length : null,
       ticket: available('woocommerce') && validPaid.length ? amount(revenue / validPaid.length) : null,
       sessions: available('ga4') ? sum(totalTraffic, 'sessions') : null,
       purchases: available('ga4') ? sum(totalTraffic, 'purchases') : null,
       spend: available('google_ads') || available('meta_ads') ? spend : null,
-      revenuePerAdSpend: spend ? amount(revenue / spend) : null,
+      revenuePerAdSpend: available('woocommerce') && spend ? amount(revenue / spend) : null,
       unallocatedRefund: sum(validPaid, 'unallocatedRefund'),
     },
     daily, products, coupons, utms: utms.sort((a, b) => b.revenue - a.revenue), links: linkReports,

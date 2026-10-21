@@ -122,8 +122,12 @@ function createProviders({ transport = request, env = process.env } = {}) {
         const { data } = await woo(config, 'settings/general');
         const find = id => data.find(item => item.id === id)?.value;
         let tracking = null;
-        if (config.report_user && config.report_password) tracking = (await bridge(config, 'health')).data;
-        return { currency: find('woocommerce_currency') || 'BRL', tracking };
+        let tracking_error = null;
+        if (config.report_user && config.report_password) {
+          try { tracking = (await bridge(config, 'health')).data; }
+          catch { tracking_error = 'Relatórios Aerion indisponíveis. Revise o plugin, o usuário e a Application Password. Vendas continuam sincronizando pela API WooCommerce.'; }
+        }
+        return { currency: find('woocommerce_currency') || 'BRL', tracking, tracking_error };
       }
       if (provider === 'ga4') {
         await gaReport(config, 'yesterday', 'yesterday', ['date'], ['sessions']);

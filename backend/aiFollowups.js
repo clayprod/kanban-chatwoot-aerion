@@ -35,8 +35,55 @@ const TERMOS_PROIBIDOS = [
   /\bcontrato\s+assinad/i,
 ];
 
+// Nem toda conversa parada pede follow-up. Caso real (contato Mafra, out/2026): o
+// cliente disse "nao estou a frente das ETPs, fale com o Cap Sa Fortes" e passou o
+// telefone. A IA respondeu perguntando a ELE se NOS ja tinhamos falado com o Cap —
+// tarefa nossa, nao dele — e depois ainda insistiu mais duas vezes. O certo era
+// agradecer, reclassificar com data longa e abrir o lead novo com a indicacao.
+//
+// Por isso o modelo primeiro LE a situacao e so depois escreve. Estas quatro nunca
+// geram mensagem, mesmo que ele ache que sim: a decisao nao fica com ele.
+const SITUACOES_SEM_MENSAGEM = new Set([
+  'handoff',            // "fale com fulano" — a conversa com esta pessoa acabou
+  'recusa_definitiva',  // "nao usamos drone", "encerramos a atividade"
+  'virou_cliente',      // ja comprou; follow-up de prospeccao aqui e vexame
+  'aguardando_nos',     // a bola esta com a gente (proposta, orcamento, retorno tecnico)
+]);
+
+// Quanto esperar antes de voltar, por situacao. Handoff e recusa saem de cena por
+// muito tempo; a pessoa ja disse o que tinha para dizer.
+const ESPERA_POR_SITUACAO = {
+  handoff: 180,
+  recusa_definitiva: 365,
+  virou_cliente: 0,
+  aguardando_nos: 0,
+};
+
 // Placeholder de template que escapou da personalização ({nome}, {empresa}, …).
 const PLACEHOLDER = /\{[a-z_]+\}/i;
+
+// Despedida nao e tecnica de venda: avisa o cliente que desistimos e fecha a porta.
+// O processo comercial manda terminar a cadencia em value-add e mandar para nurture,
+// em silencio. Isto e validacao, nao instrucao: o modelo ja escorregou aqui.
+const TERMOS_DESPEDIDA = [
+  /\b[uú]ltima\s+mensagem\b/i,
+  /n[aã]o\s+(vou|irei)\s+(mais\s+)?insistir/i,
+  /n[aã]o\s+insisto\s+mais/i,
+  /\bvou\s+encerrar\b/i,
+  /\bencerrar\s+(por\s+aqui|o\s+contato|nosso\s+contato)/i,
+  /\bme\s+despe(ço|co)\b/i,
+  /desculpa?e?\s+(o\s+)?incom[oó]d/i,
+  /obrigad[oa]\s+pel[oa]\s+(tempo|aten[cç][aã]o)\s+(dedicad|at[eé]\s+aqui)/i,
+  /receber\s+(informa[cç][oõ]es|atualiza[cç][oõ]es)\s+futur/i,
+  /prefere\s+que\s+eu\s+n[aã]o/i,
+  /\bparo\s+de\s+(te\s+)?(mandar|enviar|incomodar)/i,
+  // "Agradeco pela atencao ate aqui" e despedida com outras palavras.
+  /agrade[c\u00e7]o\s+(pel[ao]|por)\s+(aten[c\u00e7][a\u00e3]o|tempo|interesse)/i,
+  /deixo\s+a\s+porta\s+aberta/i,
+  // Pergunta fechada de sim/nao: o processo manda usar calibrada ("Como", "O que").
+  /ainda\s+h[a\u00e1]\s+interesse/i,
+  /tem\s+interesse\s*\?/i,
+];
 
 const flag = (nome, padrao = false) => {
   const valor = process.env[nome];
@@ -63,14 +110,18 @@ const lista = (nome, padrao) => {
 // Follow-up nao e a mesma mensagem repetida: e uma sequencia que muda de angulo a
 // cada tentativa. Repetir "ainda tem interesse?" tres vezes cansa e queima o lead.
 const ESTRATEGIA_SEQUENCIA = [
-  'Primeira tentativa: apenas retome o assunto de onde parou, leve e curto. '
-    + 'Nada de pressao. Uma pergunta aberta e facil.',
-  'Segunda tentativa: mude o angulo. Em vez de perguntar de novo se ha interesse, '
-    + 'traga algo util (um ponto do produto que casa com o que a pessoa falou, uma '
-    + 'duvida tecnica que costuma aparecer) e convide a responder a partir dali.',
-  'Terceira e ultima tentativa: feche o ciclo com elegancia. Deixe claro que voce nao '
-    + 'vai insistir mais, agradeca, e deixe a porta aberta para quando fizer sentido. '
-    + 'Pergunta simples de sim ou nao, ou nenhuma.',
+  'Primeira tentativa: retome o assunto de onde parou, curto e sem pressao. '
+    + 'Feche com uma pergunta calibrada ("Como esta...", "O que mudou em...") '
+    + 'que faca a pessoa pensar e responder com mais que um sim.',
+  'Segunda tentativa: mude o angulo e TRAGA VALOR. Um ponto concreto do produto que '
+    + 'casa com o que a pessoa falou, um caso parecido, uma duvida tecnica que costuma '
+    + 'aparecer no segmento dela. Use labeling antes da pergunta ("Imagino que a '
+    + 'prioridade de voces agora seja X..."). A pergunta vem do valor, nao do pedido.',
+  'Terceira tentativa: ultimo toque da cadencia, e ele e VALUE-ADD, nunca despedida. '
+    + 'Traga algo util de novo e descubra o TIMING com pergunta calibrada: '
+    + '"Quando voces costumam revisar esse tipo de investimento?". '
+    + 'O objetivo e qualificar o momento para nurture, nao encerrar relacionamento. '
+    + 'Depois desta o lead so entra em nurture — ele nao precisa saber disso.',
 ];
 
 const estrategiaDaTentativa = (tentativa, maximo) => {
@@ -265,6 +316,10 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            NOT IN ('true', '1', 'yes', 'sim')
        AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'nao_contatar')), ''), 'false')
            NOT IN ('true', '1', 'yes', 'sim')
+       -- Opt-out so da AUTOMACAO: vendedor e campanha continuam valendo. Serve para
+       -- quem ja disse o que tinha que dizer e nao deve ser cutucado por robo.
+       AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'ia_followup_opt_out')), ''), 'false')
+           NOT IN ('true', '1', 'yes', 'sim')
        -- Nao entrar num lote em andamento: se o numero acabou de mandar algo (campanha
        -- disparando de 2 em 2 minutos, por exemplo), a IA espera o proximo tick.
        AND (carga.ultimo_envio IS NULL OR carga.ultimo_envio <= NOW() - make_interval(secs => $7))
@@ -374,7 +429,7 @@ const montarPrompt = ({
   contato, historico, followupsAnteriores, diasSilencio,
   anteriores = [], maxPorContato = 3, agora = new Date(),
 }) => {
-  const tentativa = Number(followupsAnteriores || 0) + 1;
+  const tentativa = Math.min(Number(followupsAnteriores || 0) + 1, Math.max(1, maxPorContato));
   const system = [
     'Você escreve mensagens curtas de follow-up comercial no WhatsApp, em nome da Aerion, empresa brasileira de tecnologia.',
 'Escreva em português do Brasil, tom profissional e direto, como um vendedor experiente — nunca como robô ou telemarketing.',
@@ -392,6 +447,11 @@ const montarPrompt = ({
     '- Faça no máximo UMA pergunta, sempre fácil de responder.',
     '- Nunca cite preço, desconto, prazo de entrega ou condição comercial.',
     '- Nunca invente fato, número, reunião ou combinado que não esteja no histórico.',
+    '- A SITUAÇÃO SE JULGA PELA ÚLTIMA COISA QUE O CLIENTE DISSE, que vem destacada.',
+    '  Mensagens NOSSAS enviadas depois dela, sem resposta, NÃO mudam a situação: são',
+    '  insistência nossa, não fato novo. Se ele disse "fale com fulano" e depois mandamos',
+    '  três mensagens no vazio, a situação continua handoff — nunca vira silêncio.',
+    '  Handoff, recusa definitiva e "já comprei" valem para sempre.',
     '- CADA linha do histórico vem com quanto tempo faz. Respeite isso: evento, feira,',
     '  promoção ou prazo citado numa mensagem antiga JÁ PASSOU. Nunca convide alguém para',
     '  algo que já aconteceu nem fale no futuro de data que ficou para trás. Na dúvida sobre',
@@ -404,10 +464,51 @@ const montarPrompt = ({
     '- No máximo um emoji, e só se o histórico já tiver tom informal.',
     '- Esta é uma SEQUÊNCIA. Nunca repita a abordagem nem a pergunta de uma tentativa',
     '  anterior: se já perguntou se há interesse, mude o ângulo.',
+    '',
+    'Técnicas do processo comercial da Aerion (base Chris Voss) — use, não cite:',
+    '- PERGUNTA CALIBRADA: comece por "Como" ou "O que". Nunca "por que" (soa cobrança),',
+    '  nunca pergunta fechada de sim/não que o cliente responde com uma palavra e some.',
+    '- LABELING: nomeie a situação dele antes de perguntar ("Imagino que a frota de vocês',
+    '  esteja rodando no limite...", "Parece que o momento aí está corrido..."). Mostra que',
+    '  você entende a realidade dele e desarma.',
+    '- BUSCAR O "NÃO": pergunta onde o "não" é confortável devolve controle para o cliente',
+    '  e costuma destravar resposta. "Seria absurdo olharmos isso de novo agora?" funciona',
+    '  melhor que "você tem interesse?".',
+    '- CUSTO DA INÇÃO: quando couber, ancore no que fica caro ficando como está — sem drama',
+    '  e sem inventar número.',
+    '',
+    'O que NUNCA fazer, porque mata a venda:',
+    '- Nunca se despedir, encerrar o contato ou avisar que "não vai mais insistir".',
+    '  A cadencia acaba em silencio e o lead vai para nurture; o cliente nunca recebe',
+    '  mensagem de encerramento. A porta fica aberta SEMPRE.',
+    '- Nunca pedir desculpa por incomodar nem agradecer "pelo tempo até aqui". Isso',
+    '  comunica que você desistiu e convida o cliente a sumir de vez.',
+    '- Nunca perguntar se ele "quer receber informações futuras" — é pergunta de',
+    '  descadastro, não de vendas.',
     '- Se o histórico não der contexto para uma mensagem útil, devolva confianca baixa.',
     '',
+    'ANTES DE ESCREVER, LEIA A CONVERSA E CLASSIFIQUE A SITUAÇÃO:',
+    '- "handoff": a pessoa disse que não é ela quem cuida disso e indicou outra. A conversa',
+    '  COM ELA acabou. Não se pergunta a ela sobre o andamento com a outra pessoa — isso',
+    '  é tarefa nossa. Se ela passou nome ou telefone, devolva em "indicacao".',
+    '- "recusa_definitiva": não usa drone, já tem fornecedor fechado, encerrou a atividade.',
+    '- "virou_cliente": já comprou ou fechou com a gente.',
+    '- "aguardando_nos": a bola está do NOSSO lado (ele pediu proposta, orçamento, resposta',
+    '  técnica e não entregamos). Cobrar quem espera por nós é o pior erro possível.',
+    '- "adiar_com_data": pediu para voltar em um momento específico.',
+    '- "duvida_aberta": ficou uma pergunta dele sem resposta.',
+    '- "silencio": conversou normalmente e parou de responder, sem nada pendente.',
+    '',
+    'Nas quatro primeiras, NÃO escreva mensagem: devolva "acao": "nao_escrever".',
+    'Nas três últimas, escreva seguindo a estratégia da tentativa.',
+    '',
     'Responda SOMENTE com um objeto JSON:',
-    '{"mensagem": "<texto pronto para enviar>", "confianca": <numero de 0 a 1>, "motivo": "<por que este follow-up faz sentido agora>"}',
+    '{"situacao": "<uma das sete>", "acao": "escrever" | "nao_escrever",',
+    ' "motivo": "<a frase do cliente que te levou a isso>",',
+    ' "mensagem": "<texto pronto, ou null se nao_escrever>",',
+    ' "confianca": <numero de 0 a 1>,',
+    ' "retomar_em_dias": <inteiro, 0 se nao cabe>,',
+    ' "indicacao": {"nome": "<quem ele indicou>", "telefone": "<se deu>"} ou null}',
   ].join('\n');
 
   // Sem a idade de cada mensagem o modelo trata o assunto mais recente como atual e
@@ -428,6 +529,20 @@ const montarPrompt = ({
   }).format(agora);
   const empresaCurta = nomeCurtoEmpresa(contato.empresa);
 
+  // A ultima fala do cliente e o unico sinal que define a situacao. Entregue separada,
+  // para nao depender de o modelo acha-la no meio das nossas mensagens sem resposta.
+  const idxUltimaCliente = historico.map((h) => h.autor).lastIndexOf('cliente');
+  const ultimaDoCliente = idxUltimaCliente >= 0 ? historico[idxUltimaCliente] : null;
+  const nossasDepois = idxUltimaCliente >= 0
+    ? historico.length - idxUltimaCliente - 1
+    : historico.length;
+  // Pega a ultima RAJADA do cliente (falas seguidas dele), nao so a ultima linha.
+  const falasDoCliente = [];
+  for (let i = idxUltimaCliente; i >= 0 && falasDoCliente.length < 4; i -= 1) {
+    if (historico[i].autor !== 'cliente') break;
+    falasDoCliente.unshift(historico[i]);
+  }
+
   const user = [
     `Hoje é ${hoje}.`,
     `Contato (cadastro, pode ser razão social — não use como primeiro nome): ${contato.name || 'sem nome'}`,
@@ -437,7 +552,17 @@ const montarPrompt = ({
     `Tentativa ${tentativa} de ${maxPorContato} desta sequência.`,
     `Estratégia desta tentativa: ${estrategiaDaTentativa(tentativa, maxPorContato)}`,
     '',
-    'Histórico da conversa (mais antigo primeiro):',
+    ultimaDoCliente
+      ? [
+        `>>> O QUE O CLIENTE FALOU POR ÚLTIMO (há ${diasDesde(ultimaDoCliente.em, agora) ?? '?'} dias) — julgue a situação por aqui:`,
+        ...falasDoCliente.map((f) => `    "${f.texto}"`),
+      ].join(String.fromCharCode(10))
+      : '>>> O CLIENTE NUNCA RESPONDEU nesta conversa.',
+    nossasDepois > 0
+      ? `>>> Depois disso nós mandamos ${nossasDepois} mensagem(ns) e ele não respondeu. Isso é insistência nossa, não fato novo.`
+      : null,
+    '',
+    'Histórico completo (mais antigo primeiro):',
     linhas,
     anteriores.length ? '' : null,
     anteriores.length
@@ -464,6 +589,9 @@ const validarMensagem = (texto, confianca, config) => {
   if (limpo.length > MENSAGEM_MAX_CHARS) return `mensagem longa demais (${limpo.length} chars)`;
   if (PLACEHOLDER.test(limpo)) return 'placeholder não resolvido na mensagem';
   if (TERMOS_PROIBIDOS.some((re) => re.test(limpo))) return 'mensagem toca em tema comercial proibido';
+  if (TERMOS_DESPEDIDA.some((re) => re.test(limpo))) {
+    return 'mensagem se despede do lead — a cadência termina em silêncio, não em adeus';
+  }
   // Number(null) é 0 — sem este teste, confiança ausente virava "abaixo do mínimo".
   if (confianca === null || confianca === undefined || confianca === '') return 'confiança ausente';
   if (!Number.isFinite(Number(confianca))) return 'confiança ausente';
@@ -533,6 +661,7 @@ const runAiFollowupTick = async (pool, {
   accountId,
   chatCompletionJson,
   notify = null,
+  agendarRetorno = null,
   fetchImpl = fetch,
   now = new Date(),
   config = carregarConfig(),
@@ -592,8 +721,50 @@ const runAiFollowupTick = async (pool, {
         continue;
       }
 
+      const situacao = String(ia.data?.situacao || '').trim().toLowerCase();
       const texto = String(ia.data?.mensagem || '').trim();
       const confianca = ia.data?.confianca;
+
+      // Guarda dura: nestas situacoes nao se escreve, mesmo que o modelo tenha
+      // devolvido "escrever" e um texto bonito. A decisao nao e dele.
+      const proibidoEscrever = SITUACOES_SEM_MENSAGEM.has(situacao)
+        || String(ia.data?.acao || '').trim().toLowerCase() === 'nao_escrever';
+
+      if (proibidoEscrever) {
+        const motivoLeitura = String(ia.data?.motivo || '').slice(0, 300);
+        await registrarDecisao(pool, {
+          ...base,
+          status: 'skipped',
+          skipReason: `situacao "${situacao || 'nao_escrever'}": ${motivoLeitura}`,
+          provider: ia.provider,
+          model: ia.model,
+          confidence: confianca,
+        });
+        resultado.pulados += 1;
+
+        // Sai de cena pelo tempo que a situacao pede, em vez de voltar em 5 dias.
+        const dias = ESPERA_POR_SITUACAO[situacao] ?? Number(ia.data?.retomar_em_dias) ?? 0;
+        if (dias > 0 && agendarRetorno) {
+          await Promise.resolve(agendarRetorno({
+            contactId: candidato.contact_id,
+            dueAt: new Date(Date.now() + dias * 86400000).toISOString(),
+            note: `IA: ${situacao} — voltar em ${dias} dias`.slice(0, 160),
+          })).catch((e) => console.warn('[follow-up] agendar retorno falhou:', e.message));
+        }
+
+        // Indicacao e o ativo mais valioso dessa resposta: nao pode morrer no log.
+        const ind = ia.data?.indicacao;
+        if (ind && (ind.nome || ind.telefone) && notify) {
+          await Promise.resolve(notify({
+            tipo: 'indicacao',
+            contato: candidato,
+            indicacao: ind,
+            motivo: motivoLeitura,
+          })).catch(() => {});
+        }
+        continue;
+      }
+
       const problema = validarMensagem(texto, confianca, config);
       if (problema) {
         await registrarDecisao(pool, {
@@ -663,6 +834,9 @@ const runAiFollowupTick = async (pool, {
 
 module.exports = {
   AI_FOLLOWUP_LOG_TABLE,
+  TERMOS_DESPEDIDA,
+  SITUACOES_SEM_MENSAGEM,
+  ESPERA_POR_SITUACAO,
   nomeCurtoEmpresa,
   MENSAGEM_MAX_CHARS,
   ETAPAS_PADRAO,
