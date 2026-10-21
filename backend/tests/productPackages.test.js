@@ -24,6 +24,8 @@ test('three batteries means one extra beyond the two included, with cost in rank
   const mapping = [{ requirement_id: 'r', spec_ids: a.product.specs.map(s => s.id) }];
   const result = assessProduct(a.product, [requirement], [...sources, ...a.sources], mapping, true, { unit: 'un', reference_price: 110 });
   assert.equal(result.status, 'full'); assert.equal(result.commercial_bonus, 1); assert.equal(result.sale_price, 120);
+  const duplicate = { ...base, specs: [{ id: 'old1', key: requirement.key, value: 2 }, { id: 'old2', key: requirement.key, value: 2 }] };
+  assert.equal(assembleProduct(duplicate, [requirement], [battery], sources).product.specs.filter(s => s.key === requirement.key).length, 1);
 });
 test('incompatible, missing and unconfirmed accessories never create full compliance', () => {
   for (const p of [{ ...base, compatible_ids: [] }, { ...base, package_confirmed: false }]) {
@@ -51,4 +53,9 @@ test('installing a confirmed RTK accessory uses only its evidenced RTK facts', (
   assert.equal(a.product.sale_price, 120); assert.ok(a.product.specs.some(s => s.id === 'rtks'));
   const result = assessProduct(a.product, [r], allSources, [{ requirement_id: 'rtk', spec_ids: ['rtks'] }], true, {});
   assert.equal(result.status, 'full');
+  const conflict = { ...spec, id: 'rtk-conflict', value: 'não', quote: 'Módulo não suporta RTK' };
+  const conflictingSources = [{ id: 'notice', text: r.quote }, { id: 'module', text: spec.quote + '\n' + conflict.quote }];
+  const uncertain = assembleProduct(base, [r], [{ ...battery, accessory_key: 'rtk', specs: [spec, conflict] }], conflictingSources);
+  assert.equal(uncertain.product.specs.length, 2);
+  assert.equal(assessProduct(uncertain.product, [r], conflictingSources, [{ requirement_id: 'rtk', spec_ids: ['rtks', 'rtk-conflict'] }], true, {}).status, 'uncertain');
 });

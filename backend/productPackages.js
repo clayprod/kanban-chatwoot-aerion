@@ -52,18 +52,18 @@ function assembleProduct(product, requirements, accessories, sources) {
     const key = componentKey(req), c = quantities.find(c => c.key === key);
     if (key === 'battery' && c && req.kind === 'numeric' && ['min', 'eq'].includes(req.operator) && !req.conditions) {
       // Replace the count only; autonomy, battery chemistry and other metrics stay untouched.
-      const index = specs.findIndex(s => text(s.key) === text(req.key));
-      if (index >= 0) specs.splice(index, 1);
+      for (let index = specs.length - 1; index >= 0; index--) if (text(specs[index].key) === text(req.key)) specs.splice(index, 1);
       const quote = `${c.label}: ${c.quantity} ${req.unit}`;
       syntheticLines.push(quote);
       specs.push({ id: `package-${req.id}`, key: req.key, label: req.label, kind: 'numeric', value: c.quantity, unit: req.unit, conditions: '', source_id: syntheticId, location: 'Composição conferida do pacote', quote });
     } else if (key) {
       const chosen = additions.filter(a => a.key === key).map(a => available.find(p => String(p.id) === String(a.product_id)));
-      for (const a of chosen) for (const s of a.specs || []) if (text(s.key) === text(req.key)) {
+      for (const a of chosen) {
+        const matching = (a.specs || []).filter(s => text(s.key) === text(req.key));
+        if (!matching.length) continue;
         // Only optional module metrics may be supplied by this accessory.
-        const index = specs.findIndex(s => text(s.key) === text(req.key));
-        if (index >= 0) specs.splice(index, 1);
-        specs.push(s);
+        for (let index = specs.length - 1; index >= 0; index--) if (text(specs[index].key) === text(req.key)) specs.splice(index, 1);
+        specs.push(...matching);
       }
     }
   }
