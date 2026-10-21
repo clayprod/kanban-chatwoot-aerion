@@ -274,6 +274,22 @@ test('Google Ads reporting converts micros, keeps account currency and omits dev
   assert(!requests[0].url.includes('secret'));
 });
 
+test('Google Ads ROAS uses the selected purchase action rather than summing lead conversion values', async () => {
+  const queries = [];
+  const p = createProviders({ transport: async (url, options) => {
+    if (url.includes('oauth2')) return new Response(JSON.stringify({ access_token: 'private-access', expires_in: 3600 }));
+    const query = JSON.parse(options.body).query; queries.push(query);
+    const purchase = query.includes('segments.conversion_action =');
+    return new Response(JSON.stringify({ results: [{ segments: { date: '2026-10-20' }, campaign: { id: '1', name: 'Drones' },
+      metrics: purchase ? { allConversions: '2', allConversionsValue: '1500' } : { costMicros: '100000000', clicks: '20', impressions: '1000', conversions: '7', conversionsValue: '7' } }] }));
+  } });
+  const rows = await p.metrics('google_ads', { customer_id: '1234567890', purchase_conversion_action_id: '987654', client_id: 'client', client_secret: 'secret', refresh_token: 'refresh' }, '2026-10-20', '2026-10-21', { currency: 'BRL' });
+  assert.equal(rows[0].conversions, 2); assert.equal(rows[0].conversionValue, 1500); assert.equal(rows[0].spend, 100);
+  assert.equal(rows[0].allGoalsConversions, 7); assert.equal(rows[0].allGoalsConversionValue, 7);
+  assert(queries[1].includes("customers/1234567890/conversionActions/987654"));
+  assert.throws(() => validateConfig('google_ads', { customer_id: '1234567890', purchase_conversion_action_id: 'injection' }));
+});
+
 test('federated identity signs short assertions and keeps Analytics and Ads token caches separate', async () => {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const account = { type: 'workload_identity', client_email: 'reader@aerion-project.iam.gserviceaccount.com',

@@ -29,7 +29,7 @@ async function createTables(pool) {
 }
 const PUBLIC_FIELDS = {
   woocommerce: ['url', 'report_user'], ga4: ['property_id'],
-  google_ads: ['customer_id', 'login_customer_id', 'client_id', 'auth_type'], meta_ads: ['account_id'],
+  google_ads: ['customer_id', 'login_customer_id', 'client_id', 'auth_type', 'purchase_conversion_action_id'], meta_ads: ['account_id'],
   search_console: ['site_url'],
 };
 const SECRET_FIELDS = {

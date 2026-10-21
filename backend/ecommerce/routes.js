@@ -47,6 +47,7 @@ function validateConfig(provider, config) {
       if ((field === 'customer_id' || config[field]) && !/^\d{10}$/.test(config[field])) throw new Error('IDs do Google Ads devem ter 10 dígitos.');
     }
     config.auth_type = config.auth_type || 'oauth';
+    if (config.purchase_conversion_action_id && !/^\d+$/.test(config.purchase_conversion_action_id)) throw new Error('O ID da ação de compra Google Ads deve ser numérico.');
     if (!['oauth', 'google_identity'].includes(config.auth_type)) throw new Error('Tipo de autenticação Google inválido.');
     if (config.auth_type === 'google_identity') config.service_account = validateGoogleIdentity(config.service_account);
     else if (missing(['client_id', 'client_secret'])) throw new Error('Informe OAuth Client ID e Client Secret do Google Cloud.');
@@ -187,7 +188,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
         }
         try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
         const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id', search_console: 'site_url' }[provider];
-        const changed = old && old.config[identity] !== merged[identity];
+        const changed = old && (old.config[identity] !== merged[identity] || (provider === 'google_ads' && (old.config.purchase_conversion_action_id || '') !== (merged.purchase_conversion_action_id || '')));
         const metaCredentialChanged = provider === 'meta_ads' && previous.access_token !== merged.access_token;
         if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id || (previous.auth_type || 'oauth') !== merged.auth_type)) delete merged.refresh_token;
         const config = Object.fromEntries(PUBLIC_FIELDS[provider].map(k => [k, merged[k] || '']));

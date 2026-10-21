@@ -232,6 +232,25 @@ function createProviders({ transport = request, env = process.env } = {}) {
             currency: info.currency, timezone: info.timezone, attribution: 'Configuração das ações de conversão no Google Ads' })));
           pageToken = data.nextPageToken;
         } while (pageToken);
+        if (config.purchase_conversion_action_id) {
+          const purchases = new Map();
+          const purchaseQuery = `SELECT segments.date, segments.conversion_action, campaign.id, metrics.all_conversions, metrics.all_conversions_value FROM campaign WHERE segments.date BETWEEN '${from}' AND '${to}' AND segments.conversion_action = 'customers/${config.customer_id}/conversionActions/${config.purchase_conversion_action_id}'`;
+          let purchasePage;
+          do {
+            const { data } = await json(`https://googleads.googleapis.com/${env.ECOMMERCE_GOOGLE_ADS_VERSION || 'v25'}/customers/${config.customer_id}/googleAds:search`, postJson({ query: purchaseQuery, ...(purchasePage ? { pageToken: purchasePage } : {}) }, headers), transport);
+            for (const row of data.results || []) {
+              const key = `${row.segments.date}:${row.campaign.id}`;
+              const old = purchases.get(key) || { conversions: 0, conversionValue: 0 };
+              old.conversions += Number(row.metrics.allConversions || 0); old.conversionValue += Number(row.metrics.allConversionsValue || 0); purchases.set(key, old);
+            }
+            purchasePage = data.nextPageToken;
+          } while (purchasePage);
+          for (const row of rows) {
+            row.allGoalsConversions = row.conversions; row.allGoalsConversionValue = row.conversionValue;
+            Object.assign(row, purchases.get(`${row.date}:${row.campaignId}`) || { conversions: 0, conversionValue: 0 });
+            row.attribution = `Compra Google Ads · ação ${config.purchase_conversion_action_id} · inclui ação secundária; exclui leads`;
+          }
+        }
         return rows;
       }
       const rows = [];
