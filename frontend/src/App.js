@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import axios from 'axios';
 import SearchGuide from './SearchGuide';
 import SearchEvidence from './SearchEvidence';
-import SearchQualityPanel from './SearchQualityPanel';
 import SearchWatchlistReview from './SearchWatchlistReview';
 import ProductCatalog from './ProductCatalog';
 import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
@@ -5562,7 +5561,6 @@ function PcaExplorer({ onPromoted, onSwitchToBoard, onOpenOpportunity }) {
           </div>
         )}
 
-        <SearchQualityPanel />
         <SearchGuide source="pca" filters={filtros} activating={loading}
           onRestoreFilters={restored => setFiltros(prev => ({ ...prev, ...restored }))}
           onCriteriaChange={() => setSearchProfile(null)} onActivate={async profile => {
@@ -8109,6 +8107,7 @@ function App() {
   // Header do popup compacto por padrão — mais espaço pra lista de resultados.
   const [pncpJobHeaderExpanded, setPncpJobHeaderExpanded] = useState(false);
   const [pncpJobFilterDraft, setPncpJobFilterDraft] = useState({
+    item_kind: 'all',
     tipos_documento: 'edital',
     status: 'recebendo_proposta',
     modalidade_licitacao_id: '',
@@ -10453,6 +10452,7 @@ function App() {
 
   const seedPncpJobFilterDraft = (filters = {}) => {
     setPncpJobFilterDraft({
+      item_kind: filters.search_profile?.item_kind || filters.item_kind || 'all',
       tipos_documento: filters.tipos_documento || 'edital',
       status: filters.status || 'recebendo_proposta',
       modalidade_licitacao_id: filters.modalidade_licitacao_id || '',
@@ -10471,6 +10471,8 @@ function App() {
   const getPncpPartidaFilterChips = (filters = {}, options = {}) => {
     const chips = [];
     const f = filters || {};
+    const kind = f.search_profile?.item_kind || f.item_kind;
+    if (kind && kind !== 'all') chips.push({ key: 'item_kind', label: 'Itens', value: kind === 'material' ? 'Somente materiais' : 'Somente serviços' });
     const tipoDocLabel = {
       edital: 'Editais',
       ata: 'Atas',
@@ -16472,16 +16474,12 @@ function App() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h3 className={`${sectionTitle} text-base`}>Nova busca de editais</h3>
-                      <p className={`${subtle} mt-0.5`}>
-                        Defina seu interesse e os filtros. A coleta continuará em segundo plano após sua confirmação.
-                      </p>
                     </div>
                     <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondarySm}`}>
                       Watchlists
                     </button>
                   </div>
 
-                  <SearchQualityPanel />
                   <SearchGuide key={pncpGuideJob?.id || 'new'} source="edital"
                     onRestoreFilters={restored => setPncpSearchFilters(prev => ({ ...prev, ...restored }))}
                     initialProfile={pncpGuideJob?.filters?.search_profile || (pncpGuideJob ? {
@@ -16546,13 +16544,6 @@ function App() {
                       </button>
                     </div>
                   </div>
-                  <p className="text-[11px] text-muted2">
-                    Esses filtros definem como o job consulta o PNCP. Depois que a busca existir, o aprofundamento nos resultados fica no popup do card.
-                    {' · '}
-                    <span title="Editais já importados para o board deixam de aparecer em Na lista.">
-                      Não lista o que já está no pipeline
-                    </span>
-                  </p>
 
                   {pncpSearchExpanded && (
                     <div className="space-y-5 rounded-[14px] border border-line bg-bg2/40 p-4">
@@ -17552,10 +17543,7 @@ function App() {
                                 <div className="rounded-[12px] border border-line bg-bg2/40 p-3.5">
                                   <div className="flex flex-wrap items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                      <h4 className={`${sectionTitle} text-sm`}>Filtros de partida</h4>
-                                      <p className={`${subtle} mt-0.5`}>
-                                        Como este job consulta o PNCP. Diferente do filtro local em Resultados.
-                                      </p>
+                                      <h4 className={`${sectionTitle} text-sm`}>Filtros da busca</h4>
                                     </div>
                                     <button
                                       type="button"
@@ -17584,6 +17572,13 @@ function App() {
 
                                   {pncpJobFiltersEditing && (
                                     <div className="mt-3 space-y-3 border-t border-line pt-3">
+                                      <label className="block text-sm font-medium">Tipo de item
+                                        <select value={pncpJobFilterDraft.item_kind} onChange={e => setPncpJobFilterDraft(prev => ({ ...prev, item_kind: e.target.value }))} className={`${select} filter-select mt-1 text-sm`}>
+                                          <option value="all">Materiais e serviços</option>
+                                          <option value="material">Somente materiais — excluir serviços</option>
+                                          <option value="service">Somente serviços</option>
+                                        </select>
+                                      </label>
                                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                         <div className="min-w-0">
                                           <label className="mb-1 block text-[11px] font-medium text-muted">Documento</label>
@@ -17677,7 +17672,7 @@ function App() {
                                           Cancelar
                                         </button>
                                         <p className={`${subtle} max-w-md`}>
-                                          Reaplica no job e reenfileira a coleta. Resultados já salvos permanecem.
+                                          Atualiza os critérios e refaz a coleta.
                                         </p>
                                       </div>
                                     </div>

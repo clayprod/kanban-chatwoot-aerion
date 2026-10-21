@@ -12,6 +12,11 @@ foreach(wc_get_products(['limit'=>-1,'status'=>'publish','return'=>'objects']) a
   $q=Aerion_Pricing::quote($p,'trade',0);
   $rows[]=['id'=>$p->get_id(),'sku'=>$p->get_sku(),'name'=>$p->get_name(),'slug'=>$p->get_slug(),
     'trade'=>$p->get_meta('_aerion_trade_price',true),'sale_price'=>$q['card'],'pix'=>$q['pix'],
+    'package_contents'=>json_decode((string)$p->get_meta('_aerion_package_contents',true),true),
+    'compatibility'=>json_decode((string)$p->get_meta('_aerion_compatibility',true),true),
+    'specifications'=>json_decode((string)$p->get_meta('_aerion_specifications',true),true),
+    'technical_data'=>json_decode((string)$p->get_meta('_aerion_technical_data',true),true),
+    'variant_specs'=>json_decode((string)$p->get_meta('_aerion_variant_specs',true),true),
     'bom'=>$p->get_meta('_aerion_bom',true),'description'=>wp_strip_all_tags($p->get_description()),
     'short_description'=>wp_strip_all_tags($p->get_short_description()),
     'url'=>get_permalink($p->get_id()),'categories'=>wp_get_object_terms($p->get_id(),'product_cat',['fields'=>'names']),

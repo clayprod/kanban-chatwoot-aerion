@@ -37,7 +37,7 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
     axios.get('/api/licitacoes/search/guide/drafts').then(r => {
       if (!ignore) setDrafts((r.data || []).filter(d => d.source === source));
     }).catch(() => {});
-    axios.get('/api/licitacoes/products').then(r => { if (!ignore) setProducts((r.data || []).filter(p => p.active)); }).catch(() => {});
+    axios.get('/api/licitacoes/products').then(r => { if (!ignore) setProducts((r.data || []).filter(p => p.active && p.product_type !== 'accessory')); }).catch(() => {});
     return () => { ignore = true; revision.current++; controller.current?.abort(); };
   }, [source]);
   useEffect(() => {
@@ -100,10 +100,9 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
     setNotice('Rascunho recuperado. Confira os critérios e gere uma nova amostra.');
   };
 
-  return <section className="space-y-4 rounded-xl border border-line bg-surf p-4 text-ink" aria-label="Criar busca guiada">
+  return <section className="space-y-4 text-ink" aria-label="Criar busca guiada">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h3 className="text-base font-semibold">{initialProfile ? 'Revisar critérios da busca' : `Nova busca ${source === 'pca' ? 'de PCA' : 'de editais'}`}</h3>
-        <p className="mt-1 text-sm text-muted">Descreva seu interesse. Vamos conferir o entendimento e consultar uma amostra antes de começar.</p></div>
+      {initialProfile && <h3 className="text-base font-semibold">Revisar critérios</h3>}
       {onCancel && <button type="button" className={secondary} onClick={onCancel}>Fechar</button>}
     </div>
     {drafts.length > 0 && <label className="block text-sm">Continuar um rascunho
@@ -115,18 +114,17 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
         placeholder="Descreva produtos, serviços, marcas ou necessidades. Diga também o que não interessa."
         onChange={e => { invalidate(); setDescription(e.target.value); setProfile(null); setQuestions([]); }} />
     </label>
-    <div className="space-y-2 rounded-lg border border-line bg-bg2 p-3">
+    <div className="space-y-2">
       <label className="block text-sm font-medium">Tipo de item<select className={`${fieldClass} mt-1 font-normal`} value={itemKind} aria-describedby={itemKindHelpId} onChange={e => {
         const kind = e.target.value;
         invalidate(); setItemKind(kind); itemKindChosen.current = true;
         setProfile(p => p ? { ...p, item_kind: kind, confirmed_at: null } : p);
       }}><option value="all">Materiais e serviços</option><option value="material">Somente materiais — excluir serviços</option><option value="service">Somente serviços</option></select></label>
-      <p id={itemKindHelpId} className="text-sm text-muted">Para tirar serviços dos resultados, escolha “Somente materiais”. A exclusão usa a classificação oficial do PNCP. Itens sem classificação confirmada continuam visíveis e sinalizados para revisão.</p>
+      <p id={itemKindHelpId} className="text-xs text-muted">Classificação oficial do PNCP. Itens sem classificação ficam para revisão.</p>
     </div>
-    {products.length > 0 && <fieldset className="space-y-2 text-sm"><legend className="font-medium">Produtos para análise técnica (opcional)</legend>
-      <p className="text-xs text-muted">Sem seleção, considerar todos os produtos ativos pertinentes. A análise depende da automação configurada em Produtos.</p>
+    {products.length > 0 && <details className="text-sm"><summary className="cursor-pointer">Produtos para comparar · {productIds.length ? `${productIds.length} selecionados` : 'Todos os pertinentes'}</summary><fieldset className="mt-2 space-y-2"><legend className="sr-only">Produtos para análise técnica (opcional)</legend>
       <div className="flex max-h-36 flex-wrap gap-3 overflow-auto">{products.map(p => <label key={p.id} className="flex items-center gap-2"><input type="checkbox" checked={productIds.map(String).includes(String(p.id))} onChange={e => { invalidate(); setProductIds(ids => e.target.checked ? [...ids, String(p.id)] : ids.filter(id => String(id) !== String(p.id))); }} />{p.name}</label>)}</div>
-    </fieldset>}
+    </fieldset></details>}
     <div className="flex flex-wrap gap-2">
       <button type="button" className={primary} disabled={!!busy || !description.trim()} onClick={interpret}>{busy === 'interpret' ? 'Interpretando…' : 'Definir minha busca'}</button>
       {!profile && <button type="button" className={secondary} disabled={!description.trim() || !!busy} onClick={() => {
@@ -162,7 +160,6 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
           </div>}
         </>}
         <label className="block text-sm">O que deve ficar de fora<textarea rows={2} className={`${fieldClass} mt-1`} value={list(profile.excluded_terms)} onChange={e => patchProfile({ excluded_terms: e.target.value.split(';') })} /></label>
-        <p className="text-sm text-muted">Os filtros de localidade, órgão e período definidos nesta tela também serão aplicados.</p>
         <button type="button" className={primary} disabled={!canPreview || !!busy} onClick={getPreview}>{busy === 'preview' ? 'Consultando amostra…' : 'Conferir amostra real'}</button>
       </div>
       {preview && <div className="space-y-3 border-t border-line pt-4" aria-label="Amostra da busca">

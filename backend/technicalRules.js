@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const VERSION = 1;
+const VERSION = 2;
 const text = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(v)).digest('hex');
 const commercialUnit = v => ({ un: 'unit', unidade: 'unit', unidades: 'unit', unit: 'unit', units: 'unit', und: 'unit', peca: 'unit', pecas: 'unit' }[text(v)] || text(v));

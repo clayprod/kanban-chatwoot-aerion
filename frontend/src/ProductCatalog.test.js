@@ -52,3 +52,20 @@ test('result lists fetch only a summary until the user opens the technical evide
   fireEvent(details, new Event('toggle'));
   await waitFor(() => expect(axios.get).toHaveBeenCalledWith('/api/licitacoes/technical/jobs/9'));
 });
+
+test('catalogue separates accessories, opens original contents and exposes the credit blocker', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/config') ? {
+    config: { enabled: true, min_score: 68, daily_limit: 30, daily_tokens: 2000000 }, usage: {}, health: { ready: 0, products: 1, provider_blocked: true },
+  } : url.endsWith('/products') ? [
+    { id: '1', name: 'Drone original', product_type: 'product', active: true, sale_price: 100, keywords: [], included_items: [{ label: 'Baterias de voo', key: 'battery', quantity: 2 }], compatible_ids: ['2'] },
+    { id: '2', name: 'Bateria avulsa', product_type: 'accessory', active: true, sale_price: 20, keywords: [] },
+  ] : [] }));
+  render(<ProductCatalog />);
+  expect(await screen.findByText(/Análises aguardando créditos de IA/)).toBeVisible();
+  await screen.findByRole('heading', { name: 'Drone original' });
+  expect(screen.getByLabelText('Quantidade do componente 1')).toHaveValue(2);
+  expect(screen.getByRole('tab', { name: /Produtos/ })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByLabelText(/Bateria avulsa/)).toBeChecked();
+  fireEvent.click(screen.getByRole('tab', { name: /Acessórios/ }));
+  expect(screen.getByRole('tab', { name: /Acessórios/ })).toHaveAttribute('aria-selected', 'true');
+});

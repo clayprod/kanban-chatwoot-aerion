@@ -20089,8 +20089,9 @@ const chatCompletionJson = async ({
   temperature = 0.25,
   timeoutMs = 45000,
   maxProviderAttempts = Infinity,
+  providerOffset = 0,
 }) => {
-  const providers = getAiChatProviders();
+  const providers = getAiChatProviders().slice(Math.max(0, Number(providerOffset) || 0));
   if (!providers.length) {
     return { ok: false, error: 'Nenhuma IA configurada (OPENAI_API_KEY, GROQ_API_KEY ou OPENROUTER_API_KEY).' };
   }
@@ -20175,7 +20176,7 @@ const technicalAnalysis = createTechnicalAnalysis({
     const level = user?.page_permissions?.['Licitações'];
     return write ? level === 'edit' : ['view', 'edit'].includes(level);
   },
-  ai: args => chatCompletionJson(args), getIds: extractPncpCompraIdentifiers,
+  ai: args => chatCompletionJson(args), getProviderCount: () => getAiChatProviders().length, getIds: extractPncpCompraIdentifiers,
   getNotice: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`), { priority: 'bulk' }),
   getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk', maxPages: 2, startPage, requireEmptyPage: true }),
   getFiles: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'bulk' }),
@@ -23713,6 +23714,9 @@ const initializeDataLayer = async () => {
 
   await createLicitacaoTables();
   await createSearchQualityTables(pool);
+  // Recover only searches interrupted by the fixed reassignment bug.
+  await pool.query(`UPDATE ${PNCP_SEARCH_JOBS_TABLE} SET status='queued',error=NULL,completed_at=NULL,updated_at=NOW()
+    WHERE account_id=$1 AND status='failed' AND error='Assignment to constant variable.'`, [CHATWOOT_ACCOUNT_ID]);
   await createTechnicalTables(pool);
   const catalogSeed = await seedTechnicalCatalog(pool, CHATWOOT_ACCOUNT_ID);
   if (catalogSeed.inserted) console.log(`[technical-catalog] ${catalogSeed.inserted} produtos importados com preço de distribuição.`);

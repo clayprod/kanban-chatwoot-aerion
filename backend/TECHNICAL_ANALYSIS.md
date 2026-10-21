@@ -34,10 +34,16 @@ Migrações são aditivas. Fontes binárias ficam no PostgreSQL, deduplicadas po
 
 `data/aerionCatalog.json` contém os 31 produtos publicados da loja WordPress local indicada pelo usuário, com tabela `_aerion_trade_price`, sem desconto Pix, campanha ou nível Silver/Gold. Inclui variantes, kits, composição e os trechos institucionais que puderam ser associados à variante. Não associa ficha de aeronave a acessório; dados de controle remoto de outra configuração são omitidos. Faltas permanecem sem comprovação.
 
-O startup importa esse lote apenas em `CHATWOOT_ACCOUNT_ID`, sem ligar a automação. `source_key` por SKU torna a operação idempotente; cadastros existentes não são sobrescritos. O exportador `scripts/exportAerionCatalog.js` consulta a loja local em modo somente leitura. Publicação do código/migrações segue `main` e CI, sem executar código local na produção.
+O exportador `scripts/exportAerionCatalog.js` consulta a loja local em modo somente leitura para a tabela de distribuição. `scripts/refreshAerionPackages.js` confere composição, fichas e compatibilidade nas páginas públicas atuais da loja. A consolidação por SKU em `aerionCatalogModel.js` mantém 8 produtos principais e 11 acessórios: pacotes de baterias extras e controles alternativos não viram novas aeronaves. Variantes antigas recebem `superseded_by`, mantendo fontes, IDs e histórico; seleções antigas de busca são resolvidas para o pacote original.
+
+A migração `original-packages-v2` aplica uma vez a composição conferida, preserva preços editados e habilita a análise de buscas existentes na conta Aerion, conforme solicitado. Reinícios seguintes preservam edições e pausas feitas pelo usuário. Publicação segue `main` e CI.
+
+Produtos têm `included_items` estruturados e `compatible_ids` explícitos. Acessórios têm função e unidades por embalagem. A comparação completa a quantidade de baterias e módulos/hubs exigidos somente com acessórios ativos e compatíveis, soma o custo e mostra a configuração ofertada. Um complemento não corrige falha intrínseca de câmera/autonomia. Fatos técnicos do módulo precisam de fontes; ausência de preço, composição ou evidência não produz aprovação. Mudanças de preço de acessórios também recalculam a classificação sem IA.
+
+A rotina tenta até três provedores configurados, com reserva de tokens para cada tentativa. Falta de créditos sem alternativa válida pausa a conta por uma hora, sem falhar repetidamente cada ficha; a UI informa o bloqueio e oferece `/api/licitacoes/technical/resume`. Resultados salvos são varridos sem depender de abrir cards. Registros sem identificação PNCP válida recebem checkpoint para não bloquear os seguintes.
 
 ## Verificação
 
-`node --test tests/technicalRules.test.js` cobre limites, unidades, conflitos, critérios compostos e escolha comercial. Com `QUALITY_TEST_DATABASE_URL` apontando para um PostgreSQL de teste, `tests/technicalAnalysis.integration.test.js` valida APIs, migrações idempotentes, retomada, limites, filtros globais, recomposição de preço, isolamento e os 31 cadastros. Cada execução usa e remove seu próprio schema.
+`node --test tests/technicalRules.test.js tests/productPackages.test.js tests/deepSearchRegression.test.js` cobre limites, composição, acessórios e o rodízio real do coletor sem acessar PNCP. Com `QUALITY_TEST_DATABASE_URL` apontando para PostgreSQL de teste, `tests/technicalAnalysis.integration.test.js` valida migrações, APIs, retomada, limites, filtros, preços, isolamento, consolidação, buscas existentes e fallback de IA. Cada execução usa e remove seu próprio schema.
 
 Na imagem Docker, `TECHNICAL_DOCUMENT_TEST=1 node --test tests/technicalDocuments.integration.test.js` verifica PDF textual, PDF digitalizado/OCR, tabelas DOCX e DOC legado sem IA ou rede.

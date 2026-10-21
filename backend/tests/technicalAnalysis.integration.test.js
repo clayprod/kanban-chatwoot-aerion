@@ -94,6 +94,14 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal(calls, callsBeforePrice); // prices cannot cause AI consumption
       assert.equal((await request('GET', `${base}/technical/jobs/${jobId}`)).data.result.items[0].products[0].sale_price, 80);
 
+      // Background sweep must reach saved results even without opening their cards.
+      // Invalid PNCP identities on the first page cannot starve the remaining results.
+      for (let n = 0; n < 45; n++) await pool.query("INSERT INTO pncp_search_job_results(job_id,account_id,result_key,score,visibility,payload) VALUES($1,1,$2,99,'visible',$3::jsonb)", [jid, `invalid-${n}`, JSON.stringify({ ...input, orgao_cnpj: 'invalid' })]);
+      await pool.query("INSERT INTO pncp_search_job_results(job_id,account_id,result_key,score,visibility,payload) VALUES($1,1,'existing-unopened',75,'visible',$2::jsonb)", [jid, JSON.stringify({ ...input, sequencial: '3' })]);
+      for (let n = 0; n < 3; n++) await service.tick();
+      assert.ok((await pool.query("SELECT job_id FROM technical_candidates WHERE account_id=1 AND result_key='existing-unopened'")).rows[0]?.job_id);
+      assert.equal((await pool.query("SELECT count(*)::int AS n FROM technical_candidates WHERE account_id=1 AND result_key LIKE 'invalid-%'")).rows[0].n, 45);
+
       // Explicit re-extraction invalidates the old verdict immediately.
       await request('POST', `${base}/products/${product.id}/sources`, { name: 'Ficha B.txt', text: 'Ficha da variante B. Autonomia de 42 min. Novos dados técnicos.' });
       const invalidated = (await request('GET', `${base}/technical/jobs/${jobId}`)).data;
@@ -108,13 +116,44 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const waiting = await pool.query("SELECT status,error FROM technical_jobs WHERE account_id=1 AND kind='product' ORDER BY id DESC LIMIT 1");
       assert.equal(waiting.rows[0].status, 'queued'); assert.match(waiting.rows[0].error, /Limite diário/);
 
-      const seeded = await seedTechnicalCatalog(pool, 77); assert.equal(seeded.inserted, 31);
+      const legacy = (await pool.query("INSERT INTO technical_products(account_id,name,sale_price,source_key) VALUES(77,'Kit antigo',30000,'aerion-store:102003506') RETURNING id")).rows[0];
+      const seeded = await seedTechnicalCatalog(pool, 77); assert.equal(seeded.inserted, 19);
+      const archived = (await pool.query('SELECT active,superseded_by FROM technical_products WHERE id=$1', [legacy.id])).rows[0];
+      assert.equal(archived.active, false); assert.ok(archived.superseded_by);
+      assert.equal((await request('GET', `${base}/products`, null, 77)).data.length, 19);
       assert.equal((await seedTechnicalCatalog(pool, 77)).inserted, 0);
       await pool.query("UPDATE technical_products SET sale_price=123.45 WHERE account_id=77 AND source_key='aerion-store:102003505'");
       await seedTechnicalCatalog(pool, 77);
       assert.equal(Number((await pool.query("SELECT sale_price FROM technical_products WHERE account_id=77 AND source_key='aerion-store:102003505'")).rows[0].sale_price), 123.45);
-      assert.equal((await service.settings(77)).enabled, false);
+      assert.equal((await service.settings(77)).enabled, true);
       assert.equal((await pool.query('SELECT count(*)::int AS n FROM technical_products WHERE account_id=2')).rows[0].n, 0);
+
+      // An exhausted provider pauses the entire account after one attempt, instead
+      // of failing/retrying each catalogue entry independently.
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const blockedProduct = (await request('POST', `${base}/products`, { name: 'Blocked product', sale_price: 10 }, 88)).data;
+      await request('POST', `${base}/products/${blockedProduct.id}/sources`, { text: 'Autonomia de 40 min.' }, 88);
+      let exhaustedCalls = 0;
+      const blockedService = createTechnicalAnalysis({ ...dependencies, ai: async () => { exhaustedCalls++; return { ok: false, error: 'openai:429 You have no credits remaining' }; } });
+      for (let n = 0; n < 6; n++) await blockedService.tick();
+      assert.equal(exhaustedCalls, 1);
+      assert.match((await blockedService.settings(88)).provider_error, /sem créditos/);
+      assert.equal((await request('GET', `${base}/technical/config`, null, 88)).data.health.provider_blocked, true);
+      assert.equal((await request('POST', `${base}/technical/resume`, {}, 88)).status, 200);
+      assert.equal((await blockedService.settings(88)).provider_error, null);
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const fallbackProduct = (await request('POST', `${base}/products`, { name: 'Fallback product', sale_price: 10 }, 89)).data;
+      await request('POST', `${base}/products/${fallbackProduct.id}/sources`, { text: 'Autonomia de 42 min.' }, 89);
+      const offsets = [];
+      const fallbackService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args => {
+        offsets.push(args.providerOffset);
+        return args.providerOffset === 0 ? { ok: false, error: 'openai:429 You have no credits remaining' } : dependencies.ai(args);
+      } });
+      for (let n = 0; n < 5; n++) await fallbackService.tick();
+      assert.deepEqual(offsets, [0, 1]);
+      assert.equal((await pool.query('SELECT specs_complete FROM technical_products WHERE id=$1', [fallbackProduct.id])).rows[0].specs_complete, true);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 2);
+      assert.equal((await fallbackService.settings(89)).provider_error, null);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();
