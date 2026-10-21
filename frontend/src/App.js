@@ -12894,6 +12894,10 @@ function App() {
 
   const openOpportunity = async (opportunity) => {
     const request = ++pncpPreviewRequest.current;
+    // Discard the previous view's item totals before opening a persisted record.
+    // Its autosave must never use the items from a read-only preview or another opportunity.
+    setSelectedItems([]);
+    setItemRequirementsMap({});
     setSelectedOpportunity(opportunity);
     try {
       const [requirementsResponse, contactsResponse, itemsResponse, commentsResponse] = await Promise.all([
