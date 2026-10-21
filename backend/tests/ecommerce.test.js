@@ -115,6 +115,7 @@ test('GTM plan preserves lead conversion labels and sends structured GA4 ecommer
   assert.equal(plan.tags.some(t => t.type === 'awct'), false);
   assert.equal(plan.tags.find(t => t.type === 'gaawe').parameter.find(p => p.key === 'sendEcommerceData').value, 'true');
   assert.equal(plan.tags.find(t => t.name === 'Meta - Pixel Base').consentSettings.consentStatus, 'needed');
+  assert.equal(plan.tags.find(t => t.name === 'Meta - Pixel Base').tagFiringOption, 'oncePerEvent');
   assert.throws(() => buildPlan({ tag: [] }), /differs/);
 });
 
@@ -127,7 +128,7 @@ test('Meta browser measurements require consent and deduplicate the same paid tr
   const context = { window, document: { addEventListener: (name, fn) => { listeners[name] = fn; } } };
   const boot = () => vm.runInNewContext(`(${metaBootstrap.toString()})('1668777180919759')`, context);
   boot(); assert.equal(calls.length, 0);
-  granted = true; boot();
+  granted = true; boot(); boot();
   assert.equal(calls.filter(c => c[2] === 'PageView').length, 1);
   const ecommerce = { transaction_id: '123', value: 99.95, currency: 'BRL', items: [{ item_id: 'SKU-123', quantity: 2, price: 49.975 }] };
   window.aerionMetaSend('purchase', ecommerce);

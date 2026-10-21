@@ -71,7 +71,9 @@ function buildPlan(live) {
   const html = body => [parameter('html', `<script>${body}</script>`), parameter('supportDocumentWrite', false, 'boolean')];
   const tags = [
     { name: 'Aerion · GA4 ecommerce', type: 'gaawe', tagFiringOption: 'oncePerEvent', triggers: ['Aerion · Ecommerce GA4'], parameter: [parameter('measurementIdOverride', MEASUREMENT), parameter('eventName', '{{Event}}'), parameter('sendEcommerceData', true, 'boolean'), parameter('getEcommerceDataFrom', 'dataLayer')] },
-    { ...base, triggers: ['Aerion · Marketing permitido'], firingTriggerId: undefined, parameter: html(`(${metaBootstrap.toString()})('${PIXEL}');`), consentSettings: marketingConsent, tagFiringOption: 'oncePerLoad' },
+    // A denied setup attempt must be allowed to retry after consent. The bootstrap
+    // guards initialization/PageView itself, so repeated allowed attempts are safe.
+    { ...base, triggers: ['Aerion · Marketing permitido'], firingTriggerId: undefined, parameter: html(`(${metaBootstrap.toString()})('${PIXEL}');`), consentSettings: marketingConsent, tagFiringOption: 'oncePerEvent' },
     { name: 'Aerion · Meta ecommerce', type: 'html', tagFiringOption: 'oncePerEvent', triggers: ['Aerion · Ecommerce Meta'], setupTag: [{ tagName: base.name, stopOnSetupFailure: true }], consentSettings: marketingConsent,
       parameter: html("if(window.aerionMetaSend){window.aerionMetaSend({{Event}},{{Aerion · Ecommerce}},{{Aerion · Event ID}} || 'aerion_' + {{Event}} + '_' + {{Aerion · GTM Event ID}});}") },
   ];

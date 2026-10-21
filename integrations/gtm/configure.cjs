@@ -51,7 +51,7 @@ async function main() {
     return decode(await fetch(`https://tagmanager.googleapis.com/tagmanager/v2/${endpoint}`, {
       method, headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(45000),
-    }));
+    })).catch(error => { throw new Error(`${method} ${endpoint}: ${error.message}`); });
   };
   const container = await request(CONTAINER);
   if (container.publicId !== PUBLIC_ID) throw new Error('Unexpected GTM container.');

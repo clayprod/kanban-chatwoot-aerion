@@ -44,6 +44,10 @@ O Moove intercepta suas configurações com `pre_option` na prioridade 99. A pol
 
 `ecommerce.cjs` gera a tag GA4 com ecommerce estruturado e corrige o Pixel Meta para respeitar consentimento de marketing, enviar SKU/valor/moeda e deduplicar compra por ID. Os testes cobrem consentimento negado, concessão/revogação, dados de produtos e repetição da mesma transação. A tag Google Ads existente é de formulário/contato: seu label não é reutilizado para compras. CAPI e compras primárias Google Ads continuam sendo integrações separadas, dependentes das permissões e ações correspondentes.
 
+Permissões efetivas encontradas: administrador da conta com somente leitura no contêiner. O acesso administrativo existente permitiu corrigir apenas o grant do próprio usuário técnico nesse contêiner para `publish`, preservando os demais acessos. O GTM compilou/publicou a versão 8, com oito tags anteriores preservadas. A validação no navegador confirmou GA4 `view_item` com BRL/SKU e bloqueio da Meta antes do consentimento; a inicialização da Meta foi ajustada para permitir nova tentativa por evento após o consentimento, com guarda própria contra PageView duplicado.
+
+Após a correção do catálogo, o feed público retornou 29 ofertas: 21 em estoque, uma pré-venda e sete sem estoque. Os 22 produtos disponíveis para compra estão presentes. EVO Nest permanece excluído por cadastro de envio incompleto. A API Merchant retornou `SERVICE_DISABLED`; o administrador ainda precisa habilitar a API e conceder acesso à conta para conferir fonte importada, reprovações e exibição. `robots.txt` permite os produtos e aponta para um sitemap que inclui os 30 produtos publicados; não foi encontrado bloqueio geral de rastreamento no site.
+
 ## Recuperação e públicos
 
 Separar carrinho sem pedido, checkout iniciado, pedido pendente e pagamento falho. Público de remarketing pode usar ViewContent/AddToCart/InitiateCheckout com exclusão de Purchase e janelas a definir após validar o sinal. Não ativar otimização por compras sem sinal de compra confiável.
