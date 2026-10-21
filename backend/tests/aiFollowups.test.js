@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   carregarConfig,
+  estrategiaDaTentativa,
   validarMensagem,
   dentroDaJanela,
   montarPrompt,
@@ -29,7 +30,7 @@ const CONFIG_BASE = {
 
 // Pool falso: devolve respostas na ordem em que as queries aparecem e guarda
 // tudo que foi gravado, para as asserções.
-const fakePool = ({ candidatos = [], historico = [], enviadosHoje = 0 }) => {
+const fakePool = ({ candidatos = [], historico = [], anteriores = [], enviadosHoje = 0 }) => {
   const gravados = [];
   return {
     gravados,
@@ -42,6 +43,8 @@ const fakePool = ({ candidatos = [], historico = [], enviadosHoje = 0 }) => {
       if (sql.includes('ultima_mensagem AS (')) return { rows: candidatos };
       if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: enviadosHoje }] };
       if (sql.includes('SELECT m.content')) return { rows: historico };
+      // follow-ups que a IA ja mandou para o contato (sequencia)
+      if (sql.includes('SELECT message, created_at')) return { rows: anteriores };
       throw new Error(`query inesperada: ${sql.slice(0, 60)}`);
     },
   };
@@ -126,7 +129,7 @@ test('o prompt leva histórico, etapa e follow-ups anteriores', () => {
   assert.match(user, /Paloma Oliveira/);
   assert.match(user, /3\. Follow-up 1/);
   assert.match(user, /Dias sem resposta: 4/);
-  assert.match(user, /já enviados a este contato: 1/);
+  assert.match(user, /Tentativa 2 de 3/);
   assert.match(user, /\[cliente — [^\]]+\] tenho interesse/);
 });
 
@@ -232,10 +235,56 @@ test('defaults sao seguros sem nenhuma env var', () => {
     assert.equal(cfg.horaInicio, 9);
     assert.equal(cfg.horaFim, 18);
     assert.equal(cfg.silencioDias, 3);
-    assert.equal(cfg.maxPorContato, 2);
+    assert.equal(cfg.maxPorContato, 3);
   } finally {
     Object.assign(process.env, salvos);
   }
+});
+
+test('cada tentativa da sequencia tem estrategia propria', () => {
+  const a = estrategiaDaTentativa(1, 3);
+  const b = estrategiaDaTentativa(2, 3);
+  const c = estrategiaDaTentativa(3, 3);
+  assert.notEqual(a, b);
+  assert.notEqual(b, c);
+  assert.match(a, /retome o assunto/);
+  assert.match(b, /mude o angulo/);
+  assert.match(c, /não vai insistir mais|nao vai insistir mais/);
+  // A ultima tentativa fecha o ciclo mesmo quando o teto e menor que 3.
+  assert.equal(estrategiaDaTentativa(2, 2), c, 'tentativa final sempre encerra');
+});
+
+test('o prompt mostra a tentativa e o que a IA ja disse, para nao repetir', () => {
+  const { system, user } = montarPrompt({
+    contato: CANDIDATO,
+    historico: [{ autor: 'nós', texto: 'Mandei o material', em: '2026-09-01T12:00:00.000Z' }],
+    followupsAnteriores: 1,
+    diasSilencio: 12,
+    maxPorContato: 3,
+    anteriores: [
+      { message: 'Oi, ainda tem interesse nos drones?', created_at: '2026-09-20T12:00:00.000Z' },
+    ],
+    agora: new Date('2026-09-30T15:00:00.000Z'),
+  });
+  assert.match(user, /Tentativa 2 de 3/);
+  assert.match(user, /mude o angulo/);
+  assert.match(user, /já mandou nesta sequência/);
+  assert.match(user, /1ª \(há 10 dias\): Oi, ainda tem interesse nos drones\?/);
+  assert.match(system, /Nunca repita a abordagem/);
+});
+
+test('primeira tentativa nao lista anteriores', () => {
+  const { user } = montarPrompt({
+    contato: CANDIDATO,
+    historico: [{ autor: 'nós', texto: 'Oi', em: '2026-09-01T12:00:00.000Z' }],
+    followupsAnteriores: 0,
+    diasSilencio: 29,
+    maxPorContato: 3,
+    anteriores: [],
+    agora: new Date('2026-09-30T15:00:00.000Z'),
+  });
+  assert.match(user, /Tentativa 1 de 3/);
+  assert.doesNotMatch(user, /já mandou nesta sequência/);
 });
 
 test('mensagem válida passa em todas as barreiras', () => {
@@ -290,8 +339,12 @@ test('a busca coordena com o disparo pela carga do numero, nao por sistema', asy
   assert.match(sqlVisto, /COALESCE\(carga\.hoje, 0\) < \$8/);
   assert.match(sqlVisto, /COALESCE\(carga\.ultima_hora, 0\) < \$9/);
   assert.deepEqual(paramsVistos.slice(6), [300, 40, 12]);
-  // Cliente parado ha mais tempo primeiro.
-  assert.match(sqlVisto, /ORDER BY um\.created_at ASC/);
+  // Agendado vencido tem precedencia; depois, o parado ha mais tempo.
+  assert.match(sqlVisto, /ORDER BY \(retorno\.id IS NOT NULL\) DESC/);
+  assert.match(sqlVisto, /um\.created_at ASC/);
+  // O lembrete agendado pela classificacao de etapa e gatilho por si so.
+  assert.match(sqlVisto, /contact_followup_reminders/);
+  assert.match(sqlVisto, /retorno\.id IS NOT NULL OR um\.message_type = 1/);
 });
 
 test('desligado não consulta nada', async () => {

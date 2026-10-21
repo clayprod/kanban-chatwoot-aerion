@@ -44,8 +44,15 @@ const {
   AI_FOLLOWUP_LOG_TABLE,
   carregarConfig: carregarConfigAiFollowup,
   createAiFollowupTable,
+  carregarContextoConversa,
   runAiFollowupTick,
 } = require('./aiFollowups');
+const {
+  STAGE_LOG_TABLE,
+  carregarConfigStage,
+  createStageLogTable,
+  runStageClassificationTick,
+} = require('./leadStage');
 const {
   createCallTranscriptsTable,
   registerCallTranscriptRoutes,
@@ -23075,6 +23082,51 @@ app.get('/api/rfb/search', async (req, res) => {
   }
 });
 
+// Observabilidade da classificação de etapa: o que a IA moveu, sugeriu e por quê.
+app.get('/api/ai-stages', requireAdmin, async (req, res) => {
+  const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+  try {
+    const [decisoes, agregado] = await Promise.all([
+      pool.query(
+        `SELECT l.id, l.contact_id, l.from_stage, l.to_stage, l.confidence, l.motivo,
+                l.status, l.skip_reason, l.provider, l.model, l.error, l.created_at,
+                c.name AS contact_name
+           FROM ${STAGE_LOG_TABLE} l
+           LEFT JOIN contacts c ON c.id = l.contact_id AND c.account_id = l.account_id
+          WHERE l.account_id = $1
+          ORDER BY l.created_at DESC
+          LIMIT $2`,
+        [CHATWOOT_ACCOUNT_ID, limite]
+      ),
+      pool.query(
+        `SELECT status, COUNT(*)::int AS total
+           FROM ${STAGE_LOG_TABLE}
+          WHERE account_id = $1
+            AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                AT TIME ZONE 'America/Sao_Paulo'
+          GROUP BY status`,
+        [CHATWOOT_ACCOUNT_ID]
+      ),
+    ]);
+    const config = carregarConfigStage();
+    res.json({
+      config: {
+        enabled: config.enabled,
+        dry_run: config.dryRun,
+        janela_dias: config.janelaDias,
+        max_por_dia: config.maxPorDia,
+        min_confianca: config.minConfianca,
+        alvos_automaticos: config.alvosAutomaticos,
+      },
+      hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
+      decisoes: decisoes.rows,
+    });
+  } catch (error) {
+    console.error('[ia-stage] listagem falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível carregar o histórico de classificação.' });
+  }
+});
+
 // Observabilidade do follow-up automático: o que a IA decidiu, enviou e segurou.
 app.get('/api/ai-followups', requireAdmin, async (req, res) => {
   const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
@@ -23221,6 +23273,53 @@ const registerBackgroundSchedules = () => {
       console.error('[ai-followup] tick falhou:', error.message);
     } finally {
       aiFollowupRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Classificação de etapa pela IA. Gatilho OPOSTO ao do follow-up: olha quem
+  // RESPONDEU. Quem disse "não tenho interesse" nunca seria candidato lá (o follow-up
+  // exige que a última palavra seja nossa), e é justamente quem mais precisa sair da
+  // etapa errada. Sem janela comercial: não manda mensagem, só escreve no CRM.
+  let aiStageRodando = false;
+  cron.schedule('*/15 * * * *', async () => {
+    if (!dataLayerReady || aiStageRodando) return;
+    const config = carregarConfigStage();
+    if (!config.enabled) return;
+    aiStageRodando = true;
+    try {
+      const resultado = await runStageClassificationTick(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        chatCompletionJson,
+        carregarContextoConversa,
+        historyTable: HISTORY_TABLE,
+        config,
+        // Etapa fria com data de volta vira lembrete de verdade, na mesma tabela que
+        // o painel ja usa — e o proprio follow-up puxa quando vencer.
+        agendarRetorno: ({ contactId, dueAt, note }) => replaceContactReminder(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          contactId,
+          dueAt,
+          note,
+          userId: null,
+        }),
+        notify: ({ tipo, contato, para, motivo }) => notifyAccountUsers(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          type: tipo === 'applied' ? 'funil.ia_etapa_movida' : 'funil.ia_etapa_sugerida',
+          title: tipo === 'applied'
+            ? `${contato.name || 'Contato'} movido para ${para}`
+            : `${contato.name || 'Contato'} parece estar em ${para}`,
+          body: String(motivo || '').slice(0, 180),
+          data: { view: 'Board', contact_id: contato.contact_id },
+          dedupeKey: `ia-stage:${tipo}:${contato.contact_id}:${Date.now()}`,
+        }),
+      });
+      if (resultado.movidos || resultado.sugeridos || resultado.falhas) {
+        console.log('[ia-stage] tick:', resultado);
+      }
+    } catch (error) {
+      console.error('[ia-stage] tick falhou:', error.message);
+    } finally {
+      aiStageRodando = false;
     }
   }, { timezone: 'America/Sao_Paulo' });
 
@@ -23463,6 +23562,7 @@ const initializeDataLayer = async () => {
   await createActivityTable();
   await createContactReminderTable(pool);
   await createAiFollowupTable(pool);
+  await createStageLogTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

@@ -60,6 +60,26 @@ const lista = (nome, padrao) => {
   return bruto.split(',').map((s) => s.trim()).filter(Boolean);
 };
 
+// Follow-up nao e a mesma mensagem repetida: e uma sequencia que muda de angulo a
+// cada tentativa. Repetir "ainda tem interesse?" tres vezes cansa e queima o lead.
+const ESTRATEGIA_SEQUENCIA = [
+  'Primeira tentativa: apenas retome o assunto de onde parou, leve e curto. '
+    + 'Nada de pressao. Uma pergunta aberta e facil.',
+  'Segunda tentativa: mude o angulo. Em vez de perguntar de novo se ha interesse, '
+    + 'traga algo util (um ponto do produto que casa com o que a pessoa falou, uma '
+    + 'duvida tecnica que costuma aparecer) e convide a responder a partir dali.',
+  'Terceira e ultima tentativa: feche o ciclo com elegancia. Deixe claro que voce nao '
+    + 'vai insistir mais, agradeca, e deixe a porta aberta para quando fizer sentido. '
+    + 'Pergunta simples de sim ou nao, ou nenhuma.',
+];
+
+const estrategiaDaTentativa = (tentativa, maximo) => {
+  const indice = Math.min(Math.max(1, tentativa), ESTRATEGIA_SEQUENCIA.length) - 1;
+  const ultima = tentativa >= maximo;
+  if (ultima && tentativa > 1) return ESTRATEGIA_SEQUENCIA[ESTRATEGIA_SEQUENCIA.length - 1];
+  return ESTRATEGIA_SEQUENCIA[indice];
+};
+
 // Etapas onde um empurrão automático é seguro. Negociação, proposta enviada,
 // descartado e fechado-perdido ficam de fora de propósito: ali quem fala é o vendedor.
 const ETAPAS_PADRAO = [
@@ -78,7 +98,7 @@ const carregarConfig = () => {
     dryRun: flag('AI_FOLLOWUP_DRY_RUN', true),
     etapas: lista('AI_FOLLOWUP_STAGES', ETAPAS_PADRAO),
     silencioDias: inteiro('AI_FOLLOWUP_SILENCE_DAYS', 3),
-    maxPorContato: inteiro('AI_FOLLOWUP_MAX_PER_CONTACT', 2),
+    maxPorContato: inteiro('AI_FOLLOWUP_MAX_PER_CONTACT', 3),
     maxPorDia: inteiro('AI_FOLLOWUP_MAX_PER_DAY', 30),
     // 1 por tick e regra de seguranca, nao preferencia: o loop do tick envia sem
     // pausa entre contatos, entao qualquer valor > 1 vira rajada de mensagens em
@@ -187,7 +207,9 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            conv.assignee_id,
            conv.inbox_id,
            COALESCE(carga.hoje, 0) AS instancia_hoje,
-           COALESCE(carga.ultima_hora, 0) AS instancia_ultima_hora
+           COALESCE(carga.ultima_hora, 0) AS instancia_ultima_hora,
+           (retorno.id IS NOT NULL) AS por_agendamento,
+           retorno.due_at AS agendado_para
       FROM contacts c
       JOIN ultima_mensagem um ON um.contact_id = c.id
       JOIN conversations conv ON conv.id = um.conversation_id
@@ -199,19 +221,31 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            AND l.contact_id = c.id
            AND l.status IN ('sent', 'dry_run')
       ) ja ON true
+      -- Retorno que a classificacao de etapa agendou ("me chama em marco").
+      LEFT JOIN LATERAL (
+        SELECT r.id, r.due_at
+          FROM contact_followup_reminders r
+         WHERE r.account_id = c.account_id
+           AND r.contact_id = c.id
+           AND r.status = 'pending'
+           AND r.due_at <= NOW()
+         ORDER BY r.due_at
+         LIMIT 1
+      ) retorno ON true
      WHERE c.account_id = $1
        AND COALESCE(c.phone_number, '') <> ''
-       AND c.custom_attributes->>'Funil_Vendas' = ANY($2)
+       AND (c.custom_attributes->>'Funil_Vendas' = ANY($2) OR retorno.id IS NOT NULL)
        -- a última palavra tem que ser nossa: se o contato falou por último, é
        -- atendimento vivo e quem responde é o vendedor, não a IA
-       AND um.message_type = 1
-       AND um.created_at <= NOW() - make_interval(days => $3)
+       AND (retorno.id IS NOT NULL OR um.message_type = 1)
+       AND (retorno.id IS NOT NULL OR um.created_at <= NOW() - make_interval(days => $3))
        AND COALESCE(ja.total, 0) < $4
-       -- não repete em cima de um follow-up recente
+       -- Espacamento CRESCENTE entre tentativas: a Nesima tentativa so acontece
+       -- depois de cooldownDias * N. Cutucar sempre no mesmo ritmo soa automatico.
        AND NOT EXISTS (
          SELECT 1 FROM ${AI_FOLLOWUP_LOG_TABLE} r
           WHERE r.account_id = c.account_id AND r.contact_id = c.id
-            AND r.created_at >= NOW() - make_interval(days => $5)
+            AND r.created_at >= NOW() - make_interval(days => $5 * (COALESCE(ja.total, 0) + 1))
        )
        -- não colide com campanha de disparo: se saiu mensagem nossa depois da
        -- última registrada, alguém (ou o disparo) já falou com o lead
@@ -236,8 +270,8 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
        AND (carga.ultimo_envio IS NULL OR carga.ultimo_envio <= NOW() - make_interval(secs => $7))
        AND COALESCE(carga.hoje, 0) < $8
        AND COALESCE(carga.ultima_hora, 0) < $9
-     -- Cliente parado ha mais tempo primeiro.
-     ORDER BY um.created_at ASC
+     -- Agendado vencido primeiro; depois o parado ha mais tempo.
+     ORDER BY (retorno.id IS NOT NULL) DESC, retorno.due_at ASC NULLS LAST, um.created_at ASC
      LIMIT $6
     `,
     [
@@ -316,13 +350,31 @@ const nomeCurtoEmpresa = (nome) => {
   return escolhidas.join(' ').replace(/[\s\-–&.,;]+$/, '').trim() || null;
 };
 
+// O que a IA ja mandou para este contato, para a proxima tentativa nao repetir
+// abordagem nem pergunta.
+const carregarFollowupsAnteriores = async (pool, { accountId, contactId }) => {
+  const { rows } = await pool.query(
+    `SELECT message, created_at
+       FROM ${AI_FOLLOWUP_LOG_TABLE}
+      WHERE account_id = $1 AND contact_id = $2 AND status = 'sent'
+        AND COALESCE(TRIM(message), '') <> ''
+      ORDER BY created_at`,
+    [accountId, contactId]
+  );
+  return rows;
+};
+
 const diasDesde = (data, now = new Date()) => {
   const t = new Date(data).getTime();
   if (!Number.isFinite(t)) return null;
   return Math.floor((now.getTime() - t) / 86400000);
 };
 
-const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, agora = new Date() }) => {
+const montarPrompt = ({
+  contato, historico, followupsAnteriores, diasSilencio,
+  anteriores = [], maxPorContato = 3, agora = new Date(),
+}) => {
+  const tentativa = Number(followupsAnteriores || 0) + 1;
   const system = [
     'Você escreve mensagens curtas de follow-up comercial no WhatsApp, em nome da Aerion, empresa brasileira de tecnologia.',
 'Escreva em português do Brasil, tom profissional e direto, como um vendedor experiente — nunca como robô ou telemarketing.',
@@ -350,6 +402,8 @@ const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, a
     '  comece sem vocativo ("Oi, tudo bem?").',
     '- Nunca use placeholder entre chaves.',
     '- No máximo um emoji, e só se o histórico já tiver tom informal.',
+    '- Esta é uma SEQUÊNCIA. Nunca repita a abordagem nem a pergunta de uma tentativa',
+    '  anterior: se já perguntou se há interesse, mude o ângulo.',
     '- Se o histórico não der contexto para uma mensagem útil, devolva confianca baixa.',
     '',
     'Responda SOMENTE com um objeto JSON:',
@@ -380,10 +434,22 @@ const montarPrompt = ({ contato, historico, followupsAnteriores, diasSilencio, a
     empresaCurta ? `Empresa (contexto — não recite, prefira não citar): ${empresaCurta}` : null,
     `Etapa do funil: ${contato.funil || 'não informada'}`,
     `Dias sem resposta: ${diasSilencio ?? 'desconhecido'}`,
-    `Follow-ups automáticos já enviados a este contato: ${followupsAnteriores}`,
+    `Tentativa ${tentativa} de ${maxPorContato} desta sequência.`,
+    `Estratégia desta tentativa: ${estrategiaDaTentativa(tentativa, maxPorContato)}`,
     '',
     'Histórico da conversa (mais antigo primeiro):',
     linhas,
+    anteriores.length ? '' : null,
+    anteriores.length
+      ? 'Follow-ups que VOCÊ já mandou nesta sequência (não repita nenhum deles):'
+      : null,
+    anteriores.length
+      ? anteriores.map((a, i) => {
+          const dias = diasDesde(a.created_at, agora);
+          const quando = dias === null ? '' : dias === 0 ? ' (hoje)' : ` (há ${dias} dias)`;
+          return `  ${i + 1}ª${quando}: ${a.message}`;
+        }).join('\n')
+      : null,
     '',
     'Escreva o próximo follow-up.',
   ].filter(Boolean).join('\n');
@@ -506,11 +572,17 @@ const runAiFollowupTick = async (pool, {
         continue;
       }
 
+      const anteriores = await carregarFollowupsAnteriores(pool, {
+        accountId,
+        contactId: candidato.contact_id,
+      });
       const { system, user } = montarPrompt({
         contato: candidato,
         historico,
         followupsAnteriores: Number(candidato.followups_anteriores || 0),
         diasSilencio: diasDesde(candidato.ultima_em, now),
+        anteriores,
+        maxPorContato: config.maxPorContato,
         agora: now,
       });
       const ia = await chatCompletionJson({ system, user, maxTokens: 500, temperature: 0.4 });
@@ -600,6 +672,9 @@ module.exports = {
   horaEmSaoPaulo,
   buscarCandidatos,
   carregarContextoConversa,
+  carregarFollowupsAnteriores,
+  estrategiaDaTentativa,
+  ESTRATEGIA_SEQUENCIA,
   contarEnviadosHoje,
   montarPrompt,
   validarMensagem,

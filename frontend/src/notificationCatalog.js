@@ -71,6 +71,18 @@ export const NOTIFICATION_TYPES = [
     description: 'Quando chega a hora de ligar ou falar novamente com um contato.',
   },
   {
+    type: 'funil.ia_etapa_movida',
+    category: 'funil',
+    label: 'Etapa corrigida pela IA',
+    description: 'Quando a IA lê a resposta do cliente e move o card para a etapa certa.',
+  },
+  {
+    type: 'funil.ia_etapa_sugerida',
+    category: 'funil',
+    label: 'Etapa sugerida pela IA',
+    description: 'Quando a IA acha que houve marco comercial (demo, proposta, negociação) e deixa a decisão com o vendedor.',
+  },
+  {
     type: 'funil.ai_followup_sent',
     category: 'funil',
     label: 'Follow-up enviado pela IA',
