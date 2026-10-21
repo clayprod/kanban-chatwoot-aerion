@@ -17,8 +17,9 @@ fs.mkdirSync(out, { recursive: true });
     const hits = [];
     page.on('request', req => {
       const u = new URL(req.url());
-      if (!/google-analytics\.com|googletagmanager\.com|facebook\.com|facebook\.net|googleadservices\.com|doubleclick\.net/.test(u.hostname)) return;
-      const params = new URLSearchParams(req.postData() || u.search);
+      if (!/google-analytics\.com|googletagmanager\.com|facebook\.com|facebook\.net|googleadservices\.com|doubleclick\.net/.test(u.hostname) && !/\/(?:g\/)?collect/.test(u.pathname)) return;
+      const params = new URLSearchParams(u.search);
+      for (const [key, value] of new URLSearchParams(req.postData() || '')) params.set(key, value);
       hits.push({ host: u.hostname, path: u.pathname, params: Object.fromEntries(['id', 'tid', 'en', 'ev', 'gcs', 'gcd', 'cu', 'cd[currency]', 'cd[value]'].filter(k => params.has(k)).map(k => [k, params.get(k)])) });
     });
     await page.setViewport({ width: 1365, height: 1000 });
@@ -29,7 +30,7 @@ fs.mkdirSync(out, { recursive: true });
       // Storefront defers secondary scripts until the first real interaction.
       await page.mouse.move(600, 300);
       await page.keyboard.press('Tab');
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      await new Promise(resolve => setTimeout(resolve, 3500));
       let clicked = false;
       if (accept) {
         await page.screenshot({ path: path.join(out, 'consent-before.png'), fullPage: false });
@@ -47,6 +48,7 @@ fs.mkdirSync(out, { recursive: true });
       const state = await page.evaluate(() => ({
         url: location.origin + location.pathname,
         consent: typeof wp_has_consent === 'function' ? { statistics: wp_has_consent('statistics'), marketing: wp_has_consent('marketing') } : null,
+        ga4Diagnostics: { disabled: window['ga-disable-G-TRB0NJD7H1'] === true, gtag: typeof window.gtag, tagLoaded: !!window.google_tag_manager?.['G-TRB0NJD7H1'], consent: window.google_tag_data?.ics?.entries?.analytics_storage },
         consentIntegration: window.moove_frontend_gdpr_scripts ? { wpConsentApi: window.moove_frontend_gdpr_scripts.wp_consent_api, banner: window.moove_frontend_gdpr_scripts.display_cookie_banner } : null,
         consentUi: (() => { const el = document.querySelector('#moove_gdpr_cookie_info_bar'); return el ? { display: getComputedStyle(el).display, visibility: getComputedStyle(el).visibility, className: el.className } : null; })(),
         dataLayer: (window.dataLayer || []).map(x => {
@@ -58,7 +60,7 @@ fs.mkdirSync(out, { recursive: true });
       }));
       results.push({ route, requestedAcceptance: accept, clickedAcceptance: clicked, status: response.status(), ...state, hits: [...hits] });
     };
-    for (const route of ['/loja/', '/loja/produto/hubsan-mini-7/', '/carrinho/']) await visit(route);
+    if (!process.argv.includes('--cart-only')) for (const route of ['/loja/', '/loja/produto/hubsan-mini-7/', '/carrinho/']) await visit(route);
     await visit('/loja/produto/hubsan-mini-7/', true);
     if (process.argv.includes('--cart')) {
       hits.length = 0;
@@ -93,6 +95,16 @@ fs.mkdirSync(out, { recursive: true });
       }
     }
     fs.writeFileSync(path.join(out, 'browser-audit.json'), JSON.stringify(results, null, 2));
+    if (process.argv.includes('--verify-funnel')) {
+      const assert = require('node:assert/strict');
+      const all = results.flatMap(result => result.hits || []);
+      for (const event of ['ViewContent', 'AddToCart', 'InitiateCheckout']) assert(all.some(hit => hit.params.ev === event), `Missing Meta ${event}`);
+      for (const event of ['view_item', 'view_cart', 'begin_checkout']) assert(all.some(hit => hit.params.en === event), `Missing GA4 ${event}`);
+      assert(!all.some(hit => ['Lead', 'Purchase'].includes(hit.params.ev)), 'Cart-only audit must not generate leads or purchases');
+      assert(!all.some(hit => hit.params.en === 'conversion'), 'Cart must not generate Google Ads form conversions');
+      assert.equal(results.find(result => result.step === 'anonymous-cart-cleanup')?.empty, true);
+      console.error('FUNNEL VERIFIED: product, cart, checkout; no false leads/orders; anonymous cart emptied');
+    }
     console.log(JSON.stringify(results, null, 2));
   } finally { await browser.close(); }
 })().catch(e => { console.error(e.stack); process.exitCode = 1; });

@@ -218,6 +218,47 @@ test('configuration validates service-account JSON and normalizes ad-account IDs
   assert.equal(validateConfig('google_ads', { customer_id: '123-456-7890', client_id: 'app', client_secret: 'secret' }).customer_id, '1234567890');
   assert.equal(validateConfig('meta_ads', { account_id: 'act_123', access_token: 'token' }).account_id, '123');
 });
+
+test('Search Console uses a separate readonly scope and preserves page/query daily metrics', async () => {
+  const requests = [];
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const config = validateConfig('search_console', { site_url: 'sc-domain:aerion.com.br', service_account: { type: 'service_account', client_email: 'reader@example.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) } });
+  const p = createProviders({ transport: async (url, options) => {
+    requests.push({ url, options });
+    if (url.includes('oauth2')) return new Response(JSON.stringify({ access_token: 'search-only', expires_in: 3600 }));
+    if (url.endsWith('/sitemaps')) return new Response(JSON.stringify({ sitemap: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: '0', warnings: '1' }] }));
+    if (!url.endsWith('/query')) return new Response(JSON.stringify({ permissionLevel: 'siteFullUser' }));
+    const body = JSON.parse(options.body);
+    assert.equal(body.dataState, 'final'); assert.equal(body.type, 'web');
+    return new Response(JSON.stringify({ rows: [{ keys: body.dimensions.length === 1 ? ['2026-10-20'] : ['2026-10-20', body.dimensions[1] === 'page' ? 'https://aerion.com.br/loja/' : 'drone aerion'], clicks: 4, impressions: 100, position: 9 }] }));
+  } });
+  const info = await p.test('search_console', config);
+  assert.equal(info.permission, 'siteFullUser'); assert.equal(info.sitemaps[0].warnings, 1);
+  const rows = await p.metrics('search_console', config, '2026-10-20', '2026-10-21');
+  assert.equal(rows.length, 3); assert.equal(rows.find(r => r.kind === 'search_query').content, 'drone aerion');
+  assert.equal(rows.find(r => r.kind === 'search_page').landing, 'https://aerion.com.br/loja/');
+  const assertion = new URLSearchParams(requests[0].options.body).get('assertion').split('.')[1];
+  assert.equal(JSON.parse(Buffer.from(assertion, 'base64url').toString()).scope, 'https://www.googleapis.com/auth/webmasters.readonly');
+  assert.throws(() => validateConfig('search_console', { ...config, site_url: 'https://localhost/' }));
+});
+
+test('Search Console totals exclude query breakdowns and weight CTR and position by impressions', () => {
+  const { buildSearchReport } = require('../ecommerce/searchConsole');
+  const range = { from: '2026-10-01', to: '2026-10-21' };
+  const rows = [{ date: '2026-10-20', kind: 'search_total', clicks: 2, impressions: 10, position: 1 }, { date: '2026-10-21', kind: 'search_total', clicks: 3, impressions: 90, position: 11 },
+    { date: '2026-10-21', kind: 'search_query', query: 'drone', clicks: 1, impressions: 5, position: 2 }];
+  const report = buildSearchReport(rows, range, { last_success_at: new Date(), config: { site_url: 'sc-domain:aerion.com.br' } });
+  assert.equal(report.summary.clicks, 5); assert.equal(report.summary.ctr, 5); assert.equal(report.summary.position, 10);
+  assert.equal(report.queries.length, 1); assert.equal(report.latestDate, '2026-10-21');
+  assert.equal(buildSearchReport([], range).summary, null);
+});
+
+test('Google Ads production approval errors are actionable without echoing upstream content', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const p = createProviders({ transport: async url => url.includes('oauth2') ? new Response(JSON.stringify({ access_token: 'secret-access', expires_in: 3600 })) :
+    new Response(JSON.stringify({ error: { message: 'secret-access', details: [{ errors: [{ errorCode: { authorizationError: 'CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION' } }] }] } }), { status: 403 }) });
+  await assert.rejects(p.test('google_ads', { auth_type: 'google_identity', customer_id: '1234567890', service_account: { type: 'service_account', client_email: 'reader@example.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) } }), error => error.message.includes('Explorer') && !error.message.includes('secret-access'));
+});
 test('Google Ads reporting converts micros, keeps account currency and omits developer token', async () => {
   const requests = [];
   const providers = createProviders({ transport: async (url, options) => {

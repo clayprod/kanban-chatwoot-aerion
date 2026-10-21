@@ -52,6 +52,19 @@ test('marketing keeps traffic and campaigns inside the same main section', async
   expect(await screen.findByText('Origem do tráfego')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
 });
+
+test('Search Console stays in Marketing and shows organic totals separately from sales', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : {
+    ...report, search: { available: true, site: 'sc-domain:aerion.com.br', latestDate: '2026-10-18', summary: { clicks: 15, impressions: 1000, ctr: 1.5, position: 9 }, pages: [], queries: [], daily: [], sitemaps: [] },
+  } }));
+  render(<EcommerceView section="ads" onNavigate={jest.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Busca orgânica e SEO' }));
+  expect(screen.getByText('Visibilidade na busca do Google')).toBeInTheDocument();
+  expect(screen.getByText('sc-domain:aerion.com.br')).toBeInTheDocument();
+  expect(screen.getByText('1,5%')).toBeInTheDocument();
+  expect(screen.getByText(/não equivalem a sessões do GA4 ou vendas/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
+});
 test('report failures show an actionable error with retry', async () => {
   axios.get.mockRejectedValue({ response: { data: { error: 'Fonte indisponível' } } });
   render(<EcommerceView onNavigate={jest.fn()} />);

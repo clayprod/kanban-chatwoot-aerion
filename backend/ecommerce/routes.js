@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const { PROVIDERS, dateRange, buildReport, verifyWebhook, encryptionKey } = require('./domain');
 const { createProviders, storeUrl } = require('./providers');
 const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, transaction, createSync, encrypt, decrypt } = require('./store');
+const { buildSearchReport } = require('./searchConsole');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function validateGoogleIdentity(value) {
@@ -32,6 +33,12 @@ function validateConfig(provider, config) {
   }
   if (provider === 'ga4') {
     if (!/^\d+$/.test(config.property_id || '')) throw new Error('Informe o ID numérico da propriedade GA4.');
+    config.service_account = validateGoogleIdentity(config.service_account);
+  }
+  if (provider === 'search_console') {
+    const site = String(config.site_url || '');
+    if (/^sc-domain:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/i.test(site)) config.site_url = site.toLowerCase();
+    else config.site_url = storeUrl(site) + '/';
     config.service_account = validateGoogleIdentity(config.service_account);
   }
   if (provider === 'google_ads') {
@@ -155,6 +162,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     const catalog = new Map(ofKind('product').map(p => [String(p.id), p]));
     report.products.forEach(product => { product.categories = catalog.get(product.id.split(':')[0])?.categories || []; });
     report.couponCatalog = ofKind('coupon');
+    report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
     res.json(report);
   });
   router.use(admin);
@@ -178,7 +186,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
           }
         }
         try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
-        const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id' }[provider];
+        const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id', search_console: 'site_url' }[provider];
         const changed = old && old.config[identity] !== merged[identity];
         const metaCredentialChanged = provider === 'meta_ads' && previous.access_token !== merged.access_token;
         if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id || (previous.auth_type || 'oauth') !== merged.auth_type)) delete merged.refresh_token;

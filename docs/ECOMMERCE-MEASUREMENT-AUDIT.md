@@ -2,7 +2,7 @@
 
 Verificação em 21/10/2026 no WordPress em produção, configuração publicada do GTM e Graph API. Não foram criados pedidos, compras fictícias ou campanhas. Os resultados do navegador ficam em `.tmp/measurement/browser-audit.json` e não contêm identificadores de visitantes.
 
-## Evidências encontradas
+## Evidências da configuração inicial, antes das correções
 
 | Superfície | Evidência | Consequência |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ O Moove intercepta suas configurações com `pre_option` na prioridade 99. A pol
 
 ## Próxima validação das plataformas
 
-- GTM: ativar Tag Manager API no projeto `cybernetic-post-481513-c2` e conceder Publish à identidade técnica. Criar workspace separado, preservar a versão anterior, configurar eventos GA4 a partir do data layer e revisar disparadores/consentimento da Meta. Validar antes de publicar.
+- GTM: API ativada, Publish verificado, configuração preparada em workspace separado, com backup das versões anteriores. Validar os eventos efetivamente enviados no navegador após cada publicação.
 - GA4: obter acesso à propriedade, conferir stream, fuso e moeda, validar DebugView e usar um funil fechado de usuários para abandono. Não calcular abandono por `1 - eventos_purchase/eventos_add_to_cart`.
 - Google Ads: desbloquear conta e identificar ação de compra. Não reutilizar como compra o label existente de lead/contato. Evitar marcar compra nativa e compra importada do GA4 como duas ações primárias para a mesma venda.
 - Merchant Center: conferir conta, domínio verificado, fonte cadastrada, aprovação de cada oferta, frete/devolução e vínculo com a conta Ads. Feed acessível não prova nenhuma dessas etapas.
@@ -48,11 +48,36 @@ O Moove intercepta suas configurações com `pre_option` na prioridade 99. A pol
 
 Permissões efetivas encontradas: administrador da conta com somente leitura no contêiner. O acesso administrativo existente permitiu corrigir apenas o grant do próprio usuário técnico nesse contêiner para `publish`, preservando os demais acessos. O GTM compilou/publicou a versão 8, com oito tags anteriores preservadas. A validação no navegador confirmou GA4 `view_item` com BRL/SKU e bloqueio da Meta antes do consentimento; a inicialização da Meta foi ajustada para permitir nova tentativa por evento após o consentimento, com guarda própria contra PageView duplicado.
 
+A versão 9 confirmou no navegador uma única chamada Meta PageView/ViewContent após aceitar cookies, sem SDK antes do aceite. O teste anônimo de carrinho encontrou um problema anterior: `form_submit` também disparava Lead e a conversão de formulário Ads ao adicionar produtos. A configuração revisada usa `generate_lead`, já emitido pelo tema ao receber sucesso do formulário, e mantém os cliques diretos de contato da ação Ads existente. As tags `lead_home` e `lead_contato` passam a exigir a página correspondente. Nenhum formulário real de contato foi enviado para testar, evitando criar leads fictícios.
+
+O checkout emite `begin_checkout` antes da restauração do consentimento salvo. A configuração revisada recupera o estado atual de checkout uma vez no Pixel. No GA4, eventos ecommerce exigem o estado de estatísticas permitido e o estado inicial da página é reenviado uma vez após a restauração; ações anteriores de adicionar/remover produtos não são repetidas. O teste de carrinho não preenche dados pessoais nem envia o pedido; o item de teste é removido ao terminar.
+
+O Default Workspace contém uma exclusão pendente de `lead_home`. Publicar em workspace próprio preserva essa alteração e não atualiza automaticamente o workspace antigo. A configuração publicada deve ser conferida em **Versões**, ou em um workspace novo criado a partir da versão atual. Não descartar alterações do Default Workspace para fazê-las aparecer.
+
+Resultado final: versão **10** publicada, workspace de consulta `Aerion Ecommerce - publicado v10` (ID 12). O navegador confirmou Meta ViewContent/AddToCart/InitiateCheckout e GA4 view_item/add_to_cart/view_cart/begin_checkout, BRL e SKU corretos, sem Lead/Purchase/conversão Ads de formulário no fluxo de carrinho. O carrinho anônimo foi esvaziado. A coleta GA4 após consentimento também usa `analytics.google.com`; o auditor cobre esse host e os endpoints `/collect`, além de `google-analytics.com`.
+
+## Novos acessos Google
+
+O acesso da identidade técnica ao Google Ads permitiu listar a conta **103-898-3099**. A consulta de campanhas foi bloqueada com `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`: o projeto Cloud está com acesso Test e precisa de Explorer, Basic ou Standard. Isso é separado da permissão do usuário na conta e de uma eventual restrição de veiculação. A [visão geral da Google Ads API](https://console.cloud.google.com/google/ads-apis/overview?project=cybernetic-post-481513-c2) contém a solicitação de upgrade. Não reutilizar a conversão de contato como compra enquanto não for possível consultar/criar a ação correta.
+
+Search Console: API ativada e acesso `siteFullUser` confirmado em `sc-domain:aerion.com.br`, com consulta de desempenho HTTP 200. A integração usa escopo exclusivo `webmasters.readonly`, credencial federada cifrada e sincronização em lotes independentes. A aba SEO apresenta totais diários, páginas, consultas e sitemaps. Cliques/impressões dos totais não são obtidos somando consultas anônimas omitidas. CTR usa totais ponderados; posição usa impressões. Datas seguem o Pacífico, dados são finalizados e a última data disponível fica visível. Detalhamentos limitados são sinalizados; esses dados não provam indexação ou aprovação no Shopping.
+
 Após a correção do catálogo, o feed público retornou 29 ofertas: 21 em estoque, uma pré-venda e sete sem estoque. Os 22 produtos disponíveis para compra estão presentes. EVO Nest permanece excluído por cadastro de envio incompleto. A API Merchant retornou `SERVICE_DISABLED`; o administrador ainda precisa habilitar a API e conceder acesso à conta para conferir fonte importada, reprovações e exibição. `robots.txt` permite os produtos e aponta para um sitemap que inclui os 30 produtos publicados; não foi encontrado bloqueio geral de rastreamento no site.
 
 ## Recuperação e públicos
 
 Separar carrinho sem pedido, checkout iniciado, pedido pendente e pagamento falho. Público de remarketing pode usar ViewContent/AddToCart/InitiateCheckout com exclusão de Purchase e janelas a definir após validar o sinal. Não ativar otimização por compras sem sinal de compra confiável.
+
+Estrutura proposta para revisão, ainda não criada/ativada na conta:
+
+| Público | Inclusão | Exclusão | Uso |
+| --- | --- | --- | --- |
+| Produto visto, 30 dias | ViewContent | AddToCart e Purchase | Reapresentar o produto ou sua aplicação |
+| Carrinho, 14 dias | AddToCart | Purchase | Resolver dúvidas de frete, prazo e pagamento |
+| Checkout, 7 dias | InitiateCheckout | Purchase | Recuperar intenção mais recente |
+| Compradores, 180 dias | Purchase | Conforme campanha | Excluir aquisição e avaliar acessórios compatíveis |
+
+Essas janelas são uma proposta inicial, não um resultado medido. É preciso verificar o volume disponível e a correspondência dos eventos antes de criar públicos semelhantes ou mudar a otimização. O histórico importado tem somente uma compra paga; ele não sustenta afirmar que já existe uma base robusta de compradores para aprendizado. Os sinais ajudam os modelos da plataforma; não criam automaticamente uma persona nem garantem redução de CPA. Anúncios dinâmicos também exigem um catálogo Meta conectado com os mesmos IDs/SKUs enviados pelo Pixel. Acesso `ads_read` usado no relatório não autoriza criar públicos/campanhas; CAPI permanece pendente de configuração específica.
 
 Recuperação por mensagem exige contato identificado, base legal/consentimento aplicável, exclusão de quem já pagou e descadastro. WhatsApp segue as regras de verificação de número, preview, variações, cooldown e orçamento total por instância em AGENTS.md. Nenhuma mensagem automática ou campanha foi ativada nesta auditoria.
 

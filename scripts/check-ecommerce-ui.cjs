@@ -13,7 +13,7 @@ const output = path.join(__dirname, '..', '.tmp', 'ecommerce-ui');
 fs.mkdirSync(output, { recursive: true });
 const app = express();
 app.use(express.json());
-const connections = ['woocommerce', 'ga4', 'google_ads', 'meta_ads'].map(provider => ({ provider, config: {}, enabled: true, status: 'connected', last_success_at: new Date().toISOString(), info: {} }));
+const connections = ['woocommerce', 'ga4', 'google_ads', 'meta_ads', 'search_console'].map(provider => ({ provider, config: {}, enabled: true, status: 'connected', last_success_at: new Date().toISOString(), info: {} }));
 connections[0].config = { url: 'https://loja.aerion.com.br' };
 const to = day();
 const orders = Array.from({ length: 9 }, (_, index) => normalizeOrder({ id: index + 1, number: `10${index}`, currency: 'BRL', status: 'completed',
@@ -32,7 +32,10 @@ const metrics = Array.from({ length: 15 }, (_, index) => [
 app.get('/api/auth/status', (req, res) => res.json({ authenticated: true, role: 'admin', name: 'Teste local Ecommerce', email: 'teste@example.com', is_app_admin: true }));
 app.get('/api/ecommerce/status', (req, res) => res.json({ connections, encryptionReady: true, oauthRedirectUri: 'https://crm.example.com/api/ecommerce/oauth/google/callback' }));
 app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range: dateRange(req.query), orders, metrics, connections,
-  links: [{ link_id: 'aerion-demo-link', utm_campaign: 'Drones Enterprise', utm_source: 'google', coupon_codes: ['AERION10'] }], visits: [] }), couponCatalog: [] }));
+  links: [{ link_id: 'aerion-demo-link', utm_campaign: 'Drones Enterprise', utm_source: 'google', coupon_codes: ['AERION10'] }], visits: [] }), couponCatalog: [],
+  search: { available: true, site: 'sc-domain:aerion.com.br', latestDate: shiftDay(to, -3), summary: { clicks: 42, impressions: 1800, ctr: 2.33, position: 8.5 },
+    pages: [{ landing: 'https://aerion.com.br/loja/produto/autel-evo-lite-enterprise/', clicks: 12, impressions: 350, ctr: 3.43, position: 8 }],
+    queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
 app.use('/api', (req, res) => res.json([]));
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'build', 'index.html')));
@@ -64,6 +67,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     const sections = [
       ['Visão geral', 'overview', 'Visão geral'], ['Vendas e produtos', 'sales', 'Vendas e produtos'], ['Cupons', 'coupons', 'Vendas e produtos'],
       ['Marketing', 'ads', 'Marketing'], ['Tráfego e conversão', 'traffic', 'Marketing'], ['Campanhas e UTMs', 'campaigns', 'Marketing'],
+      ['Busca orgânica e SEO', 'seo', 'Marketing'],
     ];
     for (const [label, id, heading] of sections) {
       await clickSection(label);
@@ -77,6 +81,8 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     await clickSection('Visão geral');
     await page.waitForSelector('table');
     await page.screenshot({ path: path.join(output, 'overview-mobile.png'), fullPage: true });
+    await clickSection('Marketing'); await clickSection('Busca orgânica e SEO');
+    await page.screenshot({ path: path.join(output, 'seo-mobile.png'), fullPage: true });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, 'The mobile page must not overflow horizontally.');
     assert.deepEqual(errors, [], 'Dashboard has uncaught browser errors.');

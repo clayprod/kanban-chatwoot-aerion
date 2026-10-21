@@ -185,6 +185,27 @@ test('Ecommerce API and resumable sync with isolated PostgreSQL schema', { skip:
       assert.equal(row.info.authorization_type, undefined);
       assert.equal(row.info.history_from, '2025-10-21');
     });
+    await t.test('Search Console configuration is encrypted and distinct same-day queries survive synchronization', async () => {
+      const identity = { type: 'service_account', client_email: 'reader@example.com', private_key: 'private-search-key' };
+      const result = await request('/connections/search_console', { method: 'PUT', body: { site_url: 'sc-domain:aerion.com.br', service_account: JSON.stringify(identity) } });
+      assert.equal(result.response.status, 200);
+      assert(!(await request('/status')).text.includes(identity.private_key));
+      await request('/connections/search_console', { method: 'PUT', body: { service_account: '' } });
+      const saved = (await pool.query("SELECT secrets FROM ecommerce_connections WHERE provider='search_console'")).rows[0];
+      assert.equal(decrypt(saved.secrets, encryptionKey(env)).service_account.private_key, identity.private_key);
+      await pool.query("UPDATE ecommerce_connections SET cursor=$1 WHERE provider='search_console'", [{ from: '2026-10-20', to: '2026-10-20', next: '2026-10-20' }]);
+      const original = providers.metrics;
+      providers.metrics = async () => [
+        { date: '2026-10-20', kind: 'search_total', clicks: 3, impressions: 100, position: 8 },
+        ...['drone', 'aerion'].map(query => ({ date: '2026-10-20', kind: 'search_query', query, content: query, clicks: 1, impressions: 10, position: 5 })),
+      ];
+      try { await createSync({ pool, providers, env }).run('search_console', { force: true }); }
+      finally { providers.metrics = original; }
+      const report = await request('/report?from=2026-10-20&to=2026-10-21');
+      assert.equal(report.data.search.summary.clicks, 3);
+      assert.equal(report.data.search.queries.length, 2);
+      assert.equal(report.data.search.available, true);
+    });
     await t.test('per-provider PostgreSQL lock prevents two workers from fetching the same source', async () => {
       const client = await pool.connect();
       await client.query('SELECT pg_advisory_lock(735101)');

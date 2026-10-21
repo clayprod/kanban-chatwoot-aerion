@@ -45,6 +45,12 @@ async function json(url, options = {}, transport = request) {
   } catch { throw new ProviderError('Não foi possível consultar a plataforma. Verifique conexão, domínio e permissões.'); }
   if (!response.ok) {
     // Do not propagate upstream bodies/URLs: they may echo credentials or customer details.
+    if (response.status === 403 && new URL(url).hostname === 'googleads.googleapis.com') {
+      const failure = await response.json().catch(() => null);
+      if (failure?.error?.details?.some(detail => detail.errors?.some(error => error.errorCode?.authorizationError === 'CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION'))) {
+        throw new ProviderError('O projeto Google Cloud está restrito a contas de teste. Solicite acesso Explorer, Basic ou Standard na visão geral da Google Ads API.', 3600);
+      }
+    }
     if ([401, 403].includes(response.status)) throw new ProviderError('Acesso recusado pela plataforma. Revise autorização e permissões.', 3600);
     if (response.status === 429) throw new ProviderError('Limite de consultas atingido. A sincronização será retomada.', Math.min(86400, Math.max(300, Number(response.headers.get('retry-after')) || 900)));
     throw new ProviderError(`A plataforma respondeu HTTP ${response.status}.`, 600, response.status);
@@ -66,7 +72,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
     return result.access_token;
   };
   async function googleToken(config, serviceAccount = false) {
-    const scope = serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
+    const scope = serviceAccount === 'search_console' ? 'https://www.googleapis.com/auth/webmasters.readonly' : serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
     const account = serviceAccount || config.auth_type === 'google_identity' ? config.service_account : null;
     const key = crypto.createHash('sha256').update(JSON.stringify([config, scope])).digest('hex');
     return cached(key, async () => {
@@ -157,6 +163,14 @@ function createProviders({ transport = request, env = process.env } = {}) {
         await gaReport(config, 'yesterday', 'yesterday', ['date'], ['sessions']);
         return {};
       }
+      if (provider === 'search_console') {
+        const headers = { Authorization: `Bearer ${await googleToken(config, 'search_console')}` };
+        const base = `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(config.site_url)}`;
+        const { data: site } = await json(base, { headers }, transport);
+        if (site.permissionLevel === 'siteUnverifiedUser') throw new ProviderError('A conta técnica ainda não tem acesso verificado a esta propriedade do Search Console.', 3600);
+        const { data } = await json(`${base}/sitemaps`, { headers }, transport);
+        return { permission: site.permissionLevel, timezone: 'America/Los_Angeles', sitemaps: (data.sitemap || []).map(s => ({ path: s.path, lastSubmitted: s.lastSubmitted, lastDownloaded: s.lastDownloaded, isPending: s.isPending, warnings: Number(s.warnings || 0), errors: Number(s.errors || 0) })) };
+      }
       if (provider === 'google_ads') {
         const { data } = await json(`https://googleads.googleapis.com/${env.ECOMMERCE_GOOGLE_ADS_VERSION || 'v25'}/customers/${config.customer_id}/googleAds:search`,
           postJson({ query: 'SELECT customer.currency_code, customer.time_zone FROM customer LIMIT 1' }, {
@@ -171,6 +185,23 @@ function createProviders({ transport = request, env = process.env } = {}) {
       return { currency: data.currency, timezone: data.timezone_name };
     },
     async metrics(provider, config, from, to, info = {}) {
+      if (provider === 'search_console') {
+        const headers = { Authorization: `Bearer ${await googleToken(config, 'search_console')}` };
+        const rows = [];
+        for (const [kind, dimension] of [['search_total', null], ['search_page', 'page'], ['search_query', 'query']]) {
+          for (let startRow = 0; startRow < 100000; startRow += 25000) {
+            const { data } = await json(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(config.site_url)}/searchAnalytics/query`, postJson({
+              startDate: from, endDate: to, dimensions: dimension ? ['date', dimension] : ['date'], type: 'web', dataState: 'final', rowLimit: 25000, startRow,
+            }, headers), transport);
+            const batch = data.rows || [];
+            rows.push(...batch.map(row => ({ kind, date: row.keys[0], clicks: Number(row.clicks || 0), impressions: Number(row.impressions || 0), position: Number(row.position || 0),
+              ...(dimension === 'page' ? { landing: row.keys[1] } : dimension === 'query' ? { query: row.keys[1], content: row.keys[1] } : {}),
+              truncated: startRow === 75000 && batch.length === 25000 })));
+            if (batch.length < 25000) break;
+          }
+        }
+        return rows;
+      }
       if (provider === 'ga4') {
         const total = await gaReport(config, from, to, ['date'], ['sessions', 'activeUsers', 'screenPageViews', 'ecommercePurchases']);
         const traffic = await gaReport(config, from, to, ['date', 'sessionSource', 'sessionMedium', 'sessionCampaignName', 'sessionManualAdContent'], ['sessions', 'ecommercePurchases']);

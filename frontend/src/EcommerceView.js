@@ -10,7 +10,7 @@ export const ECOMMERCE_SECTIONS = [
   { id: 'ads', label: 'Marketing', icon: MegaphoneIcon },
   { id: 'connections', label: 'Conexões', icon: Cog6ToothIcon },
 ];
-const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads' };
+const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads', search_console: 'Google Search Console' };
 const STATE = { pending: 'Aguardando configuração', connected: 'Conectado', syncing: 'Sincronizando', error: 'Requer atenção' };
 const number = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(value);
 const money = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -119,12 +119,14 @@ const FIELDS = {
     ['client_id', 'OAuth Client ID', 'text', '…apps.googleusercontent.com'], ['client_secret', 'OAuth Client Secret', 'password', 'Segredo do aplicativo Google Cloud'],
     ['service_account', 'Credenciais da conta técnica Google Ads (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
   meta_ads: [['account_id', 'ID da conta de anúncios', 'text', 'act_123456789'], ['access_token', 'Token de acesso Meta · ads_read', 'password', 'Token com acesso de análise à conta']],
+  search_console: [['site_url', 'Propriedade do Search Console', 'text', 'sc-domain:aerion.com.br ou https://aerion.com.br/'], ['service_account', 'Credenciais da conta técnica Search Console (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
 };
 const HELP = {
   woocommerce: 'No WooCommerce, gere uma chave de leitura em Configurações → Avançado → API REST. Para UTMs Aerion, instale o plugin de relatórios e configure o usuário técnico abaixo.',
   ga4: 'Habilite a Analytics Data API no Google Cloud. Conceda à conta de serviço acesso de leitor à propriedade GA4. O ID da propriedade é numérico; não use o código G- da tag.',
   google_ads: 'Habilite a Google Ads API no projeto Google Cloud e obtenha acesso de produção. Use uma conta técnica com acesso Somente leitura ao anunciante ou autorize um usuário por OAuth.',
   meta_ads: 'Use um aplicativo da Aerion e um token com ads_read, obtido por OAuth ou por um usuário de sistema com acesso de análise à conta. O Pixel é conferido na loja; os resultados vêm da Insights API.',
+  search_console: 'Habilite a Search Console API no Google Cloud e conceda acesso à propriedade para a conta técnica. Consultamos apenas dados de pesquisa e sitemaps; esta conexão não altera o site nem envia URLs para indexação.',
 };
 function ConnectionForm({ provider, connection, status, onUpdate }) {
   const [form, setForm] = useState(() => ({ ...(connection?.config || {}), enabled: connection?.enabled !== false }));
@@ -198,7 +200,7 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
 export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
   const [section, setSection] = useState(requestedSection);
   useEffect(() => setSection(requestedSection), [requestedSection]);
-  const parentSection = ['traffic', 'campaigns', 'ads'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
+  const parentSection = ['traffic', 'campaigns', 'ads', 'seo'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
   const [range, setRange] = useState(() => ({ from: previousDay(today(), 29), to: today() }));
   const [draftRange, setDraftRange] = useState(range);
   const [report, setReport] = useState(null);
@@ -258,7 +260,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
-      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
+      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {pending.length > 0 && <Notice>{pending.map(c => `${SOURCES[c.provider]}: ${STATE[c.status]}`).join(' · ')}. Os resultados podem estar incompletos durante a importação.</Notice>}
       {status.connections.some(c => c.info?.history_from && range.from < c.info.history_from) && <Notice>O período selecionado começa antes do histórico importado de uma ou mais fontes. Consulte a cobertura informada no rodapé; os resultados desse intervalo são parciais.</Notice>}
       {woo?.info?.tracking_error && section === 'campaigns' && <Notice>{woo.info.tracking_error}</Notice>}
@@ -297,6 +299,19 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
           <Table caption="Atribuição registrada nos pedidos · WooCommerce" rows={filter(report.utms)} columns={[{ key: 'source', label: 'Origem', render: r => r.source || (r.linkId ? 'Link Aerion' : 'Sem atribuição') }, { key: 'medium', label: 'Mídia' }, { key: 'campaign', label: 'Campanha' }, { key: 'linkId', label: 'ID link' }, numeric('orders', 'Pedidos'), numeric('withCoupon', 'Com cupom'), numeric('revenue', 'Receita', money)]} />
           <Table caption="Links Aerion · último link em até 30 dias" rows={filter(report.links)} columns={[{ key: 'utm_campaign', label: 'Campanha' }, { key: 'utm_source', label: 'Origem' }, { key: 'link_id', label: 'ID link' }, numeric('landings', 'Acessos registrados'), numeric('visitorDays', 'Visitantes-dia'), numeric('orders', 'Pedidos pagos'), numeric('revenue', 'Receita', money), numeric('couponOutside', 'Cupom fora do link')]} />
           <p className="text-xs text-muted">Links Aerion dependem do plugin de relatórios. Visitas seguem o dia UTC do registro original. Visitantes-dia soma visitantes únicos de cada dia; não representa pessoas únicas no período. Ausência de UTM não é preenchida retroativamente. Cupons fora do link podem aparecer em mais de uma linha.</p>
+        </>}
+        {section === 'seo' && <>
+          {!report.search?.available && <Notice>Conecte o Search Console para consultar buscas e páginas que atraem visitas orgânicas.</Notice>}
+          <section className={panel}><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Visibilidade na busca do Google</h3><p className="mt-1 break-all text-xs text-muted">{report.search?.site || 'Propriedade ainda não conectada'}</p></div><p className="text-xs text-muted">{report.search?.latestDate ? `Dados finalizados até ${dateLabel(report.search.latestDate)}` : 'Aguardando dados finalizados'}</p></div>
+            <dl className="mt-5 grid grid-cols-2 gap-5 lg:grid-cols-4">{[['Cliques orgânicos', report.search?.summary?.clicks, number], ['Impressões na busca', report.search?.summary?.impressions, number], ['CTR orgânico', report.search?.summary?.ctr, percent], ['Posição média', report.search?.summary?.position, number]].map(([label, value, format]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{format(value)}</dd></div>)}</dl>
+            <p className="mt-4 border-t border-line pt-3 text-xs text-muted">Pesquisa web · dias no fuso do Pacífico · dados finalizados podem ter atraso. Cliques da busca não equivalem a sessões do GA4 ou vendas. Consultas anônimas são omitidas; os detalhamentos podem não somar o total. Posição é ponderada por impressões; menor é melhor.</p>
+          </section>
+          {report.search?.truncated && <Notice>O limite de linhas foi atingido em parte da importação. Os detalhamentos exibem os principais resultados e podem estar incompletos.</Notice>}
+          <Table caption="Páginas encontradas na busca" rows={report.search?.pages || []} columns={[{ key: 'landing', label: 'Página', render: r => <span className="break-all">{r.landing}</span> }, numeric('clicks', 'Cliques'), numeric('impressions', 'Impressões'), numeric('ctr', 'CTR', percent), numeric('position', 'Posição média')]} />
+          <Table caption="Buscas que levam à Aerion" rows={report.search?.queries || []} columns={[{ key: 'query', label: 'Termo pesquisado' }, numeric('clicks', 'Cliques'), numeric('impressions', 'Impressões'), numeric('ctr', 'CTR', percent), numeric('position', 'Posição média')]} />
+          <Table caption="Evolução diária · busca orgânica" rows={report.search?.daily || []} columns={[{ key: 'date', label: 'Dia', render: r => dateLabel(r.date) }, numeric('clicks', 'Cliques'), numeric('impressions', 'Impressões'), { key: 'ctr', label: 'CTR', numeric: true, render: r => r.impressions ? percent(r.clicks / r.impressions * 100) : '—' }, numeric('position', 'Posição média')]} />
+          <Table caption="Sitemaps no Search Console" rows={report.search?.sitemaps || []} empty="Nenhum sitemap retornado pela propriedade. Isso não comprova ausência de páginas indexadas." columns={[{ key: 'path', label: 'Sitemap', render: r => <span className="break-all">{r.path}</span> }, { key: 'lastDownloaded', label: 'Última leitura', render: r => when(r.lastDownloaded) }, numeric('errors', 'Erros'), numeric('warnings', 'Avisos'), { key: 'isPending', label: 'Situação', render: r => r.isPending ? 'Processando' : 'Consultado' }]} />
+          <p className="text-xs text-muted">Sitemap lido não comprova indexação de cada produto. Aprovação e visibilidade no Google Shopping são verificadas separadamente no Merchant Center.</p>
         </>}
         {section === 'coupons' && <>
           <Table caption="Cupons em pedidos pagos · BRL" rows={filter(report.coupons)} columns={[{ key: 'code', label: 'Cupom' }, numeric('orders', 'Pedidos'), numeric('discount', 'Desconto concedido', money), numeric('revenue', 'Receita associada', money), numeric('withUtm', 'Com atribuição'), numeric('withoutUtm', 'Sem atribuição')]} />
