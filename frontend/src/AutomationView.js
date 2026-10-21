@@ -5,21 +5,19 @@ import {
   ChatBubbleLeftRightIcon,
   ViewColumnsIcon,
   ExclamationTriangleIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
-import {
-  btnSecondarySm,
-  card,
-  cardAlt,
-  iconBtn,
-  input,
-  sectionTitle,
-  subtle,
-} from './ui';
+import { btnGhostXs, card, cardAlt, iconBtn, input, subtle } from './ui';
 
 // Painel de leitura da automação comercial: o que a IA mandou e o que ela moveu.
-// Os dois workers rodam sozinhos em background, então sem esta tela a única forma
-// de saber se estão vivos é consultar o banco — e já aconteceu de ficarem dias
-// parados por env apagada num deploy sem ninguém perceber.
+// Os dois workers rodam sozinhos; sem esta tela a única forma de saber se estão
+// vivos é consultar o banco — e já ficaram dias parados sem ninguém perceber.
+//
+// A maior parte do volume é ruído ("etapa já está correta", "confiança abaixo do
+// mínimo"): são decisões corretas de NÃO fazer nada. Ficam fora da lista por padrão,
+// contadas no resumo, a um clique de distância.
+
+const PAGINA = 15;
 
 const fmtDataHora = (valor) => {
   if (!valor) return '—';
@@ -27,125 +25,145 @@ const fmtDataHora = (valor) => {
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('pt-BR', {
     timeZone: 'America/Sao_Paulo',
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 };
 
 const horasDesde = (valor) => {
-  if (!valor) return null;
-  const t = new Date(valor).getTime();
-  if (!Number.isFinite(t)) return null;
-  return (Date.now() - t) / 3600000;
+  const t = new Date(valor || 0).getTime();
+  return Number.isFinite(t) && t > 0 ? (Date.now() - t) / 3600000 : null;
 };
 
-const CORES_STATUS = {
-  sent: 'text-status-success',
-  applied: 'text-status-success',
-  dry_run: 'text-status-warning',
-  suggested: 'text-primary',
-  skipped: 'text-muted',
-  failed: 'text-status-danger',
+const STATUS = {
+  sent:      { cor: 'text-status-success', rotulo: 'enviado',  ruido: false },
+  applied:   { cor: 'text-status-success', rotulo: 'movido',   ruido: false },
+  dry_run:   { cor: 'text-status-warning', rotulo: 'simulado', ruido: false },
+  suggested: { cor: 'text-primary',        rotulo: 'sugerido', ruido: false },
+  failed:    { cor: 'text-status-danger',  rotulo: 'falhou',   ruido: false },
+  skipped:   { cor: 'text-muted2',         rotulo: 'pulado',   ruido: true },
 };
+const meta = (s) => STATUS[s] || { cor: 'text-muted2', rotulo: s, ruido: false };
 
-const ROTULO_STATUS = {
-  sent: 'enviado',
-  applied: 'movido',
-  dry_run: 'simulado',
-  suggested: 'sugerido',
-  skipped: 'pulado',
-  failed: 'falhou',
-};
-
-function Pill({ status, children }) {
-  return (
-    <span className={`shrink-0 text-[11px] font-semibold ${CORES_STATUS[status] || 'text-muted2'}`}>
-      {children ?? ROTULO_STATUS[status] ?? status}
-    </span>
-  );
-}
-
-function Contadores({ hoje }) {
-  const entradas = Object.entries(hoje || {});
-  if (!entradas.length) return <span className={subtle}>nada hoje</span>;
-  return (
-    <div className="flex flex-wrap items-center gap-3 text-[12px] tabular-nums">
-      {entradas.map(([status, n]) => (
-        <span key={status} className={CORES_STATUS[status] || 'text-muted2'}>
-          {n} <span className="text-muted2">{ROTULO_STATUS[status] || status}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-// Um worker em silêncio pode ser "não havia o que fazer" ou "está desligado e
-// ninguém viu". A diferença importa, então a tela diz qual dos dois é.
-function Saude({ config, ultimaAtividade }) {
+function Saude({ config, ultima }) {
   if (!config) return null;
-  const horas = horasDesde(ultimaAtividade);
   if (!config.enabled) {
     return (
       <div className="flex items-start gap-2 rounded-[10px] border border-status-danger/30 bg-status-danger/10 p-2.5 text-[12px] text-status-danger">
         <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-        <span>
-          <strong>Desligado.</strong> A variável de ambiente que liga este worker não está
-          valendo — normalmente porque um deploy limpou as variáveis do serviço.
-        </span>
+        <span><strong>Desligado.</strong> A variável que liga este worker não está valendo — normalmente um deploy limpou as variáveis do serviço.</span>
       </div>
     );
   }
   if (config.dry_run) {
     return (
       <div className="rounded-[10px] border border-status-warning/30 bg-status-warning/10 p-2.5 text-[12px] text-status-warning">
-        <strong>Modo sombra.</strong> A IA decide e registra tudo abaixo, mas não executa nada.
+        <strong>Modo sombra.</strong> Decide e registra, mas não executa nada.
       </div>
     );
   }
-  if (horas !== null && horas > 48) {
+  const h = horasDesde(ultima);
+  if (h !== null && h > 48) {
     return (
       <div className="rounded-[10px] border border-status-warning/30 bg-status-warning/10 p-2.5 text-[12px] text-status-warning">
-        Ligado, mas sem atividade há {Math.floor(horas / 24)} dia(s). Pode ser fila vazia — ou
-        algo travado.
+        Ligado, sem atividade há {Math.floor(h / 24)} dia(s). Pode ser fila vazia — ou algo travado.
       </div>
     );
   }
   return null;
 }
 
-function Painel({ titulo, icone: Icone, config, hoje, itens, linhas, carregando, erro, onReload }) {
+function Item({ it, children }) {
+  const [aberto, setAberto] = useState(false);
+  const m = meta(it.status);
+  const detalhe = it.skip_reason || it.error;
   return (
-    <section className={`${card} p-4`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icone className="h-5 w-5 shrink-0 text-primary" />
-          <h2 className={sectionTitle}>{titulo}</h2>
-        </div>
-        <button type="button" onClick={onReload} className={`${iconBtn} h-7 w-7`} title="Atualizar">
-          <ArrowPathIcon className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
+    <li className={`${cardAlt} px-3 py-2`}>
+      <div className="flex items-start justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setAberto((v) => !v)}
+          className="min-w-0 flex-1 text-left"
+          aria-expanded={aberto}
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ChevronDownIcon className={`h-3.5 w-3.5 shrink-0 text-muted2 transition ${aberto ? '' : '-rotate-90'}`} />
+            <span className="truncate text-[13px] font-semibold text-ink">
+              {it.contact_name || `Contato #${it.contact_id}`}
+            </span>
+          </span>
+          <span className="mt-0.5 block pl-5 text-[11px] text-muted2">
+            {fmtDataHora(it.created_at)}
+            {it.confidence != null && ` · conf ${Number(it.confidence).toFixed(2)}`}
+          </span>
         </button>
+        <span className={`shrink-0 text-[11px] font-semibold ${m.cor}`}>{m.rotulo}</span>
       </div>
+      {aberto && <div className="mt-1.5 space-y-1 pl-5">{children}</div>}
+      {!aberto && detalhe && (
+        <p className="mt-0.5 truncate pl-5 text-[11px] text-muted2">{detalhe}</p>
+      )}
+    </li>
+  );
+}
 
-      <div className="mt-2 space-y-2">
-        <Saude config={config} ultimaAtividade={itens?.[0]?.created_at} />
-        <Contadores hoje={hoje} />
-      </div>
+function Painel({ dados, carregando, onReload, busca, linhas, vazio }) {
+  const [verRuido, setVerRuido] = useState(false);
+  const [limite, setLimite] = useState(PAGINA);
 
-      {erro && <p className="mt-3 text-[12px] text-status-danger">{erro}</p>}
+  const todos = dados?.decisoes || [];
+  const filtrados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return todos.filter((it) => {
+      if (!verRuido && meta(it.status).ruido) return false;
+      if (!q) return true;
+      return [it.contact_name, it.message, it.motivo, it.skip_reason, it.to_stage, it.from_stage]
+        .filter(Boolean).join(' ').toLowerCase().includes(q);
+    });
+  }, [todos, busca, verRuido]);
 
-      <ul className="mt-3 space-y-1.5">
-        {!itens?.length && !carregando && (
-          <li className={`${subtle} py-6 text-center`}>Nenhuma decisão registrada ainda.</li>
-        )}
-        {itens?.map((it) => (
-          <li key={it.id} className={`${cardAlt} px-3 py-2`}>
-            {linhas(it)}
-          </li>
+  const ruidoOculto = todos.filter((it) => meta(it.status).ruido).length;
+  const visiveis = filtrados.slice(0, limite);
+
+  return (
+    <div className="space-y-2.5">
+      <Saude config={dados?.config} ultima={todos[0]?.created_at} />
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] tabular-nums">
+        {Object.entries(dados?.hoje || {}).map(([s, n]) => (
+          <span key={s} className={meta(s).cor}>
+            {n} <span className="text-muted2">{meta(s).rotulo}</span>
+          </span>
         ))}
+        {!Object.keys(dados?.hoje || {}).length && <span className={subtle}>nada hoje</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {ruidoOculto > 0 && (
+            <button type="button" onClick={() => setVerRuido((v) => !v)} className={btnGhostXs}>
+              {verRuido ? 'Ocultar' : `Ver ${ruidoOculto} pulado(s)`}
+            </button>
+          )}
+          <button type="button" onClick={onReload} className={`${iconBtn} h-7 w-7`} title="Atualizar">
+            <ArrowPathIcon className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
+          </button>
+        </span>
+      </div>
+
+      <ul className="space-y-1.5">
+        {!visiveis.length && !carregando && (
+          <li className={`${subtle} py-8 text-center`}>{vazio}</li>
+        )}
+        {visiveis.map((it) => <Item key={it.id} it={it}>{linhas(it)}</Item>)}
       </ul>
-    </section>
+
+      {filtrados.length > visiveis.length && (
+        <button
+          type="button"
+          onClick={() => setLimite((n) => n + PAGINA)}
+          className={`${btnGhostXs} w-full py-2`}
+        >
+          Mostrar mais {Math.min(PAGINA, filtrados.length - visiveis.length)} de {filtrados.length - visiveis.length}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -155,14 +173,15 @@ export default function AutomationView() {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
+  const [aba, setAba] = useState('followup');
 
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro('');
     try {
       const [f, s] = await Promise.all([
-        axios.get('/api/ai-followups?limit=60').catch((e) => ({ error: e })),
-        axios.get('/api/ai-stages?limit=60').catch((e) => ({ error: e })),
+        axios.get('/api/ai-followups?limit=120').catch((e) => ({ error: e })),
+        axios.get('/api/ai-stages?limit=120').catch((e) => ({ error: e })),
       ]);
       if (f.error && s.error) throw f.error;
       setFollowups(f.error ? null : f.data);
@@ -176,108 +195,97 @@ export default function AutomationView() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const filtrar = useCallback((lista) => {
-    const q = busca.trim().toLowerCase();
-    if (!q) return lista || [];
-    return (lista || []).filter((it) => [
-      it.contact_name, it.message, it.motivo, it.skip_reason, it.to_stage, it.from_stage,
-    ].filter(Boolean).join(' ').toLowerCase().includes(q));
-  }, [busca]);
-
-  const itensFollowup = useMemo(() => filtrar(followups?.decisoes), [followups, filtrar]);
-  const itensStage = useMemo(() => filtrar(stages?.decisoes), [stages, filtrar]);
+  const abas = [
+    { id: 'followup', nome: 'Follow-up', icone: ChatBubbleLeftRightIcon, n: followups?.hoje?.sent || 0 },
+    { id: 'etapa', nome: 'Classificação de etapa', icone: ViewColumnsIcon, n: (stages?.hoje?.applied || 0) + (stages?.hoje?.dry_run || 0) },
+  ];
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className={`${sectionTitle} text-lg`}>Automação</h1>
-          <p className={`${subtle} mt-0.5`}>
-            O que a IA fez sozinha: follow-ups enviados e etapas de funil corrigidas.
-          </p>
-        </div>
+    <div className={`${card} p-4`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <nav className="flex items-center gap-1" role="tablist">
+          {abas.map((a) => {
+            const ativa = aba === a.id;
+            return (
+              <button
+                key={a.id}
+                type="button"
+                role="tab"
+                aria-selected={ativa}
+                onClick={() => setAba(a.id)}
+                className={`flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-sm font-medium transition ${
+                  ativa ? 'bg-primary/[0.12] text-primary' : 'text-muted hover:bg-bg2 hover:text-ink'
+                }`}
+              >
+                <a.icone className="h-4 w-4" />
+                {a.nome}
+                {a.n > 0 && (
+                  <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold tabular-nums text-primary">
+                    {a.n}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
         <input
           type="search"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
           placeholder="Filtrar por contato, mensagem ou motivo…"
-          className={`${input} h-9 w-full text-sm sm:w-80`}
-          aria-label="Filtrar atividade da automação"
+          className={`${input} h-8 w-full text-sm sm:w-72`}
+          aria-label="Filtrar atividade"
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Painel
-          titulo="Follow-up automático"
-          icone={ChatBubbleLeftRightIcon}
-          config={followups?.config}
-          hoje={followups?.hoje}
-          itens={itensFollowup}
-          carregando={carregando}
-          erro={!followups && !carregando ? 'Endpoint de follow-up indisponível.' : ''}
-          onReload={carregar}
-          linhas={(it) => (
-            <>
-              <div className="flex items-start justify-between gap-2">
-                <span className="min-w-0 truncate text-[13px] font-semibold text-ink">
-                  {it.contact_name || `Contato #${it.contact_id}`}
-                </span>
-                <Pill status={it.status} />
-              </div>
-              <p className="mt-0.5 text-[11px] text-muted2">
-                {fmtDataHora(it.created_at)}
-                {it.confidence != null && ` · confiança ${Number(it.confidence).toFixed(2)}`}
-              </p>
-              {it.message && (
-                <p className="mt-1 whitespace-pre-wrap text-[12px] text-muted">{it.message}</p>
-              )}
-              {(it.skip_reason || it.error) && (
-                <p className="mt-1 text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
-              )}
-            </>
-          )}
-        />
-
-        <Painel
-          titulo="Classificação de etapa"
-          icone={ViewColumnsIcon}
-          config={stages?.config}
-          hoje={stages?.hoje}
-          itens={itensStage}
-          carregando={carregando}
-          erro={!stages && !carregando ? 'Endpoint de classificação indisponível.' : ''}
-          onReload={carregar}
-          linhas={(it) => (
-            <>
-              <div className="flex items-start justify-between gap-2">
-                <span className="min-w-0 truncate text-[13px] font-semibold text-ink">
-                  {it.contact_name || `Contato #${it.contact_id}`}
-                </span>
-                <Pill status={it.status} />
-              </div>
-              <p className="mt-0.5 text-[11px] text-muted2">
-                {fmtDataHora(it.created_at)}
-                {it.confidence != null && ` · confiança ${Number(it.confidence).toFixed(2)}`}
-              </p>
-              {it.to_stage && (
-                <p className="mt-1 text-[12px] text-ink">
-                  <span className="text-muted2">{it.from_stage || '—'}</span>
-                  <span className="mx-1.5 text-muted2">→</span>
-                  <span className="font-medium">{it.to_stage}</span>
-                </p>
-              )}
-              {it.motivo && <p className="mt-0.5 text-[12px] text-muted">{it.motivo}</p>}
-              {(it.skip_reason || it.error) && (
-                <p className="mt-1 text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
-              )}
-            </>
-          )}
-        />
+      <div className="pt-3">
+        {aba === 'followup' && (
+          <Painel
+            dados={followups}
+            carregando={carregando}
+            onReload={carregar}
+            busca={busca}
+            vazio="Nenhum follow-up registrado ainda."
+            linhas={(it) => (
+              <>
+                {it.message && <p className="whitespace-pre-wrap text-[12px] text-muted">{it.message}</p>}
+                {(it.skip_reason || it.error) && (
+                  <p className="text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
+                )}
+                {it.provider && (
+                  <p className="text-[10px] text-muted2">{it.provider} · {it.model}</p>
+                )}
+              </>
+            )}
+          />
+        )}
+        {aba === 'etapa' && (
+          <Painel
+            dados={stages}
+            carregando={carregando}
+            onReload={carregar}
+            busca={busca}
+            vazio="Nenhuma classificação registrada ainda."
+            linhas={(it) => (
+              <>
+                {it.to_stage && (
+                  <p className="text-[12px] text-ink">
+                    <span className="text-muted2">{it.from_stage || '—'}</span>
+                    <span className="mx-1.5 text-muted2">→</span>
+                    <span className="font-medium">{it.to_stage}</span>
+                  </p>
+                )}
+                {it.motivo && <p className="text-[12px] text-muted">{it.motivo}</p>}
+                {(it.skip_reason || it.error) && (
+                  <p className="text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
+                )}
+              </>
+            )}
+          />
+        )}
       </div>
 
-      {erro && (
-        <p className={`${card} p-3 text-[13px] text-status-danger`}>{erro}</p>
-      )}
+      {erro && <p className="mt-3 text-[13px] text-status-danger">{erro}</p>}
     </div>
   );
 }

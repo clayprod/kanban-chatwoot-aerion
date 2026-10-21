@@ -598,6 +598,40 @@ const mapUserAccessRow = (u) => {
   };
 };
 
+// Conversa que a IA toca e fica sem dono vira terra de ninguem: o cliente responde e
+// a resposta nao cai na fila de ninguem. Vale para o follow-up e para a prospeccao
+// ativa. Resolvido por e-mail (nao por id fixo) e cacheado.
+const AI_ASSIGNEE_EMAIL = process.env.AI_DEFAULT_ASSIGNEE_EMAIL || 'clayton.costa@aerion.com.br';
+let aiAssigneeId;
+async function resolverResponsavelPadrao(pool) {
+  if (aiAssigneeId !== undefined) return aiAssigneeId;
+  try {
+    const { rows } = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      [AI_ASSIGNEE_EMAIL]
+    );
+    aiAssigneeId = rows[0]?.id ?? null;
+    if (!aiAssigneeId) console.warn('[ia] responsavel padrao nao encontrado:', AI_ASSIGNEE_EMAIL);
+  } catch (error) {
+    console.warn('[ia] resolver responsavel padrao falhou:', error.message);
+    aiAssigneeId = null;
+  }
+  return aiAssigneeId;
+}
+
+// So assume conversa orfa: se ja tem dono, a atribuicao dele vale.
+async function atribuirResponsavelPadrao(pool, conversationId) {
+  if (!conversationId) return false;
+  const uid = await resolverResponsavelPadrao(pool);
+  if (!uid) return false;
+  const { rowCount } = await pool.query(
+    'UPDATE conversations SET assignee_id = $1, updated_at = NOW() WHERE id = $2 AND assignee_id IS NULL',
+    [uid, conversationId]
+  );
+  if (rowCount) console.log('[ia] conversa', conversationId, 'atribuida a', AI_ASSIGNEE_EMAIL);
+  return rowCount > 0;
+}
+
 async function getUserByEmail(email) {
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.display_name, u.encrypted_password, u.confirmed_at,
@@ -23272,6 +23306,7 @@ const registerBackgroundSchedules = () => {
         agendarRetorno: ({ contactId, dueAt, note }) => replaceContactReminder(pool, {
           accountId: CHATWOOT_ACCOUNT_ID, contactId, dueAt, note, userId: null,
         }),
+        atribuirResponsavel: ({ conversationId }) => atribuirResponsavelPadrao(pool, conversationId),
         notify: ({ tipo, contato, mensagem, motivo, indicacao }) => {
           // Indicacao ("fale com o Cap Sa Fortes, 51 9960-7789") e lead novo, e o
           // ativo mais valioso daquela resposta: nao pode morrer no log.

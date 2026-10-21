@@ -662,6 +662,7 @@ const runAiFollowupTick = async (pool, {
   chatCompletionJson,
   notify = null,
   agendarRetorno = null,
+  atribuirResponsavel = null,
   fetchImpl = fetch,
   now = new Date(),
   config = carregarConfig(),
@@ -814,6 +815,16 @@ const runAiFollowupTick = async (pool, {
         message: texto,
       });
       resultado.enviados += 1;
+
+      // Se ninguem cuidava dessa conversa, ela passa a ter dono. A IA abriu a porta;
+      // quem atende a resposta tem que estar definido antes dela chegar.
+      if (!candidato.assignee_id && atribuirResponsavel) {
+        await Promise.resolve(atribuirResponsavel({
+          conversationId: candidato.conversation_id,
+          contactId: candidato.contact_id,
+        })).catch((e) => console.warn('[follow-up] atribuir responsavel falhou:', e.message));
+      }
+
       if (notify) {
         await Promise.resolve(
           notify({ tipo: 'sent', contato: candidato, mensagem: texto })
