@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   carregarConfigStage,
+  ORIGENS_PROTEGIDAS_PADRAO,
   avaliarSugestao,
   montarPromptStage,
   runStageClassificationTick,
@@ -23,6 +24,7 @@ const CFG = {
   maxPorDia: 60,
   minConfianca: 0.7,
   alvosAutomaticos: ALVOS_AUTOMATICOS_PADRAO,
+  origensProtegidas: ORIGENS_PROTEGIDAS_PADRAO,
   etapasFrias: ['16. Descartado', '17. Nurturing', '15. Pausado'],
   retomarMinDias: 15,
   retomarMaxDias: 180,
@@ -117,6 +119,28 @@ test('etapa de trabalho e aplicada; marco comercial so e sugerido', () => {
     assert.equal(v.acao, 'suggested', `${marco} deveria so sugerir`);
     assert.match(v.motivo, /confirmação humana/);
   }
+});
+
+test('nao rebaixa quem ja passou de marco comercial', () => {
+  // A sombra propos "18. Novos Clientes -> 2. Em Contato" e "-> 16. Descartado".
+  // Rebaixar quem ja comprou e estrago chato de desfazer: so sugere.
+  for (const origem of ['18. Novos Clientes', '7. Agendamento Demo', '11. Em Negociação']) {
+    const v = avaliarSugestao({
+      etapaAtual: origem, sugerida: '2. Em Contato', confianca: 0.95, etapas: ETAPAS, config: CFG,
+    });
+    assert.equal(v.acao, 'suggested', `saida de ${origem} deveria so sugerir`);
+    assert.match(v.motivo, /confirmação humana/);
+  }
+  // Nem para Descartado, que e o caso mais perigoso.
+  assert.equal(
+    avaliarSugestao({ etapaAtual: '18. Novos Clientes', sugerida: '16. Descartado', confianca: 1, etapas: ETAPAS, config: CFG }).acao,
+    'suggested'
+  );
+  // Etapa de trabalho continua movendo normalmente.
+  assert.equal(
+    avaliarSugestao({ etapaAtual: '1. Inbox (Novos)', sugerida: '2. Em Contato', confianca: 0.85, etapas: ETAPAS, config: CFG }).acao,
+    'applied'
+  );
 });
 
 test('rejeita etapa inexistente, igual a atual, ou confianca insuficiente', () => {

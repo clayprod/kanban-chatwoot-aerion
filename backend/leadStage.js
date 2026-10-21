@@ -18,6 +18,21 @@ const STAGE_LOG_TABLE = 'ai_stage_log';
 // Etapas que a IA pode aplicar sozinha. Movimento entre elas é organização de fila,
 // não compromisso comercial. "16. Descartado" entra porque recusa explícita do cliente
 // é o sinal mais claro que existe e deixar o lead vivo no funil é pior.
+// De onde a IA NAO tira ninguem sozinha. Sair de um marco comercial e decisao
+// de gente: ou o negocio avancou, ou morreu, e os dois casos tem dono.
+const ORIGENS_PROTEGIDAS_PADRAO = [
+  '7. Agendamento Demo',
+  '8. Demo Realizada',
+  '9. Elaborando Proposta',
+  '10. Proposta Enviada',
+  '11. Em Negociação',
+  '12. Aprovação Interna',
+  '13. Fechado-Ganho',
+  '14. Fechado-Perdido',
+  '18. Novos Clientes',
+  '23. Oportunidade Recompra',
+];
+
 const ALVOS_AUTOMATICOS_PADRAO = [
   '1. Inbox (Novos)',
   '2. Em Contato',
@@ -61,6 +76,7 @@ const carregarConfigStage = () => ({
   minConfianca: decimal('AI_STAGE_MIN_CONFIDENCE', 0.7),
   alvosAutomaticos: lista('AI_STAGE_AUTO_TARGETS', ALVOS_AUTOMATICOS_PADRAO),
   etapasFrias: lista('AI_STAGE_COLD_TARGETS', ETAPAS_FRIAS_PADRAO),
+  origensProtegidas: lista('AI_STAGE_PROTECTED_SOURCES', ORIGENS_PROTEGIDAS_PADRAO),
   retomarMinDias: inteiro('AI_STAGE_RETRY_MIN_DAYS', 15),
   retomarMaxDias: inteiro('AI_STAGE_RETRY_MAX_DAYS', 180),
 });
@@ -217,6 +233,10 @@ const avaliarSugestao = ({ etapaAtual, sugerida, confianca, etapas, config }) =>
   }
   if (!Number.isFinite(Number(confianca)) || Number(confianca) < config.minConfianca) {
     return { acao: 'skipped', motivo: `confiança ${confianca} abaixo de ${config.minConfianca}` };
+  }
+  // Sair de marco comercial tambem e decisao de gente, nao so entrar.
+  if ((config.origensProtegidas || ORIGENS_PROTEGIDAS_PADRAO).includes(etapaAtual)) {
+    return { acao: 'suggested', motivo: `sair de "${etapaAtual}" precisa de confirmação humana` };
   }
   // Marco comercial é decisão de gente: a IA só levanta a mão.
   if (!config.alvosAutomaticos.includes(alvo)) {
@@ -416,6 +436,7 @@ const runStageClassificationTick = async (pool, {
 module.exports = {
   STAGE_LOG_TABLE,
   ALVOS_AUTOMATICOS_PADRAO,
+  ORIGENS_PROTEGIDAS_PADRAO,
   ETAPAS_FRIAS_PADRAO,
   normalizarRetomada,
   carregarConfigStage,
