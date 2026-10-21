@@ -122,9 +122,11 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
       }}><option value="all">Materiais e serviços</option><option value="material">Somente materiais — excluir serviços</option><option value="service">Somente serviços</option></select></label>
       <p id={itemKindHelpId} className="text-xs text-muted">Classificação oficial do PNCP. Itens sem classificação ficam para revisão.</p>
     </div>
-    {products.length > 0 && <details className="text-sm"><summary className="cursor-pointer">Produtos para comparar · {productIds.length ? `${productIds.length} selecionados` : 'Todos os pertinentes'}</summary><fieldset className="mt-2 space-y-2"><legend className="sr-only">Produtos para análise técnica (opcional)</legend>
+    {products.length > 0 && <div className="space-y-1">
+      <p className="text-xs text-muted">Seleção opcional: sem marcar, todos os produtos ativos pertinentes serão comparados. Marque apenas para restringir a análise aos escolhidos.</p>
+      <details className="text-sm"><summary className="cursor-pointer">Produtos para comparar · {productIds.length ? `${productIds.length} selecionados` : 'Todos os pertinentes'}</summary><fieldset className="mt-2 space-y-2"><legend className="sr-only">Produtos para análise técnica (opcional)</legend>
       <div className="flex max-h-36 flex-wrap gap-3 overflow-auto">{products.map(p => <label key={p.id} className="flex items-center gap-2"><input type="checkbox" checked={productIds.map(String).includes(String(p.id))} onChange={e => { invalidate(); setProductIds(ids => e.target.checked ? [...ids, String(p.id)] : ids.filter(id => String(id) !== String(p.id))); }} />{p.name}</label>)}</div>
-    </fieldset></details>}
+    </fieldset></details></div>}
     <div className="flex flex-wrap gap-2">
       <button type="button" className={primary} disabled={!!busy || !description.trim()} onClick={interpret}>{busy === 'interpret' ? 'Interpretando…' : 'Definir minha busca'}</button>
       {!profile && <button type="button" className={secondary} disabled={!description.trim() || !!busy} onClick={() => {
