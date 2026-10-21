@@ -13,6 +13,7 @@ class WC_Order {
     public function get_date_paid(): mixed { return $this->date; }
     public function get_id(): int { return 123; }
     public function get_currency(): string { return 'BRL'; }
+    public function get_fees(): array { return []; }
     public function get_items(string $type): array { return [new class { public function get_total(): string { return '99.95'; } }]; }
 }
 function check(bool $value, string $message): void { if (! $value) { throw new RuntimeException($message); } }
@@ -42,4 +43,12 @@ check($purchase['ecommerce']['value'] === 99.95, 'Value excludes shipping, taxes
 check($purchase['ecommerce']['transaction_id'] === '123', 'Stable internal order ID deduplicates purchases.');
 check($purchase['event_id'] === 'aerion_purchase_123', 'Browser/server share a deterministic event ID.');
 check($purchase['ecommerce']['items'][0]['item_id'] === 'SKU', 'Preserve item details.');
+$pix = new class(true, 'paid-date') extends WC_Order {
+    public function get_fees(): array { return [new class {
+        public function get_name(): string { return 'Desconto no Pix'; }
+        public function get_total(): string { return '-5'; }
+    }]; }
+};
+$purchase = Aerion_Ecommerce_Measurement::purchase(['ecommerce' => ['items' => [['item_id' => 'SKU', 'price' => 99.95, 'quantity' => 1]]]], $pix);
+check($purchase['ecommerce']['value'] === 94.95 && $purchase['ecommerce']['items'][0]['price'] === 94.95, 'Pix payment discount must reduce purchase value and item prices.');
 echo "WordPress measurement tests passed.\n";

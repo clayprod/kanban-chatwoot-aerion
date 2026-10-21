@@ -77,6 +77,21 @@ final class Aerion_Ecommerce_Measurement
         if (! self::paid($order)) { return ['event' => 'aerion_order_unpaid', 'ecommerce' => null]; }
         $value = 0.0;
         foreach ($order->get_items('line_item') as $item) { $value += (float) $item->get_total(); }
+        $payment_discount = 0.0;
+        foreach ($order->get_fees() as $fee) {
+            if (in_array(strtolower(trim($fee->get_name())), ['desconto no pix', 'mercado pago discount'], true) && (float) $fee->get_total() < 0) {
+                $payment_discount -= (float) $fee->get_total();
+            }
+        }
+        $value = max(0.0, round($value - $payment_discount, 2));
+        if ($payment_discount > 0 && !empty($data['ecommerce']['items'])) {
+            $item_total = 0.0;
+            foreach ($data['ecommerce']['items'] as $item) { $item_total += (float) ($item['price'] ?? 0) * max(1, (int) ($item['quantity'] ?? 1)); }
+            if ($item_total > 0) {
+                foreach ($data['ecommerce']['items'] as &$item) { $item['price'] = round((float) ($item['price'] ?? 0) * $value / $item_total, 6); }
+                unset($item);
+            }
+        }
         $data['event'] = 'purchase';
         $data['event_id'] = 'aerion_purchase_' . $order->get_id();
         $data['ecommerce']['transaction_id'] = (string) $order->get_id();

@@ -60,6 +60,24 @@ function normalizeOrder(order, refunds = []) {
       subtotal: amount(item.subtotal), total: amount(item.total), refunded,
       revenue: amount((Number(item.total) || 0) - refunded) };
   });
+  // The store implements Pix as a negative fee, not a WooCommerce coupon.
+  // Allocate its remaining amount across net product lines so product/UTM totals
+  // reconcile to paid product revenue without treating shipping fees as discounts.
+  const paymentFees = (order.fee_lines || []).filter(fee => ['desconto no pix', 'mercado pago discount'].includes(String(fee.name || '').trim().toLowerCase()) && Number(fee.total) < 0);
+  const paymentDiscountOriginal = amount(paymentFees.reduce((sum, fee) => sum - Number(fee.total), 0));
+  const returnedDiscount = amount(refunds.flatMap(refund => refund.line_items || []).filter(line =>
+    (line.meta_data || []).some(meta => meta.key === '_refunded_item_id' && paymentFees.some(fee => String(fee.id) === String(meta.value))))
+    .reduce((sum, line) => sum + Math.max(0, Number(line.total) || 0), 0));
+  const weights = items.map(item => Math.max(0, Math.round(item.revenue * 100)));
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+  const discountCents = Math.min(weightTotal, Math.max(0, Math.round((paymentDiscountOriginal - returnedDiscount) * 100)));
+  const shares = weights.map((weight, index) => {
+    const exact = weightTotal ? discountCents * weight / weightTotal : 0;
+    return { index, cents: Math.floor(exact), remainder: exact - Math.floor(exact) };
+  });
+  let remainder = discountCents - shares.reduce((sum, share) => sum + share.cents, 0);
+  [...shares].sort((a, b) => b.remainder - a.remainder || a.index - b.index).forEach(share => { if (remainder > 0) { share.cents++; remainder--; } });
+  shares.forEach(share => { items[share.index].paymentDiscount = share.cents / 100; items[share.index].revenue = amount(items[share.index].revenue - share.cents / 100); });
   // Amount-only refunds cannot safely be assigned to products or tax/shipping.
   const allocatedRefunds = refunds.reduce((sum, refund) => sum + (refund.line_items || []).reduce((n, line) =>
     n + Math.abs(Number(line.total) || 0) + Math.abs(Number(line.total_tax) || 0), 0), 0);
@@ -76,6 +94,7 @@ function normalizeOrder(order, refunds = []) {
     revenue: paid ? amount(items.reduce((sum, item) => sum + item.revenue, 0)) : 0,
     shipping: amount(order.shipping_total), tax: amount(order.total_tax), discount: amount(order.discount_total),
     total: amount(order.total), refunded: amount(refunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0)),
+    paymentDiscount: discountCents / 100, paymentDiscountOriginal,
     unallocatedRefund,
     attribution: {
       linkId: String(meta._aerion_utm_link_id || ''),

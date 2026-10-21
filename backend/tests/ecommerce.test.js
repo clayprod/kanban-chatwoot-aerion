@@ -55,6 +55,23 @@ test('pending, cancelled and failed orders cannot increase paid revenue', () => 
 test('amount-only refunds remain explicitly unallocated', () => {
   assert.equal(normalizeOrder(order(), [{ amount: '12', line_items: [] }]).unallocatedRefund, 12);
 });
+
+test('Pix negative fees reduce actual product revenue and refunded discounts are not deducted twice', () => {
+  const pix = order({ total: '95', fee_lines: [{ id: 50, name: 'Desconto no Pix', total: '-5' }] });
+  const paid = normalizeOrder(pix);
+  assert.equal(paid.paymentDiscount, 5);
+  assert.equal(paid.revenue, 95);
+  assert.equal(paid.items[0].revenue, 95);
+  const refund = { amount: '95', line_items: [
+    { total: '-100', quantity: -1, meta_data: [{ key: '_refunded_item_id', value: pix.line_items[0].id }] },
+    { total: '5', quantity: 0, meta_data: [{ key: '_refunded_item_id', value: 50 }] },
+  ] };
+  const returned = normalizeOrder({ ...pix, status: 'refunded' }, [refund]);
+  assert.equal(returned.paymentDiscount, 0);
+  assert.equal(returned.revenue, 0);
+  const unrelated = normalizeOrder(order({ fee_lines: [{ id: 51, name: 'Frete promocional', total: '-5' }] }));
+  assert.equal(unrelated.revenue, 100);
+});
 test('date validation rejects invalid days, reversed and oversized periods', () => {
   for (const query of [{ from: '2026-02-30' }, { from: '2026-11-01', to: '2026-10-01' },
     { from: '2020-01-01', to: '2026-10-21' }, { from: 'sql' }]) assert.throws(() => dateRange(query));
