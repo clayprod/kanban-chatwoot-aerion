@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$WebsiteRoot,
-    [string]$ExpectedPreviousHash = ''
+    [string]$ExpectedPreviousHash = '',
+    [string]$ExpectedPreviousMerchantHash = ''
 )
 $ErrorActionPreference = 'Stop'
 $resolvedRoot = (Resolve-Path -LiteralPath $WebsiteRoot).Path.TrimEnd('\')
@@ -10,6 +11,8 @@ $pluginDirectory = Join-Path $resolvedRoot 'wordpress\wp-content\plugins\aerion-
 $pluginTarget = Join-Path $pluginDirectory 'aerion-ecommerce-reports.php'
 $pluginSource = Join-Path $PSScriptRoot 'aerion-ecommerce-reports.php'
 $hashMarker = Join-Path $pluginDirectory '.crm-plugin-source.sha256'
+$merchantTarget = Join-Path $resolvedRoot 'wordpress\wp-content\plugins\aerion-commerce\includes\class-aerion-google-merchant.php'
+$merchantSource = Join-Path $PSScriptRoot 'class-aerion-google-merchant.php'
 if (-not (Test-Path -LiteralPath $dockerfile) -or -not (Test-Path -LiteralPath $entrypoint)) {
     throw 'O destino precisa conter o projeto WordPress Aerion esperado.'
 }
@@ -23,6 +26,11 @@ if (Test-Path -LiteralPath $pluginTarget) {
     $installedHash = if (Test-Path -LiteralPath $hashMarker) { [IO.File]::ReadAllText($hashMarker).Trim() } else { '' }
     if ($currentHash -ne (Get-FileHash -LiteralPath $pluginSource).Hash -and $currentHash -ne $installedHash -and $currentHash -ne $ExpectedPreviousHash) {
         throw 'Já existe outro conteúdo no plugin de destino. Revise antes de substituir.'
+    }
+}
+if ($ExpectedPreviousMerchantHash -ne '') {
+    if (-not (Test-Path -LiteralPath $merchantTarget) -or (Get-FileHash -LiteralPath $merchantTarget).Hash -ne $ExpectedPreviousMerchantHash) {
+        throw 'O feed Merchant foi alterado desde a revisão. Nenhum arquivo foi atualizado.'
     }
 }
 $dockerText = [IO.File]::ReadAllText($dockerfile)
@@ -40,6 +48,8 @@ if (-not $entrypointText.Contains($entryLine) -and -not $entrypointText.Contains
 $encoding = New-Object System.Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null
 Copy-Item -LiteralPath $pluginSource -Destination $pluginTarget
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'measurement.php') -Destination (Join-Path $pluginDirectory 'measurement.php')
+if ($ExpectedPreviousMerchantHash -ne '') { Copy-Item -LiteralPath $merchantSource -Destination $merchantTarget }
 [IO.File]::WriteAllText($hashMarker, (Get-FileHash -LiteralPath $pluginSource).Hash, $encoding)
 if (-not $dockerText.Contains($dockerLine)) {
     $newline = if ($dockerText.Contains("`r`n")) { "`r`n" } else { "`n" }

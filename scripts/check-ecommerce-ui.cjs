@@ -62,12 +62,12 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       throw new Error(`Navigation button missing: ${label}`);
     };
     const sections = [
-      ['Visão geral', 'overview'], ['Vendas e produtos', 'sales'], ['Tráfego e conversão', 'traffic'],
-      ['Campanhas e UTMs', 'campaigns'], ['Cupons', 'coupons'], ['Mídia paga', 'ads'],
+      ['Visão geral', 'overview', 'Visão geral'], ['Vendas e produtos', 'sales', 'Vendas e produtos'], ['Cupons', 'coupons', 'Vendas e produtos'],
+      ['Marketing', 'ads', 'Marketing'], ['Tráfego e conversão', 'traffic', 'Marketing'], ['Campanhas e UTMs', 'campaigns', 'Marketing'],
     ];
-    for (const [label, id] of sections) {
+    for (const [label, id, heading] of sections) {
       await clickSection(label);
-      await page.waitForFunction(expected => [...document.querySelectorAll('h2')].some(h => h.textContent === expected), {}, label);
+      await page.waitForFunction(expected => [...document.querySelectorAll('h2')].some(h => h.textContent === expected), {}, heading);
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });

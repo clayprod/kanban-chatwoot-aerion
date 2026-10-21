@@ -83,6 +83,22 @@ jobs:
       - name: Validate WordPress Ecommerce reporting bridge
         run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/reports.test.php
 
+      - name: Validate paid-only WooCommerce measurement
+        run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/measurement.test.php
+
+      - name: Validate Shopping manufacturer brands
+        run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/merchant.test.php
+
+      - name: Export validated WordPress integration
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordpress-ecommerce-integration-${{ github.sha }}
+          path: |
+            integrations/wordpress/aerion-ecommerce-reports.php
+            integrations/wordpress/measurement.php
+            integrations/wordpress/class-aerion-google-merchant.php
+          retention-days: 14
+
       - name: Validate technical analysis and catalogue isolation
         working-directory: backend
         run: node --test tests/technicalRules.test.js tests/technicalAnalysis.integration.test.js

@@ -168,6 +168,23 @@ test('Ecommerce API and resumable sync with isolated PostgreSQL schema', { skip:
       row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='google_ads'")).rows[0];
       assert.equal(row.enabled, false);
     });
+    await t.test('testing access preserves coverage and authorization expiry; replacing a Meta token clears its old expiry', async () => {
+      const config = { account_id: '123456', access_token: 'private-meta-token' };
+      assert.equal((await request('/connections/meta_ads', { method: 'PUT', body: config })).response.status, 200);
+      await pool.query("UPDATE ecommerce_connections SET info=$1 WHERE provider='meta_ads'", [{ history_from: '2025-10-21', authorization_expires_at: '2026-12-20T18:00:00Z', authorization_type: 'user_oauth', authorization_app_id: '123' }]);
+      assert.equal((await request('/connections/meta_ads/test', { method: 'POST' })).response.status, 200);
+      let row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='meta_ads'")).rows[0];
+      assert.equal(row.info.history_from, '2025-10-21');
+      assert.equal(row.info.authorization_expires_at, '2026-12-20T18:00:00Z');
+      await request('/connections/meta_ads', { method: 'PUT', body: { enabled: true } });
+      row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='meta_ads'")).rows[0];
+      assert.equal(row.info.authorization_expires_at, '2026-12-20T18:00:00Z');
+      await request('/connections/meta_ads', { method: 'PUT', body: { access_token: 'replacement-meta-token' } });
+      row = (await pool.query("SELECT * FROM ecommerce_connections WHERE provider='meta_ads'")).rows[0];
+      assert.equal(row.info.authorization_expires_at, undefined);
+      assert.equal(row.info.authorization_type, undefined);
+      assert.equal(row.info.history_from, '2025-10-21');
+    });
     await t.test('per-provider PostgreSQL lock prevents two workers from fetching the same source', async () => {
       const client = await pool.connect();
       await client.query('SELECT pg_advisory_lock(735101)');

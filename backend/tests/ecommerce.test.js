@@ -80,6 +80,30 @@ test('report separates sources, currencies and non-additive coupon revenue', () 
   assert.equal(report.coupons[1].revenue, 100);
   assert.deepEqual(report.currencies, ['BRL', 'USD']);
 });
+test('media ratios use weighted totals and unpaid orders exclude failures and cancellations', () => {
+  const report = buildReport({ range: dateRange({ from: '2026-10-20', to: '2026-10-21' }),
+    connections: ['woocommerce', 'meta_ads'].map(provider => ({ provider, last_success_at: '2026-10-21' })),
+    orders: ['pending', 'on-hold', 'failed', 'cancelled'].map((status, i) => normalizeOrder(order({ id: i + 100, status, date_paid_gmt: null, total: '120' }))),
+    metrics: [
+      { provider: 'meta_ads', date: '2026-10-20', currency: 'BRL', spend: 10, clicks: 1, impressions: 100, conversions: 1, conversionValue: 50 },
+      { provider: 'meta_ads', date: '2026-10-21', currency: 'BRL', spend: 90, clicks: 99, impressions: 900, conversions: 1, conversionValue: 150 },
+      { provider: 'meta_ads', date: '2026-10-21', currency: 'USD', spend: 999, clicks: 1, impressions: 1 },
+    ] });
+  assert.equal(report.summary.media.cpc, 1);
+  assert.equal(report.summary.media.roas, 2);
+  assert.equal(report.summary.media.ctr, 10);
+  assert.equal(report.summary.media.cpm, 100);
+  assert.equal(report.summary.media.cpa, 50);
+  assert.equal(report.summary.unpaidOrders, 2);
+  assert.equal(report.summary.unpaidValue, 240);
+  assert.equal(report.summary.mediaPartial, true);
+  assert.equal(report.platforms[0].spend, null);
+  assert.equal(report.platforms[1].spend, 100);
+  assert.equal(report.daily[0].googleSpend, null);
+  assert.equal(report.daily[1].metaSpend, 90);
+  assert.equal(report.summary.cartAbandonmentRate, null);
+});
+
 test('unconnected sources are unavailable rather than zero', () => {
   const report = buildReport({ range: dateRange({ from: '2026-10-20', to: '2026-10-21' }) });
   assert.equal(report.summary.revenue, null); assert.equal(report.summary.spend, null); assert.equal(report.summary.sessions, null);

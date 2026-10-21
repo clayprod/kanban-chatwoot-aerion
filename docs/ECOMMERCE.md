@@ -75,6 +75,8 @@ Alternativamente, selecione **Conta técnica Google** em Autenticação Google A
 
 Use um aplicativo pertencente à Aerion, configure o acesso necessário à Marketing API e associe um usuário de sistema à conta de anúncios com capacidade de análise. Informe ID da conta e token com `ads_read`. Requisitos de acesso/revisão do aplicativo dependem de sua configuração no Meta Business. Tokens podem ser revogados ou expirar: o painel registra falha e permite substituí-los.
 
+Um token de usuário concedido por OAuth com `ads_read` também pode ser usado após validar o acesso direto à conta pela API. A autorização do MCP no computador e a credencial do servidor são independentes: a sincronização da VPS não deve depender de uma sessão local do Codex. Quando a provisão registrar `authorization_expires_at` nos metadados da conexão, a tela Conexões mostra a data de validade. Renove antes dessa data; não trate um token OAuth de 60 dias como permanente. Testar o acesso preserva esses metadados e a cobertura histórica. Ao substituir o token, a validade anterior é removida até ser confirmada para a nova credencial.
+
 A Insights API é consultada por campanha/dia. As conversões de compra usam uma única categoria agregada (`omni_purchase`, com fallback em `purchase`), sem somar categorias sobrepostas. A janela solicitada é 7 dias após clique e 1 dia após visualização. O módulo não adiciona Pixel ou Conversions API: isso exige primeiro auditar as tags já instaladas, consentimento, eventos e deduplicação por `event_id`.
 
 ## Métricas e limites
@@ -112,3 +114,11 @@ npm run build
 Os testes de integração criam e removem um schema isolado no banco de teste; não aponte essa variável para produção. Os testes PHP rodam com `php integrations/wordpress/reports.test.php` na raiz, ou no container `php:8.2-cli` com a pasta montada somente para leitura. O CI exige os testes do backend/bridge; as telas têm testes próprios.
 
 CRM em produção somente via branch `main` no GitHub e CI/GHCR. Para WordPress, seguir também `ops/production/README.md` do projeto da loja e usar `/usr/local/sbin/aerion-wordpress-deploy IMAGE` na publicação da imagem aprovada. Não executar `compose up` diretamente nem copiar código de desenvolvimento para produção. Ativar o plugin e configurar contas são etapas operacionais posteriores ao deploy.
+
+## Análise consolidada e medição
+
+O menu reúne visão geral, vendas/produtos (com cupons), marketing (mídia, tráfego e UTMs) e conexões. O gráfico compara receita, investimento total/por plataforma e pedidos ainda pendentes, com legendas selecionáveis e agrupamento diário/semanal/mensal; volume fica em modo separado. Pedidos pendentes são apenas `pending`/`on-hold` sem pagamento em BRL, pelo valor total incluindo frete e impostos; falhas e cancelamentos não entram nesse saldo. A série diária representa a situação atual de pedidos criados naquele dia.
+
+CPC = investimento/cliques; CTR = cliques/impressões; CPM = investimento×1000/impressões; CPA = investimento/conversões informadas; ROAS atribuído = valor atribuído/investimento. Os totais usam somas ponderadas, nunca média dos índices de campanhas. O retorno da loja (MER) usa receita de produtos WooCommerce/investimento e não representa atribuição. O consolidado inclui somente BRL e sinaliza plataformas ausentes. ROAS entre plataformas pode conter dupla atribuição.
+
+A política de eventos WooCommerce fica em `integrations/wordpress/measurement.php`, incluída no plugin 1.1.0. O instalador copia os dois arquivos para o projeto WordPress; para atualizar o feed revisado, passar também `-ExpectedPreviousMerchantHash <SHA256 verificado>`. Ele recusa sobrescrever versão divergente. A fonte e os testes são validados no CI antes de qualquer deploy. Auditoria, limitações e próximas verificações em [ECOMMERCE-MEASUREMENT-AUDIT.md](ECOMMERCE-MEASUREMENT-AUDIT.md).

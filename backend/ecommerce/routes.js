@@ -180,6 +180,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
         try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
         const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id' }[provider];
         const changed = old && old.config[identity] !== merged[identity];
+        const metaCredentialChanged = provider === 'meta_ads' && previous.access_token !== merged.access_token;
         if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id || (previous.auth_type || 'oauth') !== merged.auth_type)) delete merged.refresh_token;
         const config = Object.fromEntries(PUBLIC_FIELDS[provider].map(k => [k, merged[k] || '']));
         const secrets = Object.fromEntries(SECRET_FIELDS[provider].filter(k => merged[k] !== undefined).map(k => [k, merged[k]]));
@@ -190,10 +191,12 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
         const enabled = req.body.enabled !== false && (provider !== 'google_ads' || merged.auth_type === 'google_identity' || Boolean(merged.refresh_token));
         await client.query(`INSERT INTO ecommerce_connections(provider,config,secrets,enabled) VALUES($1,$2,$3,$4)
           ON CONFLICT(provider) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=EXCLUDED.enabled,
-          cursor=NULL,status='pending',error=NULL,info=CASE WHEN $5 THEN '{}'::jsonb ELSE ecommerce_connections.info END,
+          cursor=NULL,status='pending',error=NULL,info=CASE WHEN $5 THEN '{}'::jsonb
+            WHEN $6 THEN ecommerce_connections.info - 'authorization_expires_at' - 'authorization_type' - 'authorization_app_id'
+            ELSE ecommerce_connections.info END,
           last_success_at=CASE WHEN $5 THEN NULL ELSE ecommerce_connections.last_success_at END,
           last_reconciled_at=CASE WHEN $5 THEN NULL ELSE ecommerce_connections.last_reconciled_at END,next_run_at=now(),updated_at=now()`,
-        [provider, config, seal(secrets), enabled, Boolean(changed)]);
+        [provider, config, seal(secrets), enabled, Boolean(changed), metaCredentialChanged]);
       });
       res.json({ saved: true });
     } finally { client.release(); }
@@ -202,7 +205,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     if (!PROVIDERS.includes(req.params.provider)) return res.sendStatus(404);
     const { config } = await loadConfig(req.params.provider);
     const info = await providers.test(req.params.provider, config);
-    await pool.query('UPDATE ecommerce_connections SET info=$2,error=NULL WHERE provider=$1', [req.params.provider, info]);
+    await pool.query('UPDATE ecommerce_connections SET info=info || $2::jsonb,error=NULL WHERE provider=$1', [req.params.provider, info]);
     res.json({ ok: true, info });
   });
   router.post('/connections/:provider/sync', async (req, res) => {

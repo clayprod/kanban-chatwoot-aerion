@@ -24,6 +24,7 @@ $routes = [];
 $allowed = false;
 function register_activation_hook(mixed ...$args): void {}
 function add_action(mixed ...$args): void {}
+function add_filter(mixed ...$args): void {}
 function add_role(mixed ...$args): void {}
 function current_user_can(string $cap): bool { global $allowed; return $cap === 'aerion_read_reports' && $allowed; }
 function wp_timezone_string(): string { return 'America/Sao_Paulo'; }

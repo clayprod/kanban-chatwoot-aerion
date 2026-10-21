@@ -100,11 +100,22 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
   const wooHistoryFrom = connections.find(c => c.provider === 'woocommerce')?.info?.history_from;
   const traffic = byProvider('ga4');
   const ads = metrics.filter(m => ['google_ads', 'meta_ads'].includes(m.provider) && m.date >= range.from && m.date <= range.to);
-  const currencies = [...new Set([...paid.map(o => o.currency), ...ads.map(m => m.currency)].filter(Boolean))];
+  const currencies = [...new Set([...currentOrders.map(o => o.currency), ...ads.map(m => m.currency)].filter(Boolean))];
   const validPaid = paid.filter(o => o.currency === 'BRL');
   const validAds = ads.filter(m => m.currency === 'BRL');
   const revenue = sum(validPaid, 'revenue');
   const spend = sum(validAds, 'spend');
+  const unpaid = currentOrders.filter(o => !o.paid && o.currency === 'BRL' && ['pending', 'on-hold'].includes(o.status));
+  const efficiency = rows => {
+    const totals = Object.fromEntries(['spend', 'clicks', 'impressions', 'conversions', 'conversionValue'].map(key => [key, sum(rows, key)]));
+    return { ...totals, cpc: totals.clicks ? totals.spend / totals.clicks : null,
+      ctr: totals.impressions ? totals.clicks / totals.impressions * 100 : null,
+      cpm: totals.impressions ? totals.spend / totals.impressions * 1000 : null,
+      cpa: totals.conversions ? totals.spend / totals.conversions : null,
+      roas: totals.spend ? totals.conversionValue / totals.spend : null };
+  };
+  const platforms = ['google_ads', 'meta_ads'].map(provider => ({ provider, available: available(provider), currency: 'BRL',
+    ...(available(provider) ? efficiency(validAds.filter(row => row.provider === provider)) : Object.fromEntries(['spend', 'clicks', 'impressions', 'conversions', 'conversionValue', 'cpc', 'ctr', 'cpm', 'cpa', 'roas'].map(key => [key, null]))) }));
   const group = (rows, getKey, make, add) => {
     const map = new Map();
     for (const row of rows) {
@@ -129,6 +140,9 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
       orders: available('woocommerce') ? dayOrders.length : null,
       sessions: available('ga4') ? sum(traffic.filter(m => m.date === date && m.kind === 'total'), 'sessions') : null,
       activeUsers: available('ga4') ? sum(traffic.filter(m => m.date === date && m.kind === 'total'), 'activeUsers') : null,
+      unpaidValue: available('woocommerce') ? sum(unpaid.filter(o => o.createdDay === date), 'total') : null,
+      googleSpend: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'spend') : null,
+      metaSpend: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'spend') : null,
       spend: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'spend') : null });
   }
   const utms = group(validPaid, o => JSON.stringify([o.attribution.linkId, o.attribution.source, o.attribution.medium, o.attribution.campaign, o.attribution.content]), o => ({
@@ -154,9 +168,14 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
       purchases: available('ga4') ? sum(totalTraffic, 'purchases') : null,
       spend: available('google_ads') || available('meta_ads') ? spend : null,
       revenuePerAdSpend: available('woocommerce') && spend ? amount(revenue / spend) : null,
+      unpaidOrders: available('woocommerce') ? unpaid.length : null,
+      unpaidValue: available('woocommerce') ? sum(unpaid, 'total') : null,
+      media: platforms.some(p => p.available) ? efficiency(validAds) : null,
+      mediaPartial: platforms.some(p => !p.available),
+      cartAbandonmentRate: null,
       unallocatedRefund: sum(validPaid, 'unallocatedRefund'),
     },
-    daily, products, coupons, utms: utms.sort((a, b) => b.revenue - a.revenue), links: linkReports,
+    daily, platforms, products, coupons, utms: utms.sort((a, b) => b.revenue - a.revenue), links: linkReports,
     orders: currentOrders.sort((a, b) => String(b.paidAt || b.createdAt).localeCompare(String(a.paidAt || a.createdAt))),
     traffic: traffic.filter(m => m.kind !== 'total'), ads,
   };

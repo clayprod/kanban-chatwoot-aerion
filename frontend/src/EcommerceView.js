@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { ResponsiveLine } from '@nivo/line';
-import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon, Squares2X2Icon, ShoppingBagIcon, MegaphoneIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
 
 export const ECOMMERCE_SECTIONS = [
-  { id: 'overview', label: 'Visão geral' }, { id: 'sales', label: 'Vendas e produtos' },
-  { id: 'traffic', label: 'Tráfego e conversão' }, { id: 'campaigns', label: 'Campanhas e UTMs' },
-  { id: 'coupons', label: 'Cupons' }, { id: 'ads', label: 'Mídia paga' }, { id: 'connections', label: 'Conexões' },
+  { id: 'overview', label: 'Visão geral', icon: Squares2X2Icon },
+  { id: 'sales', label: 'Vendas e produtos', icon: ShoppingBagIcon },
+  { id: 'ads', label: 'Marketing', icon: MegaphoneIcon },
+  { id: 'connections', label: 'Conexões', icon: Cog6ToothIcon },
 ];
 const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads' };
 const STATE = { pending: 'Aguardando configuração', connected: 'Conectado', syncing: 'Sincronizando', error: 'Requer atenção' };
@@ -60,19 +61,49 @@ function grouped(rows, keys, fields) {
   return [...map.values()];
 }
 function SalesChart({ rows }) {
-  const data = rows.filter(row => row.revenue != null).map(row => ({ x: row.date, y: row.revenue }));
+  const [visible, setVisible] = useState(['revenue', 'spend']);
+  const [mode, setMode] = useState('money');
+  const [interval, setInterval] = useState('day');
+  const series = mode === 'money' ? [
+    ['revenue', 'Receita de produtos', '#0d9488'], ['spend', 'Investimento total', '#8b78f5'],
+    ['metaSpend', 'Meta Ads', '#3b82f6'], ['googleSpend', 'Google Ads', '#d97706'], ['unpaidValue', 'Aguardando pagamento', '#e56767'],
+  ] : [['orders', 'Pedidos pagos', '#0d9488'], ['sessions', 'Sessões GA4', '#3b82f6']];
+  const buckets = new Map();
+  rows.forEach(row => {
+    const date = new Date(`${row.date}T12:00:00Z`);
+    if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
+    const key = interval === 'month' ? `${row.date.slice(0, 7)}-01` : interval === 'week' ? date.toISOString().slice(0, 10) : row.date;
+    if (!buckets.has(key)) buckets.set(key, { date: key });
+    series.forEach(([id]) => { if (row[id] != null) buckets.get(key)[id] = (buckets.get(key)[id] || 0) + row[id]; });
+  });
+  const data = series.filter(([id]) => visible.includes(id) && rows.some(row => row[id] != null)).map(([id, label, color]) => ({ id: label, color, data: [...buckets.values()].map(row => ({ x: row.date, y: row[id] ?? null })) }));
+  const available = rows.some(row => series.some(([id]) => row[id] != null));
   return <section className={panel} aria-label="Receita diária de produtos">
-    <h3 className="text-sm font-semibold">Receita diária de produtos</h3><p className={`${labelClass} mt-1`}>WooCommerce · BRL · data do pagamento</p>
-    {!data.length ? <p className="py-12 text-sm text-muted">Conecte o WooCommerce para acompanhar a evolução de vendas.</p> : <div className="h-64" role="img" aria-label="Evolução da receita diária no período selecionado">
-      <ResponsiveLine data={[{ id: 'Receita', data }]} margin={{ top: 25, right: 18, bottom: 44, left: 65 }}
-        xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }} colors={['#8b78f5']}
-        axisTop={null} axisRight={null} axisBottom={{ tickValues: data.filter((_, i) => i % Math.max(1, Math.ceil(data.length / 6)) === 0).map(d => d.x), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 12 }}
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">Vendas e investimento ao longo do tempo</h3><p className={`${labelClass} mt-1`}>{mode === 'money' ? 'BRL · receita pela data de pagamento · mídia pelo dia da conta' : 'Volume · pedidos pela data de pagamento · sessões do GA4'}</p></div>
+      <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-mode">Métrica do gráfico</label><select id="ecommerce-chart-mode" className={select} value={mode} onChange={e => { setMode(e.target.value); setVisible(e.target.value === 'money' ? ['revenue', 'spend'] : ['orders', 'sessions']); }}><option value="money">Valores em R$</option><option value="volume">Pedidos e sessões</option></select><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
+    </div>
+    <div className="my-4 flex flex-wrap gap-2" aria-label="Mostrar ou ocultar linhas do gráfico">{series.map(([id, label, color]) => <button key={id} type="button" disabled={!rows.some(r => r[id] != null)} aria-pressed={visible.includes(id)} onClick={() => setVisible(v => v.includes(id) ? v.filter(k => k !== id) : [...v, id])} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40 ${visible.includes(id) ? 'border-line bg-bg2 text-ink' : 'border-transparent text-muted'}`}><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}</button>)}</div>
+    {!available ? <p className="py-12 text-sm text-muted">Conecte o WooCommerce para acompanhar a evolução de vendas.</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <div className="h-72" role="img" aria-label="Evolução das métricas selecionadas no período">
+      <ResponsiveLine data={data} margin={{ top: 20, right: 18, bottom: 44, left: 65 }}
+        xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }} colors={({ color }) => color}
+        axisTop={null} axisRight={null} axisBottom={{ tickValues: data[0].data.filter((_, i) => i % Math.max(1, Math.ceil(data[0].data.length / 6)) === 0).map(d => d.x), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 12 }}
         axisLeft={{ tickSize: 0, tickPadding: 10, format: n => number(n) }} enablePoints={data.length <= 31} pointSize={4}
-        enableGridX={false} enableArea={false} useMesh animate={false}
+        enableGridX={false} enableArea={false} enableSlices="x" animate={false}
         theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } }, tooltip: { container: { background: '#172033', color: '#fff', borderRadius: 8 } } }}
-        tooltip={({ point }) => <span>{dateLabel(point.data.x)}: {money(point.data.y)}</span>} />
+        sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink"><strong>{dateLabel(slice.points[0].data.x)}</strong>{slice.points.map(point => <div className="mt-2 flex justify-between gap-5" key={point.id}><span>{point.serieId}</span><b>{mode === 'money' ? money(point.data.y) : number(point.data.y)}</b></div>)}</div>} />
     </div>}
+    <p className={`${labelClass} mt-3`}>Clique nas legendas para comparar. Pedidos pendentes incluem frete e impostos e refletem a situação atual dos pedidos criados no período; não representam abandono de carrinho.</p>
   </section>;
+}
+
+const ratio = value => value == null ? '—' : `${number(value)}×`;
+const percent = value => value == null ? '—' : `${number(value)}%`;
+function MediaIndicators({ summary }) {
+  const media = summary.media || {};
+  return <section className={panel}><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-base font-semibold">Eficiência da mídia</h3><span className="text-xs text-muted">{summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Fontes conectadas · BRL'}</span></div><dl className="mt-4 grid grid-cols-2 gap-5 lg:grid-cols-6">{[
+    ['ROAS atribuído', media.roas, ratio, 'Valor atribuído / investimento'], ['Retorno da loja · MER', summary.revenuePerAdSpend, ratio, 'Receita WooCommerce / mídia'],
+    ['CPC', media.cpc, money, 'Investimento / cliques'], ['CTR', media.ctr, percent, 'Cliques / impressões'], ['CPM', media.cpm, money, 'Custo por mil impressões'], ['CPA atribuído', media.cpa, money, 'Custo por conversão informada'],
+  ].map(([label, value, format, help]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{help}</p></div>)}</dl><p className="mt-4 border-t border-line pt-3 text-xs text-muted">ROAS usa a atribuição das plataformas e pode contabilizar a mesma venda em ambas. MER usa as vendas reais de produtos da loja e não mede atribuição. CPC, CTR, CPM e CPA usam totais ponderados.</p></section>;
 }
 
 const FIELDS = {
@@ -87,13 +118,13 @@ const FIELDS = {
   google_ads: [['customer_id', 'ID da conta anunciante', 'text', '123-456-7890'], ['login_customer_id', 'ID da conta administradora · se utilizada', 'text', 'Opcional'],
     ['client_id', 'OAuth Client ID', 'text', '…apps.googleusercontent.com'], ['client_secret', 'OAuth Client Secret', 'password', 'Segredo do aplicativo Google Cloud'],
     ['service_account', 'Credenciais da conta técnica Google Ads (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
-  meta_ads: [['account_id', 'ID da conta de anúncios', 'text', 'act_123456789'], ['access_token', 'Token do usuário de sistema · ads_read', 'password', 'Token com acesso de análise à conta']],
+  meta_ads: [['account_id', 'ID da conta de anúncios', 'text', 'act_123456789'], ['access_token', 'Token de acesso Meta · ads_read', 'password', 'Token com acesso de análise à conta']],
 };
 const HELP = {
   woocommerce: 'No WooCommerce, gere uma chave de leitura em Configurações → Avançado → API REST. Para UTMs Aerion, instale o plugin de relatórios e configure o usuário técnico abaixo.',
   ga4: 'Habilite a Analytics Data API no Google Cloud. Conceda à conta de serviço acesso de leitor à propriedade GA4. O ID da propriedade é numérico; não use o código G- da tag.',
   google_ads: 'Habilite a Google Ads API no projeto Google Cloud e obtenha acesso de produção. Use uma conta técnica com acesso Somente leitura ao anunciante ou autorize um usuário por OAuth.',
-  meta_ads: 'Use um aplicativo da Aerion no Meta Business e um usuário de sistema com acesso de análise à conta de anúncios. Gere o token com ads_read. O Pixel é conferido na loja; os resultados vêm da Insights API.',
+  meta_ads: 'Use um aplicativo da Aerion e um token com ads_read, obtido por OAuth ou por um usuário de sistema com acesso de análise à conta. O Pixel é conferido na loja; os resultados vêm da Insights API.',
 };
 function ConnectionForm({ provider, connection, status, onUpdate }) {
   const [form, setForm] = useState(() => ({ ...(connection?.config || {}), enabled: connection?.enabled !== false }));
@@ -154,6 +185,7 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
       {connection?.info?.tracking_error && <Notice>{connection.info.tracking_error}</Notice>}
       <div className="space-y-1 border-t border-line pt-3 text-xs text-muted">
         <p>Última atualização: {when(connection?.last_success_at)}</p>
+        {provider === 'meta_ads' && connection?.info?.authorization_expires_at && <p>Autorização Meta válida até: {when(connection.info.authorization_expires_at)}. Renove o acesso antes dessa data para manter a sincronização.</p>}
         {provider === 'woocommerce' && connection?.info?.bridge_last_success_at && <p>Última atualização de links e visitas Aerion: {when(connection.info.bridge_last_success_at)}</p>}
         {connection?.progress && <p>Importação em andamento · {connection.progress.phase} · lote {connection.progress.page}{connection.progress.from ? ` · desde ${connection.progress.from.slice(0, 10)}` : ''}</p>}
         {connection?.info?.tracking && <p>Configuração declarada da loja: GTM {connection.info.tracking.gtm_configured ? 'configurado' : 'não configurado'} · GA4 {connection.info.tracking.ga4_configured ? 'configurado' : 'não detectado'} · Pixel Meta {connection.info.tracking.meta_pixel_configured ? 'configurado' : 'não detectado'} · consentimento {connection.info.tracking.consent_api ? 'disponível' : 'não detectado'} · UTMs Aerion {connection.info.tracking.utm_available ? 'disponível' : 'não detectado'}. Tags instaladas pelo GTM e eventos reais exigem validação no navegador, DebugView e Events Manager.</p>}
@@ -163,7 +195,10 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
   </details>;
 }
 
-export default function EcommerceView({ section = 'overview', isAdmin = false, onNavigate }) {
+export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
+  const [section, setSection] = useState(requestedSection);
+  useEffect(() => setSection(requestedSection), [requestedSection]);
+  const parentSection = ['traffic', 'campaigns', 'ads'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
   const [range, setRange] = useState(() => ({ from: previousDay(today(), 29), to: today() }));
   const [draftRange, setDraftRange] = useState(range);
   const [report, setReport] = useState(null);
@@ -174,7 +209,7 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
   const [refresh, setRefresh] = useState(0);
   const [source, setSource] = useState('all');
   const [query, setQuery] = useState('');
-  const title = ECOMMERCE_SECTIONS.find(s => s.id === section)?.label || 'Visão geral';
+  const title = ECOMMERCE_SECTIONS.find(s => s.id === parentSection)?.label || 'Visão geral';
   const reload = useCallback(() => setRefresh(n => n + 1), []);
   useEffect(() => { setReport(null); }, [range]);
   useEffect(() => {
@@ -210,8 +245,8 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
       <button type="button" className={btnSecondarySm} disabled={loading} onClick={reload}><ArrowPathIcon className="h-4 w-4" />Atualizar painel</button>
     </header>
     <div className="flex flex-wrap gap-2 border-b border-line pb-3" aria-label="Relatórios Ecommerce">
-      {ECOMMERCE_SECTIONS.filter(s => isAdmin || s.id !== 'connections').map(s => <button key={s.id} type="button" aria-current={s.id === section ? 'page' : undefined}
-        onClick={() => onNavigate(s.id)} className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${s.id === section ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-surf2 hover:text-ink'}`}>{s.label}</button>)}
+      {ECOMMERCE_SECTIONS.filter(s => isAdmin || s.id !== 'connections').map(s => <button key={s.id} type="button" aria-current={s.id === parentSection ? 'page' : undefined}
+        onClick={() => { setSection(s.id); onNavigate(s.id); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${s.id === parentSection ? 'bg-primary/15 text-primary' : 'text-muted hover:bg-surf2 hover:text-ink'}`}><s.icon className="h-4 w-4" aria-hidden="true" />{s.label}</button>)}
     </div>
     {error && <Notice error>{error} <button className="ml-2 underline" type="button" onClick={reload}>Tentar novamente</button></Notice>}
     {loading && !report && <div aria-label="Carregando Ecommerce" role="status" className="space-y-4 motion-safe:animate-pulse"><div className="h-24 rounded-xl bg-surf2" /><div className="h-64 rounded-xl bg-surf2" /><span className="sr-only">Carregando relatórios…</span></div>}
@@ -223,6 +258,7 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
+      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {pending.length > 0 && <Notice>{pending.map(c => `${SOURCES[c.provider]}: ${STATE[c.status]}`).join(' · ')}. Os resultados podem estar incompletos durante a importação.</Notice>}
       {status.connections.some(c => c.info?.history_from && range.from < c.info.history_from) && <Notice>O período selecionado começa antes do histórico importado de uma ou mais fontes. Consulte a cobertura informada no rodapé; os resultados desse intervalo são parciais.</Notice>}
       {woo?.info?.tracking_error && section === 'campaigns' && <Notice>{woo.info.tracking_error}</Notice>}
@@ -230,11 +266,13 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
       {summary.unallocatedRefund > 0 && <Notice>Há {money(summary.unallocatedRefund)} em reembolsos sem discriminação de produtos, frete ou impostos. A receita de produtos ainda não desconta esses valores e exige conciliação.</Notice>}
       {report && <>
         {section === 'overview' && <>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-5">
-            {[['Receita de produtos', summary.revenue, money, 'WooCommerce · após descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, 'WooCommerce · BRL'], ['Ticket médio', summary.ticket, money, 'Receita de produtos / pedidos'], ['Sessões', summary.sessions, number, 'GA4 · navegação registrada'], ['Investimento em mídia', summary.spend, money, 'Google Ads + Meta · fontes conectadas em BRL']].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
+            {[['Receita de produtos', summary.revenue, money, 'Pagamentos confirmados · descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, `Ticket médio ${money(summary.ticket)}`], ['Investimento em mídia', summary.spend, money, summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Google Ads + Meta · BRL'], ['Aguardando pagamento', summary.unpaidValue, money, `${number(summary.unpaidOrders)} pedidos pendentes ou em espera · inclui frete e impostos`]].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}
           </dl>
           <p className="text-xs text-muted">Receita no período anterior ({dateLabel(report.range.previousFrom)} a {dateLabel(report.range.previousTo)}): {money(summary.previousRevenue)}. Receita exclui frete e impostos. Compras registradas no GA4: {number(summary.purchases)}.</p>
           <SalesChart rows={report.daily} />
+          <MediaIndicators summary={summary} />
+          <section className={panel}><h3 className="text-base font-semibold">Conversão e oportunidades</h3><dl className="mt-4 grid grid-cols-2 gap-5 lg:grid-cols-4">{[['Sessões GA4', number(summary.sessions)], ['Compras GA4', number(summary.purchases)], ['Compras / sessões GA4', summary.sessions ? percent(summary.purchases / summary.sessions * 100) : '—'], ['Abandono de carrinho', percent(summary.cartAbandonmentRate)]].map(([label, value]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{value}</dd></div>)}</dl><p className="mt-4 text-xs text-muted">Abandono exige um funil de usuários com carrinho e compra no mesmo intervalo. A medição está em validação; pedidos não pagos e contagens de eventos não permitem calcular essa taxa. Compras / sessões mede ocorrências por sessão, não a proporção de pessoas que compraram.</p></section>
           <Table caption="Produtos com maior receita" rows={report.products.slice(0, 10)} columns={[{ key: 'name', label: 'Produto' }, numeric('quantity', 'Unidades líquidas'), numeric('revenue', 'Receita', money)]} />
           <p className="text-xs text-muted">Vendas da loja, compras do GA4 e conversões atribuídas pelos anúncios seguem critérios diferentes. Conversões das plataformas não são somadas como pedidos únicos.</p>
         </>}
@@ -242,7 +280,7 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
         {section === 'sales' && <>
           {noSource('woocommerce') && <Notice>Conecte o WooCommerce para consultar vendas e produtos.</Notice>}
           <Table caption="Desempenho de produtos" rows={filter(report.products)} columns={[{ key: 'name', label: 'Produto' }, { key: 'sku', label: 'SKU' }, { key: 'categories', label: 'Categorias', render: r => r.categories?.join(', ') || '—' }, numeric('quantity', 'Unidades líquidas'), numeric('revenue', 'Receita', money), numeric('refunded', 'Reembolsos de produtos', money)]} />
-          <Table caption="Pedidos no período" rows={filter(report.orders)} columns={[{ key: 'number', label: 'Pedido' }, { key: 'status', label: 'Situação' }, { key: 'paidAt', label: 'Pagamento', render: r => r.paidAt ? when(r.paidAt) : 'Não pago' }, { key: 'currency', label: 'Moeda' }, numeric('revenue', 'Receita de produtos', r => number(r)), numeric('refunded', 'Reembolsado'), { key: 'coupons', label: 'Cupons', render: r => r.coupons.map(c => c.code).join(', ') || '—' }]} />
+          <Table caption="Pedidos no período" rows={filter(report.orders)} columns={[{ key: 'number', label: 'Pedido' }, { key: 'status', label: 'Situação' }, { key: 'paidAt', label: 'Pagamento', render: r => r.paidAt ? when(r.paidAt) : 'Não pago' }, { key: 'currency', label: 'Moeda' }, numeric('total', 'Valor do pedido'), numeric('revenue', 'Receita de produtos', r => number(r)), numeric('refunded', 'Reembolsado'), { key: 'coupons', label: 'Cupons', render: r => r.coupons.map(c => c.code).join(', ') || '—' }]} />
         </>}
         {section === 'traffic' && <>
           {noSource('ga4') && <Notice>Conecte a propriedade GA4 para consultar visitas e aquisição.</Notice>}
@@ -266,8 +304,11 @@ export default function EcommerceView({ section = 'overview', isAdmin = false, o
           <Table caption="Cupons cadastrados na loja" rows={filter(report.couponCatalog || [])} columns={[{ key: 'code', label: 'Cupom' }, { key: 'discountType', label: 'Tipo' }, { key: 'amount', label: 'Valor configurado' }, numeric('usageCount', 'Usos na loja'), numeric('usageLimit', 'Limite'), { key: 'expiresAt', label: 'Vencimento', render: r => r.expiresAt ? when(`${r.expiresAt.replace(/Z$/, '')}Z`) : 'Sem vencimento' }]} />
         </>}
         {section === 'ads' && <>
+          <MediaIndicators summary={summary} />
+          <SalesChart rows={report.daily} />
+          <Table caption="Comparativo por plataforma · BRL" rows={report.platforms || []} columns={[{ key: 'provider', label: 'Plataforma', render: r => <button type="button" className="text-primary underline underline-offset-4" onClick={() => setSource(r.provider)}>{SOURCES[r.provider]}{!r.available ? ' · sem dados' : ''}</button> }, numeric('spend', 'Investimento', money), numeric('clicks', 'Cliques'), numeric('cpc', 'CPC', money), numeric('ctr', 'CTR', percent), numeric('cpm', 'CPM', money), numeric('conversions', 'Conversões atribuídas'), numeric('conversionValue', 'Valor atribuído', money), numeric('roas', 'ROAS atribuído', ratio)]} />
           <label className="block max-w-xs space-y-1"><span className="block text-xs text-muted">Plataforma</span><select className={`${select} w-full`} value={source} onChange={e => setSource(e.target.value)}><option value="all">Google Ads e Meta Ads</option><option value="google_ads">Google Ads</option><option value="meta_ads">Meta Ads</option></select></label>
-          <Table caption="Performance por campanha · atribuição da plataforma" rows={filter(ads)} columns={[{ key: 'provider', label: 'Fonte', render: r => SOURCES[r.provider] }, { key: 'campaign', label: 'Campanha' }, { key: 'currency', label: 'Moeda' }, numeric('spend', 'Investimento'), numeric('impressions', 'Impressões'), numeric('clicks', 'Cliques'), { key: 'cpc', label: 'CPC', numeric: true, render: r => r.clicks ? number(r.spend / r.clicks) : '—' }, numeric('conversions', 'Conversões'), { key: 'roas', label: 'ROAS informado', numeric: true, render: r => r.spend ? `${number(r.conversionValue / r.spend)}×` : '—' }, { key: 'attribution', label: 'Janela / critério' }, { key: 'timezone', label: 'Fuso da conta' }]} />
+          <Table caption="Performance por campanha · atribuição da plataforma" rows={filter(ads)} columns={[{ key: 'provider', label: 'Fonte', render: r => SOURCES[r.provider] }, { key: 'campaign', label: 'Campanha' }, { key: 'currency', label: 'Moeda' }, numeric('spend', 'Investimento'), numeric('impressions', 'Impressões'), numeric('clicks', 'Cliques'), { key: 'cpc', label: 'CPC', numeric: true, render: r => r.clicks ? number(r.spend / r.clicks) : '—' }, { key: 'ctr', label: 'CTR', numeric: true, render: r => r.impressions ? percent(r.clicks / r.impressions * 100) : '—' }, { key: 'cpm', label: 'CPM', numeric: true, render: r => r.impressions ? number(r.spend / r.impressions * 1000) : '—' }, numeric('conversions', 'Conversões'), numeric('conversionValue', 'Valor atribuído'), { key: 'roas', label: 'ROAS informado', numeric: true, render: r => r.spend ? `${number(r.conversionValue / r.spend)}×` : '—' }, { key: 'attribution', label: 'Janela / critério' }, { key: 'timezone', label: 'Fuso da conta' }]} />
           <Notice>O Google Ads usa as ações de conversão configuradas na conta; elas podem incluir resultados além de compras. A Meta usa 7 dias após clique e 1 dia após visualização. Cada plataforma pode atribuir a mesma venda. O ROAS acima usa o valor de conversão informado pela própria plataforma.</Notice>
         </>}
         <footer className="flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-3 text-xs text-muted" aria-label="Atualização das fontes">

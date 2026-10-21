@@ -15003,7 +15003,7 @@ function App() {
     {
       label: 'Ecommerce',
       items: ECOMMERCE_SECTIONS.map(section => ({
-        name: section.label, view: 'Ecommerce', sub: section.id, icon: ChartBarIcon,
+        name: section.label, view: 'Ecommerce', sub: section.id, icon: section.icon,
         adminOnly: section.id === 'connections',
       })),
     },
