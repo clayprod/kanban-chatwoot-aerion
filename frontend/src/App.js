@@ -6,6 +6,7 @@ import SearchEvidence from './SearchEvidence';
 import SearchWatchlistReview from './SearchWatchlistReview';
 import ProductCatalog from './ProductCatalog';
 import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
+import SankhyaReportingPanel from './SankhyaReportingPanel';
 import TechnicalResult from './TechnicalResult';
 import OpportunityPreview from './OpportunityPreview';
 import { createPncpOpportunityPreview } from './pncpPreview';
@@ -23356,6 +23357,7 @@ function App() {
 
           {activeView === 'Metas' && authStatus.role === 'admin' && (
             <div className="mt-6">
+              <SankhyaReportingPanel year={metasYear} />
               <div className="toolbar-meta mb-6">
                 <p className="min-w-0 text-sm text-muted">
                   Receita em R$: <span className="font-semibold text-ink/80 dark:text-white/80">meta</span> (plano) vs <span className="font-semibold text-ink/80 dark:text-white/80">realizado</span> (faturamento). Por mês e no ano.

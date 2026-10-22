@@ -65,7 +65,7 @@ jobs:
 
       - name: Validate Ecommerce frontend
         working-directory: frontend
-        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js
+        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js SankhyaReportingPanel.test.js
         env:
           CI: true
 
@@ -77,6 +77,12 @@ jobs:
       - name: Validate Ecommerce API, attribution and synchronization
         working-directory: backend
         run: npm run test:ecommerce
+        env:
+          ECOMMERCE_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
+
+      - name: Validate readonly Sankhya synchronization and snapshot recovery
+        working-directory: backend
+        run: node --test tests/sankhyaReporting.test.js
         env:
           ECOMMERCE_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
 

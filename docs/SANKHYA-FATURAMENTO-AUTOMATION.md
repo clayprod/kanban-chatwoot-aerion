@@ -15,6 +15,8 @@ Referência: `Proxy-Sankhya-API-Reference-Parceiro-v3.pdf`, na raiz do projeto W
 
 O contrato expõe listagem/consulta de NF-e e DANFE. O vínculo pedido–nota vem de `codigoPedidoOrigem` na consulta individual de NF-e; não está na listagem. Isso permite conciliação quando a leitura estiver funcionando, mas não equivale a autorização para emitir notas ou dar baixa no financeiro.
 
+Também foram consultados dois NUNOTA da empresa 102 presentes na base gerencial: 57692 e 54442. Ambas as consultas individuais retornaram HTTP 404, `Nota não encontrada`. A consulta 54442 consta como exemplo no PDF v3. Esses retornos não provam inexistência das notas no ERP: o contrato também usa 404 para documentos fora do escopo da chave. O usuário não lembra o pedido usado em uma importação anterior; não há base para afirmar que aquele mesmo fluxo foi reproduzido ou identificar a causa interna da regressão. A integração WordPress tem tanto busca pela API quanto recebimento de DANFE/XML por webhook, e esses caminhos não são equivalentes à listagem gerencial.
+
 ## Fonte atual do dashboard
 
 `backend/index.js` consulta o PostgreSQL indicado por `FATURAMENTO_DATABASE_URL`, sem passar pelo Metabase. O Metabase e o Kanban consomem a base carregada pelo fluxo de exportação/importação. A conexão de produção existe e não há overrides `FATURAMENTO_QUERY*`.
@@ -22,6 +24,21 @@ O contrato expõe listagem/consulta de NF-e e DANFE. O vínculo pedido–nota ve
 Os quatro relatórios de realizado usam `vendas`, filtrando grupos cuja descrição começa com `AERION` e `natureza_nf2='Venda'`. Somam `valor_total_prod` e contam `numero_nota` distinto; não há filtro explícito por empresa nesses SQLs. As metas continuam em `metas_aerion` e não devem ser substituídas por pedidos.
 
 O esquema atual de `vendas` inclui `empresa`, `numero_unico`, `numero_nota`, `data_de_faturamento`, `codigo_do_produto`, `cod_grupoprod`, `valor_total_prod`, `codigo_vendedor`, `descricao_vendedor`, `situacao_nf`, `natureza_nf2`, `arquivo_origem` e `importado_em`. São dados por item; somar `valor_total_nota` em cada linha duplicaria o cabeçalho. O `valorNota` do proxy também não pode substituir automaticamente a receita de produtos, por diferenças de frete, impostos e descontos.
+
+O recorte atual AERION/Venda retornou registros das empresas 3, 100 e 102; a última importação observada foi em 16/10/2026. Esse recorte antigo não foi alterado como parte da ativação separada da 102. Deve ser revisado na conciliação antes de se apresentar como consolidado exclusivo de 100 e 102.
+
+## Automação parcial da 102 autorizada pelo usuário
+
+O usuário autorizou iniciar com a 102 e incluir a 100 depois. `backend/sankhyaReporting.js` implementa uma sincronização somente de leitura, com configuração cifrada no PostgreSQL e dois fluxos independentes: pedidos e notas fiscais. A empresa 100 é recusada no contrato atual; as tabelas já guardam a empresa na chave para uma futura extensão autorizada.
+
+- A cada minuto o agendador verifica o trabalho pendente. Cada recurso faz uma varredura a cada 30 minutos, com lotes limitados a três páginas e checkpoints persistentes.
+- Respostas de erro usam espera de 30 minutos, sem interromper o fluxo de pedidos quando a listagem de notas falha. Chaves e corpos de erro upstream não aparecem na resposta ou no log.
+- Páginas novas ficam em uma geração separada. Só a conclusão de uma varredura publica a nova geração. Se uma página posterior falhar, o painel conserva a carga anterior inteira, sem misturar os totais antigos e novos.
+- Guardam-se somente cabeçalhos necessários à operação, sem dados pessoais do cliente, chave fiscal, endereços ou títulos financeiros. Totais não são consolidados quando a moeda não está identificada como BRL.
+- Em **Metas e Resultados**, o painel ERP mostra o estado da sincronização da 102, pedidos e notas com status de autorização. Não converte pedidos em receita, nem apresenta ausência de leitura fiscal como zero notas.
+- Os gráficos existentes de faturamento continuam na base anterior até a leitura e conciliação fiscal. A contagem de notas com `statusNFe=1` não é, por si só, uma apuração de receita líquida de cancelamentos/devoluções.
+
+API administrativa: `PUT /api/sankhya/connections/102` configura a chave por canal de servidor e habilita explicitamente a conexão; não há credencial padrão. `POST /api/sankhya/sync` solicita o próximo ciclo, sem bloquear a interface. `GET /api/sankhya/report?ano=2026` retorna apenas agregados e estados operacionais. A chave não é retornada ao navegador.
 
 ## Contrato necessário para automatizar as empresas 100 e 102
 

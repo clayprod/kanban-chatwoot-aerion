@@ -1,5 +1,6 @@
 const express = require('express');
 const { createEcommerce } = require('./ecommerce/routes');
+const { createSankhyaReporting } = require('./sankhyaReporting');
 const { Pool } = require('pg');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -722,6 +723,8 @@ const requireAdmin = (req, res, next) => {
 
 const ecommerce = createEcommerce({ pool, getUserById });
 app.use('/api/ecommerce', ecommerce.router);
+const sankhyaReporting = createSankhyaReporting({ pool, authorize: requireAdmin });
+app.use('/api/sankhya', sankhyaReporting.router);
 
 const requireBoardEdit = async (req, res, next) => {
   if (req.auth?.role === 'admin') return next();
@@ -23360,6 +23363,7 @@ let backgroundSchedulesRegistered = false;
 const registerBackgroundSchedules = () => {
   cron.schedule('* * * * *', () => {
     ecommerce.tick().catch(() => console.warn('[ecommerce] sincronização indisponível; nova tentativa no próximo ciclo'));
+    sankhyaReporting.tick().catch(() => console.warn('[sankhya] sincronização indisponível; dados anteriores preservados'));
   });
   if (backgroundSchedulesRegistered) return;
   backgroundSchedulesRegistered = true;
@@ -23755,6 +23759,7 @@ const registerBackgroundSchedules = () => {
 
 const initializeDataLayer = async () => {
   await ecommerce.ensure();
+  await sankhyaReporting.ensure();
   await createHistoryTable();
   await createActivityTable();
   await createContactReminderTable(pool);
