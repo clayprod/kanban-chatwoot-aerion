@@ -72,6 +72,9 @@ test('CRM segments are a current aggregate preview and never trigger an audience
   } : report }));
   render(<EcommerceView section="traffic" onNavigate={jest.fn()} />);
   expect(await screen.findByText('Clientes e recompra')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Distribuição · base comercial do CRM' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Públicos da loja · estrutura sugerida' })).toBeInTheDocument();
+  expect(screen.getByText(/esta tabela não comprova criação ou sincronização/)).toBeInTheDocument();
   expect(screen.getByText(/Nenhuma lista foi enviada/)).toBeInTheDocument();
   expect(screen.getByText(/independente do período do gráfico/)).toBeInTheDocument();
   expect(axios.post).not.toHaveBeenCalled();

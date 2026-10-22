@@ -36,6 +36,8 @@ app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range
   search: { available: true, site: 'sc-domain:aerion.com.br', latestDate: shiftDay(to, -3), summary: { clicks: 42, impressions: 1800, ctr: 2.33, position: 8.5 },
     pages: [{ landing: 'https://aerion.com.br/loja/produto/autel-evo-lite-enterprise/', clicks: 12, impressions: 350, ctr: 3.43, position: 8 }],
     queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
+app.get('/api/ecommerce/audiences', (req, res) => res.json({ available: true, uploaded: false, observedAt: new Date().toISOString(),
+  segments: [{ id: 'qualified', label: 'Qualificados e oportunidades', stages: '6 a 12', contacts: 47, emails: 21, suppressed: 0, use: 'Remarketing comercial' }], stages: [], profiles: [] }));
 app.use('/api', (req, res) => res.json([]));
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'build', 'index.html')));
@@ -72,6 +74,13 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     for (const [label, id, heading] of sections) {
       await clickSection(label);
       await page.waitForFunction(expected => [...document.querySelectorAll('h2')].some(h => h.textContent === expected), {}, heading);
+      if (id === 'traffic') await page.waitForFunction(() => document.body.textContent.includes('Qualificados e oportunidades'));
+      if (id === 'overview') {
+        await page.select('#ecommerce-chart-mode', 'efficiency');
+        await page.waitForFunction(() => document.body.textContent.includes('CPC ponderado por cliques'));
+        await page.screenshot({ path: path.join(output, 'efficiency-desktop.png'), fullPage: true });
+        await page.select('#ecommerce-chart-mode', 'money');
+      }
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });

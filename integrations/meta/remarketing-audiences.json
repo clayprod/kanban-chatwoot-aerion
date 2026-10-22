@@ -1,0 +1,238 @@
+{
+  "ad_account_id": "1318645390292737",
+  "pixel_id": "1668777180919759",
+  "status": "prepared_not_created",
+  "last_attempt": "2026-10-22",
+  "blocker": "Meta MCP creation returned Authorization Error (401 / OAuthException 190); reading remains available.",
+  "note": "MCP ads_create_custom_audience expects rule encoded as a JSON string. No audiences or contact lists have been uploaded. Do not attach to campaigns automatically.",
+  "audiences": [
+    {
+      "name": "Aerion | Visitantes | 30d | sem compra",
+      "subtype": "WEBSITE",
+      "prefill": true,
+      "rule": {
+        "inclusions": {
+          "operator": "or",
+          "rules": [{
+            "event_sources": [{ "type": "pixel", "id": "1668777180919759" }],
+            "retention_seconds": 2592000,
+            "filter": { "operator": "and", "filters": [{ "field": "url", "operator": "i_contains", "value": "" }] },
+            "template": "ALL_VISITORS"
+          }]
+        },
+        "exclusions": {
+          "operator": "or",
+          "rules": [{
+            "event_sources": [{ "type": "pixel", "id": "1668777180919759" }],
+            "retention_seconds": 15552000,
+            "filter": { "operator": "and", "filters": [{ "field": "event", "operator": "eq", "value": "Purchase" }] },
+            "template": "VISITORS_BY_URL"
+          }]
+        }
+      }
+    },
+    {
+      "name": "Aerion | Produtos vistos | 30d | sem compra",
+      "subtype": "WEBSITE",
+      "prefill": true,
+      "rule": {
+        "inclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 2592000,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "ViewContent"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        },
+        "exclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 15552000,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "Purchase"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Aerion | Carrinho | 14d | sem compra",
+      "subtype": "WEBSITE",
+      "prefill": true,
+      "rule": {
+        "inclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 1209600,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "AddToCart"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        },
+        "exclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 15552000,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "Purchase"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Aerion | Checkout | 7d | sem compra",
+      "subtype": "WEBSITE",
+      "prefill": true,
+      "rule": {
+        "inclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 604800,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "InitiateCheckout"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        },
+        "exclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 15552000,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "Purchase"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Aerion | Compradores | 180d",
+      "subtype": "WEBSITE",
+      "prefill": true,
+      "rule": {
+        "inclusions": {
+          "operator": "or",
+          "rules": [
+            {
+              "event_sources": [
+                {
+                  "type": "pixel",
+                  "id": "1668777180919759"
+                }
+              ],
+              "retention_seconds": 15552000,
+              "filter": {
+                "operator": "and",
+                "filters": [
+                  {
+                    "field": "event",
+                    "operator": "eq",
+                    "value": "Purchase"
+                  }
+                ]
+              },
+              "template": "VISITORS_BY_URL"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

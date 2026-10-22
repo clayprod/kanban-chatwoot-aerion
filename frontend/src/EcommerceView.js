@@ -194,6 +194,22 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
   </details>;
 }
 
+function StoreAudiencePlan() {
+  const rows = [
+    { name: 'Visitantes', window: '30 dias', signal: 'Visita ao site', exclusion: 'Compra nos últimos 180 dias' },
+    { name: 'Interesse em produtos', window: '30 dias', signal: 'view_item / ViewContent', exclusion: 'Compra nos últimos 180 dias' },
+    { name: 'Carrinho', window: '14 dias', signal: 'add_to_cart / AddToCart', exclusion: 'Compra nos últimos 180 dias' },
+    { name: 'Checkout', window: '7 dias', signal: 'begin_checkout / InitiateCheckout', exclusion: 'Compra nos últimos 180 dias' },
+    { name: 'Compradores da loja', window: '180 dias', signal: 'purchase / Purchase · pagamento confirmado', exclusion: 'Sem exclusão de compradores' },
+  ];
+  return <section className="space-y-4" aria-label="Públicos da loja">
+    <div className="border-t border-line pt-5"><h3 className="text-base font-semibold">Públicos da loja · estrutura sugerida</h3><p className="mt-1 max-w-3xl text-xs text-muted">Um funil de intenção de compra para distribuidores e consumidores finais. As etapas do CRM de distribuição ficam separadas.</p></div>
+    <Table caption="Mesmas regras de negócio para Meta e Google" rows={rows} columns={[{ key: 'name', label: 'Público' }, { key: 'window', label: 'Janela móvel' }, { key: 'signal', label: 'Sinal Google / Meta' }, { key: 'exclusion', label: 'Exclusão sugerida' }]} />
+    <p className="text-xs text-muted">Proposta de segmentação; esta tabela não comprova criação ou sincronização nas plataformas. Públicos do site se atualizam pelos eventos após serem configurados. Listas do CRM precisam de sincronização própria. Nomes e regras podem ser equivalentes entre plataformas, mas pessoas correspondidas e tamanhos podem diferir.</p>
+    <p className="text-xs text-muted">Distribuidor e consumidor final devem vir de informação declarada ou de uma origem confiável. Visitar um produto ou adicionar ao carrinho, isoladamente, não identifica esse perfil. Uma base usada como sinal não limita automaticamente a entrega a pessoas semelhantes; a configuração da campanha também determina a expansão.</p>
+  </section>;
+}
+
 function CrmAudiencePreview({ refresh }) {
   const [preview, setPreview] = useState(null), [error, setError] = useState('');
   useEffect(() => {
@@ -204,7 +220,7 @@ function CrmAudiencePreview({ refresh }) {
     return () => controller.abort();
   }, [refresh]);
   return <section className="space-y-4" aria-label="Públicos por etapa do CRM">
-    <div className="border-t border-line pt-5"><h3 className="text-base font-semibold">Públicos a partir do funil comercial</h3><p className="mt-1 max-w-3xl text-xs text-muted">Situação atual do Kanban/Chatwoot, independente do período do gráfico. Clientes classificados no CRM não equivalem a pagamentos confirmados na loja.</p></div>
+    <div className="border-t border-line pt-5"><h3 className="text-base font-semibold">Distribuição · base comercial do CRM</h3><p className="mt-1 max-w-3xl text-xs text-muted">Situação atual do Kanban/Chatwoot, independente do período do gráfico. Cadastros reais do funil de distribuição; não são exemplos fictícios nem a base de referência da loja. Clientes classificados no CRM não equivalem a pagamentos confirmados na loja.</p></div>
     {error ? <Notice error>{error}</Notice> : !preview ? <p role="status" className="text-sm text-muted">Consultando as etapas do CRM…</p> : <>
       <Table caption="Base do CRM por intenção comercial" rows={preview.segments || []} columns={[{ key: 'label', label: 'Segmento' }, { key: 'stages', label: 'Etapas' }, numeric('contacts', 'Contatos'), numeric('emails', 'Emails únicos disponíveis'), numeric('suppressed', 'Não contatar'), { key: 'use', label: 'Uso recomendado' }]} />
       <p className="text-xs text-muted">Emails com formato válido, sem duplicação dentro do segmento e respeitando os bloqueios registrados no CRM. Isso não comprova correspondência nas plataformas nem autorização para publicidade. Nenhuma lista foi enviada. A classificação inclui as etapas atuais do funil, que devem ser revisadas antes de usar compradores ou qualificados como referência de público.</p>
@@ -310,6 +326,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
           <Table caption="Navegação diária · GA4" rows={report.daily} columns={[{ key: 'date', label: 'Dia', render: r => dateLabel(r.date) }, numeric('sessions', 'Sessões'), numeric('activeUsers', 'Usuários ativos no dia')]} />
           <p className="text-xs text-muted">Usuários ativos são únicos em cada dia. Somá-los não representa usuários únicos no período.</p>
           {report.traffic.some(r => r.thresholded || r.otherRow) && <Notice>O GA4 informou limitação de cobertura ou agrupamento de linhas neste relatório. Os detalhamentos podem não coincidir com os totais.</Notice>}
+          <StoreAudiencePlan />
           <CrmAudiencePreview refresh={refresh} />
         </>}
         {section === 'campaigns' && <>
