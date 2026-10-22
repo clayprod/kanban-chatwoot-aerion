@@ -11,10 +11,8 @@ test('ERP orders are separate from unavailable invoices and the existing revenue
     { company_id: 102, resource: 'invoices', enabled: true, authorized_documents: 0, last_success_at: null, error: 'HTTP 502. Últimos dados preservados.' },
   ] } });
   render(<SankhyaReportingPanel year={2026} />);
-  expect(await screen.findByText('6')).toBeInTheDocument();
-  expect(screen.getByText('—')).toBeInTheDocument();
-  expect(screen.getByText(/Pedidos representam a carteira, não receita faturada/)).toBeInTheDocument();
-  expect(screen.getByText(/HTTP 502/)).toBeInTheDocument();
+  expect(await screen.findByText(/Pedidos 102: atualizados em/)).toBeInTheDocument();
+  expect(screen.getByText(/Faturamento: base anterior · notas pendentes/)).toHaveAttribute('title', 'HTTP 502. Últimos dados preservados.');
   expect(axios.get.mock.calls[0][0]).toBe('/api/sankhya/report?ano=2026');
   axios.post.mockResolvedValue({ data: { queued: true } });
   fireEvent.click(screen.getByRole('button', { name: 'Atualizar ERP' }));

@@ -91,7 +91,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
     await clickSection('Metas e Resultados');
-    await page.waitForFunction(() => document.body.textContent.includes('ERP automático · empresa 102') && document.body.textContent.includes('HTTP 502'));
+    await page.waitForFunction(() => document.body.textContent.includes('Pedidos 102: atualizados em') && document.body.textContent.includes('Faturamento: base anterior'));
     await page.screenshot({ path: path.join(output, 'erp-desktop.png'), fullPage: true });
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await page.reload({ waitUntil: 'networkidle0' });
