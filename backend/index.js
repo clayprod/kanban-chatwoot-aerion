@@ -51,6 +51,14 @@ const {
   runAiFollowupTick,
 } = require('./aiFollowups');
 const {
+  PROSPECCAO_LOG_TABLE,
+  carregarConfigProspeccao,
+  createProspeccaoTable,
+  extrairPerfis,
+  paramsDaBusca,
+  runProspeccaoTick,
+} = require('./prospeccao');
+const {
   OUTBOUND_QUEUE_TABLE,
   createOutboundQueueTable,
   enfileirar,
@@ -23236,10 +23244,49 @@ app.get('/api/rfb/search', async (req, res) => {
   }
 });
 
+// Observabilidade da prospecção: quem foi abordado, quem foi descartado e por quê.
+app.get('/api/prospeccao', requireAdmin, async (req, res) => {
+  const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+  try {
+    const [decisoes, agregado] = await Promise.all([
+      pool.query(
+        `SELECT id, cnpj, razao_social, telefone, perfil, status, motivo,
+                perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, created_at
+           FROM ${PROSPECCAO_LOG_TABLE}
+          WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        [CHATWOOT_ACCOUNT_ID, limite]
+      ),
+      pool.query(
+        `SELECT status, COUNT(*)::int AS total FROM ${PROSPECCAO_LOG_TABLE}
+          WHERE account_id = $1
+            AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                AT TIME ZONE 'America/Sao_Paulo'
+          GROUP BY status`,
+        [CHATWOOT_ACCOUNT_ID]
+      ),
+    ]);
+    const configEnv = carregarConfigProspeccao();
+    const settings = await carregarSettings(pool);
+    res.json({
+      config: {
+        enabled: resolverFlag(settings, 'prospeccao_enabled', configEnv.enabled),
+        dry_run: resolverFlag(settings, 'prospeccao_dry_run', configEnv.dryRun),
+        max_por_dia: configEnv.maxPorDia,
+      },
+      hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
+      decisoes: decisoes.rows,
+    });
+  } catch (error) {
+    console.error('[prospeccao] listagem falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível carregar a prospecção.' });
+  }
+});
+
 // Liga/desliga da automação. Mora no banco justamente para sobreviver a deploy:
 // as env já foram apagadas seis vezes e o worker ficou parado sem ninguém notar.
 app.post('/api/ai-settings', requireAdmin, async (req, res) => {
-  const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run'];
+  const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run',
+    'prospeccao_enabled', 'prospeccao_dry_run'];
   const body = req.body || {};
   const alvos = Object.keys(body).filter((k) => permitidas.includes(k));
   if (!alvos.length) {
@@ -23508,6 +23555,84 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Prospeccao ativa: busca empresas novas pelos perfis do Radar e faz o primeiro
+  // contato. Enfileira com a prioridade mais baixa — contato frio nunca passa na
+  // frente de quem ja respondeu.
+  let prospeccaoRodando = false;
+  cron.schedule('20 * * * *', async () => {
+    if (!dataLayerReady || prospeccaoRodando) return;
+    const configEnv = carregarConfigProspeccao();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'prospeccao_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'prospeccao_dry_run', configEnv.dryRun),
+    };
+    if (!config.enabled) return;
+    const cfgJanela = carregarConfigAiFollowup();
+    if (!dentroDaJanela(cfgJanela, new Date())) return;
+    prospeccaoRodando = true;
+    try {
+      const resultado = await runProspeccaoTick(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        chatCompletionJson,
+        config,
+        validarMensagem,
+        verificarNumerosWhatsapp,
+        carregarPerfis: async () => extrairPerfis(await loadTrendsIntelCacheOnly()),
+        buscarEmpresas: async (filtros, tamanho) => {
+          const qs = paramsDaBusca(filtros, { pageSize: tamanho });
+          const resp = await fetch(`http://127.0.0.1:${port}/api/rfb/search?${qs}`);
+          if (!resp.ok) throw new Error(`busca RFB HTTP ${resp.status}`);
+          const dados = await resp.json();
+          return dados.results || dados.rows || [];
+        },
+        importarLead: async (empresa) => {
+          const { rows } = await pool.query(
+            `SELECT id FROM contacts
+              WHERE account_id = $1
+                AND regexp_replace(COALESCE(custom_attributes->>'CNPJ_CPF',
+                      custom_attributes->>'CNPJ', ''), '[^0-9]', '', 'g') = $2
+              LIMIT 1`,
+            [CHATWOOT_ACCOUNT_ID, String(empresa.cnpj || '').replace(/[^0-9]/g, '')]
+          );
+          if (rows[0]) return rows[0].id;
+          const resp = await fetch(`http://127.0.0.1:${port}/api/leads/import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              leads: [empresa],
+              defaultStage: '1. Inbox (Novos)',
+              labels: ['prospeccao-ia'],
+            }),
+          });
+          if (!resp.ok) throw new Error(`import HTTP ${resp.status}`);
+          const novo = await pool.query(
+            `SELECT id FROM contacts
+              WHERE account_id = $1
+                AND regexp_replace(COALESCE(custom_attributes->>'CNPJ_CPF',
+                      custom_attributes->>'CNPJ', ''), '[^0-9]', '', 'g') = $2
+              LIMIT 1`,
+            [CHATWOOT_ACCOUNT_ID, String(empresa.cnpj || '').replace(/[^0-9]/g, '')]
+          );
+          return novo.rows[0]?.id ?? null;
+        },
+        enfileirarEnvio: ({ contactId, telefone, texto, dedupeKey }) => enfileirar(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          contactId, telefone,
+          origem: 'prospeccao', texto, dedupeKey,
+        }),
+      });
+      if (resultado.abordados || resultado.falhas || resultado.descartados) {
+        console.log('[prospeccao] tick:', resultado);
+      }
+    } catch (error) {
+      console.error('[prospeccao] tick falhou:', error.message);
+    } finally {
+      prospeccaoRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Despachante da fila unica. Todo envio de WhatsApp da automacao passa por aqui,
   // e so aqui se decide QUANDO. Tres sistemas disputando o mesmo numero sem se
   // conhecer foi o que levou o comercial_aerion a 71 envios num dia.
@@ -23526,12 +23651,17 @@ const registerBackgroundSchedules = () => {
           capHorario: cfg.instanciaCapHorario,
           capDiario: cfg.instanciaCapDiario,
         },
-        enviar: (item) => enviarPeloChatwoot({
-          config: chatwoot,
-          accountId: CHATWOOT_ACCOUNT_ID,
-          conversationId: item.conversation_id,
-          texto: item.texto,
-        }),
+        // Contato que ja tem conversa recebe por dentro do Chatwoot, para a mensagem
+        // cair na thread. Lead frio ainda nao tem conversa nenhuma: vai pela Evolution,
+        // que e quem abre a conversa no Chatwoot ao entregar.
+        enviar: (item) => (item.conversation_id
+          ? enviarPeloChatwoot({
+              config: chatwoot,
+              accountId: CHATWOOT_ACCOUNT_ID,
+              conversationId: item.conversation_id,
+              texto: item.texto,
+            })
+          : sendEvolutionTextMessage(item.telefone, item.texto)),
       });
       if (resultado.despachados || resultado.falhas) {
         console.log('[fila] tick:', resultado);
@@ -23840,6 +23970,7 @@ const initializeDataLayer = async () => {
   await createStageLogTable(pool);
   await createAiSettingsTable(pool);
   await createOutboundQueueTable(pool);
+  await createProspeccaoTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

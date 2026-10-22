@@ -38,7 +38,7 @@ const lotes = (itens, tamanho) => {
 // A Evolution devolve [{ jid, exists, number, name }]. O `number` volta como foi
 // enviado; o `jid` pode vir normalizado (ela mesma ajusta o 9º dígito), então o
 // casamento é feito pelo `number` e, como reforço, pelos dígitos do jid.
-const indexarResposta = (linhas, enviados) => {
+const indexarResposta = (linhas, enviados, nomes = new Map()) => {
   const existentes = new Set();
   for (const linha of Array.isArray(linhas) ? linhas : []) {
     if (!linha || linha.exists !== true) continue;
@@ -46,6 +46,8 @@ const indexarResposta = (linhas, enviados) => {
     if (doNumber) existentes.add(doNumber);
     const doJid = soDigitos(String(linha.jid || '').split('@')[0]);
     if (doJid) existentes.add(doJid);
+    const nome = String(linha.name || '').trim();
+    if (nome) { if (doNumber) nomes.set(doNumber, nome); if (doJid) nomes.set(doJid, nome); }
   }
   // Um número enviado cujo jid voltou normalizado (perdeu/ganhou o 9) ainda conta:
   // se o jid existe, a Evolution vai entregar.
@@ -65,11 +67,12 @@ const verificarNumerosWhatsapp = async (telefones, {
   agora = Date.now(),
 } = {}) => {
   const numeros = [...new Set(telefones.map(soDigitos).filter(Boolean))];
-  if (!numeros.length) return { existentes: new Set(), indisponivel: false };
+  const perfis = new Map();
+  if (!numeros.length) return { existentes: new Set(), perfis, indisponivel: false };
 
   const base = String(baseUrl || '').replace(/\/+$/, '');
   if (!base || !instancia || !apiKey) {
-    return { existentes: new Set(numeros), indisponivel: true };
+    return { existentes: new Set(numeros), perfis, indisponivel: true };
   }
 
   limparCacheExpirado(agora);
@@ -83,7 +86,7 @@ const verificarNumerosWhatsapp = async (telefones, {
       aConsultar.push(numero);
     }
   }
-  if (!aConsultar.length) return { existentes, indisponivel: false };
+  if (!aConsultar.length) return { existentes, perfis, indisponivel: false };
 
   let indisponivel = false;
   for (const lote of lotes(aConsultar, LOTE)) {
@@ -98,7 +101,7 @@ const verificarNumerosWhatsapp = async (telefones, {
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const linhas = await resp.json();
-      const doLote = indexarResposta(linhas, lote);
+      const doLote = indexarResposta(linhas, lote, perfis);
       for (const numero of lote) {
         const existe = doLote.has(numero);
         cache.set(numero, { existe, em: agora });
@@ -113,7 +116,7 @@ const verificarNumerosWhatsapp = async (telefones, {
       clearTimeout(timer);
     }
   }
-  return { existentes, indisponivel };
+  return { existentes, perfis, indisponivel };
 };
 
 const limparCacheWhatsapp = () => cache.clear();
