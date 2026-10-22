@@ -65,6 +65,17 @@ test('Search Console stays in Marketing and shows organic totals separately from
   expect(screen.getByText(/não equivalem a sessões do GA4 ou vendas/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
 });
+
+test('CRM segments are a current aggregate preview and never trigger an audience upload', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : url.endsWith('/audiences') ? {
+    available: true, uploaded: false, observedAt: '2026-10-21T20:00:00Z', segments: [{ id: 'customers', label: 'Clientes e recompra', stages: '13, 18 e 23', contacts: 5, emails: 1, suppressed: 0, use: 'Excluir da aquisição' }], stages: [], profiles: [],
+  } : report }));
+  render(<EcommerceView section="traffic" onNavigate={jest.fn()} />);
+  expect(await screen.findByText('Clientes e recompra')).toBeInTheDocument();
+  expect(screen.getByText(/Nenhuma lista foi enviada/)).toBeInTheDocument();
+  expect(screen.getByText(/independente do período do gráfico/)).toBeInTheDocument();
+  expect(axios.post).not.toHaveBeenCalled();
+});
 test('report failures show an actionable error with retry', async () => {
   axios.get.mockRejectedValue({ response: { data: { error: 'Fonte indisponível' } } });
   render(<EcommerceView onNavigate={jest.fn()} />);

@@ -206,6 +206,23 @@ test('Ecommerce API and resumable sync with isolated PostgreSQL schema', { skip:
       assert.equal(report.data.search.queries.length, 2);
       assert.equal(report.data.search.available, true);
     });
+    await t.test('CRM audience preview isolates the account, deduplicates email counts and never returns identifiers', async () => {
+      await pool.query("CREATE TABLE contacts(id serial PRIMARY KEY,account_id int,email text,custom_attributes jsonb,additional_attributes jsonb DEFAULT '{}')");
+      for (const [account, email, stage, custom, additional] of [
+        [2, 'buyer@example.com', '13. Fechado-Ganho', {}, {}], [2, 'BUYER@example.com', '18. Novos Clientes', {}, {}],
+        [2, 'qualified@example.com', '6. Qualificado (SQL)', {}, {}], [2, 'cold@example.com', '1. Inbox (Novos)', {}, {}],
+        [2, 'blocked@example.com', '16. Descartado', { opt_out: false }, { opt_out: true }],
+        [3, 'other-account@example.com', '13. Fechado-Ganho', {}, {}],
+      ]) await pool.query('INSERT INTO contacts(account_id,email,custom_attributes,additional_attributes) VALUES($1,$2,$3,$4)', [account, email, { Funil_Vendas: stage, ...custom }, additional]);
+      const result = await request('/audiences', { user: '2' });
+      assert.equal(result.response.status, 200); assert.equal(result.data.summary.contacts, 5);
+      const customers = result.data.segments.find(segment => segment.id === 'customers');
+      assert.equal(customers.contacts, 2); assert.equal(customers.emails, 1);
+      assert.equal(result.data.segments.find(segment => segment.id === 'excluded').emails, 0);
+      assert.equal(result.data.summary.suppressed, 1);
+      assert(!result.text.includes('@example.com')); assert.equal(result.data.uploaded, false);
+      assert.equal((await request('/audiences', { user: '3' })).response.status, 403);
+    });
     await t.test('per-provider PostgreSQL lock prevents two workers from fetching the same source', async () => {
       const client = await pool.connect();
       await client.query('SELECT pg_advisory_lock(735101)');

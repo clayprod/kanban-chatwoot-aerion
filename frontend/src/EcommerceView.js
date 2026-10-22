@@ -194,6 +194,26 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
   </details>;
 }
 
+function CrmAudiencePreview({ refresh }) {
+  const [preview, setPreview] = useState(null), [error, setError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    setError('');
+    axios.get('/api/ecommerce/audiences', { signal: controller.signal }).then(({ data }) => setPreview(data))
+      .catch(failure => { if (!controller.signal.aborted) setError(errorText(failure)); });
+    return () => controller.abort();
+  }, [refresh]);
+  return <section className="space-y-4" aria-label="Públicos por etapa do CRM">
+    <div className="border-t border-line pt-5"><h3 className="text-base font-semibold">Públicos a partir do funil comercial</h3><p className="mt-1 max-w-3xl text-xs text-muted">Situação atual do Kanban/Chatwoot, independente do período do gráfico. Clientes classificados no CRM não equivalem a pagamentos confirmados na loja.</p></div>
+    {error ? <Notice error>{error}</Notice> : !preview ? <p role="status" className="text-sm text-muted">Consultando as etapas do CRM…</p> : <>
+      <Table caption="Base do CRM por intenção comercial" rows={preview.segments || []} columns={[{ key: 'label', label: 'Segmento' }, { key: 'stages', label: 'Etapas' }, numeric('contacts', 'Contatos'), numeric('emails', 'Emails únicos disponíveis'), numeric('suppressed', 'Não contatar'), { key: 'use', label: 'Uso recomendado' }]} />
+      <p className="text-xs text-muted">Emails com formato válido, sem duplicação dentro do segmento e respeitando os bloqueios registrados no CRM. Isso não comprova correspondência nas plataformas nem autorização para publicidade. Nenhuma lista foi enviada. A classificação inclui as etapas atuais do funil, que devem ser revisadas antes de usar compradores ou qualificados como referência de público.</p>
+      <details className="border-t border-line pt-4"><summary className="cursor-pointer text-sm font-medium">Conferir etapas e tipos de cliente</summary><div className="mt-4 space-y-4"><Table caption="Etapas atuais do Kanban" rows={preview.stages || []} columns={[{ key: 'name', label: 'Etapa' }, numeric('contacts', 'Contatos'), numeric('emails', 'Emails únicos disponíveis')]} /><Table caption="Tipo de cliente cadastrado" rows={preview.profiles || []} columns={[{ key: 'name', label: 'Tipo' }, numeric('contacts', 'Contatos'), numeric('emails', 'Emails únicos disponíveis')]} /></div></details>
+      <p className="text-xs text-muted">Prévia atualizada em {when(preview.observedAt)}. Uma pessoa pode aparecer em segmentos diferentes por cadastros duplicados; a sincronização futura deverá reconciliar esses casos antes do envio.</p>
+    </>}
+  </section>;
+}
+
 export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
   const [section, setSection] = useState(requestedSection);
   useEffect(() => setSection(requestedSection), [requestedSection]);
@@ -290,6 +310,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
           <Table caption="Navegação diária · GA4" rows={report.daily} columns={[{ key: 'date', label: 'Dia', render: r => dateLabel(r.date) }, numeric('sessions', 'Sessões'), numeric('activeUsers', 'Usuários ativos no dia')]} />
           <p className="text-xs text-muted">Usuários ativos são únicos em cada dia. Somá-los não representa usuários únicos no período.</p>
           {report.traffic.some(r => r.thresholded || r.otherRow) && <Notice>O GA4 informou limitação de cobertura ou agrupamento de linhas neste relatório. Os detalhamentos podem não coincidir com os totais.</Notice>}
+          <CrmAudiencePreview refresh={refresh} />
         </>}
         {section === 'campaigns' && <>
           <Table caption="Aquisição por campanha · GA4" rows={filter(traffic)} columns={[{ key: 'source', label: 'Origem' }, { key: 'medium', label: 'Mídia' }, { key: 'campaign', label: 'Campanha' }, { key: 'content', label: 'Conteúdo' }, numeric('sessions', 'Sessões'), numeric('purchases', 'Compras GA4')]} />

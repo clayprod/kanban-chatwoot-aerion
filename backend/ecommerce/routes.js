@@ -4,6 +4,7 @@ const { PROVIDERS, dateRange, buildReport, verifyWebhook, encryptionKey } = requ
 const { createProviders, storeUrl } = require('./providers');
 const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, transaction, createSync, encrypt, decrypt } = require('./store');
 const { buildSearchReport } = require('./searchConsole');
+const { crmAudiencePreview } = require('./audiences');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function validateGoogleIdentity(value) {
@@ -165,6 +166,10 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     report.couponCatalog = ofKind('coupon');
     report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
     res.json(report);
+  });
+  router.get('/audiences', async (req, res) => {
+    try { res.json(await crmAudiencePreview(pool, Number(env.CHATWOOT_ACCOUNT_ID || 2))); }
+    catch { res.status(503).json({ error: 'Não foi possível consultar as etapas do CRM. Os demais relatórios continuam disponíveis.' }); }
   });
   router.use(admin);
   router.put('/connections/:provider', async (req, res) => {
