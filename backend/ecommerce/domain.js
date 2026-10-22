@@ -162,7 +162,11 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
       unpaidValue: available('woocommerce') ? sum(unpaid.filter(o => o.createdDay === date), 'total') : null,
       googleSpend: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'spend') : null,
       metaSpend: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'spend') : null,
-      spend: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'spend') : null });
+      spend: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'spend') : null,
+      clicks: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'clicks') : null,
+      googleClicks: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'clicks') : null,
+      metaClicks: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'clicks') : null,
+      conversionValue: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'conversionValue') : null });
   }
   const utms = group(validPaid, o => JSON.stringify([o.attribution.linkId, o.attribution.source, o.attribution.medium, o.attribution.campaign, o.attribution.content]), o => ({
     ...o.attribution, orders: 0, revenue: 0, withCoupon: 0,

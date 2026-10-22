@@ -3,6 +3,7 @@ import axios from 'axios';
 import { ResponsiveLine } from '@nivo/line';
 import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon, Squares2X2Icon, ShoppingBagIcon, MegaphoneIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
+import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS } from './ecommerceChart';
 
 export const ECOMMERCE_SECTIONS = [
   { id: 'overview', label: 'Visão geral', icon: Squares2X2Icon },
@@ -64,35 +65,30 @@ function SalesChart({ rows }) {
   const [visible, setVisible] = useState(['revenue', 'spend']);
   const [mode, setMode] = useState('money');
   const [interval, setInterval] = useState('day');
-  const series = mode === 'money' ? [
-    ['revenue', 'Receita de produtos', '#0d9488'], ['spend', 'Investimento total', '#8b78f5'],
-    ['metaSpend', 'Meta Ads', '#3b82f6'], ['googleSpend', 'Google Ads', '#d97706'], ['unpaidValue', 'Aguardando pagamento', '#e56767'],
-  ] : [['orders', 'Pedidos pagos', '#0d9488'], ['sessions', 'Sessões GA4', '#3b82f6']];
-  const buckets = new Map();
-  rows.forEach(row => {
-    const date = new Date(`${row.date}T12:00:00Z`);
-    if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
-    const key = interval === 'month' ? `${row.date.slice(0, 7)}-01` : interval === 'week' ? date.toISOString().slice(0, 10) : row.date;
-    if (!buckets.has(key)) buckets.set(key, { date: key });
-    series.forEach(([id]) => { if (row[id] != null) buckets.get(key)[id] = (buckets.get(key)[id] || 0) + row[id]; });
-  });
-  const data = series.filter(([id]) => visible.includes(id) && rows.some(row => row[id] != null)).map(([id, label, color]) => ({ id: label, color, data: [...buckets.values()].map(row => ({ x: row.date, y: row[id] ?? null })) }));
-  const available = rows.some(row => series.some(([id]) => row[id] != null));
+  const { series, available, data, max, points, selected } = prepareSalesChart(rows, mode, interval, visible);
+  const axisFormat = (side, value) => mode === 'efficiency' && side === 'right' ? `${number(value)}×` : new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
+  const rawFormat = (side, value) => mode === 'money' || (mode === 'efficiency' && side === 'left') ? money(value) : mode === 'efficiency' ? `${number(value)}×` : number(value);
+  const hasAxis = side => selected.some(([, , , axis]) => axis === side);
   return <section className={panel} aria-label="Receita diária de produtos">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">Vendas e investimento ao longo do tempo</h3><p className={`${labelClass} mt-1`}>{mode === 'money' ? 'BRL · receita pela data de pagamento · mídia pelo dia da conta' : 'Volume · pedidos pela data de pagamento · sessões do GA4'}</p></div>
-      <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-mode">Métrica do gráfico</label><select id="ecommerce-chart-mode" className={select} value={mode} onChange={e => { setMode(e.target.value); setVisible(e.target.value === 'money' ? ['revenue', 'spend'] : ['orders', 'sessions']); }}><option value="money">Valores em R$</option><option value="volume">Pedidos e sessões</option></select><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">Vendas e investimento ao longo do tempo</h3><p className={`${labelClass} mt-1`}>{mode === 'money' ? 'Receita pela data de pagamento · mídia pelo dia da conta' : mode === 'efficiency' ? 'CPC ponderado por cliques · ROAS atribuído pelas plataformas' : 'Pedidos pela data de pagamento · sessões do GA4'}</p></div>
+      <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-mode">Métrica do gráfico</label><select id="ecommerce-chart-mode" className={select} value={mode} onChange={e => { setMode(e.target.value); setVisible(CHART_DEFAULTS[e.target.value]); }}><option value="money">Valores em R$</option><option value="efficiency">CPC e ROAS</option><option value="volume">Pedidos e sessões</option></select><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
     </div>
-    <div className="my-4 flex flex-wrap gap-2" aria-label="Mostrar ou ocultar linhas do gráfico">{series.map(([id, label, color]) => <button key={id} type="button" disabled={!rows.some(r => r[id] != null)} aria-pressed={visible.includes(id)} onClick={() => setVisible(v => v.includes(id) ? v.filter(k => k !== id) : [...v, id])} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40 ${visible.includes(id) ? 'border-line bg-bg2 text-ink' : 'border-transparent text-muted'}`}><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}</button>)}</div>
-    {!available ? <p className="py-12 text-sm text-muted">Conecte o WooCommerce para acompanhar a evolução de vendas.</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <div className="h-72" role="img" aria-label="Evolução das métricas selecionadas no período">
-      <ResponsiveLine data={data} margin={{ top: 20, right: 18, bottom: 44, left: 65 }}
-        xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }} colors={({ color }) => color}
-        axisTop={null} axisRight={null} axisBottom={{ tickValues: data[0].data.filter((_, i) => i % Math.max(1, Math.ceil(data[0].data.length / 6)) === 0).map(d => d.x), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 12 }}
-        axisLeft={{ tickSize: 0, tickPadding: 10, format: n => number(n) }} enablePoints={data.length <= 31} pointSize={4}
+    <div className="my-4 flex flex-wrap gap-2" aria-label="Mostrar ou ocultar linhas do gráfico">{series.map(([id, label, color, axis]) => <button key={id} type="button" disabled={!available.some(([key]) => key === id)} title={`${axis === 'right' ? 'Eixo direito' : 'Eixo esquerdo'}: ${CHART_AXES[mode][axis === 'right' ? 1 : 0]}`} aria-pressed={visible.includes(id)} onClick={() => setVisible(v => v.includes(id) ? v.filter(k => k !== id) : [...v, id])} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40 ${visible.includes(id) ? 'border-line bg-bg2 text-ink' : 'border-transparent text-muted'}`}><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}<span className="text-muted" aria-hidden="true">{axis === 'right' ? '→' : '←'}</span></button>)}</div>
+    {!available.length ? <p className="py-12 text-sm text-muted">{mode === 'efficiency' ? 'Ainda não há cliques e investimento disponíveis para calcular CPC e ROAS neste período.' : 'Conecte o WooCommerce para acompanhar a evolução de vendas.'}</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <>
+      <div className="mb-2 flex justify-between gap-5 text-xs text-muted"><span>{hasAxis('left') ? `Esquerda: ${CHART_AXES[mode][0]}` : ''}</span><span className="text-right">{hasAxis('right') ? `Direita: ${CHART_AXES[mode][1]}` : ''}</span></div>
+      <div className="h-80" role="img" aria-label="Evolução das métricas selecionadas no período, com escalas independentes à esquerda e à direita">
+      <ResponsiveLine data={data} margin={{ top: 16, right: hasAxis('right') ? 55 : 12, bottom: 44, left: hasAxis('left') ? 55 : 12 }}
+        xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 1, nice: false }} colors={({ color }) => color}
+        axisTop={null} axisRight={hasAxis('right') ? { tickValues: [0, 0.25, 0.5, 0.75, 1], tickSize: 0, tickPadding: 10, format: n => axisFormat('right', n * max.right) } : null} axisBottom={{ tickValues: data[0].data.filter((_, i) => i % Math.max(1, Math.ceil(data[0].data.length / 5)) === 0).map(d => d.x), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 12 }}
+        axisLeft={hasAxis('left') ? { tickValues: [0, 0.25, 0.5, 0.75, 1], tickSize: 0, tickPadding: 10, format: n => axisFormat('left', n * max.left) } : null} gridYValues={[0, 0.25, 0.5, 0.75, 1]} enablePoints={points.length <= 45} pointSize={4}
         enableGridX={false} enableArea={false} enableSlices="x" animate={false}
         theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } }, tooltip: { container: { background: '#172033', color: '#fff', borderRadius: 8 } } }}
-        sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink"><strong>{dateLabel(slice.points[0].data.x)}</strong>{slice.points.map(point => <div className="mt-2 flex justify-between gap-5" key={point.id}><span>{point.serieId}</span><b>{mode === 'money' ? money(point.data.y) : number(point.data.y)}</b></div>)}</div>} />
-    </div>}
-    <p className={`${labelClass} mt-3`}>Clique nas legendas para comparar. Pedidos pendentes incluem frete e impostos e refletem a situação atual dos pedidos criados no período; não representam abandono de carrinho.</p>
+        sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink"><strong>{dateLabel(slice.points[0].data.x)}</strong>{slice.points.map(point => {
+          const serie = data.find(s => s.id === point.serieId), raw = serie?.data.find(d => d.x === point.data.x)?.rawValue;
+          return <div className="mt-2 flex justify-between gap-5" key={point.id}><span>{point.serieId} · {serie?.axis === 'right' ? 'dir.' : 'esq.'}</span><b>{rawFormat(serie?.axis, raw)}</b></div>;
+        })}</div>} />
+      </div></>}
+    <p className={`${labelClass} mt-3`}>Escalas independentes: compare a evolução, não a altura das linhas. {mode === 'money' ? 'Pedidos pendentes incluem frete e impostos e refletem a situação atual dos pedidos criados no período; não representam abandono de carrinho.' : mode === 'efficiency' ? 'CPC e ROAS são recalculados pelos totais de cada dia, semana ou mês; dias sem cliques ou investimento ficam sem taxa.' : 'Pedidos e sessões têm escalas próprias e não representam pessoas únicas.'}</p>
   </section>;
 }
 
