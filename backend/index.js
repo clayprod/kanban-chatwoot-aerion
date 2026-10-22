@@ -4061,6 +4061,14 @@ const describeFetchError = (error) => {
   return [...new Set(parts)].join(' | ') || 'erro desconhecido';
 };
 
+// The same transport as search, inside the caller's PNCP gate/lane. Native
+// fetch repeatedly lost PNCP response bodies before technical jobs checkpointed.
+const fetchPncpTechnicalJson = (pathName, query = {}) => {
+  const url = new URL(String(pathName).replace(/^\/+/, ''), 'https://pncp.gov.br/api/pncp/');
+  for (const [key, value] of Object.entries(query)) if (value != null) url.searchParams.set(key, String(value));
+  return fetchJsonWithCurl(url.toString(), 45);
+};
+
 const fetchPncpSearchStable = async (query = {}, { retries = 3, minItemsWhenKnown = 1 } = {}) => {
   let lastError = null;
   // Se o gate já está em backoff, não martela a API com retries curtos.
@@ -4883,7 +4891,7 @@ const fetchPncpCompraItens = async (cnpj, ano, sequencial, options = {}) => {
 
   while (page <= lastPage) {
     const itensData = await withPncpTransientRetry(
-      () => withPncpGate(() => fetchPncp(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
+      () => withPncpGate(() => (options.fetchJson || fetchPncp)(`/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/itens`, {
         pagina: page,
         tamanhoPagina: pageSize,
       }), { priority })
@@ -10871,6 +10879,19 @@ const withPncpHeavyJobSlot = async (name, work) => {
   }
 };
 
+// A large collector checkpoints before lending its slot to the next bounded
+// task. It rejoins the same queue, so neither collection nor analysis starves.
+const yieldPncpHeavyJobSlot = async () => {
+  if (!PNCP_HEAVY_JOB.current || !PNCP_HEAVY_JOB.queue.length) return;
+  const name = PNCP_HEAVY_JOB.current;
+  const next = PNCP_HEAVY_JOB.queue.shift();
+  PNCP_HEAVY_JOB.current = null;
+  PNCP_HEAVY_JOB.since = 0;
+  await new Promise(resolve => { PNCP_HEAVY_JOB.queue.push(resolve); next(); });
+  PNCP_HEAVY_JOB.current = name;
+  PNCP_HEAVY_JOB.since = Date.now();
+};
+
 /** Orçamento de enriquecimento (valores) conforme o ritmo atual do gate. */
 const getPncpEnrichBudget = () => {
   const paused = Date.now() < PNCP_GATE.pausedUntil || Date.now() < pncpDetalheRateLimitedUntil;
@@ -13295,6 +13316,7 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
           }
           st.page = page + 1;
           run.next_page = st.page;
+          if (PNCP_HEAVY_JOB.queue.length) break;
           // Folga entre páginas (além do gap do gate).
           if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && pagesThisSlice < sliceCap) {
             const pagePause = Math.min(1500, Math.max(250, Math.round(PNCP_GATE.gapMs * 0.4)));
@@ -13359,6 +13381,8 @@ const runPncpDeepSearchJobUnlocked = async (jobId) => {
 
         syncTermRunsList(states);
         await persistSliceProgress(states, run, sessionRawFrom);
+
+        await yieldPncpHeavyJobSlot();
 
         // Pausa leve entre frentes do rodízio.
         if (!PNCP_DEEP_SEARCH_CANCELLED.has(jobId) && states.some((s) => !s.done)) {
@@ -20209,10 +20233,12 @@ const technicalAnalysis = createTechnicalAnalysis({
     return write ? level === 'edit' : ['view', 'edit'].includes(level);
   },
   ai: args => chatCompletionJson(args), getProviderCount: () => getAiChatProviders().length, getIds: extractPncpCompraIdentifiers,
-  getNotice: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`), { priority: 'bulk' }),
-  getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk', maxPages: 2, startPage, requireEmptyPage: true }),
-  getFiles: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'bulk' }),
-  gate: work => withPncpGate(work, { priority: 'bulk' }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
+  getNotice: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`), { priority: 'sync' }),
+  getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'sync', maxPages: 1, startPage, requireEmptyPage: true, fetchJson: fetchPncpTechnicalJson }),
+  getFiles: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'sync' }),
+  // One notice/file per durable step: like watchlist matching, this is bounded
+  // sync work. Large discovery scanners remain bulk and keep the direct lane.
+  gate: work => withPncpGate(work, { priority: 'sync' }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
   isPncpThrottleError,
   isEligible: item => getPncpReceivingProposalVerdict(item).verdict === 'open',
 });

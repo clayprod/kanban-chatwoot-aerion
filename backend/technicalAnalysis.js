@@ -27,7 +27,7 @@ function itemInScope(item, profile, products) {
   const productTerms = products.flatMap(p => [...(p.keywords || []), p.name, p.model, p.category]).filter(v => text(v).length >= 3);
   return [...terms, ...productTerms].some(term => matchesTerm(value, term));
 }
-const labelStatus = { queued: 'Na fila', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada' };
+const labelStatus = { queued: 'Na fila', metadata: 'Consultando dados e anexos do edital', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada' };
 function technicalFilterClause(mode) {
   if (!['full', 'uncertain', 'no_full', 'pending'].includes(mode)) return '';
   const link = `FROM technical_candidates tc JOIN technical_jobs tj ON tj.id=tc.job_id AND tj.account_id=tc.account_id
@@ -307,12 +307,21 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
   async function noticeStep(job, config) {
     const state = job.state, { ids, profile, payload } = job.context;
     if (!state.initialized) {
-      const fetched = await heavy('technical-documents', async () => ({ notice: await getNotice(ids), items: await getItems(ids, 1), files: await getFiles(ids) }));
-      if (!isEligible(fetched.notice)) return finish(job, 'partial', null, 'Licitação encerrada ou sem confirmação de abertura.');
+      job.stage = 'metadata';
+      if (!state.notice_checked) {
+        const notice = await heavy('technical-notice', () => getNotice(ids));
+        if (!isEligible(notice)) return finish(job, 'partial', null, 'Licitação encerrada ou sem confirmação de abertura.');
+        state.notice_checked = true; await checkpoint(job); return;
+      }
+      if (!state.items_loaded) {
+        const items = await heavy('technical-items', () => getItems(ids, 1));
+        state.items_raw = [...items]; state.items_next_page = items.nextPage; state.items_complete = items.complete === true;
+        state.items_loaded = true; await checkpoint(job); return;
+      }
+      const files = fileList(await heavy('technical-files', () => getFiles(ids)));
       // Waiting for PNCP is not an analyzed notice and must not consume its quota.
       await startNotice(job, config);
-      state.items_raw = [...fetched.items]; state.items_next_page = fetched.items.nextPage; state.items_complete = fetched.items.complete === true;
-      state.files = fileList(fetched.files);
+      state.files = files;
       state.source_ids = []; state.file_cursor = 0; state.complete = state.files.length > 0; state.notes = []; state.initialized = true; job.stage = 'documents'; await checkpoint(job); return;
     }
     if (!state.items_complete) {
@@ -428,7 +437,9 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       for (const { account_id: account } of accounts.rows) await sweep(account);
       const rows = await pool.query(`SELECT j.* FROM technical_jobs j LEFT JOIN technical_config c ON c.account_id=j.account_id
         WHERE j.status IN ('queued','running') AND j.next_run_at<=NOW() AND (c.provider_retry_at IS NULL OR c.provider_retry_at<=NOW()) AND (j.kind='product' OR c.enabled=TRUE)
-        ORDER BY CASE WHEN j.kind='product' THEN 0 ELSE 1 END,COALESCE((j.context->'payload'->>'score')::numeric,0) DESC,j.updated_at LIMIT 1`);
+        ORDER BY CASE WHEN j.kind='product' THEN 0 ELSE 1 END,
+          CASE WHEN j.state->>'notice_checked'='true' OR j.state->>'initialized'='true' THEN 0 ELSE 1 END,
+          COALESCE((j.context->'payload'->>'score')::numeric,0) DESC,j.updated_at LIMIT 1`);
       const job = rows.rows[0];
       if (!job) return;
       const config = await settings(job.account_id);

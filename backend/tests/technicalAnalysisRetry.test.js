@@ -61,9 +61,11 @@ test('resumed metadata request advances to documents using the same analysis', a
   await service.tick();
   paused = false;
   await service.tick();
+  await service.tick();
+  await service.tick();
   assert.equal(job.stage, 'documents');
   assert.equal(job.state.initialized, true);
-  assert.equal(queries.filter(q => q.sql.includes('SET state=')).length, 1);
+  assert.equal(queries.filter(q => q.sql.includes('SET state=')).length, 3);
   assert.equal(queries.filter(q => q.sql.includes('INSERT INTO technical_usage')).length, 1);
 });
 
@@ -78,4 +80,17 @@ test('PNCP terminated sockets and download disconnects wait without skipping evi
   await download.service.tick();
   assert.equal(state.file_cursor, 0); assert.equal(state.complete, true); assert.deepEqual(state.notes, []);
   assert.ok(download.queries.some(q => q.sql.includes("stage='waiting_pncp'")));
+});
+
+test('a failure listing items does not discard a successful notice request', async () => {
+  let notices = 0, items = 0;
+  const { service, job } = worker({}, {
+    getNotice: async () => { notices++; return { open: true }; }, isEligible: () => true,
+    getItems: async () => { if (++items === 1) throw new TypeError('terminated'); return Object.assign([], { complete: true }); },
+    getFiles: async () => [],
+  });
+  await service.tick(); await service.tick();
+  assert.equal(job.state.notice_checked, true); assert.equal(job.state.items_loaded, undefined);
+  await service.tick(); await service.tick();
+  assert.equal(job.state.initialized, true); assert.equal(notices, 1); assert.equal(items, 2);
 });
