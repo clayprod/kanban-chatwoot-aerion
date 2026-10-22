@@ -4,6 +4,7 @@ import {
   ArrowPathIcon,
   ChatBubbleLeftRightIcon,
   ViewColumnsIcon,
+  MagnifyingGlassCircleIcon,
   ExclamationTriangleIcon,
   ChevronDownIcon,
 } from '@heroicons/react/24/outline';
@@ -219,6 +220,7 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
 export default function AutomationView() {
   const [followups, setFollowups] = useState(null);
   const [stages, setStages] = useState(null);
+  const [prospeccao, setProspeccao] = useState(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
@@ -229,13 +231,15 @@ export default function AutomationView() {
     setCarregando(true);
     setErro('');
     try {
-      const [f, s] = await Promise.all([
+      const [f, s, p] = await Promise.all([
         axios.get('/api/ai-followups?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/ai-stages?limit=120').catch((e) => ({ error: e })),
+        axios.get('/api/prospeccao?limit=120').catch((e) => ({ error: e })),
       ]);
-      if (f.error && s.error) throw f.error;
+      if (f.error && s.error && p.error) throw f.error;
       setFollowups(f.error ? null : f.data);
       setStages(s.error ? null : s.data);
+      setProspeccao(p.error ? null : p.data);
     } catch (e) {
       setErro(e?.response?.data?.error || 'Não foi possível carregar a atividade da automação.');
     } finally {
@@ -261,6 +265,7 @@ export default function AutomationView() {
   const abas = [
     { id: 'followup', nome: 'Follow-up', icone: ChatBubbleLeftRightIcon, n: followups?.hoje?.sent || 0 },
     { id: 'etapa', nome: 'Classificação de etapa', icone: ViewColumnsIcon, n: (stages?.hoje?.applied || 0) + (stages?.hoje?.dry_run || 0) },
+    { id: 'prospeccao', nome: 'Prospecção ativa', icone: MagnifyingGlassCircleIcon, n: (prospeccao?.hoje?.abordado || 0) + (prospeccao?.hoje?.dry_run || 0) },
   ];
 
   return (
@@ -348,6 +353,39 @@ export default function AutomationView() {
                 {(it.skip_reason || it.error) && (
                   <p className="text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
                 )}
+              </>
+            )}
+          />
+        )}
+        {aba === 'prospeccao' && (
+          <Painel
+            dados={prospeccao}
+            carregando={carregando}
+            onReload={carregar}
+            busca={busca}
+            chaves={{ enabled: 'prospeccao_enabled', dryRun: 'prospeccao_dry_run' }}
+            onToggle={alternar}
+            salvando={salvando}
+            vazio="Nenhuma empresa prospectada ainda."
+            linhas={(it) => (
+              <>
+                {it.telefone && (
+                  <p className="text-[12px] text-muted">
+                    <span className="font-mono">{it.telefone}</span>
+                    {it.perfil_whatsapp && <span className="text-muted2"> · perfil "{it.perfil_whatsapp}"</span>}
+                  </p>
+                )}
+                {/* O que mais importa auditar: a IA sabia que era a empresa certa? */}
+                {it.confirmou_empresa === false && (
+                  <p className="text-[11px] text-status-warning">
+                    Perfil não confirmou a empresa — a abertura pergunta com quem está falando.
+                  </p>
+                )}
+                {it.mensagem && <p className="whitespace-pre-wrap text-[12px] text-muted">{it.mensagem}</p>}
+                {(it.motivo || it.error) && (
+                  <p className="text-[11px] text-muted2">{it.motivo || it.error}</p>
+                )}
+                {it.perfil && <p className="text-[10px] text-muted2">perfil: {it.perfil}</p>}
               </>
             )}
           />
