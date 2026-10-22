@@ -310,6 +310,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       job.stage = 'metadata';
       if (!state.notice_checked) {
         const notice = await heavy('technical-notice', () => getNotice(ids));
+        state.notice_snapshot = notice;
         if (!isEligible(notice)) return finish(job, 'partial', null, 'Licitação encerrada ou sem confirmação de abertura.');
         state.notice_checked = true; await checkpoint(job); return;
       }
