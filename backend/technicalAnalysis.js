@@ -109,6 +109,17 @@ async function createTechnicalTables(pool) {
   await pool.query(`UPDATE technical_jobs SET status='queued',stage='metadata',attempts=0,error=NULL,result=NULL,next_run_at=NOW(),updated_at=NOW()
     WHERE kind='notice' AND status='partial' AND error='Licitação encerrada ou sem confirmação de abertura.'
       AND NOT COALESCE((state->>'initialized')::boolean,FALSE) AND state->>'notice_api' IS DISTINCT FROM 'consulta'`);
+  // Legacy workers reserved a notice before any metadata was read. These jobs
+  // cannot have made an AI call. Return only their notice slots, never tokens.
+  await pool.query(`WITH reserved AS (
+      SELECT id,account_id,started_day FROM technical_jobs WHERE kind='notice' AND started_day IS NOT NULL
+        AND NOT COALESCE((state->>'initialized')::boolean,FALSE) FOR UPDATE
+    ), released AS (
+      UPDATE technical_jobs j SET started_day=NULL FROM reserved r WHERE j.id=r.id RETURNING r.account_id,r.started_day
+    ), totals AS (SELECT account_id,started_day,COUNT(*)::int AS n FROM released GROUP BY account_id,started_day)
+    UPDATE technical_usage u SET notices=GREATEST(0,u.notices-t.n) FROM totals t WHERE u.account_id=t.account_id AND u.day=t.started_day`);
+  await pool.query(`UPDATE technical_jobs SET error=NULL,next_run_at=NOW() WHERE status='queued' AND kind='notice'
+    AND error='Limite diário de licitações atingido.' AND NOT COALESCE((state->>'initialized')::boolean,FALSE)`);
 }
 
 function createTechnicalAnalysis(deps) {

@@ -59,9 +59,15 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       // Gate waits are durable scheduling events, including analyses marked
       // failed by older releases. Neither recovery nor waiting loses progress.
       await pool.query("UPDATE technical_jobs SET status='failed',attempts=3,error='PNCP bulk gate wait exceeded (paused)' WHERE id=$1", [jobId]);
+      await pool.query("UPDATE technical_jobs SET started_day=(NOW() AT TIME ZONE 'America/Sao_Paulo')::date WHERE id=$1", [jobId]);
+      await pool.query('UPDATE technical_usage SET notices=1 WHERE account_id=1');
       await createTechnicalTables(pool);
       let recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
       assert.equal(recovered.status, 'queued'); assert.equal(recovered.stage, 'waiting_pncp'); assert.equal(recovered.attempts, 0); assert.equal(recovered.error, null);
+      assert.equal(recovered.started_day, null);
+      assert.equal((await pool.query('SELECT notices FROM technical_usage WHERE account_id=1')).rows[0].notices, 0);
+      await createTechnicalTables(pool);
+      assert.equal((await pool.query('SELECT notices FROM technical_usage WHERE account_id=1')).rows[0].notices, 0);
       await pool.query("UPDATE technical_jobs SET status='failed',stage='queued',attempts=3,error='terminated' WHERE id=$1", [jobId]);
       await createTechnicalTables(pool);
       recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
