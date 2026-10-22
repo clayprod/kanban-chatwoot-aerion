@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
+const { FACTS_FORMAT } = require('../technicalAiFormat');
 const { normalizeProfile } = require('../searchQuality');
 test('the real deep collector reaches the PNCP gate after refreshing live terms', async () => {
   const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
@@ -74,4 +75,28 @@ test('technical pagination accepts confirmed HTTP 204, but never a broken empty 
   await assert.rejects(context.read('https://example.org', 45, { allowNoContent: true }), /JSON parse/);
   response = '[{"numeroItem":1}]\n200';
   assert.equal((await context.read('https://example.org', 45, { allowNoContent: true }))[0].numeroItem, 1);
+});
+
+test('technical providers request strict facts from an available model without changing other AI callers', async () => {
+  const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+  const start = source.indexOf('const getAiChatProviders =');
+  const end = source.indexOf('const technicalAnalysis =', start);
+  const requests = [];
+  const context = { process: { env: {} }, OPENAI_API_KEY: 'test', GROQ_API_KEY: 'test', OPENROUTER_API_KEY: 'test',
+    OPENAI_AI_MODEL: 'gpt-4.1-mini', GROQ_AI_MODEL: 'llama-3.3-70b-versatile', OPENROUTER_AI_MODEL: 'openai/gpt-4o-mini',
+    AbortController, setTimeout, clearTimeout,
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ choices: [{ message: { content: '{"complete":true,"facts":[],"conflicts":[]}' }, finish_reason: 'stop' }], usage: { total_tokens: 10 } }) };
+    } };
+  vm.runInNewContext(`${source.slice(start, end)};globalThis.ask=chatCompletionJson;`, context);
+  const request = { system: 'Extract JSON facts', user: 'data', maxProviderAttempts: 1, responseFormat: FACTS_FORMAT };
+  assert.equal((await context.ask({ ...request, technical: true, providerOffset: 1 })).ok, true);
+  assert.equal(requests[0].body.model, 'openai/gpt-oss-120b');
+  assert.deepEqual(requests[0].body.response_format, FACTS_FORMAT);
+  await context.ask({ ...request, technical: true, providerOffset: 2 });
+  assert.equal(requests[1].body.provider.require_parameters, true);
+  await context.ask({ ...request, providerOffset: 1 });
+  assert.equal(requests[2].body.model, 'llama-3.3-70b-versatile');
+  assert.equal(requests[2].body.response_format, undefined);
 });
