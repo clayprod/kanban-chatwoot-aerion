@@ -4071,8 +4071,8 @@ const describeFetchError = (error) => {
 
 // The same transport as search, inside the caller's PNCP gate/lane. Native
 // fetch repeatedly lost PNCP response bodies before technical jobs checkpointed.
-const fetchPncpTechnicalJson = (pathName, query = {}) => {
-  const url = new URL(String(pathName).replace(/^\/+/, ''), 'https://pncp.gov.br/api/pncp/');
+const fetchPncpTechnicalJson = (pathName, query = {}, api = 'pncp') => {
+  const url = new URL(String(pathName).replace(/^\/+/, ''), `https://pncp.gov.br/api/${api}/`);
   for (const [key, value] of Object.entries(query)) if (value != null) url.searchParams.set(key, String(value));
   return fetchJsonWithCurl(url.toString(), 45, { allowNoContent: true });
 };
@@ -20241,7 +20241,8 @@ const technicalAnalysis = createTechnicalAnalysis({
     return write ? level === 'edit' : ['view', 'edit'].includes(level);
   },
   ai: args => chatCompletionJson(args), getProviderCount: () => getAiChatProviders().length, getIds: extractPncpCompraIdentifiers,
-  getNotice: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`), { priority: 'sync' }),
+  noticeApi: 'consulta',
+  getNotice: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`, {}, 'consulta'), { priority: 'sync' }),
   getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'sync', maxPages: 1, startPage, requireEmptyPage: true, fetchJson: fetchPncpTechnicalJson }),
   getFiles: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'sync' }),
   // One notice/file per durable step: like watchlist matching, this is bounded

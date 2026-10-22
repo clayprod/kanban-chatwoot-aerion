@@ -106,6 +106,9 @@ async function createTechnicalTables(pool) {
   await pool.query(`UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW(),updated_at=NOW()
     WHERE kind='notice' AND status IN ('failed','queued') AND
       (error ~* 'PNCP bulk (budget deferred|gate wait)' OR (error='terminated' AND stage='queued' AND NOT COALESCE((state->>'initialized')::boolean,FALSE)))`);
+  await pool.query(`UPDATE technical_jobs SET status='queued',stage='metadata',attempts=0,error=NULL,result=NULL,next_run_at=NOW(),updated_at=NOW()
+    WHERE kind='notice' AND status='partial' AND error='Licitação encerrada ou sem confirmação de abertura.'
+      AND NOT COALESCE((state->>'initialized')::boolean,FALSE) AND state->>'notice_api' IS DISTINCT FROM 'consulta'`);
 }
 
 function createTechnicalAnalysis(deps) {
@@ -311,6 +314,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       if (!state.notice_checked) {
         const notice = await heavy('technical-notice', () => getNotice(ids));
         state.notice_snapshot = notice;
+        state.notice_api = deps.noticeApi || null;
         if (!isEligible(notice)) return finish(job, 'partial', null, 'Licitação encerrada ou sem confirmação de abertura.');
         state.notice_checked = true; await checkpoint(job); return;
       }
