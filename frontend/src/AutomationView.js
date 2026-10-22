@@ -5,7 +5,7 @@ import {
   ChatBubbleLeftRightIcon,
   ViewColumnsIcon,
   MagnifyingGlassCircleIcon,
-  ExclamationTriangleIcon,
+  PauseCircleIcon,
   ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { btnGhostXs, card, cardAlt, iconBtn, input, subtle } from './ui';
@@ -77,11 +77,17 @@ function Switch({ ligado, onChange, salvando, rotulo, titulo }) {
 
 function Saude({ config, ultima }) {
   if (!config) return null;
+  // O texto antigo culpava deploy por ter limpado variável de ambiente. Isso deixou
+  // de ser verdade quando o estado passou a morar em ai_settings: hoje, se está
+  // desligado, é porque alguém desligou (ou nunca ligou) — e liga no botão ao lado.
   if (!config.enabled) {
     return (
-      <div className="flex items-start gap-2 rounded-[10px] border border-status-danger/30 bg-status-danger/10 p-2.5 text-[12px] text-status-danger">
-        <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-        <span><strong>Desligado.</strong> A variável que liga este worker não está valendo — normalmente um deploy limpou as variáveis do serviço.</span>
+      <div className="flex items-start gap-2 rounded-[10px] border border-line bg-bg2/60 p-2.5 text-[12px] text-muted">
+        <PauseCircleIcon className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong className="text-ink">Desligado.</strong> Este worker não está rodando.
+          Use o botão <em>Desligado</em> acima para ligar — fica gravado no banco e sobrevive a deploy.
+        </span>
       </div>
     );
   }
