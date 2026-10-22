@@ -20213,6 +20213,7 @@ const technicalAnalysis = createTechnicalAnalysis({
   getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'bulk', maxPages: 2, startPage, requireEmptyPage: true }),
   getFiles: ids => withPncpGate(() => fetchPncp(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'bulk' }),
   gate: work => withPncpGate(work, { priority: 'bulk' }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
+  isPncpThrottleError,
   isEligible: item => getPncpReceivingProposalVerdict(item).verdict === 'open',
 });
 technicalAnalysis.register(app);

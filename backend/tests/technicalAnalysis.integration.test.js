@@ -56,6 +56,19 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal((await request('GET', `${base}/technical/sources/${attached.data.source.id}`, null, 2)).status, 404);
       await request('PUT', `${base}/technical/config`, { enabled: true, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
       const jobId = (await service.observe(1, input, { terms: ['drone'] })).id;
+      // Gate waits are durable scheduling events, including analyses marked
+      // failed by older releases. Neither recovery nor waiting loses progress.
+      await pool.query("UPDATE technical_jobs SET status='failed',attempts=3,error='PNCP bulk gate wait exceeded (paused)' WHERE id=$1", [jobId]);
+      await createTechnicalTables(pool);
+      let recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
+      assert.equal(recovered.status, 'queued'); assert.equal(recovered.stage, 'waiting_pncp'); assert.equal(recovered.attempts, 0); assert.equal(recovered.error, null);
+      const deferredService = createTechnicalAnalysis({ ...dependencies, heavy: async () => { throw Object.assign(new Error('PNCP bulk budget deferred'), { code: 'PNCP_BULK_DEFERRED' }); } });
+      await deferredService.tick();
+      recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
+      assert.equal(recovered.status, 'queued'); assert.equal(recovered.attempts, 0); assert.equal(recovered.started_day, null); assert.deepEqual(recovered.state, {});
+      const waitingPublic = (await request('GET', `${base}/technical/jobs/${jobId}`)).data;
+      assert.match(waitingPublic.stage_label, /retomada automática/); assert.equal(waitingPublic.error, null);
+      await pool.query('UPDATE technical_jobs SET next_run_at=NOW() WHERE id=$1', [jobId]);
       assert.equal((await service.observe(1, { ...input, score: 60, sequencial: '2' }, { terms: ['drone'] })), null);
       assert.equal((await service.observe(1, { ...input, open: false, sequencial: '2' }, { terms: ['drone'] })), null);
       for (let n = 0; n < 15; n++) {

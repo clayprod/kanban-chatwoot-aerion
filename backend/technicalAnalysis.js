@@ -6,6 +6,7 @@ const { matchesTerm, classifyItem } = require('./searchQuality');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
 class BudgetWait extends Error {}
+const isPncpDeferred = error => error?.code === 'PNCP_BULK_DEFERRED' || /PNCP bulk (budget deferred|gate wait)/i.test(String(error?.message || ''));
 const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(x => /^\d+$/.test(x)))].slice(0, 100);
 const safeProduct = p => ({ ...p, sale_price: Number(p.sale_price), specs: p.specs || [] });
 const profileKey = profile => hash({ terms: profile?.terms || [], match_mode: profile?.match_mode || 'literal', related_terms: profile?.related_terms || [], excluded_terms: profile?.excluded_terms || [], item_kind: profile?.item_kind || 'all', product_ids: cleanIds(profile?.product_ids) });
@@ -24,7 +25,7 @@ function itemInScope(item, profile, products) {
   const productTerms = products.flatMap(p => [...(p.keywords || []), p.name, p.model, p.category]).filter(v => text(v).length >= 3);
   return [...terms, ...productTerms].some(term => matchesTerm(value, term));
 }
-const labelStatus = { queued: 'Na fila', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada' };
+const labelStatus = { queued: 'Na fila', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada' };
 function technicalFilterClause(mode) {
   if (!['full', 'uncertain', 'no_full', 'pending'].includes(mode)) return '';
   const link = `FROM technical_candidates tc JOIN technical_jobs tj ON tj.id=tc.job_id AND tj.account_id=tc.account_id
@@ -98,11 +99,16 @@ async function createTechnicalTables(pool) {
     job_id BIGINT REFERENCES technical_jobs(id), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY(account_id,source_context,result_key))`);
   await pool.query(`ALTER TABLE licitacao_opportunities ADD COLUMN IF NOT EXISTS technical_analysis_id BIGINT REFERENCES technical_jobs(id)`);
+  // Older workers treated gate deferrals as failures. Preserve checkpoints and
+  // recover only this known transient condition, without retrying real failures.
+  await pool.query(`UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW(),updated_at=NOW()
+    WHERE kind='notice' AND status IN ('failed','queued') AND error ~* 'PNCP bulk (budget deferred|gate wait)'`);
 }
 
 function createTechnicalAnalysis(deps) {
   const { pool, getAccountId, ai, getIds, getNotice, getItems, getFiles, gate, heavy, isEligible } = deps;
   const documentIO = deps.documentIO || documents;
+  const isPncpWait = error => isPncpDeferred(error) || Boolean(deps.isPncpThrottleError?.(error));
   let running = false;
   const settings = async account => (await pool.query('SELECT * FROM technical_config WHERE account_id=$1', [account])).rows[0] || { account_id: account, ...DEFAULTS };
   const accessoriesFor = async account => (await pool.query("SELECT * FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type='accessory' AND superseded_by IS NULL ORDER BY id", [account])).rows.map(safeProduct);
@@ -287,9 +293,10 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
   async function noticeStep(job, config) {
     const state = job.state, { ids, profile, payload } = job.context;
     if (!state.initialized) {
-      await startNotice(job, config);
       const fetched = await heavy('technical-documents', async () => ({ notice: await getNotice(ids), items: await getItems(ids, 1), files: await getFiles(ids) }));
       if (!isEligible(fetched.notice)) return finish(job, 'partial', null, 'Licitação encerrada ou sem confirmação de abertura.');
+      // Waiting for PNCP is not an analyzed notice and must not consume its quota.
+      await startNotice(job, config);
       state.items_raw = [...fetched.items]; state.items_next_page = fetched.items.nextPage; state.items_complete = fetched.items.complete === true;
       state.files = fileList(fetched.files);
       state.source_ids = []; state.file_cursor = 0; state.complete = state.files.length > 0; state.notes = []; state.initialized = true; job.stage = 'documents'; await checkpoint(job); return;
@@ -307,7 +314,10 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         if (!file.url) throw new Error(`Sem link de download: ${file.name}`);
         const s = await heavy('technical-download', () => source(job.account_id, { url: file.url, name: file.name }));
         await parsedSource(job.account_id, s.id); state.source_ids.push(String(s.id));
-      } catch (e) { state.complete = false; state.notes.push(`${file.name}: ${e.message}`); }
+      } catch (e) {
+        if (isPncpWait(e)) throw e;
+        state.complete = false; state.notes.push(`${file.name}: ${e.message}`);
+      }
       state.file_cursor++; await checkpoint(job); return;
     }
     const catalog = await productsFor(job.account_id, cleanIds(profile.product_ids));
@@ -411,7 +421,11 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         if (job.kind === 'product') await productStep(job, config); else await noticeStep(job, config);
         await pool.query("UPDATE technical_jobs SET status='queued',attempts=0 WHERE id=$1 AND status='running'", [job.id]);
       } catch (e) {
-        if (e instanceof BudgetWait) {
+        if (isPncpWait(e)) {
+          // Release the heavy slot and retry the same checkpoint. Deferrals do
+          // not exhaust the failure budget or silently skip a document.
+          await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1", [job.id]);
+        } else if (e instanceof BudgetWait) {
           const delay = /cr[eé]dit/i.test(e.message) ? "NOW()+INTERVAL '1 hour'" : /fichas/.test(e.message) ? "NOW()+INTERVAL '2 minutes'" : "((NOW() AT TIME ZONE 'America/Sao_Paulo')::date+1)::timestamp AT TIME ZONE 'America/Sao_Paulo'";
           await pool.query(`UPDATE technical_jobs SET status='queued',error=$2,next_run_at=${delay} WHERE id=$1`, [job.id, e.message]);
         } else await pool.query(`UPDATE technical_jobs SET attempts=attempts+1,status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'queued' END,error=$2,next_run_at=NOW()+INTERVAL '10 minutes' WHERE id=$1`, [job.id, e.message]);
