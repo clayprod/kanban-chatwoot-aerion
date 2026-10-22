@@ -7,6 +7,8 @@ const DEFAULTS = Object.freeze({ enabled: false, min_score: 68, daily_limit: 30,
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
 class BudgetWait extends Error {}
 const isPncpDeferred = error => error?.code === 'PNCP_BULK_DEFERRED' || /PNCP bulk (budget deferred|gate wait)/i.test(String(error?.message || ''));
+const isPncpTransportError = error => /^(terminated|fetch failed)$/i.test(String(error?.message || '')) ||
+  [error?.code, error?.cause?.code].some(code => ['ECONNRESET', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code));
 const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(x => /^\d+$/.test(x)))].slice(0, 100);
 const safeProduct = p => ({ ...p, sale_price: Number(p.sale_price), specs: p.specs || [] });
 const profileKey = profile => hash({ terms: profile?.terms || [], match_mode: profile?.match_mode || 'literal', related_terms: profile?.related_terms || [], excluded_terms: profile?.excluded_terms || [], item_kind: profile?.item_kind || 'all', product_ids: cleanIds(profile?.product_ids) });
@@ -102,13 +104,25 @@ async function createTechnicalTables(pool) {
   // Older workers treated gate deferrals as failures. Preserve checkpoints and
   // recover only this known transient condition, without retrying real failures.
   await pool.query(`UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW(),updated_at=NOW()
-    WHERE kind='notice' AND status IN ('failed','queued') AND error ~* 'PNCP bulk (budget deferred|gate wait)'`);
+    WHERE kind='notice' AND status IN ('failed','queued') AND
+      (error ~* 'PNCP bulk (budget deferred|gate wait)' OR (error='terminated' AND stage='queued' AND NOT COALESCE((state->>'initialized')::boolean,FALSE)))`);
 }
 
 function createTechnicalAnalysis(deps) {
-  const { pool, getAccountId, ai, getIds, getNotice, getItems, getFiles, gate, heavy, isEligible } = deps;
+  const { pool, getAccountId, ai, getIds, gate, heavy, isEligible } = deps;
   const documentIO = deps.documentIO || documents;
   const isPncpWait = error => isPncpDeferred(error) || Boolean(deps.isPncpThrottleError?.(error));
+  // Classify transport errors only at PNCP reads, never at an AI/provider call.
+  const pncpRead = async work => {
+    try { return await work(); }
+    catch (error) {
+      if (isPncpTransportError(error)) throw Object.assign(new Error('PNCP connection interrupted; retry scheduled', { cause: error }), { code: 'PNCP_BULK_DEFERRED' });
+      throw error;
+    }
+  };
+  const getNotice = ids => pncpRead(() => deps.getNotice(ids));
+  const getItems = (ids, page) => pncpRead(() => deps.getItems(ids, page));
+  const getFiles = ids => pncpRead(() => deps.getFiles(ids));
   let running = false;
   const settings = async account => (await pool.query('SELECT * FROM technical_config WHERE account_id=$1', [account])).rows[0] || { account_id: account, ...DEFAULTS };
   const accessoriesFor = async account => (await pool.query("SELECT * FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type='accessory' AND superseded_by IS NULL ORDER BY id", [account])).rows.map(safeProduct);
@@ -316,6 +330,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         await parsedSource(job.account_id, s.id); state.source_ids.push(String(s.id));
       } catch (e) {
         if (isPncpWait(e)) throw e;
+        if (/^https?:\/\/(?:[^/]+\.)?pncp\.gov\.br(?=[:/]|$)/i.test(file.url || '') && isPncpTransportError(e))
+          throw Object.assign(new Error('PNCP download interrupted; retry scheduled', { cause: e }), { code: 'PNCP_BULK_DEFERRED' });
         state.complete = false; state.notes.push(`${file.name}: ${e.message}`);
       }
       state.file_cursor++; await checkpoint(job); return;

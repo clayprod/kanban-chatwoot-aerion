@@ -66,3 +66,16 @@ test('resumed metadata request advances to documents using the same analysis', a
   assert.equal(queries.filter(q => q.sql.includes('SET state=')).length, 1);
   assert.equal(queries.filter(q => q.sql.includes('INSERT INTO technical_usage')).length, 1);
 });
+
+test('PNCP terminated sockets and download disconnects wait without skipping evidence', async () => {
+  for (const error of [new TypeError('terminated'), Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } })]) {
+    const metadata = worker({}, { getNotice: async () => { throw error; } });
+    await metadata.service.tick();
+    assert.ok(metadata.queries.some(q => q.sql.includes("stage='waiting_pncp'")));
+  }
+  const state = { initialized: true, items_complete: true, files: [{ name: 'TR.pdf', url: 'https://pncp.gov.br/tr.pdf' }], file_cursor: 0, source_ids: [], complete: true, notes: [] };
+  const download = worker(state, { documentIO: { download: async () => { throw new TypeError('terminated'); } } });
+  await download.service.tick();
+  assert.equal(state.file_cursor, 0); assert.equal(state.complete, true); assert.deepEqual(state.notes, []);
+  assert.ok(download.queries.some(q => q.sql.includes("stage='waiting_pncp'")));
+});

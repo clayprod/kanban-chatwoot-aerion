@@ -62,6 +62,10 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       await createTechnicalTables(pool);
       let recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
       assert.equal(recovered.status, 'queued'); assert.equal(recovered.stage, 'waiting_pncp'); assert.equal(recovered.attempts, 0); assert.equal(recovered.error, null);
+      await pool.query("UPDATE technical_jobs SET status='failed',stage='queued',attempts=3,error='terminated' WHERE id=$1", [jobId]);
+      await createTechnicalTables(pool);
+      recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
+      assert.equal(recovered.status, 'queued'); assert.equal(recovered.error, null);
       const deferredService = createTechnicalAnalysis({ ...dependencies, heavy: async () => { throw Object.assign(new Error('PNCP bulk budget deferred'), { code: 'PNCP_BULK_DEFERRED' }); } });
       await deferredService.tick();
       recovered = (await pool.query('SELECT * FROM technical_jobs WHERE id=$1', [jobId])).rows[0];
