@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const { normalizeProfile } = require('../searchQuality');
 test('the real deep collector reaches the PNCP gate after refreshing live terms', async () => {
   const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
@@ -53,4 +54,24 @@ test('a checkpointed collector lends its heavy slot to technical analysis and th
   release(); await Promise.all([collector, technical]);
   assert.deepEqual(order, ['page saved', 'technical read', 'next page']);
   assert.equal(context.slot.snapshot().current, null); assert.equal(context.slot.snapshot().queue_len, 0);
+});
+
+test('technical pagination accepts confirmed HTTP 204, but never a broken empty HTTP 200', async () => {
+  const source = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+  const start = source.indexOf('const fetchJsonWithCurl =');
+  const end = source.indexOf('const describeFetchError =', start);
+  let response = '\n204';
+  const context = { process: { platform: 'linux' }, getPncpCallProxy: () => null,
+    spawn: (_bin, args) => {
+      assert.ok(args.includes('--write-out'));
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      queueMicrotask(() => { child.stdout.emit('data', response); child.emit('close', 0); });
+      return child;
+    } };
+  vm.runInNewContext(`${source.slice(start, end)};globalThis.read=fetchJsonWithCurl;`, context);
+  assert.equal((await context.read('https://example.org', 45, { allowNoContent: true })).length, 0);
+  response = '\n200';
+  await assert.rejects(context.read('https://example.org', 45, { allowNoContent: true }), /JSON parse/);
+  response = '[{"numeroItem":1}]\n200';
+  assert.equal((await context.read('https://example.org', 45, { allowNoContent: true }))[0].numeroItem, 1);
 });

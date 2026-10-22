@@ -4007,7 +4007,7 @@ let notePncpThrottle = (reason = 'throttle', pauseMs = null) => {
   console.warn(`[PNCP] throttle early (${String(reason).slice(0, 80)})`);
 };
 
-const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, reject) => {
+const fetchJsonWithCurl = (url, timeoutSeconds = 60, { allowNoContent = false } = {}) => new Promise((resolve, reject) => {
   const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
   const proxy = getPncpCallProxy();
   const args = [
@@ -4021,6 +4021,7 @@ const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, re
     '--retry-delay', '1',
     '--retry-all-errors',
     '--max-time', String(timeoutSeconds),
+    ...(allowNoContent ? ['--write-out', '\n%{http_code}'] : []),
     '-H', 'Accept: application/json',
     '-H', 'Accept-Language: pt-BR,pt;q=0.9',
     '-H', 'Connection: close',
@@ -4044,7 +4045,14 @@ const fetchJsonWithCurl = (url, timeoutSeconds = 60) => new Promise((resolve, re
       return;
     }
     try {
-      resolve(JSON.parse(stdout));
+      let body = stdout;
+      if (allowNoContent) {
+        const separator = stdout.lastIndexOf('\n');
+        const status = Number(stdout.slice(separator + 1));
+        body = stdout.slice(0, separator);
+        if (status === 204 && !body.trim()) { resolve([]); return; }
+      }
+      resolve(JSON.parse(body));
     } catch (error) {
       reject(new Error(`curl JSON parse error: ${error.message}; body=${stdout.slice(0, 200)}`));
     }
@@ -4066,7 +4074,7 @@ const describeFetchError = (error) => {
 const fetchPncpTechnicalJson = (pathName, query = {}) => {
   const url = new URL(String(pathName).replace(/^\/+/, ''), 'https://pncp.gov.br/api/pncp/');
   for (const [key, value] of Object.entries(query)) if (value != null) url.searchParams.set(key, String(value));
-  return fetchJsonWithCurl(url.toString(), 45);
+  return fetchJsonWithCurl(url.toString(), 45, { allowNoContent: true });
 };
 
 const fetchPncpSearchStable = async (query = {}, { retries = 3, minItemsWhenKnown = 1 } = {}) => {
