@@ -90,13 +90,15 @@ test('technical providers request strict facts from an available model without c
       return { ok: true, json: async () => ({ choices: [{ message: { content: '{"complete":true,"facts":[],"conflicts":[]}' }, finish_reason: 'stop' }], usage: { total_tokens: 10 } }) };
     } };
   vm.runInNewContext(`${source.slice(start, end)};globalThis.ask=chatCompletionJson;`, context);
-  const request = { system: 'Extract JSON facts', user: 'data', maxProviderAttempts: 1, responseFormat: FACTS_FORMAT };
+  const request = { system: 'Extract JSON facts', user: 'data', maxTokens: 7000, maxProviderAttempts: 1, responseFormat: FACTS_FORMAT };
   assert.equal((await context.ask({ ...request, technical: true, providerOffset: 1 })).ok, true);
   assert.equal(requests[0].body.model, 'openai/gpt-oss-120b');
+  assert.equal(requests[0].body.max_tokens, 4000);
   assert.deepEqual(requests[0].body.response_format, FACTS_FORMAT);
   await context.ask({ ...request, technical: true, providerOffset: 2 });
   assert.equal(requests[1].body.provider.require_parameters, true);
   await context.ask({ ...request, providerOffset: 1 });
   assert.equal(requests[2].body.model, 'llama-3.3-70b-versatile');
+  assert.equal(requests[2].body.max_tokens, 7000);
   assert.equal(requests[2].body.response_format, undefined);
 });

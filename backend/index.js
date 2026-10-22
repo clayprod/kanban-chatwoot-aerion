@@ -1,6 +1,7 @@
 const express = require('express');
 const { createEcommerce } = require('./ecommerce/routes');
 const { createSankhyaReporting } = require('./sankhyaReporting');
+const { hybridRealizado } = require('./salesRealizado');
 const { Pool } = require('pg');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -930,6 +931,24 @@ const quoteIdent = (value, fallback) => {
 };
 
 const FATURAMENTO_VENDEDOR_COLUMN = quoteIdent(process.env.FATURAMENTO_VENDEDOR_COLUMN, 'descricao_vendedor');
+
+// The explicit ERP feed setting switches 102 to its published live snapshot.
+// 100 keeps the reporting database, and old 102/other-company imports are excluded.
+const serveHybridRealizado = (annual, bySeller = false) => async (req, res, next) => {
+  const year = Number.parseInt(req.query.ano, 10) || new Date().getFullYear();
+  const month = annual ? null : Number.parseInt(req.query.mes, 10) || new Date().getMonth() + 1;
+  if (year < 2000 || year > 2100 || (month != null && (month < 1 || month > 12))) return res.status(400).json({ error: 'Período inválido.' });
+  try {
+    await sankhyaReporting.ensure();
+    const result = await hybridRealizado({ pool, legacyPool: faturamentoPool, year, month, bySeller });
+    if (!result) return next();
+    return res.json(result);
+  } catch { return res.status(503).json({ error: 'Não foi possível consultar o realizado das empresas 100 e 102.' }); }
+};
+app.get('/api/vendas/realizado', serveHybridRealizado(false));
+app.get('/api/vendas/realizado/ano', serveHybridRealizado(true));
+app.get('/api/vendas/realizado/vendedores', serveHybridRealizado(false, true));
+app.get('/api/vendas/realizado/vendedores/ano', serveHybridRealizado(true, true));
 
 // Metas: source of truth is bi.metas_aerion (same table Metabase + the old page use),
 // reached via faturamentoPool. Falls back to a local table when bi is not configured.
@@ -20200,7 +20219,7 @@ const chatCompletionJson = async ({
           model: provider.model,
           messages,
           temperature,
-          max_tokens: maxTokens,
+          max_tokens: technical && provider.name === 'groq' ? Math.min(maxTokens, 4000) : maxTokens,
           ...(technical ? { response_format: responseFormat || { type: 'json_object' } } : {}),
           ...(technical && provider.name === 'openrouter' ? { provider: { require_parameters: true } } : {}),
           ...(technical && provider.name === 'groq' && provider.model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),

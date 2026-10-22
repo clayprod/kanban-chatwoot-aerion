@@ -224,8 +224,9 @@ function createTechnicalAnalysis(deps) {
     const providers = Math.max(1, Math.min(3, Number(deps.getProviderCount?.()) || 1));
     for (let offset = 0; offset < providers; offset++) {
       const providerKey = `${job.account_id}:${offset}`;
-      if ((providerCooldowns.get(providerKey) || 0) > Date.now()) {
-        failures.push('Provedor sem créditos (tentativas suspensas por uma hora).'); continue;
+      const cooldown = providerCooldowns.get(providerKey);
+      if (cooldown?.until > Date.now()) {
+        failures.push(cooldown.error); continue;
       }
       day = await reserve(job, config, reserved);
       result = await ai({ system, user, maxTokens, responseFormat, temperature: 0, timeoutMs: 120000, maxProviderAttempts: 1, providerOffset: offset });
@@ -234,7 +235,9 @@ function createTechnicalAnalysis(deps) {
       if (result.ok && !result.truncated) break;
       failures.push(result.error || 'Resposta de IA incompleta.');
       if (isCreditError(result.error || ''))
-        providerCooldowns.set(providerKey, Date.now() + 60 * 60 * 1000);
+        providerCooldowns.set(providerKey, { until: Date.now() + 60 * 60 * 1000, error: result.error });
+      else if (/429|rate.?limit|too many/i.test(result.error || ''))
+        providerCooldowns.set(providerKey, { until: Date.now() + 2 * 60 * 1000, error: result.error });
     }
     if (!result?.ok || result.truncated) {
       const message = failures.join(' | ');
