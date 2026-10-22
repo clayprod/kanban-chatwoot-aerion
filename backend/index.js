@@ -638,6 +638,38 @@ async function atribuirResponsavelPadrao(pool, conversationId) {
   return rowCount > 0;
 }
 
+let chatwootTokenCache;
+async function resolverTokenChatwoot(pool) {
+  if (chatwootTokenCache !== undefined) return chatwootTokenCache;
+  try {
+    const { rows } = await pool.query(
+      `SELECT a.token
+         FROM access_tokens a
+         JOIN users u ON u.id = a.owner_id
+        WHERE a.owner_type = 'User' AND LOWER(u.email) = LOWER($1)
+          AND COALESCE(a.token, '') <> ''
+        LIMIT 1`,
+      [AI_ASSIGNEE_EMAIL]
+    );
+    chatwootTokenCache = rows[0]?.token || null;
+    if (!chatwootTokenCache) {
+      console.warn('[chatwoot] token nao encontrado para', AI_ASSIGNEE_EMAIL);
+    }
+  } catch (error) {
+    console.warn('[chatwoot] resolver token falhou:', error.message);
+    chatwootTokenCache = null;
+  }
+  return chatwootTokenCache;
+}
+
+// Base URL nao e segredo: vale o que estiver em ai_settings, com a env como piso.
+async function resolverChatwootConfig(pool) {
+  const settings = await carregarSettings(pool);
+  const doBanco = settings.get('chatwoot_base_url');
+  const baseUrl = String(doBanco || process.env.CHATWOOT_BASE_URL || '').replace(/\/+$/, '');
+  return { chatwootBaseUrl: baseUrl, chatwootToken: await resolverTokenChatwoot(pool) };
+}
+
 async function getUserByEmail(email) {
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.display_name, u.encrypted_password, u.confirmed_at,
@@ -23250,7 +23282,10 @@ app.get('/api/ai-followups', requireAdmin, async (req, res) => {
         max_por_contato: config.maxPorContato,
         janela: `${config.horaInicio}h-${config.horaFim}h`,
         min_confianca: config.minConfianca,
-        chatwoot_configurado: Boolean(config.chatwootBaseUrl && config.chatwootToken),
+        chatwoot_configurado: await (async () => {
+          const c = await resolverChatwootConfig(pool);
+          return Boolean(c.chatwootBaseUrl && c.chatwootToken);
+        })(),
       },
       hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
       decisoes: decisoes.rows,
@@ -23346,10 +23381,11 @@ const registerBackgroundSchedules = () => {
     if (!config.enabled) return;
     aiFollowupRodando = true;
     try {
+      const chatwoot = await resolverChatwootConfig(pool);
       const resultado = await runAiFollowupTick(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
-        config,
+        config: { ...config, ...chatwoot },
         // Situacao que pede afastamento longo (handoff, recusa) vira lembrete real
         // em vez de a IA voltar em 5 dias.
         agendarRetorno: ({ contactId, dueAt, note }) => replaceContactReminder(pool, {

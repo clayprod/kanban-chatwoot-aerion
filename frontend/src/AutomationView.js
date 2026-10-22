@@ -44,6 +44,36 @@ const STATUS = {
 };
 const meta = (s) => STATUS[s] || { cor: 'text-muted2', rotulo: s, ruido: false };
 
+function Switch({ ligado, onChange, salvando, rotulo, titulo }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={ligado}
+      aria-label={titulo || rotulo}
+      title={titulo}
+      disabled={salvando}
+      onClick={() => onChange(!ligado)}
+      className={`flex items-center gap-1.5 rounded-[10px] px-2 py-1 text-[11px] font-medium transition disabled:opacity-50 ${
+        ligado ? 'text-ink' : 'text-muted'
+      } hover:bg-bg2`}
+    >
+      <span
+        className={`relative h-4 w-7 shrink-0 rounded-full transition ${
+          ligado ? 'bg-primary' : 'bg-line2'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${
+            ligado ? 'left-3.5' : 'left-0.5'
+          }`}
+        />
+      </span>
+      {rotulo}
+    </button>
+  );
+}
+
 function Saude({ config, ultima }) {
   if (!config) return null;
   if (!config.enabled) {
@@ -106,7 +136,7 @@ function Item({ it, children }) {
   );
 }
 
-function Painel({ dados, carregando, onReload, busca, linhas, vazio }) {
+function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onToggle, salvando }) {
   const [verRuido, setVerRuido] = useState(false);
   const [limite, setLimite] = useState(PAGINA);
 
@@ -135,7 +165,26 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio }) {
           </span>
         ))}
         {!Object.keys(dados?.hoje || {}).length && <span className={subtle}>nada hoje</span>}
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex items-center gap-1">
+          {chaves && (
+            <>
+              <Switch
+                ligado={Boolean(dados?.config?.enabled)}
+                onChange={(v) => onToggle(chaves.enabled, v)}
+                salvando={salvando}
+                rotulo={dados?.config?.enabled ? 'Ligado' : 'Desligado'}
+                titulo="Liga e desliga este worker. Fica gravado no banco, então sobrevive a deploy."
+              />
+              <Switch
+                ligado={Boolean(dados?.config?.dry_run)}
+                onChange={(v) => onToggle(chaves.dryRun, v)}
+                salvando={salvando}
+                rotulo="Sombra"
+                titulo="Modo sombra: a IA decide e registra, mas não executa nada."
+              />
+              <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+            </>
+          )}
           {ruidoOculto > 0 && (
             <button type="button" onClick={() => setVerRuido((v) => !v)} className={btnGhostXs}>
               {verRuido ? 'Ocultar' : `Ver ${ruidoOculto} pulado(s)`}
@@ -174,6 +223,7 @@ export default function AutomationView() {
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
   const [aba, setAba] = useState('followup');
+  const [salvando, setSalvando] = useState(false);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -194,6 +244,19 @@ export default function AutomationView() {
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  const alternar = useCallback(async (chave, valor) => {
+    setSalvando(true);
+    setErro('');
+    try {
+      await axios.post('/api/ai-settings', { [chave]: valor });
+      await carregar();
+    } catch (e) {
+      setErro(e?.response?.data?.error || 'Não foi possível salvar a configuração.');
+    } finally {
+      setSalvando(false);
+    }
+  }, [carregar]);
 
   const abas = [
     { id: 'followup', nome: 'Follow-up', icone: ChatBubbleLeftRightIcon, n: followups?.hoje?.sent || 0 },
@@ -245,6 +308,9 @@ export default function AutomationView() {
             carregando={carregando}
             onReload={carregar}
             busca={busca}
+            chaves={{ enabled: 'followup_enabled', dryRun: 'followup_dry_run' }}
+            onToggle={alternar}
+            salvando={salvando}
             vazio="Nenhum follow-up registrado ainda."
             linhas={(it) => (
               <>
@@ -265,6 +331,9 @@ export default function AutomationView() {
             carregando={carregando}
             onReload={carregar}
             busca={busca}
+            chaves={{ enabled: 'stage_enabled', dryRun: 'stage_dry_run' }}
+            onToggle={alternar}
+            salvando={salvando}
             vazio="Nenhuma classificação registrada ainda."
             linhas={(it) => (
               <>
