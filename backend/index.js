@@ -50,6 +50,12 @@ const {
   runAiFollowupTick,
 } = require('./aiFollowups');
 const {
+  OUTBOUND_QUEUE_TABLE,
+  createOutboundQueueTable,
+  enfileirar,
+  despacharTick,
+} = require('./outboundQueue');
+const {
   createAiSettingsTable,
   carregarSettings,
   resolverFlag,
@@ -20115,7 +20121,7 @@ const fetchGoogleTrendsDaily = async () => {
   return payload;
 };
 
-const getAiChatProviders = () => {
+const getAiChatProviders = ({ technical = false } = {}) => {
   const providers = [];
   if (OPENAI_API_KEY) {
     providers.push({
@@ -20130,7 +20136,7 @@ const getAiChatProviders = () => {
       name: 'groq',
       url: 'https://api.groq.com/openai/v1/chat/completions',
       key: GROQ_API_KEY,
-      model: GROQ_AI_MODEL,
+      model: technical ? (process.env.TECHNICAL_GROQ_AI_MODEL || 'openai/gpt-oss-120b') : GROQ_AI_MODEL,
     });
   }
   if (OPENROUTER_API_KEY) {
@@ -20157,8 +20163,10 @@ const chatCompletionJson = async ({
   timeoutMs = 45000,
   maxProviderAttempts = Infinity,
   providerOffset = 0,
+  technical = false,
+  responseFormat = null,
 }) => {
-  const providers = getAiChatProviders().slice(Math.max(0, Number(providerOffset) || 0));
+  const providers = getAiChatProviders({ technical }).slice(Math.max(0, Number(providerOffset) || 0));
   if (!providers.length) {
     return { ok: false, error: 'Nenhuma IA configurada (OPENAI_API_KEY, GROQ_API_KEY ou OPENROUTER_API_KEY).' };
   }
@@ -20193,6 +20201,9 @@ const chatCompletionJson = async ({
           messages,
           temperature,
           max_tokens: maxTokens,
+          ...(technical ? { response_format: responseFormat || { type: 'json_object' } } : {}),
+          ...(technical && provider.name === 'openrouter' ? { provider: { require_parameters: true } } : {}),
+          ...(technical && provider.name === 'groq' && provider.model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),
         }),
         signal: controller.signal,
       });
@@ -20243,7 +20254,7 @@ const technicalAnalysis = createTechnicalAnalysis({
     const level = user?.page_permissions?.['Licitações'];
     return write ? level === 'edit' : ['view', 'edit'].includes(level);
   },
-  ai: args => chatCompletionJson(args), getProviderCount: () => getAiChatProviders().length, getIds: extractPncpCompraIdentifiers,
+  ai: args => chatCompletionJson({ ...args, technical: true }), getProviderCount: () => getAiChatProviders({ technical: true }).length, getIds: extractPncpCompraIdentifiers,
   noticeApi: 'consulta',
   getNotice: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}`, {}, 'consulta'), { priority: 'sync' }),
   getItems: (ids, startPage) => fetchPncpCompraItens(ids.cnpj, ids.ano, ids.sequencial, { priority: 'sync', maxPages: 1, startPage, requireEmptyPage: true, fetchJson: fetchPncpTechnicalJson }),
@@ -23426,6 +23437,14 @@ const registerBackgroundSchedules = () => {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
         config: { ...config, ...chatwoot },
+        // Em vez de mandar na hora, entra na fila e divide pista com campanha e
+        // prospeccao. Quem decide o momento e o despachante, nao o worker.
+        enfileirarEnvio: ({ contactId, conversationId, inboxId, texto, dedupeKey }) =>
+          enfileirar(pool, {
+            accountId: CHATWOOT_ACCOUNT_ID,
+            contactId, conversationId, inboxId,
+            origem: 'followup', texto, dedupeKey,
+          }),
         // Situacao que pede afastamento longo (handoff, recusa) vira lembrete real
         // em vez de a IA voltar em 5 dias.
         agendarRetorno: ({ contactId, dueAt, note }) => replaceContactReminder(pool, {
@@ -23467,6 +23486,41 @@ const registerBackgroundSchedules = () => {
       console.error('[ai-followup] tick falhou:', error.message);
     } finally {
       aiFollowupRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Despachante da fila unica. Todo envio de WhatsApp da automacao passa por aqui,
+  // e so aqui se decide QUANDO. Tres sistemas disputando o mesmo numero sem se
+  // conhecer foi o que levou o comercial_aerion a 71 envios num dia.
+  let despachanteRodando = false;
+  cron.schedule('*/2 * * * *', async () => {
+    if (!dataLayerReady || despachanteRodando) return;
+    despachanteRodando = true;
+    try {
+      const cfg = carregarConfigAiFollowup();
+      const chatwoot = await resolverChatwootConfig(pool);
+      const resultado = await despacharTick(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        dentroDaJanela: (agora) => dentroDaJanela(cfg, agora),
+        limites: {
+          gapSegundos: cfg.gapSegundos,
+          capHorario: cfg.instanciaCapHorario,
+          capDiario: cfg.instanciaCapDiario,
+        },
+        enviar: (item) => enviarPeloChatwoot({
+          config: chatwoot,
+          accountId: CHATWOOT_ACCOUNT_ID,
+          conversationId: item.conversation_id,
+          texto: item.texto,
+        }),
+      });
+      if (resultado.despachados || resultado.falhas) {
+        console.log('[fila] tick:', resultado);
+      }
+    } catch (error) {
+      console.error('[fila] tick falhou:', error.message);
+    } finally {
+      despachanteRodando = false;
     }
   }, { timezone: 'America/Sao_Paulo' });
 
@@ -23766,6 +23820,7 @@ const initializeDataLayer = async () => {
   await createAiFollowupTable(pool);
   await createStageLogTable(pool);
   await createAiSettingsTable(pool);
+  await createOutboundQueueTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

@@ -578,6 +578,29 @@ test('envia pelo Chatwoot e registra como enviado', async () => {
   assert.equal(pool.gravados.at(-1).status, 'sent');
 });
 
+test('com a fila ligada o worker enfileira em vez de enviar', async () => {
+  // Tres sistemas falando com o mesmo numero sem se conhecer levou o
+  // comercial_aerion a 71 envios num dia. Agora o worker nao decide o momento.
+  const pool = fakePool({ candidatos: [CANDIDATO], historico: HISTORICO });
+  const enfileirados = [];
+  let bateuNoChatwoot = false;
+  const r = await runAiFollowupTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async () => ({
+      ok: true, data: { situacao: 'silencio', acao: 'escrever', mensagem: 'Oi, como anda o projeto?', confianca: 0.9 },
+    }),
+    fetchImpl: async () => { bateuNoChatwoot = true; return { ok: true, json: async () => ({}) }; },
+    enfileirarEnvio: async (e) => { enfileirados.push(e); },
+    config: CONFIG_BASE,
+    now: new Date('2026-09-23T17:00:00.000Z'),
+  });
+  assert.equal(bateuNoChatwoot, false, 'nao fala com o canal direto');
+  assert.equal(enfileirados.length, 1);
+  assert.equal(enfileirados[0].texto, 'Oi, como anda o projeto?');
+  assert.match(enfileirados[0].dedupeKey, /^followup:/, 'dedupe evita item duplicado na fila');
+  assert.equal(r.enviados, 1);
+});
+
 test('dry run grava a mensagem e não chama o Chatwoot', async () => {
   const pool = fakePool({ candidatos: [CANDIDATO], historico: HISTORICO });
   let bateu = false;

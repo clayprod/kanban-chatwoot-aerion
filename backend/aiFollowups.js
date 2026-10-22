@@ -676,6 +676,7 @@ const runAiFollowupTick = async (pool, {
   notify = null,
   agendarRetorno = null,
   atribuirResponsavel = null,
+  enfileirarEnvio = null,
   fetchImpl = fetch,
   now = new Date(),
   config = carregarConfig(),
@@ -812,13 +813,24 @@ const runAiFollowupTick = async (pool, {
         continue;
       }
 
-      await enviarPeloChatwoot({
-        config,
-        accountId,
-        conversationId: candidato.conversation_id,
-        texto,
-        fetchImpl,
-      });
+      if (enfileirarEnvio) {
+        await enfileirarEnvio({
+          contactId: candidato.contact_id,
+          conversationId: candidato.conversation_id,
+          inboxId: candidato.inbox_id,
+          texto,
+          // Uma tentativa por contato na fila: se ja ha item pendente, nao duplica.
+          dedupeKey: `followup:${candidato.contact_id}:${base.attempt}`,
+        });
+      } else {
+        await enviarPeloChatwoot({
+          config,
+          accountId,
+          conversationId: candidato.conversation_id,
+          texto,
+          fetchImpl,
+        });
+      }
       await registrarDecisao(pool, {
         ...base,
         status: 'sent',
