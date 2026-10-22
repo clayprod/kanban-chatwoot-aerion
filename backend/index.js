@@ -20257,7 +20257,7 @@ const technicalAnalysis = createTechnicalAnalysis({
 technicalAnalysis.register(app);
 const technicalAnalysisTimer = setInterval(() => {
   if (dataLayerReady) technicalAnalysis.tick().catch(error => console.error('[technical-analysis]', error.message));
-}, 15000);
+}, 2000);
 technicalAnalysisTimer.unref();
 
 // --- Checklist técnico IA: fetch seguro de páginas de produto + helpers ---

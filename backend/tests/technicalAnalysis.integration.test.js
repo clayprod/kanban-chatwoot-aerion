@@ -177,6 +177,21 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal((await pool.query('SELECT specs_complete FROM technical_products WHERE id=$1', [fallbackProduct.id])).rows[0].specs_complete, true);
       assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 2);
       assert.equal((await fallbackService.settings(89)).provider_error, null);
+      const nextProduct = (await request('POST', `${base}/products`, { name: 'Fallback next product', sale_price: 10 }, 89)).data;
+      await request('POST', `${base}/products/${nextProduct.id}/sources`, { text: 'Autonomia de 43 min. Outra ficha técnica.' }, 89);
+      for (let n = 0; n < 5; n++) await fallbackService.tick();
+      assert.deepEqual(offsets, [0, 1, 1]);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 3);
+      const limitedProduct = (await request('POST', `${base}/products`, { name: 'Limited fallback', sale_price: 10 }, 90)).data;
+      await request('POST', `${base}/products/${limitedProduct.id}/sources`, { text: 'Autonomia de 44 min.' }, 90);
+      const limitedService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args =>
+        ({ ok: false, error: args.providerOffset === 0 ? 'openai:429 You have no credits remaining' : 'groq:429 Rate limit reached; retry in 60 seconds' }) });
+      await limitedService.tick();
+      const limited = await limitedService.settings(90);
+      assert.match(limited.provider_error, /temporariamente indisponível/);
+      assert.match(limited.provider_error, /groq:429/);
+      assert.ok(new Date(limited.provider_retry_at).getTime() - Date.now() < 3 * 60 * 1000);
+      assert.equal((await pool.query("SELECT attempts FROM technical_jobs WHERE account_id=90 AND kind='product'")).rows[0].attempts, 0);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

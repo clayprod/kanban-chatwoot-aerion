@@ -6,6 +6,8 @@ const { matchesTerm, classifyItem } = require('./searchQuality');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
 class BudgetWait extends Error {}
+class ProviderWait extends BudgetWait {}
+const isCreditError = message => /no credits|insufficient_quota|billing|credit balance|sem cr[eé]dit/i.test(message);
 const isPncpDeferred = error => error?.code === 'PNCP_BULK_DEFERRED' || /PNCP bulk (budget deferred|gate wait)/i.test(String(error?.message || ''));
 const isPncpTransportError = error => /^(terminated|fetch failed)$/i.test(String(error?.message || '')) ||
   [error?.code, error?.cause?.code].some(code => ['ECONNRESET', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code));
@@ -69,7 +71,8 @@ async function createTechnicalTables(pool) {
     ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS superseded_by BIGINT REFERENCES technical_products(id)`);
   await pool.query(`ALTER TABLE technical_config ADD COLUMN IF NOT EXISTS provider_error TEXT,
-    ADD COLUMN IF NOT EXISTS provider_retry_at TIMESTAMPTZ`);
+    ADD COLUMN IF NOT EXISTS provider_retry_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS provider_health_version INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`CREATE TABLE IF NOT EXISTS technical_sources (
     id BIGSERIAL PRIMARY KEY, account_id INTEGER NOT NULL, sha256 TEXT NOT NULL, name TEXT NOT NULL, url TEXT,
     content_type TEXT, bytes BYTEA NOT NULL, pages JSONB, complete BOOLEAN NOT NULL DEFAULT FALSE,
@@ -120,6 +123,13 @@ async function createTechnicalTables(pool) {
     UPDATE technical_usage u SET notices=GREATEST(0,u.notices-t.n) FROM totals t WHERE u.account_id=t.account_id AND u.day=t.started_day`);
   await pool.query(`UPDATE technical_jobs SET error=NULL,next_run_at=NOW() WHERE status='queued' AND kind='notice'
     AND error='Limite diário de licitações atingido.' AND NOT COALESCE((state->>'initialized')::boolean,FALSE)`);
+  // Recheck the old aggregate error once: a single exhausted primary used to
+  // label a healthy fallback's temporary 429 as "all providers out of credit".
+  await pool.query(`WITH accounts AS (
+    UPDATE technical_config SET provider_health_version=1,provider_error=NULL,provider_retry_at=NULL
+    WHERE provider_health_version=0 AND provider_error='A API de IA está sem créditos. Regularize o saldo e retome as análises.' RETURNING account_id
+  ) UPDATE technical_jobs j SET next_run_at=NOW(),error=NULL FROM accounts a WHERE j.account_id=a.account_id
+    AND j.status='queued' AND j.error='A API de IA está sem créditos. Regularize o saldo e retome as análises.'`);
 }
 
 function createTechnicalAnalysis(deps) {
@@ -138,6 +148,7 @@ function createTechnicalAnalysis(deps) {
   const getItems = (ids, page) => pncpRead(() => deps.getItems(ids, page));
   const getFiles = ids => pncpRead(() => deps.getFiles(ids));
   let running = false;
+  const providerCooldowns = new Map();
   const settings = async account => (await pool.query('SELECT * FROM technical_config WHERE account_id=$1', [account])).rows[0] || { account_id: account, ...DEFAULTS };
   const accessoriesFor = async account => (await pool.query("SELECT * FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type='accessory' AND superseded_by IS NULL ORDER BY id", [account])).rows.map(safeProduct);
   const productsFor = async (account, ids = [], includeSpecs = true) => (await pool.query(`SELECT ${includeSpecs ? '*' : 'id,name,model,category,keywords,sale_price,unit,package_confirmed,active,specs_version,version,specs_complete,compatible_ids'} FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type<>'accessory' AND superseded_by IS NULL ${ids.length ? 'AND (id=ANY($2::bigint[]) OR id IN(SELECT superseded_by FROM technical_products WHERE account_id=$1 AND id=ANY($2::bigint[])))' : ''} ORDER BY id`, ids.length ? [account, cleanIds(ids)] : [account])).rows.map(safeProduct);
@@ -211,18 +222,29 @@ function createTechnicalAnalysis(deps) {
     const failures = [];
     const providers = Math.max(1, Math.min(3, Number(deps.getProviderCount?.()) || 1));
     for (let offset = 0; offset < providers; offset++) {
+      const providerKey = `${job.account_id}:${offset}`;
+      if ((providerCooldowns.get(providerKey) || 0) > Date.now()) {
+        failures.push('Provedor sem créditos (tentativas suspensas por uma hora).'); continue;
+      }
       day = await reserve(job, config, reserved);
       result = await ai({ system, user, maxTokens, temperature: 0, timeoutMs: 120000, maxProviderAttempts: 1, providerOffset: offset });
       const actual = Number(result.usage?.total_tokens);
       if (Number.isFinite(actual) && actual >= 0) await pool.query('UPDATE technical_usage SET actual_tokens=actual_tokens+$3 WHERE account_id=$1 AND day=$2', [job.account_id, day, actual]);
       if (result.ok && !result.truncated) break;
       failures.push(result.error || 'Resposta de IA incompleta.');
+      if (isCreditError(result.error || ''))
+        providerCooldowns.set(providerKey, Date.now() + 60 * 60 * 1000);
     }
-    if (!result.ok || result.truncated) {
+    if (!result?.ok || result.truncated) {
       const message = failures.join(' | ');
-      if (/no credits|insufficient_quota|billing|credit balance|sem cr[eé]dit/i.test(message)) {
+      if (failures.length && failures.every(isCreditError)) {
         await pool.query("UPDATE technical_config SET provider_error=$2,provider_retry_at=NOW()+INTERVAL '1 hour' WHERE account_id=$1", [job.account_id, 'A API de IA está sem créditos. Regularize o saldo e retome as análises.']);
         throw new BudgetWait('A API de IA está sem créditos. Regularize o saldo e retome as análises.');
+      }
+      if (/429|rate.?limit|too many|timeout|timed out|fetch failed|temporar|:5\d\d/i.test(message)) {
+        const reason = `IA temporariamente indisponível; retomada automática. ${message}`;
+        await pool.query("UPDATE technical_config SET provider_error=$2,provider_retry_at=NOW()+INTERVAL '2 minutes' WHERE account_id=$1", [job.account_id, reason]);
+        throw new ProviderWait(reason);
       }
       throw new Error(message);
     }
@@ -469,7 +491,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           // not exhaust the failure budget or silently skip a document.
           await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1", [job.id]);
         } else if (e instanceof BudgetWait) {
-          const delay = /cr[eé]dit/i.test(e.message) ? "NOW()+INTERVAL '1 hour'" : /fichas/.test(e.message) ? "NOW()+INTERVAL '2 minutes'" : "((NOW() AT TIME ZONE 'America/Sao_Paulo')::date+1)::timestamp AT TIME ZONE 'America/Sao_Paulo'";
+          const delay = e instanceof ProviderWait ? "NOW()+INTERVAL '2 minutes'" : /cr[eé]dit/i.test(e.message) ? "NOW()+INTERVAL '1 hour'" : /fichas/.test(e.message) ? "NOW()+INTERVAL '2 minutes'" : "((NOW() AT TIME ZONE 'America/Sao_Paulo')::date+1)::timestamp AT TIME ZONE 'America/Sao_Paulo'";
           await pool.query(`UPDATE technical_jobs SET status='queued',error=$2,next_run_at=${delay} WHERE id=$1`, [job.id, e.message]);
         } else await pool.query(`UPDATE technical_jobs SET attempts=attempts+1,status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'queued' END,error=$2,next_run_at=NOW()+INTERVAL '10 minutes' WHERE id=$1`, [job.id, e.message]);
       }
@@ -556,6 +578,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       res.json(config);
     });
     route('post', '/api/licitacoes/technical/resume', async (_req, res, account) => {
+      for (const key of providerCooldowns.keys()) if (key.startsWith(`${account}:`)) providerCooldowns.delete(key);
       await pool.query('UPDATE technical_config SET provider_error=NULL,provider_retry_at=NULL WHERE account_id=$1', [account]);
       await pool.query("UPDATE technical_jobs j SET status='queued',attempts=0,error=NULL,next_run_at=NOW() FROM technical_products p WHERE j.account_id=$1 AND j.kind='product' AND j.target=p.id::text AND p.account_id=$1 AND p.active AND p.superseded_by IS NULL AND j.context->>'version'=p.specs_version::text AND j.status IN ('failed','queued')", [account]);
       await pool.query("UPDATE technical_candidates SET updated_at=NOW()-INTERVAL '25 hours' WHERE account_id=$1", [account]);
