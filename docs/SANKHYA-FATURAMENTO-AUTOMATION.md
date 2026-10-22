@@ -31,6 +31,8 @@ O recorte atual AERION/Venda retornou registros das empresas 3, 100 e 102; a úl
 
 O usuário autorizou iniciar com a 102 e incluir a 100 depois. `backend/sankhyaReporting.js` implementa uma sincronização somente de leitura, com configuração cifrada no PostgreSQL e dois fluxos independentes: pedidos e notas fiscais. A empresa 100 é recusada no contrato atual; as tabelas já guardam a empresa na chave para uma futura extensão autorizada.
 
+Prioridade atual junto à Gohobby: corrigir a leitura fiscal da **102**. A ampliação para a 100 é uma segunda etapa. Repetir a listagem com `codigoEmpresa=102&page=0` também retornou 502, com a mesma mensagem de formato inesperado. A consulta de pedidos retornou datas ISO (`2026-10-22`), totais numéricos e moeda descrita como `<MOEDA CORRENTE>`; esse rótulo genérico não foi interpretado automaticamente como confirmação de BRL.
+
 - A cada minuto o agendador verifica o trabalho pendente. Cada recurso faz uma varredura a cada 30 minutos, com lotes limitados a três páginas e checkpoints persistentes.
 - Respostas de erro usam espera de 30 minutos, sem interromper o fluxo de pedidos quando a listagem de notas falha. Chaves e corpos de erro upstream não aparecem na resposta ou no log.
 - Páginas novas ficam em uma geração separada. Só a conclusão de uma varredura publica a nova geração. Se uma página posterior falhar, o painel conserva a carga anterior inteira, sem misturar os totais antigos e novos.

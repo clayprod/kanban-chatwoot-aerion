@@ -38,6 +38,10 @@ app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range
     queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
 app.get('/api/ecommerce/audiences', (req, res) => res.json({ available: true, uploaded: false, observedAt: new Date().toISOString(),
   segments: [{ id: 'qualified', label: 'Qualificados e oportunidades', stages: '6 a 12', contacts: 47, emails: 21, suppressed: 0, use: 'Remarketing comercial' }], stages: [], profiles: [] }));
+app.get('/api/sankhya/report', (req, res) => res.json({ streams: [
+  { company_id: 102, resource: 'orders', enabled: true, documents: 6, last_success_at: new Date().toISOString() },
+  { company_id: 102, resource: 'invoices', enabled: true, last_success_at: null, error: 'Consulta de notas fiscais recusada pelo proxy (HTTP 502). Últimos dados preservados.' },
+] }));
 app.use('/api', (req, res) => res.json([]));
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', 'build', 'index.html')));
@@ -86,6 +90,9 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       }
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
+    await clickSection('Metas e Resultados');
+    await page.waitForFunction(() => document.body.textContent.includes('ERP automático · empresa 102') && document.body.textContent.includes('HTTP 502'));
+    await page.screenshot({ path: path.join(output, 'erp-desktop.png'), fullPage: true });
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await page.reload({ waitUntil: 'networkidle0' });
     await page.waitForSelector('summary');
