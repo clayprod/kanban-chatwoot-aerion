@@ -166,6 +166,9 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
       clicks: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'clicks') : null,
       googleClicks: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'clicks') : null,
       metaClicks: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'clicks') : null,
+      impressions: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'impressions') : null,
+      googleImpressions: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'impressions') : null,
+      metaImpressions: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'impressions') : null,
       conversionValue: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'conversionValue') : null });
   }
   const utms = group(validPaid, o => JSON.stringify([o.attribution.linkId, o.attribution.source, o.attribution.medium, o.attribution.campaign, o.attribution.content]), o => ({

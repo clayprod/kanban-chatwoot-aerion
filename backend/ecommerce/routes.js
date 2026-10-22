@@ -154,9 +154,18 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
   });
   router.get('/report', async (req, res) => {
     const range = dateRange(req.query);
-    const [{ rows: records }, { rows: connections }] = await Promise.all([
-      pool.query(`SELECT provider,kind,data FROM ecommerce_records WHERE date BETWEEN $1 AND $2 OR (provider='woocommerce' AND kind IN ('link','product','coupon'))`, [range.previousFrom, range.to]),
+    const [{ rows: records }, { rows: connections }, { rows: excludedOrders }] = await Promise.all([
+      pool.query(`SELECT provider,kind,data FROM ecommerce_records r
+        WHERE (date BETWEEN $1 AND $2 OR (provider='woocommerce' AND kind IN ('link','product','coupon')))
+          AND NOT (provider='woocommerce' AND kind='order' AND EXISTS (
+            SELECT 1 FROM ecommerce_order_exclusions e WHERE e.order_id=r.record_id AND e.excluded))`, [range.previousFrom, range.to]),
       pool.query('SELECT * FROM ecommerce_connections ORDER BY provider'),
+      pool.query(`SELECT e.order_id AS id,e.reason,e.updated_at,
+        r.data->>'number' AS number,r.data->>'status' AS status,r.data->>'createdAt' AS created_at,
+        (r.data->>'total')::numeric AS total
+        FROM ecommerce_order_exclusions e LEFT JOIN ecommerce_records r
+          ON r.provider='woocommerce' AND r.kind='order' AND r.record_id=e.order_id
+        WHERE e.excluded ORDER BY e.updated_at DESC`),
     ]);
     const ofKind = kind => records.filter(r => r.kind === kind).map(r => r.data);
     const report = buildReport({ range, orders: ofKind('order'), links: ofKind('link'), visits: ofKind('visit'),
@@ -164,6 +173,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     const catalog = new Map(ofKind('product').map(p => [String(p.id), p]));
     report.products.forEach(product => { product.categories = catalog.get(product.id.split(':')[0])?.categories || []; });
     report.couponCatalog = ofKind('coupon');
+    report.excludedOrders = excludedOrders;
     report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
     res.json(report);
   });
@@ -172,6 +182,22 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     catch { res.status(503).json({ error: 'Não foi possível consultar as etapas do CRM. Os demais relatórios continuam disponíveis.' }); }
   });
   router.use(admin);
+  router.put('/orders/:id/exclusion', async (req, res) => {
+    const id = String(req.params.id || '');
+    const reason = String(req.body?.reason || '').trim();
+    const excluded = req.body?.excluded;
+    if (!/^[1-9]\d{0,17}$/.test(id) || typeof excluded !== 'boolean' || reason.length > 300 || (excluded && !reason)) {
+      return res.status(400).json({ error: 'Informe pedido, exclusão e motivo válido (até 300 caracteres).' });
+    }
+    const found = await pool.query("SELECT 1 FROM ecommerce_records WHERE provider='woocommerce' AND kind='order' AND record_id=$1", [id]);
+    if (excluded && !found.rowCount) return res.status(404).json({ error: 'Pedido não encontrado na base sincronizada.' });
+    await pool.query(`INSERT INTO ecommerce_order_exclusions(order_id,reason,excluded,updated_by) VALUES($1,$2,$3,$4)
+      ON CONFLICT(order_id) DO UPDATE SET excluded=EXCLUDED.excluded,
+        reason=CASE WHEN EXCLUDED.reason<>'' THEN EXCLUDED.reason ELSE ecommerce_order_exclusions.reason END,
+        updated_at=now(),updated_by=EXCLUDED.updated_by`,
+    [id, reason, excluded, String(req.auth?.uid || req.auth?.sub || 'admin')]);
+    res.json({ id, excluded });
+  });
   router.put('/connections/:provider', async (req, res) => {
     const provider = req.params.provider;
     if (!PROVIDERS.includes(provider)) return res.status(404).json({ error: 'Plataforma desconhecida.' });
@@ -200,7 +226,10 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
         const secrets = Object.fromEntries(SECRET_FIELDS[provider].filter(k => merged[k] !== undefined).map(k => [k, merged[k]]));
         if (changed) {
           await client.query('DELETE FROM ecommerce_records WHERE provider=$1', [provider]);
-          if (provider === 'woocommerce') await client.query('DELETE FROM ecommerce_webhooks');
+          if (provider === 'woocommerce') {
+            await client.query('DELETE FROM ecommerce_webhooks');
+            await client.query('DELETE FROM ecommerce_order_exclusions');
+          }
         }
         const enabled = req.body.enabled !== false && (provider !== 'google_ads' || merged.auth_type === 'google_identity' || Boolean(merged.refresh_token));
         await client.query(`INSERT INTO ecommerce_connections(provider,config,secrets,enabled) VALUES($1,$2,$3,$4)

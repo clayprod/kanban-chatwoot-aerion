@@ -85,6 +85,23 @@ test('Ecommerce API and resumable sync with isolated PostgreSQL schema', { skip:
       const report = await request('/report?from=2026-10-20&to=2026-10-21');
       assert.equal(report.data.summary.revenue, 120); assert.equal(report.data.summary.orders, 1);
     });
+    await t.test('test orders stay excluded after synchronization and can be restored by administrators', async () => {
+      const path = '/orders/1/exclusion';
+      assert.equal((await request(path, { user: '2', method: 'PUT', body: { excluded: true, reason: 'Teste' } })).response.status, 403);
+      assert.equal((await request(path, { method: 'PUT', body: { excluded: true } })).response.status, 400);
+      assert.equal((await request('/orders/999/exclusion', { method: 'PUT', body: { excluded: true, reason: 'Teste' } })).response.status, 404);
+      assert.equal((await request(path, { method: 'PUT', body: { excluded: true, reason: 'Teste confirmado' } })).response.status, 200);
+      await createSync({ pool, providers, env }).run('woocommerce', { force: true });
+      const report = (await request('/report?from=2026-10-20&to=2026-10-21')).data;
+      assert.equal(report.summary.revenue, 0); assert.equal(report.summary.orders, 0);
+      assert.equal(report.orders.length, 0); assert.equal(report.products.length, 0);
+      assert.equal(report.daily.reduce((n, d) => n + d.revenue, 0), 0);
+      assert.equal(report.excludedOrders[0].id, '1');
+      assert.equal((await pool.query("SELECT count(*)::int AS n FROM ecommerce_records WHERE kind='order' AND record_id='1'")).rows[0].n, 1);
+      assert.equal((await request(path, { method: 'PUT', body: { excluded: false } })).response.status, 200);
+      const restored = (await request('/report?from=2026-10-20&to=2026-10-21')).data;
+      assert.equal(restored.summary.revenue, 120); assert.equal(restored.excludedOrders.length, 0);
+    });
     await t.test('webhook signature and idempotency, duplicate bodies and updates', async () => {
       const body = { id: 1 };
       const signature = crypto.createHmac('sha256', woo.webhook_secret).update(JSON.stringify(body)).digest('base64');

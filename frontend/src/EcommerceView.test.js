@@ -87,6 +87,18 @@ test('report failures show an actionable error with retry', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
   await waitFor(() => expect(axios.get.mock.calls.length).toBeGreaterThan(calls));
 });
+
+test('administrators can restore an excluded test order without deleting its history', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : {
+    ...report, excludedOrders: [{ id: '349', number: '349', reason: 'Teste confirmado', total: 9380.59 }],
+  } }));
+  axios.put.mockResolvedValue({ data: { id: '349', excluded: false } });
+  render(<EcommerceView section="sales" isAdmin onNavigate={jest.fn()} />);
+  const restore = await screen.findByRole('button', { name: 'Restaurar pedido 349', hidden: true });
+  fireEvent.click(restore);
+  await waitFor(() => expect(axios.put).toHaveBeenCalledWith('/api/ecommerce/orders/349/exclusion', { excluded: false }));
+  expect(screen.getByText(/O histórico foi preservado/)).toBeInTheDocument();
+});
 test('media report keeps currency, attribution and the conversion caveat visible', async () => {
   axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : {
     ...report, ads: [{ provider: 'meta_ads', campaignId: '1', campaign: 'Drone outubro', spend: 20, clicks: 4, conversions: 2,

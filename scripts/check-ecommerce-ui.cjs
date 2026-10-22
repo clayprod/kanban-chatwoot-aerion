@@ -79,6 +79,9 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
         await page.select('#ecommerce-chart-mode', 'efficiency');
         await page.waitForFunction(() => document.body.textContent.includes('CPC ponderado por cliques'));
         await page.screenshot({ path: path.join(output, 'efficiency-desktop.png'), fullPage: true });
+        await page.select('#ecommerce-chart-mode', 'reach');
+        await page.waitForFunction(() => document.body.textContent.includes('CTR ponderado por impressões'));
+        await page.screenshot({ path: path.join(output, 'reach-desktop.png'), fullPage: true });
         await page.select('#ecommerce-chart-mode', 'money');
       }
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });

@@ -66,15 +66,15 @@ function SalesChart({ rows }) {
   const [mode, setMode] = useState('money');
   const [interval, setInterval] = useState('day');
   const { series, available, data, max, points, selected } = prepareSalesChart(rows, mode, interval, visible);
-  const axisFormat = (side, value) => mode === 'efficiency' && side === 'right' ? `${number(value)}×` : new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
-  const rawFormat = (side, value) => mode === 'money' || (mode === 'efficiency' && side === 'left') ? money(value) : mode === 'efficiency' ? `${number(value)}×` : number(value);
+  const axisFormat = (side, value) => mode === 'reach' && side === 'right' ? `${number(value)}%` : mode === 'efficiency' && side === 'right' ? `${number(value)}×` : new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
+  const rawFormat = (side, value) => mode === 'reach' && side === 'right' ? percent(value) : mode === 'money' || (mode === 'efficiency' && side === 'left') ? money(value) : mode === 'efficiency' ? `${number(value)}×` : number(value);
   const hasAxis = side => selected.some(([, , , axis]) => axis === side);
   return <section className={panel} aria-label="Receita diária de produtos">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">Vendas e investimento ao longo do tempo</h3><p className={`${labelClass} mt-1`}>{mode === 'money' ? 'Receita pela data de pagamento · mídia pelo dia da conta' : mode === 'efficiency' ? 'CPC ponderado por cliques · ROAS atribuído pelas plataformas' : 'Pedidos pela data de pagamento · sessões do GA4'}</p></div>
-      <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-mode">Métrica do gráfico</label><select id="ecommerce-chart-mode" className={select} value={mode} onChange={e => { setMode(e.target.value); setVisible(CHART_DEFAULTS[e.target.value]); }}><option value="money">Valores em R$</option><option value="efficiency">CPC e ROAS</option><option value="volume">Pedidos e sessões</option></select><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">Vendas e investimento ao longo do tempo</h3><p className={`${labelClass} mt-1`}>{mode === 'money' ? 'Receita pela data de pagamento · mídia pelo dia da conta' : mode === 'efficiency' ? 'CPC ponderado por cliques · ROAS atribuído pelas plataformas' : mode === 'reach' ? 'Impressões por plataforma · CTR ponderado por impressões' : 'Pedidos pela data de pagamento · sessões do GA4'}</p></div>
+      <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-mode">Métrica do gráfico</label><select id="ecommerce-chart-mode" className={select} value={mode} onChange={e => { setMode(e.target.value); setVisible(CHART_DEFAULTS[e.target.value]); }}><option value="money">Valores em R$</option><option value="efficiency">CPC e ROAS</option><option value="reach">Impressões e CTR</option><option value="volume">Pedidos e sessões</option></select><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
     </div>
     <div className="my-4 flex flex-wrap gap-2" aria-label="Mostrar ou ocultar linhas do gráfico">{series.map(([id, label, color, axis]) => <button key={id} type="button" disabled={!available.some(([key]) => key === id)} title={`${axis === 'right' ? 'Eixo direito' : 'Eixo esquerdo'}: ${CHART_AXES[mode][axis === 'right' ? 1 : 0]}`} aria-pressed={visible.includes(id)} onClick={() => setVisible(v => v.includes(id) ? v.filter(k => k !== id) : [...v, id])} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40 ${visible.includes(id) ? 'border-line bg-bg2 text-ink' : 'border-transparent text-muted'}`}><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}<span className="text-muted" aria-hidden="true">{axis === 'right' ? '→' : '←'}</span></button>)}</div>
-    {!available.length ? <p className="py-12 text-sm text-muted">{mode === 'efficiency' ? 'Ainda não há cliques e investimento disponíveis para calcular CPC e ROAS neste período.' : 'Conecte o WooCommerce para acompanhar a evolução de vendas.'}</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <>
+    {!available.length ? <p className="py-12 text-sm text-muted">{mode === 'reach' ? 'Ainda não há impressões disponíveis nas fontes de mídia conectadas neste período.' : mode === 'efficiency' ? 'Ainda não há cliques e investimento disponíveis para calcular CPC e ROAS neste período.' : 'Conecte o WooCommerce para acompanhar a evolução de vendas.'}</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <>
       <div className="mb-2 flex justify-between gap-5 text-xs text-muted"><span>{hasAxis('left') ? `Esquerda: ${CHART_AXES[mode][0]}` : ''}</span><span className="text-right">{hasAxis('right') ? `Direita: ${CHART_AXES[mode][1]}` : ''}</span></div>
       <div className="h-80" role="img" aria-label="Evolução das métricas selecionadas no período, com escalas independentes à esquerda e à direita">
       <ResponsiveLine data={data} margin={{ top: 16, right: hasAxis('right') ? 55 : 12, bottom: 44, left: hasAxis('left') ? 55 : 12 }}
@@ -88,7 +88,7 @@ function SalesChart({ rows }) {
           return <div className="mt-2 flex justify-between gap-5" key={point.id}><span>{point.serieId} · {serie?.axis === 'right' ? 'dir.' : 'esq.'}</span><b>{rawFormat(serie?.axis, raw)}</b></div>;
         })}</div>} />
       </div></>}
-    <p className={`${labelClass} mt-3`}>Escalas independentes: compare a evolução, não a altura das linhas. {mode === 'money' ? 'Pedidos pendentes incluem frete e impostos e refletem a situação atual dos pedidos criados no período; não representam abandono de carrinho.' : mode === 'efficiency' ? 'CPC e ROAS são recalculados pelos totais de cada dia, semana ou mês; dias sem cliques ou investimento ficam sem taxa.' : 'Pedidos e sessões têm escalas próprias e não representam pessoas únicas.'}</p>
+    <p className={`${labelClass} mt-3`}>Escalas independentes: compare a evolução, não a altura das linhas. {mode === 'money' ? 'Pedidos pendentes incluem frete e impostos e refletem a situação atual dos pedidos criados no período; não representam abandono de carrinho.' : mode === 'efficiency' ? 'CPC e ROAS são recalculados pelos totais de cada dia, semana ou mês; dias sem cliques ou investimento ficam sem taxa.' : mode === 'reach' ? 'CTR = cliques / impressões. Semanas e meses usam os totais, sem fazer média dos percentuais diários. Impressões não representam pessoas únicas.' : 'Pedidos e sessões têm escalas próprias e não representam pessoas únicas.'}</p>
   </section>;
 }
 
@@ -242,10 +242,19 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refresh, setRefresh] = useState(0);
+  const [orderBusy, setOrderBusy] = useState(false);
   const [source, setSource] = useState('all');
   const [query, setQuery] = useState('');
   const title = ECOMMERCE_SECTIONS.find(s => s.id === parentSection)?.label || 'Visão geral';
   const reload = useCallback(() => setRefresh(n => n + 1), []);
+  const setOrderExclusion = async (id, excluded) => {
+    setOrderBusy(true); setError('');
+    try {
+      await axios.put(`/api/ecommerce/orders/${encodeURIComponent(id)}/exclusion`, { excluded, ...(excluded ? { reason: 'Pedido de teste identificado pelo administrador' } : {}) });
+      reload();
+    } catch (failure) { setError(errorText(failure)); }
+    finally { setOrderBusy(false); }
+  };
   useEffect(() => { setReport(null); }, [range]);
   useEffect(() => {
     const abort = new AbortController();
@@ -299,6 +308,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
       {woo?.info?.tracking_error && section === 'campaigns' && <Notice>{woo.info.tracking_error}</Notice>}
       {report?.currencies?.some(c => c !== 'BRL') && <Notice>Há registros em {report.currencies.filter(c => c !== 'BRL').join(', ')}. Os totais consolidados incluem somente BRL; a mídia mantém sua moeda original.</Notice>}
       {summary.unallocatedRefund > 0 && <Notice>Há {money(summary.unallocatedRefund)} em reembolsos sem discriminação de produtos, frete ou impostos. A receita de produtos ainda não desconta esses valores e exige conciliação.</Notice>}
+      {report?.excludedOrders?.length > 0 && <p className="text-xs text-muted">{report.excludedOrders.length} pedidos marcados como teste estão fora dos indicadores da loja. O histórico foi preservado; confira em Vendas e produtos.</p>}
       {report && <>
         {section === 'overview' && <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
@@ -315,7 +325,8 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         {section === 'sales' && <>
           {noSource('woocommerce') && <Notice>Conecte o WooCommerce para consultar vendas e produtos.</Notice>}
           <Table caption="Desempenho de produtos" rows={filter(report.products)} columns={[{ key: 'name', label: 'Produto' }, { key: 'sku', label: 'SKU' }, { key: 'categories', label: 'Categorias', render: r => r.categories?.join(', ') || '—' }, numeric('quantity', 'Unidades líquidas'), numeric('revenue', 'Receita', money), numeric('refunded', 'Reembolsos de produtos', money)]} />
-          <Table caption="Pedidos no período" rows={filter(report.orders)} columns={[{ key: 'number', label: 'Pedido' }, { key: 'status', label: 'Situação' }, { key: 'paidAt', label: 'Pagamento', render: r => r.paidAt ? when(r.paidAt) : 'Não pago' }, { key: 'currency', label: 'Moeda' }, numeric('total', 'Valor do pedido'), numeric('revenue', 'Receita de produtos', r => number(r)), numeric('refunded', 'Reembolsado'), { key: 'coupons', label: 'Cupons', render: r => r.coupons.map(c => c.code).join(', ') || '—' }]} />
+          <Table caption="Pedidos no período" rows={filter(report.orders)} columns={[{ key: 'number', label: 'Pedido' }, { key: 'status', label: 'Situação' }, { key: 'paidAt', label: 'Pagamento', render: r => r.paidAt ? when(r.paidAt) : 'Não pago' }, { key: 'currency', label: 'Moeda' }, numeric('total', 'Valor do pedido'), numeric('revenue', 'Receita de produtos', r => number(r)), numeric('refunded', 'Reembolsado'), { key: 'coupons', label: 'Cupons', render: r => r.coupons.map(c => c.code).join(', ') || '—' }, ...(isAdmin ? [{ key: 'exclude', label: 'Teste', render: r => <button type="button" className={btnSecondarySm} disabled={orderBusy} onClick={() => setOrderExclusion(r.id, true)} aria-label={`Excluir pedido ${r.number} dos indicadores`}>Marcar como teste</button> }] : [])]} />
+          {report.excludedOrders?.length > 0 && <details className="border-t border-line pt-4"><summary className="cursor-pointer text-sm font-medium">Pedidos de teste excluídos · todos os períodos</summary><div className="mt-3"><Table caption="Histórico preservado, fora dos indicadores" rows={report.excludedOrders} columns={[{ key: 'number', label: 'Pedido', render: r => r.number || r.id }, { key: 'status', label: 'Situação' }, numeric('total', 'Valor original', money), { key: 'reason', label: 'Motivo' }, ...(isAdmin ? [{ key: 'restore', label: 'Reincluir', render: r => <button type="button" className={btnSecondarySm} disabled={orderBusy} onClick={() => setOrderExclusion(r.id, false)}>Restaurar pedido {r.number || r.id}</button> }] : [])]} /></div></details>}
         </>}
         {section === 'traffic' && <>
           {noSource('ga4') && <Notice>Conecte a propriedade GA4 para consultar visitas e aquisição.</Notice>}

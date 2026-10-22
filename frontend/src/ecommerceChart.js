@@ -6,14 +6,19 @@ export const CHART_SERIES = {
   efficiency: [
     ['cpc', 'CPC total', '#8b78f5', 'left'], ['metaCpc', 'CPC Meta', '#3b82f6', 'left'], ['googleCpc', 'CPC Google', '#d97706', 'left'], ['roas', 'ROAS atribuído', '#0d9488', 'right'],
   ],
+  reach: [
+    ['impressions', 'Impressões totais', '#8b78f5', 'left'], ['metaImpressions', 'Impressões Meta', '#3b82f6', 'left'], ['googleImpressions', 'Impressões Google', '#d97706', 'left'],
+    ['ctr', 'CTR total', '#0d9488', 'right'], ['metaCtr', 'CTR Meta', '#60a5fa', 'right'], ['googleCtr', 'CTR Google', '#fbbf24', 'right'],
+  ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
 };
 export const CHART_AXES = {
   money: ['Receita e pendentes · R$', 'Investimento · R$'],
   efficiency: ['CPC · R$/clique', 'ROAS · vezes'],
+  reach: ['Impressões', 'CTR · %'],
   volume: ['Pedidos pagos', 'Sessões GA4'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], volume: ['orders', 'sessions'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], volume: ['orders', 'sessions'] };
 
 function axisMaximum(values) {
   const max = values.reduce((n, value) => Math.max(n, value || 0), 0);
@@ -24,7 +29,7 @@ function axisMaximum(values) {
 }
 export function prepareSalesChart(rows, mode, interval, visible) {
   const series = CHART_SERIES[mode], buckets = new Map();
-  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'conversionValue'];
+  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue'];
   for (const row of rows) {
     const date = new Date(`${row.date}T12:00:00Z`);
     if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
@@ -38,6 +43,11 @@ export function prepareSalesChart(rows, mode, interval, visible) {
     point.metaCpc = point.metaClicks > 0 && point.metaSpend != null ? point.metaSpend / point.metaClicks : null;
     point.googleCpc = point.googleClicks > 0 && point.googleSpend != null ? point.googleSpend / point.googleClicks : null;
     point.roas = point.spend > 0 && point.conversionValue != null ? point.conversionValue / point.spend : null;
+    for (const prefix of ['', 'meta', 'google']) {
+      const impressions = point[prefix ? `${prefix}Impressions` : 'impressions'];
+      const clicks = point[prefix ? `${prefix}Clicks` : 'clicks'];
+      point[prefix ? `${prefix}Ctr` : 'ctr'] = impressions > 0 && clicks != null ? 100 * clicks / impressions : null;
+    }
   }
   const available = series.filter(([id]) => points.some(point => point[id] != null));
   const selected = available.filter(([id]) => visible.includes(id));

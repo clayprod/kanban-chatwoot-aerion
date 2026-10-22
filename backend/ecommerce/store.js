@@ -17,6 +17,12 @@ async function createTables(pool) {
     );
     CREATE INDEX IF NOT EXISTS ecommerce_records_period ON ecommerce_records(provider, kind, date);
     ALTER TABLE ecommerce_records ADD COLUMN IF NOT EXISTS generation text;
+    CREATE TABLE IF NOT EXISTS ecommerce_order_exclusions (
+      order_id text PRIMARY KEY, reason text NOT NULL,
+      excluded boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by text NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS ecommerce_webhooks (
       delivery_id text PRIMARY KEY, topic text NOT NULL, resource_id bigint,
       received_at timestamptz NOT NULL DEFAULT now(), processed_at timestamptz
