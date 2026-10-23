@@ -1,0 +1,23 @@
+import React, { useEffect, useRef } from 'react';
+import OpportunityPreview from './OpportunityPreview';
+
+export default function PncpNoticePage({ opportunity, jobName, items, loading, error, onBack, onSearches, onImport, canImport }) {
+  const title = useRef(null);
+  useEffect(() => { title.current?.focus({ preventScroll: true }); }, [opportunity.__preview?.__result_key, opportunity.titulo]);
+  return <article className="mx-auto w-full max-w-7xl space-y-5 py-5" aria-label="Detalhes do edital">
+    <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-2 text-xs text-muted">
+      <span>Licitações</span><span aria-hidden="true">/</span>
+      <button type="button" onClick={onSearches} className="text-primary hover:underline">Buscas</button><span aria-hidden="true">/</span>
+      <button type="button" onClick={onBack} className="text-primary hover:underline">{jobName || 'Resultados'}</button><span aria-hidden="true">/</span>
+      <span aria-current="page">{opportunity.numero_edital || opportunity.titulo || 'Edital'}</span>
+    </nav>
+    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-4">
+      <div className="min-w-0 flex-1 basis-full sm:basis-0"><button type="button" onClick={onBack} className="mb-3 text-sm font-semibold text-primary hover:underline">← Voltar aos resultados</button>
+        <h2 ref={title} tabIndex={-1} className="break-words text-xl font-semibold text-ink outline-none">{opportunity.titulo || 'Edital'}</h2>
+        <p className="mt-1 text-sm text-muted">{opportunity.orgao_nome}</p>
+      </div>
+      <button type="button" onClick={onImport} disabled={!canImport} className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto">{opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline' ? 'Já está no pipeline' : 'Importar para o pipeline'}</button>
+    </header>
+    <OpportunityPreview opportunity={opportunity} items={items} loading={loading} error={error} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
+  </article>;
+}

@@ -9,6 +9,9 @@ import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
 import SankhyaReportingPanel from './SankhyaReportingPanel';
 import TechnicalResult from './TechnicalResult';
 import OpportunityPreview from './OpportunityPreview';
+import PncpNoticePage from './PncpNoticePage';
+import PncpSearchDialog from './PncpSearchDialog';
+import { readPncpPage, pncpPageUrl } from './pncpNavigation';
 import { createPncpOpportunityPreview } from './pncpPreview';
 import { fetchRfbSearchPage } from './rfbSearch';
 
@@ -7996,7 +7999,7 @@ function App() {
   const disparoDetalheRef = useRef(null);
   const [licitacaoLoading, setLicitacaoLoading] = useState(false);
   const [licitacaoSearch, setLicitacaoSearch] = useState('');
-  const [licitacaoSubview, setLicitacaoSubview] = useState('overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
+  const [licitacaoSubview, setLicitacaoSubview] = useState(() => readPncpPage().job ? 'editais' : 'overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [pncpPreviewLoading, setPncpPreviewLoading] = useState(false);
   const [pncpPreviewError, setPncpPreviewError] = useState('');
@@ -8095,6 +8098,28 @@ function App() {
   const [pncpSummaryExpanded, setPncpSummaryExpanded] = useState(false);
   const [pncpDiagnosticsExpanded, setPncpDiagnosticsExpanded] = useState(false);
   const [pncpJobModalOpen, setPncpJobModalOpen] = useState(false);
+  const [pncpNewSearchOpen, setPncpNewSearchOpen] = useState(false);
+  const closePncpNewSearch = useCallback(() => { setPncpNewSearchOpen(false); setPncpGuideJob(null); }, []);
+  const [pncpPage, setPncpPage] = useState(readPncpPage);
+  const [pncpPageError, setPncpPageError] = useState('');
+  const pncpMainScroll = useRef(null);
+  const pncpPageRequest = useRef(0);
+  const pncpJobOpenRequest = useRef(0);
+  const navigatePncpPage = (page) => {
+    window.history.replaceState({ ...window.history.state, pncpScroll: pncpMainScroll.current?.scrollTop || 0 }, '', window.location.href);
+    window.history.pushState({ pncpScroll: 0, pncpFrom: readPncpPage() }, '', pncpPageUrl(page));
+    setPncpPage(page);
+    if (pncpMainScroll.current) pncpMainScroll.current.scrollTop = 0;
+  };
+  const backToPncpResults = () => {
+    if (window.history.state?.pncpPreview) window.history.back();
+    else navigatePncpPage({ job: activePncpSearchJobId });
+  };
+  useEffect(() => {
+    const onPop = () => setPncpPage(readPncpPage());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [pncpJobModalTab, setPncpJobModalTab] = useState('resultados'); // resultados | termos | auditoria | descartados
   // Intenção semântica do job (query do embedding no rerank) — rascunho + save.
   const [pncpJobIntencaoDraft, setPncpJobIntencaoDraft] = useState(null); // null = não editado (usa o do job)
@@ -8326,7 +8351,7 @@ function App() {
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
-  const [activeView, setActiveView] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
+  const [activeView, setActiveView] = useState(() => readPncpPage().job ? 'Licitações' : new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
   const [ecommerceSubview, setEcommerceSubview] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'connections' : 'overview');
   const [processActiveSection, setProcessActiveSection] = useState(processBlueprint.map[0]?.id || 'metas-2026');
   const [processQuery, setProcessQuery] = useState('');
@@ -10773,7 +10798,7 @@ function App() {
   // Trava o scroll do body e Esc fecha o modal ativo (nova licitação ou detalhe).
   // Depend only on open/closed — NOT on the full selectedOpportunity object.
   // Re-running this on every keystroke was toggling body overflow and blurring inputs.
-  const hasSelectedOpportunityModal = Boolean(selectedOpportunity);
+  const hasSelectedOpportunityModal = Boolean(selectedOpportunity && !selectedOpportunity.__preview);
   useEffect(() => {
     const anyModal = showNewOpportunityForm || hasSelectedOpportunityModal;
     if (!anyModal) return undefined;
@@ -11240,25 +11265,30 @@ function App() {
     }
   };
 
-  const openPncpSearchJob = async (jobId, { refreshJobs = true, openModal = true } = {}) => {
+  const openPncpSearchJob = async (jobId, { refreshJobs = true, openModal = true, updateRoute = true } = {}) => {
     if (!jobId) return;
+    const openRequest = ++pncpJobOpenRequest.current;
     try {
       const response = await axios.get(`/api/licitacoes/pncp/search/deep/${jobId}`);
+      if (openRequest !== pncpJobOpenRequest.current) return;
+      const saved = !updateRoute && window.history.state?.pncpList?.job === String(jobId) ? window.history.state.pncpList : null;
       setActivePncpSearchJobId(jobId);
-      setPncpResultLocalQuery('');
-      setPncpResultScope('list');
-      pncpResultScopeRef.current = 'list';
-      setPncpJobModalTab('resultados');
-      pncpJobModalTabRef.current = 'resultados';
-      setPncpJobResultsPage(1);
-      pncpJobResultsPageRef.current = 1;
+      setPncpResultLocalQuery(saved?.query || '');
+      setPncpResultScope(saved?.scope || 'list');
+      pncpResultScopeRef.current = saved?.scope || 'list';
+      setPncpJobModalTab(saved?.tab || 'resultados');
+      pncpJobModalTabRef.current = saved?.tab || 'resultados';
+      setPncpJobResultsPage(saved?.page || 1);
+      pncpJobResultsPageRef.current = saved?.page || 1;
+      setPncpTechnicalFilter(saved?.technical || ''); pncpTechnicalFilterRef.current = saved?.technical || '';
+      if (saved) setPncpSearchFilters(prev => ({ ...prev, srp_only: saved.srp_only === true }));
       // Ordenação inicial do job (ou default); o user pode mudar depois sem o poll resetar.
-      const initialOrdenacao = response.data?.filters?.ordenacao || 'relevancia_desc';
+      const initialOrdenacao = saved?.sort || response.data?.filters?.ordenacao || 'relevancia_desc';
       setPncpJobResultsOrdenacao(initialOrdenacao);
       pncpJobResultsOrdenacaoRef.current = initialOrdenacao;
       setPncpJobFiltersEditing(false);
       seedPncpJobFilterDraft(response.data?.filters || {});
-      applyPncpJobSnapshot(response.data, { resetScope: true });
+      applyPncpJobSnapshot(response.data, { resetScope: !saved });
       setPncpSearchJobs(prev => {
         const next = {
           id: jobId,
@@ -11283,12 +11313,13 @@ function App() {
       });
       // Abre o popup imediatamente com o snapshot do job; a paginação do banco
       // (que pode esperar o gate do PNCP para enriquecer valores) atualiza depois.
-      if (openModal) setPncpJobModalOpen(true);
-      await loadPncpJobResults(jobId, 1).catch(err => console.warn('Erro ao paginar resultados do job:', err?.message));
+      if (openModal) { setPncpJobModalOpen(true); setPncpNewSearchOpen(false); setActiveView('Licitações'); setLicitacaoSubview('editais'); if (updateRoute && readPncpPage().job !== String(jobId)) navigatePncpPage({ job: String(jobId) }); }
+      await loadPncpJobResults(jobId, saved?.page || 1).catch(err => console.warn('Erro ao paginar resultados do job:', err?.message));
       try {
         localStorage.setItem('pncp_active_search_job_id', jobId);
       } catch {}
       if (refreshJobs) loadPncpSearchJobs();
+      return response.data;
     } catch (error) {
       console.error('Error opening PNCP job:', error);
       if (error.response?.status === 404) {
@@ -11302,6 +11333,9 @@ function App() {
   };
 
   const closePncpSearchJobModal = () => {
+    if (window.history.state?.pncpFrom && !window.history.state.pncpFrom.job) window.history.back();
+    else navigatePncpPage({});
+    setSelectedOpportunity(null);
     setPncpJobModalOpen(false);
     setPncpJobFiltersEditing(false);
     setPncpJobHeaderExpanded(false);
@@ -11601,6 +11635,7 @@ function App() {
         suggested_negative_terms: pncpSuggestedTerms.negativos || [],
       });
       const jobId = response.data?.job_id;
+      if (jobId) setPncpNewSearchOpen(false);
       setActivePncpSearchJobId(jobId || null);
       if (jobId) {
         try {
@@ -12390,14 +12425,7 @@ function App() {
     };
   }, [authStatus.authenticated, pncpSearchFilters.q, pncpSearchFilters.usar_ia]);
 
-  useEffect(() => {
-    if (!pncpJobModalOpen) return undefined;
-    const onKey = (event) => {
-      if (event.key === 'Escape' && !selectedOpportunity) closePncpSearchJobModal();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [pncpJobModalOpen, selectedOpportunity]);
+
 
   useEffect(() => {
     if (!pncpDeleteJobConfirm) return undefined;
@@ -12775,9 +12803,13 @@ function App() {
     return allItems;
   };
 
-  const previewPncpOpportunity = async (item, focus = null) => {
+  const previewPncpOpportunity = async (item, focus = null, options = {}) => {
     const request = ++pncpPreviewRequest.current;
-    const profile = activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] };
+    const profile = options.profile || activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] };
+    if (options.updateRoute !== false) {
+      navigatePncpPage({ job: String(activePncpSearchJobId), result: item.__result_key || item.numero_controle_pncp || item.id, item: focus?.number, product: focus?.productId });
+      window.history.replaceState({ ...window.history.state, pncpPreview: true }, '', window.location.href);
+    }
     setSelectedOpportunity(createPncpOpportunityPreview(item, profile, focus));
     setSelectedItems(mapPncpImportItemsToDraft(item.itens_pertinentes || []));
     setItemRequirementsMap({}); setSelectedCommercialRequirements([]); setSelectedLinkedContacts([]); setSelectedComments([]);
@@ -12789,6 +12821,63 @@ function App() {
       if (request === pncpPreviewRequest.current) setPncpPreviewError('Não foi possível carregar todos os itens. Os itens disponíveis continuam abaixo.');
     } finally { if (request === pncpPreviewRequest.current) setPncpPreviewLoading(false); }
   };
+
+
+  useEffect(() => {
+    if (!authStatus.authenticated) return;
+    let cancelled = false;
+    const request = ++pncpPageRequest.current;
+    const restore = async () => {
+      setPncpPageError('');
+      if (!pncpPage.job) {
+        pncpJobOpenRequest.current++;
+        setPncpJobModalOpen(false); setSelectedOpportunity(current => current?.__preview ? null : current);
+        requestAnimationFrame(() => { if (!cancelled && pncpMainScroll.current) pncpMainScroll.current.scrollTop = window.history.state?.pncpScroll || 0; });
+        return;
+      }
+      setActiveView('Licitações'); setLicitacaoSubview('editais'); setPncpJobModalOpen(true);
+      let snapshot;
+      if (String(activePncpSearchJobId) !== pncpPage.job || !activePncpSearchJob) snapshot = await openPncpSearchJob(pncpPage.job, { refreshJobs: false, updateRoute: false });
+      if (cancelled || request !== pncpPageRequest.current) return;
+      if (pncpPage.result) {
+        const current = selectedOpportunity?.__preview;
+        if (String(current?.__result_key || current?.numero_controle_pncp || current?.id) !== pncpPage.result) {
+          setSelectedOpportunity(value => value?.__preview ? null : value);
+          const response = await axios.get('/api/licitacoes/pncp/search/deep/' + encodeURIComponent(pncpPage.job) + '/result', { params: { key: pncpPage.result } });
+          if (cancelled || request !== pncpPageRequest.current) return;
+          await previewPncpOpportunity(response.data, { number: pncpPage.item, productId: pncpPage.product }, { updateRoute: false, profile: snapshot?.filters?.search_profile });
+        }
+      } else {
+        setSelectedOpportunity(current => current?.__preview ? null : current);
+        const saved = window.history.state?.pncpList;
+        if (!snapshot && saved?.job === pncpPage.job) {
+          setPncpResultLocalQuery(saved.query || ''); setPncpResultScope(saved.scope || 'list'); pncpResultScopeRef.current = saved.scope || 'list';
+          setPncpJobModalTab(saved.tab || 'resultados'); pncpJobModalTabRef.current = saved.tab || 'resultados';
+          setPncpJobResultsPage(saved.page || 1); pncpJobResultsPageRef.current = saved.page || 1;
+          setPncpJobResultsOrdenacao(saved.sort || 'relevancia_desc'); pncpJobResultsOrdenacaoRef.current = saved.sort || 'relevancia_desc';
+          setPncpTechnicalFilter(saved.technical || ''); pncpTechnicalFilterRef.current = saved.technical || '';
+          setPncpSearchFilters(prev => ({ ...prev, srp_only: saved.srp_only === true }));
+          await loadPncpJobResults(pncpPage.job, saved.page || 1);
+        }
+      }
+      if (!pncpPage.item) requestAnimationFrame(() => { if (!cancelled && pncpMainScroll.current) pncpMainScroll.current.scrollTop = window.history.state?.pncpScroll || 0; });
+    };
+    restore().catch(error => { if (!cancelled) setPncpPageError(error.response?.data?.error || 'Não foi possível abrir esta página.'); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus.authenticated, pncpPage]);
+
+  useEffect(() => {
+    if (!pncpJobModalOpen || !activePncpSearchJob || readPncpPage().result) return;
+    window.history.replaceState({ ...window.history.state, pncpList: { job: String(activePncpSearchJobId), query: pncpResultLocalQuery, scope: pncpResultScope, tab: pncpJobModalTab, page: pncpJobResultsPage, sort: pncpJobResultsOrdenacao, technical: pncpTechnicalFilter, srp_only: pncpSearchFilters.srp_only } }, '', window.location.href);
+  }, [pncpJobModalOpen, activePncpSearchJobId, activePncpSearchJob, pncpResultLocalQuery, pncpResultScope, pncpJobModalTab, pncpJobResultsPage, pncpJobResultsOrdenacao, pncpTechnicalFilter, pncpSearchFilters.srp_only]);
+
+  useEffect(() => {
+    if (activeView === 'Licitações' && licitacaoSubview === 'editais') return;
+    if (!readPncpPage().job) return;
+    window.history.replaceState({}, '', pncpPageUrl({}));
+    setPncpPage({});
+  }, [activeView, licitacaoSubview]);
 
   // Importar licitação do PNCP para criar uma oportunidade
   const importPncpLicitacao = async (item) => {
@@ -15962,6 +16051,7 @@ function App() {
 
           <VerticalScrollArrows
             className="min-h-0 flex-1"
+            contentRef={pncpMainScroll}
             contentClassName="px-3 sm:px-4 pb-[max(3rem,env(safe-area-inset-bottom))] md:px-6 lg:px-8"
             remeasureKey={`${activeView}:${licitacaoSubview || ''}:${ecommerceSubview}:${activeTab || ''}`}
           >
@@ -16499,9 +16589,16 @@ function App() {
               <>
               {licitacaoSubview === 'editais' && (
               <>
-              {/* PNCP Search — formulário cria job; cards listam jobs; detalhe + resultados no popup */}
-              <div className="mt-6 space-y-5">
-                <div className="rounded-[16px] border border-line bg-surf p-4 md:p-5 space-y-4">
+              {pncpPageError && <div role="alert" className="my-4 rounded-xl border border-status-warning p-4 text-sm text-ink">{pncpPageError}<button type="button" className="ml-4 text-primary underline" onClick={() => navigatePncpPage({ job: activePncpSearchJobId })}>Voltar aos resultados</button></div>}
+              {pncpPage.result && !selectedOpportunity?.__preview && !pncpPageError && <div role="status" className="my-5 rounded-xl border border-line bg-surf p-6 text-sm text-muted">Carregando o edital e suas análises…</div>}
+              {selectedOpportunity?.__preview && <PncpNoticePage opportunity={selectedOpportunity} jobName={activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q} items={selectedItems} loading={pncpPreviewLoading} error={pncpPreviewError}
+                onBack={backToPncpResults} onSearches={() => navigatePncpPage({})}
+                canImport={canEditPage('Licitações') && selectedOpportunity.__preview.__visibility !== 'pipeline' && selectedOpportunity.__preview.__visibility_db !== 'pipeline'}
+                onImport={() => { const item = selectedOpportunity.__preview; setSelectedOpportunity(null); pncpPreviewRequest.current++; navigatePncpPage({ job: activePncpSearchJobId }); importPncpLicitacao(item); }} />}
+              {/* Criação em diálogo; listagem e resultados em páginas. */}
+              <div className={pncpJobModalOpen || selectedOpportunity?.__preview ? 'hidden' : 'mt-6 space-y-5'}>
+                {(pncpNewSearchOpen || pncpGuideJob) && <PncpSearchDialog onClose={closePncpNewSearch}>
+                <div className="space-y-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h3 className={`${sectionTitle} text-base`}>Nova busca de editais</h3>
@@ -16527,13 +16624,13 @@ function App() {
                       unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
                       negative_terms: pncpSearchFilters.negative_terms,
                     }} activating={pncpSearchLoading}
-                    onCancel={pncpGuideJob ? () => setPncpGuideJob(null) : undefined}
+                    onCancel={closePncpNewSearch}
                     onActivate={async profile => {
                       if (pncpGuideJob) {
                         setPncpSearchLoading(true);
                         try {
                           await axios.put('/api/licitacoes/pncp/search/deep/' + pncpGuideJob.id + '/profile', { profile });
-                          setPncpGuideJob(null); await loadPncpSearchJobs();
+                          setPncpGuideJob(null); setPncpNewSearchOpen(false); await loadPncpSearchJobs();
                         } catch (e) { alert(e.response?.data?.error || 'Não foi possível salvar os critérios.'); }
                         finally { setPncpSearchLoading(false); }
                       } else {
@@ -16684,6 +16781,7 @@ function App() {
                   )}
                 </div>
 
+                </PncpSearchDialog>}
                 <div>
                   <div className="flex flex-wrap items-end justify-between gap-2">
                     <div className="min-w-0">
@@ -16694,16 +16792,17 @@ function App() {
                         {pncpSearchJobs.some(j => isPncpJobLive(j.status)) ? ' · Atualizando status ao vivo…' : ''}
                       </p>
                     </div>
+                    <div className="flex gap-2"><button type="button" onClick={() => setPncpNewSearchOpen(true)} className={btnPrimarySm}><PlusIcon className="h-4 w-4" /> Nova busca</button>
                     <button type="button" onClick={loadPncpSearchJobs} className={`${btnSecondarySm}`}>
                       <ArrowPathIcon className="h-3.5 w-3.5" /> Atualizar
-                    </button>
+                    </button></div>
                   </div>
 
                   {pncpSearchJobs.length === 0 ? (
                     <div className="mt-3 rounded-[14px] border border-dashed border-line bg-surf/60 px-4 py-10 text-center">
                       <p className="text-sm font-semibold text-ink">Nenhuma busca ainda</p>
                       <p className={`${subtle} mt-1 mx-auto max-w-md`}>
-                        Monte os termos e filtros acima e clique em <strong>Iniciar busca</strong>. O job fica salvo e continua coletando até terminar.
+                        Clique em <strong>Nova busca</strong> para definir o que procura. A busca fica salva e coleta novas oportunidades automaticamente.
                       </p>
                     </div>
                   ) : (
@@ -16992,15 +17091,11 @@ function App() {
               )}
 
               {/* Popup do job: resultados e detalhe — portal fora do layout dos cards */}
-              {pncpJobModalOpen && activePncpSearchJobId && createPortal(
-                <div className={modalOverlay} onClick={closePncpSearchJobModal} role="presentation">
-                  <div
-                    className="flex w-full max-w-6xl max-h-[min(92dvh,100%)] flex-col overflow-hidden rounded-t-[16px] border border-border bg-card shadow-lift sm:rounded-[16px] dark:bg-[#111827] dark:border-[#1f2937]"
-                    onClick={(event) => event.stopPropagation()}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Detalhe da busca de editais"
-                  >
+              {pncpJobModalOpen && activePncpSearchJobId && (
+                <section className={selectedOpportunity?.__preview || pncpPage.result ? 'hidden' : 'mx-auto w-full max-w-7xl py-5'} aria-label="Detalhe da busca de editais">
+                  <nav aria-label="Breadcrumb" className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted"><span>Licitações</span><span aria-hidden="true">/</span><button type="button" className="text-primary hover:underline" onClick={closePncpSearchJobModal}>Buscas</button><span aria-hidden="true">/</span><span aria-current="page">{activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q || 'Resultados'}</span></nav>
+                  <button type="button" onClick={closePncpSearchJobModal} className="mb-4 text-sm font-semibold text-primary hover:underline">← Voltar às buscas</button>
+                  <div className="rounded-xl border border-line bg-surf">
                     {(() => {
                       const job = activePncpSearchJob;
                       const meta = getPncpJobStatusMeta(job?.status);
@@ -17113,9 +17208,6 @@ function App() {
                                   {headerExpanded
                                     ? <ChevronUpIcon className="h-4 w-4" />
                                     : <ChevronDownIcon className="h-4 w-4" />}
-                                </button>
-                                <button type="button" onClick={closePncpSearchJobModal} className={`${iconBtn} h-8 w-8 shrink-0`} aria-label="Fechar">
-                                  <XMarkIcon className="h-5 w-5" />
                                 </button>
                               </div>
                             </div>
@@ -17368,7 +17460,7 @@ function App() {
                             </div>
                           </div>
 
-                          <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="px-3 py-2.5 sm:px-4 sm:py-3">
+                          <div className="px-3 py-2.5 sm:px-4 sm:py-3">
                             {pncpJobModalTab === 'termos' && (() => {
                               const partidaChips = getPncpPartidaFilterChips(job?.filters || {}, {
                                 modalidades: modalidadeOptions,
@@ -18222,7 +18314,8 @@ function App() {
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
                                             <SearchEvidence item={item} />
-                                            <TechnicalResult item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, { number: String(number), productId: productId == null ? null : String(productId) })} />
+                                            <button type="button" className="mt-2 text-xs font-semibold text-primary underline" onClick={() => previewPncpOpportunity(item)}>Ver edital e comparação</button>
+                                            <TechnicalResult compact item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, number == null ? null : { number: String(number), productId: productId == null ? null : String(productId) })} />
                                             <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
                                               {item.orgao?.nome || 'n/d'}
@@ -18367,13 +18460,12 @@ function App() {
                                 )}
                               </div>
                             )}
-                          </VerticalScrollArrows>
+                          </div>
                         </>
                       );
                     })()}
                   </div>
-                </div>,
-                document.body
+                </section>
               )}
               </>
               )}
@@ -18929,7 +19021,7 @@ function App() {
               </div>
               </div>
 
-              {selectedOpportunity && createPortal(
+              {selectedOpportunity && !selectedOpportunity.__preview && createPortal(
                 <div
                   className="fixed inset-0 z-modal flex items-center justify-center p-2 sm:p-4"
                   role="dialog"

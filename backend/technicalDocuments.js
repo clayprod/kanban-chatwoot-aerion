@@ -89,9 +89,12 @@ async function extract(bytes, filename, contentType = '') {
 }
 function chunksForSource(source, size = 6500) {
   const chunks = [];
-  for (const page of source.pages || []) {
+  for (const [index, page] of (source.pages || []).entries()) {
     for (let start = 0; start < page.text.length; start += size - 300) {
-      chunks.push({ source_id: source.id, location: page.location, text: page.text.slice(start, start + size), chunk: chunks.length });
+      chunks.push({ source_id: source.id, location: page.location, text: page.text.slice(start, start + size),
+        // Context helps associate continuation tables; quotations must still be
+        // found in this chunk's text, never in context supplied only as a hint.
+        context_before: start ? page.text.slice(Math.max(0, start - 1200), start) : (source.pages[index - 1]?.text || '').slice(-1200), chunk: chunks.length });
       if (start + size >= page.text.length) break;
     }
   }

@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const VERSION = 2;
+const VERSION = 3;
 const text = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(v)).digest('hex');
 const commercialUnit = v => ({ un: 'unit', unidade: 'unit', unidades: 'unit', unit: 'unit', units: 'unit', und: 'unit', peca: 'unit', pecas: 'unit' }[text(v)] || text(v));
@@ -14,8 +14,17 @@ const UNITS = {
   'm/s': ['speed', 1], 'km/h': ['speed', [5, 18]], kph: ['speed', [5, 18]],
   second: ['time', 1], seconds: ['time', 1], minute: ['time', 60], minutes: ['time', 60], hour: ['time', 3600], hours: ['time', 3600],
   wh: ['energy', 1], kwh: ['energy', 1000],
+  kb: ['storage', 1000], mb: ['storage', 1000000], gb: ['storage', 1000000000], tb: ['storage', 1000000000000],
+  bateria: ['battery_count', 1], baterias: ['battery_count', 1], battery: ['battery_count', 1], batteries: ['battery_count', 1],
 };
-const unitInfo = value => UNITS[text(value)] || [/^[a-z]+$/.test(text(value)) ? `literal:${text(value).replace(/s$/, '')}` : `unsupported:${text(value)}`, 1];
+const sourceNumbers = quote => String(quote || '').match(/-?\d+(?:[.,]\d+)*/g) || [];
+const parseSourceNumber = value => /^-?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(value) ? Number(value.replace(/\./g, '').replace(',', '.')) : Number(value.replace(',', '.'));
+const unitInfo = value => {
+  // Storage bytes (B) and bits (b) are case-sensitive, unlike Hz/hz.
+  const bitScale = { kb: 125, mb: 125000, gb: 125000000, tb: 125000000000 };
+  if (String(value).trim().endsWith('b') && bitScale[text(value)]) return ['storage', bitScale[text(value)]];
+  return UNITS[text(value)] || [/^[a-z]+$/.test(text(value)) ? `literal:${text(value).replace(/s$/, '')}` : `unsupported:${text(value)}`, 1];
+};
 function evidenceValid(fact, sources) {
   if (!fact || !fact.source_id || !fact.quote || !fact.location) return false;
   const source = sources.find(s => String(s.id) === String(fact.source_id));
@@ -23,14 +32,14 @@ function evidenceValid(fact, sources) {
 }
 function quotedNumber(fact, value) {
   if (number(value) === null) return false;
-  const nums = String(fact.quote || '').match(/-?\d+(?:[.,]\d+)?/g) || [];
-  return nums.some(n => Number(n.replace(',', '.')) === value);
+  return sourceNumbers(fact.quote).some(n => parseSourceNumber(n) === value);
 }
 function numericFactValid(fact, requirement = false) {
   if (!fact || !text(fact.key) || !text(fact.unit) || !quotedNumber(fact, fact.value)) return false;
   const expected = unitInfo(fact.unit);
-  const measurements = [...text(fact.quote).matchAll(/(-?\d+(?:[.,]\d+)?)\s*([a-z%°]+(?:[²³23])?(?:\/[a-z]+)?)/g)];
-  if (!measurements.some(m => (Number(m[1].replace(',', '.')) === fact.value || (requirement && fact.operator === 'range' && Number(m[1].replace(',', '.')) === fact.upper)) && unitInfo(m[2])[0] === expected[0] && String(unitInfo(m[2])[1]) === String(expected[1]))) return false;
+  const literal = String(fact.quote).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/(\d)\s*\([^)]*\)\s*(?=[a-z%°])/gi, '$1 ');
+  const measurements = [...literal.matchAll(/(-?\d+(?:[.,]\d+)*)\s*([a-z%°]+(?:[²³23])?(?:\/[a-z]+)?)/gi)];
+  if (!measurements.some(m => (parseSourceNumber(m[1]) === fact.value || (requirement && fact.operator === 'range' && parseSourceNumber(m[1]) === fact.upper)) && unitInfo(m[2])[0] === expected[0] && String(unitInfo(m[2])[1]) === String(expected[1]))) return false;
   if (fact.conditions && !text(fact.conditions).split(/[;|]/).every(c => text(fact.quote).includes(c.trim()))) return false;
   if (!fact.conditions && /\b(?:sem (?:vento|carga)|com carga|fcc|ce)\b/.test(text(fact.quote))) return false;
   if (!requirement) return true;
@@ -120,8 +129,13 @@ function compareRequirement(req, specs, sources, mapping = {}) {
   // A qualitative equivalence is not a licence to relax an exact requirement.
   // Only identical, explicitly extracted categorical values are auto-confirmed.
   if (req.kind === 'categorical' && req.value != null && selected.every(s => s.value != null && text(s.key) === text(req.key) && text(s.conditions) === text(req.conditions))) {
-    const values = new Set(selected.map(s => text(s.value)));
-    if (values.size === 1 && values.has(text(req.value)) && selected.every(s => text(s.quote).includes(text(s.value))) && text(req.quote).includes(text(req.value))) {
+    const categorical = fact => {
+      const v = text(fact.value);
+      if (fact.key === 'motor_type' && /^(brushless|motores? eletricos? sem escova|motores? sem escova|sem escova)$/.test(v)) return 'brushless';
+      return v;
+    };
+    const values = new Set(selected.map(categorical));
+    if (values.size === 1 && values.has(categorical(req)) && selected.every(s => text(s.quote).includes(text(s.value))) && text(req.quote).includes(text(req.value))) {
       return { ...base, status: 'ok', reason: 'Característica explicitamente comprovada nas fontes.' };
     }
     // Different names/standards may be equivalent; a model assertion is insufficient.
@@ -144,7 +158,7 @@ function assessProduct(product, requirements, sources, mappings = [], complete =
   const comparable = sameUnit && reference > 0 && price > 0 && product.package_confirmed === true;
   const technical = !complete ? 0 : full ? 20 : counts.nao_ok ? 0 : counts.total ? 8 * counts.ok / counts.total : 0;
   const commercial = full && comparable ? price < reference ? 5 : price === reference ? 3 : 1 : 0;
-  return { product_id: product.id, product_name: product.name, sale_price: price, product_version: product.version,
+  return { product_id: product.id, product_name: product.name, sale_price: price, product_version: product.version, specs_complete: product.specs_complete === true,
     price_rankable: sameUnit && product.package_confirmed === true && price > 0,
     status, counts, requirements: rows, technical_bonus: technical, commercial_bonus: commercial,
     price_comparison: comparable ? { reference, offered: price, difference: price - reference, relation: price < reference ? 'below' : price === reference ? 'equal' : 'above' } : null };
@@ -154,10 +168,7 @@ function summarize(items, baseScore = 0) {
   const weighted = relevant.length > 0 && relevant.every(i => Number(i.reference_price) > 0 && Number(i.quantity) > 0);
   let weightSum = 0, technical = 0, commercial = 0;
   const result = items.map(item => {
-    const products = [...(item.products || [])].sort((a, b) => {
-      const rank = v => v.status === 'full' ? 0 : v.status === 'uncertain' ? 1 : 2;
-      return rank(a) - rank(b) || (a.status === 'full' ? Number(b.price_rankable !== false) - Number(a.price_rankable !== false) : b.counts.ok / (b.counts.total || 1) - a.counts.ok / (a.counts.total || 1)) || (a.status === 'full' && a.price_rankable === false && b.price_rankable === false ? 0 : a.sale_price - b.sale_price) || Number(a.product_id) - Number(b.product_id);
-    });
+    const products = [...(item.products || [])].sort(rankMatches);
     const recommended = products.find(p => p.status === 'full') || null;
     const potential = recommended || products.find(p => p.status === 'uncertain') || null;
     if (item.in_scope) {
@@ -172,4 +183,9 @@ function summarize(items, baseScore = 0) {
     base_score: Number(baseScore) || 0, technical_bonus: technical, commercial_bonus: commercial,
     score: Math.min(100, Math.round((Number(baseScore) || 0) + technical + commercial)), weighting: weighted ? 'reference_value' : 'equal' };
 }
-module.exports = { VERSION, text, hash, commercialUnit, evidenceValid, quotedNumber, compareNumeric, compareCompound, compareRequirement, assessProduct, summarize, guardLegacyRequirement };
+function rankMatches(a, b) {
+  const ratio = p => p.counts?.total > 0 ? p.counts.ok / p.counts.total : 0;
+  const price = p => p.price_rankable !== false && Number(p.sale_price) > 0 ? Number(p.sale_price) : Infinity;
+  return Number(b.status === 'full') - Number(a.status === 'full') || ratio(b) - ratio(a) || price(a) - price(b) || String(a.product_id).localeCompare(String(b.product_id), 'en', { numeric: true });
+}
+module.exports = { VERSION, text, hash, commercialUnit, evidenceValid, quotedNumber, compareNumeric, compareCompound, compareRequirement, assessProduct, summarize, guardLegacyRequirement, rankMatches };

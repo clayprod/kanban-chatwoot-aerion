@@ -13934,6 +13934,20 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId', async (req, res) => {
   });
 });
 
+// Deep-link preview: account scoped and independent of current pagination.
+app.get('/api/licitacoes/pncp/search/deep/:jobId/result', async (req, res) => {
+  try {
+    const accountId = getAccountId(req);
+    const job = await loadPncpDeepJob(req.params.jobId, accountId);
+    if (!job) return res.status(404).json({ error: 'Busca não encontrada.' });
+    const key = String(req.query.key || '').slice(0, 2000);
+    const row = (await pool.query(`SELECT payload,visibility,result_key,quality_review FROM ${PNCP_SEARCH_JOB_RESULTS_TABLE}
+      WHERE job_id=$1 AND account_id=$2 AND result_key=$3`, [job.id, accountId, key])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Resultado não encontrado nesta busca.' });
+    res.json({ ...row.payload, __result_key: row.result_key, __visibility_db: row.visibility, ...(row.quality_review ? { search_quality: row.quality_review } : {}) });
+  } catch (error) { res.status(400).json({ error: 'Não foi possível abrir o resultado.' }); }
+});
+
 app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
   try {
     const accountId = getAccountId(req);

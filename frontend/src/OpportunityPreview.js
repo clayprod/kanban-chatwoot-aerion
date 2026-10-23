@@ -23,7 +23,7 @@ export default function OpportunityPreview({ opportunity, items = [], loading, e
     </section>
     <section className={sectionClass}>
       <h4 className="text-sm font-semibold">Análise técnica e produtos</h4>
-      <TechnicalResult item={raw} profile={opportunity.__profile} onOpenMatch={select} />
+      <TechnicalResult overview expanded item={raw} profile={opportunity.__profile} onOpenMatch={select} />
     </section>
     <section className={sectionClass}>
       <h4 className="mb-3 border-b border-line pb-2 text-sm font-semibold">Itens de participação</h4>

@@ -7,7 +7,7 @@ const { createTechnicalTables, createTechnicalAnalysis, technicalFilterClause } 
 const { seedTechnicalCatalog } = require('../technicalCatalogSeed');
 const docs = require('../technicalDocuments');
 test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget, isolation and seed',
-  { skip: !process.env.QUALITY_TEST_DATABASE_URL, timeout: 120000 }, async () => {
+  { skip: !process.env.QUALITY_TEST_DATABASE_URL, timeout: 300000 }, async () => {
     const admin = new Pool({ connectionString: process.env.QUALITY_TEST_DATABASE_URL });
     const schema = `technical_test_${process.pid}`; let pool, server;
     try {
@@ -22,7 +22,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       let calls = 0, downloads = 0, filesRevision = 0;
       const input = { titulo: 'Compra de drones', orgao_cnpj: '12345678000195', ano: '2026', sequencial: '1', score: 75, open: true, numero_controle_pncp: '12345678000195-1-000001/2026' };
       const getIds = i => ({ cnpj: i.orgao_cnpj || '', ano: i.ano || '', sequencial: i.sequencial || '' });
-      const dependencies = { pool, getAccountId: req => Number(req.headers['x-test-account'] || 1), getIds,
+      const dependencies = { pool, workerLockKey: 10000000 + process.pid, getAccountId: req => Number(req.headers['x-test-account'] || 1), getIds,
         getNotice: async () => ({ open: true }),
         getItems: async () => Object.assign([{ numeroItem: 1, descricao: 'Drone profissional', quantidade: 2, unidadeMedida: 'UNIDADE', valorUnitarioEstimado: 120 }], { complete: true, nextPage: null }),
         getFiles: async () => [{ titulo: 'Termo.txt', url: 'https://example.org/termo.txt', dataAtualizacao: filesRevision }],
@@ -51,7 +51,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const attached = await request('POST', `${base}/products/${product.id}/sources`, { name: 'Ficha A.txt', text: 'Ficha do Drone A. Autonomia de 40 min. Dados técnicos da variante A.' });
       assert.equal(attached.status, 202);
       for (let n = 0; n < 4; n++) await service.tick();
-      const p = (await request('GET', `${base}/products`)).data[0]; assert.equal(p.specs.length, 1); assert.equal(p.specs_complete, true);
+      const p = (await request('GET', `${base}/products`)).data[0]; assert.equal(p.specs.length, 1, JSON.stringify(p.processing)); assert.equal(p.specs_complete, true);
       assert.equal((await request('GET', `${base}/products`, null, 2)).data.length, 0);
       assert.equal((await request('GET', `${base}/technical/sources/${attached.data.source.id}`, null, 2)).status, 404);
       await request('PUT', `${base}/technical/config`, { enabled: true, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
@@ -170,7 +170,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       await service.tick();
       await service.tick();
       const waiting = await pool.query("SELECT status,error FROM technical_jobs WHERE account_id=1 AND kind='product' ORDER BY id DESC LIMIT 1");
-      assert.equal(waiting.rows[0].status, 'queued'); assert.match(waiting.rows[0].error, /Limite diário/);
+      assert.equal(waiting.rows[0].status, 'queued'); assert.match(waiting.rows[0].error, /Limite diário|Teto diário insuficiente/);
 
       const legacy = (await pool.query("INSERT INTO technical_products(account_id,name,sale_price,source_key) VALUES(77,'Kit antigo',30000,'aerion-store:102003506') RETURNING id")).rows[0];
       const seeded = await seedTechnicalCatalog(pool, 77); assert.equal(seeded.inserted, 19);
@@ -228,6 +228,59 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const revised = await service.observe(1, { ...input, dataAtualizacao: '2026-10-20T10:00:00Z' }, { terms: ['drone'] });
       assert.notEqual(revised.id, jobId);
       assert.equal((await service.observe(1, input, { terms: ['drone'] })).id, revised.id);
+
+      // Broad local triage is inexpensive; only three products per item need
+      // deeper matching. Identical item descriptions are legal quota lots.
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      let scopedConflict = false;
+      const shortlistService = createTechnicalAnalysis({ ...dependencies,
+        getItems: async () => Object.assign([1,2].map(numeroItem => ({numeroItem,descricao:'Drone profissional',quantidade:1,unidadeMedida:'UNIDADE',valorUnitarioEstimado:120})), {complete:true,nextPage:null}),
+        ai: async args => {
+          const result = await dependencies.ai(args);
+          if (JSON.parse(args.user).context?.items) {
+            result.data.facts.forEach(f => { f.item_number='all'; f.category='equipment'; });
+            if (scopedConflict) { result.data.complete=false; result.data.conflicts=[{item_numbers:['1'],message:'Condição do item 1 requer revisão.'}]; }
+          }
+          return result;
+        }
+      });
+      for (const [n,price] of [[41,500],[44,200],[42,100],[45,300],[40,10]]) {
+        const p = (await request('POST', `${base}/products`, {name:`Drone ${n}`,keywords:['drone'],sale_price:price,unit:'un',package_confirmed:true},91)).data;
+        await request('POST', `${base}/products/${p.id}/sources`, {text:`Autonomia de ${n} min.`},91);
+      }
+      for(let n=0;n<15;n++) await shortlistService.tick();
+      await request('PUT', `${base}/technical/config`, {enabled:true,min_score:68,daily_limit:30,daily_tokens:2000000},91);
+      const selected = await shortlistService.observe(91,input,{terms:['drone']});
+      for(let n=0;n<20;n++) await shortlistService.tick();
+      let selectedResult=(await request('GET',`${base}/technical/jobs/${selected.id}`,null,91)).data;
+      assert.equal(selectedResult.result.items.length,2);
+      for(const i of selectedResult.result.items) {
+        assert.equal(i.candidate_count,5); assert.equal(i.products.length,3);
+        assert.deepEqual(i.products.map(p=>p.sale_price),[100,200,300]);
+        assert.equal(i.requirements.length,1); assert.equal(i.recommended_product.sale_price,100);
+      }
+      const settled=(await pool.query('SELECT tokens,actual_tokens FROM technical_usage WHERE account_id=91')).rows[0];
+      assert.equal(settled.tokens,settled.actual_tokens);
+      assert.equal((await request('POST',`${base}/technical/jobs/${selected.id}/more`,{item_number:'1'},92)).status,404);
+      assert.equal((await request('POST',`${base}/technical/jobs/${selected.id}/more`,{item_number:'1'},91)).data.queued,2);
+      assert.equal((await request('POST',`${base}/technical/jobs/${selected.id}/more`,{item_number:'1'},91)).status,400);
+      for(let n=0;n<8;n++) await shortlistService.tick();
+      selectedResult=(await request('GET',`${base}/technical/jobs/${selected.id}`,null,91)).data;
+      assert.equal(selectedResult.result.items[0].products.length,5);
+      assert.equal(selectedResult.result.items[1].products.length,3);
+      assert.equal(selectedResult.result.items[0].products.at(-1).status,'failed');
+      // Updating the extraction rules reuses verified downloads after checking
+      // the manifest. A scoped conflict does not invalidate the other quota lot.
+      const downloadsBeforeRevision=downloads; scopedConflict=true;
+      await pool.query("DELETE FROM technical_extractions WHERE account_id=91 AND kind='notice'");
+      await pool.query("UPDATE technical_jobs SET context=jsonb_set(context,'{rules_version}','2'),state=jsonb_set(state,'{extraction_format}','2') WHERE id=$1",[selected.id]);
+      const scopedJob=await shortlistService.observe(91,input,{terms:['drone','rpa']});
+      for(let n=0;n<20;n++) await shortlistService.tick();
+      const scopedResult=(await request('GET',`${base}/technical/jobs/${scopedJob.id}`,null,91)).data.result;
+      assert.equal(downloads,downloadsBeforeRevision);
+      assert.equal(scopedResult.documents_complete,false);assert.equal(scopedResult.full_items,1);
+      assert.equal(scopedResult.items[0].documents_complete,false);
+      assert.equal(scopedResult.items[1].documents_complete,true);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();
