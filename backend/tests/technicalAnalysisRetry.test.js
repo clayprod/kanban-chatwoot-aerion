@@ -66,7 +66,7 @@ test('resumed metadata request advances to documents using the same analysis', a
   assert.equal(job.stage, 'documents');
   assert.equal(job.state.initialized, true);
   assert.equal(queries.filter(q => q.sql.includes('SET state=')).length, 3);
-  assert.equal(queries.filter(q => q.sql.includes('INSERT INTO technical_usage')).length, 1);
+  assert.equal(queries.filter(q => q.sql.includes('INSERT INTO technical_usage')).length, 0);
 });
 
 test('PNCP terminated sockets and download disconnects wait without skipping evidence', async () => {
@@ -95,11 +95,12 @@ test('a failure listing items does not discard a successful notice request', asy
   assert.equal(job.state.initialized, true); assert.equal(notices, 1); assert.equal(items, 2);
 });
 
-test('the account daily limit is never mislabeled as PNCP throttle', async () => {
-  const { service, queries } = worker({ notice_checked: true, items_loaded: true }, {
+test('metadata and downloads are not blocked by an AI notice budget before any AI request', async () => {
+  const { service, job, queries } = worker({ notice_checked: true, items_loaded: true }, {
     getFiles: async () => [], isPncpThrottleError: e => /limite/i.test(e.message),
   }, { enabled: true, daily_limit: 0 });
   await service.tick();
   assert.equal(queries.some(q => q.sql.includes("stage='waiting_pncp'")), false);
-  assert.ok(queries.some(q => q.sql.includes("::date+1") && /Limite diário/.test(q.args?.[1])));
+  assert.equal(job.state.initialized,true);
+  assert.equal(queries.some(q => q.sql.includes('INSERT INTO technical_usage')),false);
 });

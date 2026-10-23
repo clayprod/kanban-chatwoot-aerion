@@ -62,13 +62,24 @@ export function ProductMatchChips({ items = [], onSelect, documentsComplete }) {
     })}
   </div>;
 }
+export function ItemCompatibilitySummary({ item, documentsComplete }) {
+  const product = item?.recommended_product || item?.potential_product || item?.products?.[0] || item?.product_matches?.[0];
+  if (!product) return <span className="mt-1 block text-xs font-normal text-muted">Compatibilidade: aguardando análise</span>;
+  const current = product.evidence_current !== false;
+  const full = current && product.status === 'full' && (item.documents_complete ?? documentsComplete) !== false;
+  const status = full ? 'full' : current && product.status === 'failed' ? 'failed' : 'uncertain';
+  const percent = current && product.counts?.total > 0 ? Math.floor(product.counts.ok / product.counts.total * 100) : null;
+  return <span className={`mt-1 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2 py-1 text-xs ${full ? 'border-status-success/40 bg-status-success/5 text-status-success font-semibold' : 'border-line text-muted font-normal'}`}>
+    <span>{product.product_name}</span><span className="font-semibold tabular-nums">{percent == null ? '?' : `${percent}% comprovado`}</span><span>{labels[status]}</span>
+  </span>;
+}
 export function TechnicalItem({ item, highlightProductId, onCompareMore, pending }) {
   const [visibleCount, setVisibleCount] = useState(3);
   if (!item) return <p className="text-xs text-muted">Este item ainda não tem análise técnica automática vinculada.</p>;
   if (!item.in_scope) return <p className="text-xs text-muted">Item fora do escopo desta busca e do catálogo.</p>;
   const product = item.products?.find(p => String(p.product_id) === String(highlightProductId)) || item.recommended_product || item.potential_product || item.products?.[0];
   return <div className="space-y-2 text-sm">
-    {product ? <p className={`font-semibold ${product.status === 'full' ? 'text-status-success' : 'text-ink'}`}>
+    {product && product.status !== 'failed' ? <p className={`font-semibold ${product.status === 'full' ? 'text-status-success' : 'text-ink'}`}>
       {product.product_name} · {labels[product.status]} · {money(product.sale_price)}
     </p> : <p className="text-muted">Nenhum produto com atendimento comprovado para este item.</p>}
     <p className="text-xs text-muted">{item.products?.length || 0} produto{item.products?.length === 1 ? '' : 's'} comparado{item.products?.length === 1 ? '' : 's'} de {item.candidate_count ?? item.products?.length ?? 0} candidatos. Maior compatibilidade primeiro; menor preço no empate.</p>
@@ -91,7 +102,7 @@ export function TechnicalItem({ item, highlightProductId, onCompareMore, pending
     {!item.products?.length && <p className="text-xs text-muted">{item.requirements?.length || 0} exigências extraídas. Cadastre uma ficha de produto pertinente para comparar.</p>}
   </div>;
 }
-export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers }) {
+export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [fetching, setFetching] = useState(true);
@@ -113,14 +124,16 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     // key includes the procurement identity and reviewed search profile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  if (error) return compact ? null : <p className="mt-2 text-xs text-muted">{error}</p>;
-  if (fetching && !analysis) return compact ? null : <p role="status" className="mt-2 text-xs text-muted">Carregando análise técnica…</p>;
+  if (error) return compact ? null : itemSummary ? <span className="mt-1 block text-xs font-normal text-muted">Comparação temporariamente indisponível</span> : <p className="mt-2 text-xs text-muted">{error}</p>;
+  if (fetching && !analysis) return compact ? null : itemSummary ? <span className="mt-1 block text-xs font-normal text-muted">Consultando compatibilidade…</span> : <p role="status" className="mt-2 text-xs text-muted">Carregando análise técnica…</p>;
+  if (itemSummary && !analysis?.result) return <span className="mt-1 block text-xs font-normal text-muted">{['queued','running'].includes(analysis?.status) ? 'Compatibilidade: análise em andamento' : 'Compatibilidade ainda não analisada'}</span>;
   if (!analysis) return opportunityId || compact ? null : <p className="mt-2 text-xs text-muted">{enabled ? 'Análise automática: aguardando elegibilidade e catálogo.' : 'Análise automática configurável em Licitações → Produtos.'}</p>;
-  if (compact && !analysis.result) return null;
+  if (compact && !analysis.result) return <span className="mt-2 inline-flex rounded-full border border-line px-2.5 py-1 text-[11px] text-muted">{['queued','running'].includes(analysis.status) ? 'Análise em andamento' : 'Sem comparação concluída'}</span>;
   if (!analysis.result) return <div className="mt-3 space-y-1 rounded-lg border border-line bg-bg2/40 px-3 py-2 text-xs"><p className="font-semibold text-ink">Compatibilidade com seus produtos</p><p className="text-muted">Análise técnica · {analysis.stage_label}{analysis.error ? ` · ${analysis.error}` : ''}</p><p className="text-[11px] text-muted">Produtos e percentuais aparecerão após a comparação das fichas com o edital.</p></div>;
   const visibleItems = allowedItemNumbers ? analysis.result.items.filter(i => allowedItemNumbers.map(String).includes(String(i.number))) : analysis.result.items;
   const result = { ...analysis.result, items: visibleItems,
     ...(allowedItemNumbers ? { relevant_items: visibleItems.filter(i=>i.in_scope).length, full_items: visibleItems.filter(i=>i.in_scope && (i.recommended_product || i.products?.some(p=>p.status==='full'))).length } : {}) };
+  if (itemSummary) return <ItemCompatibilitySummary item={result.items.find(i=>String(i.number)===String(itemNumber))} documentsComplete={result.documents_complete} />;
   const compareMore = async number => {
     setDetailError('');
     try {

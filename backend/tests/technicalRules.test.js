@@ -86,7 +86,7 @@ test('weighted bonus uses all relevant item values, or equal weights if any refe
   assert.equal(summarize([{ ...items[0], reference_price: null }, items[1]], 68).technical_bonus, 10);
 });
 test('safe defaults and rejection of local, mapped, reserved and multicast addresses', () => {
-  assert.deepEqual(DEFAULTS, { enabled: false, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
+  assert.deepEqual(DEFAULTS, { enabled: false, min_score: 68, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
   for (const ip of ['127.0.0.1', '10.0.0.1', '169.254.169.254', '172.20.0.1', '192.168.0.1', '100.64.0.1', '::1', '::ffff:127.0.0.1', 'ff00::1', 'fc00::1']) assert.equal(publicIp(ip), false, ip);
   assert.equal(publicIp('8.8.8.8'), true);
 });

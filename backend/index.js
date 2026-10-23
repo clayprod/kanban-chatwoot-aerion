@@ -20269,6 +20269,7 @@ const chatCompletionJson = async ({
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         errors.push(`${provider.name}:JSON inválido`);
+        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length' };
         continue;
       }
       try {
@@ -20283,6 +20284,7 @@ const chatCompletionJson = async ({
         };
       } catch (parseErr) {
         errors.push(`${provider.name}:JSON parse fail`);
+        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length' };
         continue;
       }
     } catch (err) {

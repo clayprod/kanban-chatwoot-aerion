@@ -2,9 +2,14 @@ import React from 'react';
 import {render,screen,fireEvent} from '@testing-library/react';
 import '@testing-library/jest-dom';
 import axios from 'axios';
-import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem} from './TechnicalResult';
+import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,ItemCompatibilitySummary} from './TechnicalResult';
 jest.mock('axios',()=>({get:jest.fn(),post:jest.fn()}));
 const match=(id,ok,price,status='uncertain')=>({product_id:id,product_name:`Produto ${id}`,sale_price:price,status,counts:{ok,total:10,verificar:10-ok,nao_ok:0},requirements:[]});
+test('item summary shows the model without expansion and never promotes uncertain evidence to full compliance',()=>{
+  render(<ItemCompatibilitySummary item={{documents_complete:false,products:[match('A',10,100,'full')]}} />);
+  expect(screen.getByText('Produto A')).toBeVisible();expect(screen.getByText('100% comprovado')).toBeVisible();
+  expect(screen.getByText('? — Verificar')).toBeVisible();expect(screen.queryByText('Atende plenamente')).not.toBeInTheDocument();
+});
 test('result card only exposes a compact product chip and opens the exact item',()=>{
   const onSelect=jest.fn();render(<ProductMatchChips items={[{number:'2',in_scope:true,products:[match('A',9,100)]}]} onSelect={onSelect} />);
   expect(screen.getByText('90%')).toBeVisible();

@@ -16,7 +16,10 @@ export default function PncpNoticePage({ opportunity, jobName, items, otherItems
         <h2 ref={title} tabIndex={-1} className="break-words text-xl font-semibold text-ink outline-none">{opportunity.titulo || 'Edital'}</h2>
         <p className="mt-1 text-sm text-muted">{opportunity.orgao_nome}</p>
       </div>
-      <button type="button" onClick={onImport} disabled={!canImport || loading} className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:w-auto">{opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline' ? 'Já está no pipeline' : 'Importar para o pipeline'}</button>
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        {opportunity.__preview?.url && <a href={opportunity.__preview.url} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-ink hover:bg-bg2">PNCP ↗</a>}
+        <button type="button" onClick={onImport} disabled={!canImport || loading} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none">{opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline' ? 'Já está no pipeline' : 'Importar para o pipeline'}</button>
+      </div>
     </header>
     <OpportunityPreview opportunity={opportunity} items={items} otherItems={otherItems} loading={loading} error={error} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
   </article>;

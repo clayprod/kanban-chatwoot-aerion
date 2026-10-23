@@ -281,6 +281,35 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal(scopedResult.documents_complete,false);assert.equal(scopedResult.full_items,1);
       assert.equal(scopedResult.items[0].documents_complete,false);
       assert.equal(scopedResult.items[1].documents_complete,true);
+      // Score mode is deliberately independent of fixed notice/token budgets.
+      // More than three green notices proceed even after legacy counters filled.
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      await request('PUT',`${base}/technical/config`,{enabled:true,limit_mode:'score',min_score:68,daily_limit:1,daily_tokens:10000},92);
+      await pool.query(`INSERT INTO technical_usage(account_id,day,notices,tokens) VALUES(92,(NOW() AT TIME ZONE 'America/Sao_Paulo')::date,100,9000000)`);
+      const scoreProduct=(await request('POST',`${base}/products`,{name:'Drone por aderência',keywords:['drone'],sale_price:90,unit:'un',package_confirmed:true},92)).data;
+      await request('POST',`${base}/products/${scoreProduct.id}/sources`,{text:'Autonomia de 42 min.'},92);
+      for(let n=0;n<3;n++)await service.tick();
+      const greens=[];
+      for(const score of [68,80,90,95,85]) greens.push(await service.observe(92,{...input,sequencial:String(score),score},{terms:['drone']}));
+      assert.equal(await service.observe(92,{...input,sequencial:'67',score:67},{terms:['drone']}),null);
+      for(let n=0;n<42;n++)await service.tick();
+      for(const green of greens) assert.equal((await request('GET',`${base}/technical/jobs/${green.id}`,null,92)).data.status,'completed');
+      const firstGreenCall=(await pool.query("SELECT (j.context->'payload'->>'score')::int AS score FROM technical_ai_calls a JOIN technical_jobs j ON j.id=a.job_id WHERE a.account_id=92 AND j.kind='notice' ORDER BY a.id LIMIT 1")).rows[0];
+      assert.equal(firstGreenCall.score,95);
+      assert.equal((await request('GET',`${base}/technical/config`,null,92)).data.config.limit_mode,'score');
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const dense=(await request('POST',`${base}/products`,{name:'Ficha densa',sale_price:100},93)).data;
+      await request('POST',`${base}/products/${dense.id}/sources`,{text:'Autonomia de 42 min. '+ 'Detalhe técnico. '.repeat(200)},93);
+      let denseCalls=0;
+      const adaptiveService=createTechnicalAnalysis({...dependencies,ai:async args=>{
+        denseCalls++;const chunk=JSON.parse(args.user).document;
+        if(chunk.text.length>2500)return{ok:false,error:'length',truncated:true,usage:{total_tokens:100}};
+        const facts=chunk.text.includes('Autonomia de 42 min')?[{item_number:'all',label:'Autonomia',key:'flight_time',kind:'numeric',value:42,unit:'min',operator:'eq',conditions:'',quote:'Autonomia de 42 min',location:chunk.location,source_id:chunk.source_id}]:[];
+        return{ok:true,data:{complete:true,facts,conflicts:[]},usage:{total_tokens:100}};
+      }});
+      for(let n=0;n<3;n++)await adaptiveService.tick();
+      const denseProduct=(await request('GET',`${base}/products`,null,93)).data[0];
+      assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,3);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

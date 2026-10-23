@@ -18361,12 +18361,13 @@ function App() {
                                               ) : item.titulo}
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
-                                            <TechnicalResult compact item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, number == null ? null : { number: String(number), productId: productId == null ? null : String(productId) })} />
                                             <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
                                               {item.orgao?.nome || 'n/d'}
                                               {item.criterio_julgamento ? <> · {item.criterio_julgamento}</> : null}
                                             </p>
+                                            <TechnicalResult compact item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, number == null ? null : { number: String(number), productId: productId == null ? null : String(productId) })} />
+
                                           </div>
                                           <div className="flex min-w-0 flex-col gap-1.5 lg:border-l lg:border-line lg:pl-3">
                                             {(() => {
@@ -19491,6 +19492,7 @@ function App() {
                                   <strong className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-bold text-primary">#{item.numero_item || '—'}</strong>
                                   <div className="min-w-0 flex-1">
                                     <span className={`block text-xs font-medium text-ink ${isExpanded ? 'whitespace-normal break-words' : 'truncate'}`}>{item.descricao || 'Sem descrição'}</span>
+                                    <TechnicalResult itemSummary opportunityId={selectedOpportunity.id} itemNumber={item.numero_item} />
                                     {item.modelo_produto && (
                                       <span className="mt-0.5 block truncate text-[10px] text-muted">Modelo: {item.modelo_produto}</span>
                                     )}
