@@ -108,6 +108,12 @@ async function createTechnicalTables(pool) {
     notice_key TEXT NOT NULL, profile_hash TEXT NOT NULL, source_updated_at TIMESTAMPTZ,
     job_id BIGINT REFERENCES technical_jobs(id), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY(account_id,source_context,result_key))`);
+  // Revisit pending cards whose notice already has evidence. The ordinary
+  // observer checks profile scope and all catalog versions before reusing it.
+  await pool.query(`UPDATE technical_candidates c SET updated_at=NOW()-INTERVAL '25 hours'
+    WHERE EXISTS(SELECT 1 FROM technical_jobs pending WHERE pending.id=c.job_id AND pending.account_id=c.account_id AND pending.status IN ('queued','running'))
+      AND EXISTS(SELECT 1 FROM technical_jobs ready WHERE ready.account_id=c.account_id AND ready.kind='notice'
+        AND ready.context->>'notice_key'=c.notice_key AND jsonb_typeof(ready.result->'items')='array' AND ready.status IN ('completed','partial'))`);
   await pool.query(`ALTER TABLE licitacao_opportunities ADD COLUMN IF NOT EXISTS technical_analysis_id BIGINT REFERENCES technical_jobs(id)`);
   // Older workers treated gate deferrals as failures. Preserve checkpoints and
   // recover only this known transient condition, without retrying real failures.
