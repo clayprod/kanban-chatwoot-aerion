@@ -1,6 +1,6 @@
 'use strict';
 const { text, hash, rankMatches } = require('./technicalRules');
-const EXTRACTION_VERSION = 5;
+const EXTRACTION_VERSION = 6;
 const administrative = /\b(habilitacao|qualificacao econom|regularidade fiscal|proposta comercial|apresentacao de amostras|apresentacao de ficha tecnica|apresentar ficha tecnica|atestado de capacidade)\b/;
 function categoryOf(fact) {
   if (['technical_sheet_required', 'sample_required'].includes(fact.key)) return 'administrative';

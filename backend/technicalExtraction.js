@@ -130,8 +130,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
     const blocks = sourceBlocks(chunk.text);
     let data;
     try {
-      if (old?.facts) first = {facts:old.facts,complete:false};
-      else first = await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
+      first = await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
       if (!Array.isArray(first?.facts)) throw Object.assign(new Error('Extração fora do formato esperado.'),{code:'TECHNICAL_EXTRACTION_INVALID'});
       const initial = validateFacts(first.facts,s,chunk,kind,context,`${prefix}:initial`);
       const audit = await ask(job,config,`${system}\nVocê é o revisor de COBERTURA. Releia TODOS os blocos do trecho, inclusive obrigações de fornecimento e documentação. Extraia novamente TODAS as exigências atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne também coverage com exatamente uma entrada para CADA block.id: requirements (inclui exigências técnicas, kit, fornecimento e administrativas; fact_indexes aponta índices de facts que citam esse bloco), context (nenhuma exigência; justifique), ou unreadable (explique). complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,

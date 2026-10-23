@@ -8,7 +8,7 @@ const { cleanPackageItems, assembleProduct } = require('./productPackages');
 const { EXTRACTION_VERSION, normalizeFact, uniqueFacts, requirementsForItem, rankMatches } = require('./technicalQuality');
 const { matchesTerm, classifyItem, scopeProcurementItems } = require('./searchQuality');
 const GREEN_SCORE_THRESHOLD = 68;
-const NOTICE_CONTEXT_VERSION = 3;
+const NOTICE_CONTEXT_VERSION = 4;
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -310,6 +310,7 @@ Se o trecho atual só contém capa, índice, regras administrativas, assinaturas
 Responda JSON {"complete":true,"facts":[],"conflicts":[]}. complete=false SOMENTE se não conseguir cobrir TODO o trecho. Páginas administrativas, capas e trechos sem exigências técnicas são leitura completa, com facts=[].
 ${kind === 'product' ? 'Extraia somente especificações da variante/modelo/composição exatos do produto informado. Opcional não é incluído. Fontes que misturam modelos sem separar valores geram conflicts. Característica ou conteúdo de pacote não informado NÃO é conflito: apenas não extraia o fato. complete indica cobertura do texto disponível, não a presença de todas as características possíveis do produto.' : 'Extraia TODAS as exigências técnicas atômicas dos itens listados, incluindo garantia, certificações, componentes e quantidades do kit. Inclua condições gerais aplicáveis a todos os itens. Não trate critério de habilitação jurídica como técnico. Associação duvidosa gera conflicts. Retificação só substitui texto anterior quando a substituição é explícita.'}
 Itens com descrições iguais NÃO são conflito: podem representar cotas/lotes diferentes. Associe pelo número, cabeçalho e tabela. Só use all quando o texto confirmar aplicação geral. Não infira a aplicação a outro item apenas pela descrição igual.
+context.items.number é o identificador global do PNCP. O PDF pode reiniciar a numeração dos itens em cada lote. Quantidade e unidade em context são apenas pistas de identificação: confira a tabela e a ligação explícita com o lote/cota antes de associar o requisito ao número global. Não transforme esses metadados em exigências técnicas nem confunda dois lotes com o mesmo número interno de item.
 Cada conflito: {item_numbers:["números afetados, ou all se global"],message:"motivo verificável"}. Aponte o trecho ambíguo; não invente conflitos em páginas administrativas.
 Cada fact: {item_number: "número exato ou all", category:"equipment para característica técnica; kit para componente/quantidade; supply para treinamento, garantia, entrega, manual e assistência; administrative para habilitação, proposta e apresentação de documentos", label:"texto fiel",key:"grandeza específica em inglês, ex flight_time ou optical_zoom",kind:"numeric|categorical|compound",value:numeroOuString,upper:numeroOuNull,unit:"unidade LITERAL da fonte: min, s, baterias, licenças, x etc.; não substitua baterias por un",operator:"min|max|eq|range",conditions:"condições explícitas ou vazio",quote:"trecho LITERAL com números, unidades e mínimo/máximo, máximo 1200 caracteres",location:"${chunk.location}",source_id:"${s.id}"}.
 Separe critérios compostos em exigências atômicas quando possível. Leia números brasileiros (6.000 metros = 6000 metros), mas preserve literalmente a citação e a unidade; unidade incoerente deve gerar conflito, nunca correção presumida.
@@ -530,7 +531,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       // Listing descriptions can be truncated or contain typos. Sending them on
       // every page made the model invent the same conflict on unrelated pages.
       // Only the current source text is evidence; metadata supplies identifiers.
-      const data = await extractChunk(job, config, s, c, 'notice', { items: state.items.filter(i => i.in_scope).map(i => ({ number: i.number })) });
+      const data = await extractChunk(job, config, s, c, 'notice', { items: state.items.filter(i => i.in_scope).map(i => ({ number: i.number, quantity:i.quantity, unit:i.unit })) });
       if (!data.complete) state.notes.push(`Extração incompleta ou associação duvidosa em ${s.name}, ${c.location}.`, ...data.conflicts.map(v => v.message || String(v)));
       for (const issue of data.issues || []) state.notes.push(`${s.name}, ${c.location}${issue.block_id ? `, bloco ${issue.block_id}` : ''}: ${issue.reason}`);
       state.chunk_coverage.push({ source_id: s.id, location: c.location, chunk:c.chunk, complete: data.complete, facts: data.facts.length, conflicts: data.conflicts,

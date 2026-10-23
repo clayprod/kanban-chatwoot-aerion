@@ -32,7 +32,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
           calls++; const value = JSON.parse(user), chunk = value.document;
           if (!chunk) return { ok: true, data: { matches: [] }, usage: { total_tokens: 20 } };
           const product = !value.context.items;
-          if (!product) assert.ok(value.context.items.every(i => Object.keys(i).join(',') === 'number'), 'PNCP listing descriptions must not contaminate source extraction');
+          if (!product) assert.ok(value.context.items.every(i => !('description' in i) && typeof i.number==='string' && i.quantity != null), 'Only structured item identity metadata may accompany the source; listing descriptions cannot contaminate extraction');
           const quote = product ? /Autonomia de (\d+) min/.exec(chunk.text)?.[0] : 'Autonomia mínima de 41 min';
           const n = Number(/(\d+) min/.exec(quote)?.[1]);
           return { ok: true, data: { complete: true, facts: [{ item_number: product ? 'all' : '1', label: quote, key: 'flight_time', kind: 'numeric', value: n, unit: 'min', operator: product ? 'eq' : 'min', conditions: '', quote, location: chunk.location, source_id: chunk.source_id }],
