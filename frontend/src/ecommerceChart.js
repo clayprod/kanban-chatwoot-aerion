@@ -15,6 +15,7 @@ export const CHART_SERIES = {
     ['impressions', 'Impressões totais', '#0d9488', 'right'], ['metaImpressions', 'Impressões Meta', '#60a5fa', 'right'], ['googleImpressions', 'Impressões Google', '#fbbf24', 'right'],
   ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
+  traffic: [['sessions', 'Sessões GA4', '#3b82f6', 'left'], ['purchases', 'Compras GA4', '#0d9488', 'right']],
 };
 export const CHART_AXES = {
   money: ['Receita e pendentes · R$', 'Investimento · R$'],
@@ -22,8 +23,9 @@ export const CHART_AXES = {
   reach: ['Impressões', 'CTR · %'],
   cpm: ['CPM · R$/mil impressões', 'Impressões'],
   volume: ['Pedidos pagos', 'Sessões GA4'],
+  traffic: ['Sessões GA4', 'Compras GA4'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'] };
 
 function axisMaximum(values) {
   const max = values.reduce((n, value) => Math.max(n, value || 0), 0);
@@ -34,7 +36,7 @@ function axisMaximum(values) {
 }
 export function prepareSalesChart(rows, mode, interval, visible) {
   const series = CHART_SERIES[mode], buckets = new Map();
-  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue'];
+  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue'];
   for (const row of rows) {
     const date = new Date(`${row.date}T12:00:00Z`);
     if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);

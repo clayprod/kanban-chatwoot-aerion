@@ -90,6 +90,7 @@ test('report separates sources, currencies and non-additive coupon revenue', () 
   assert.equal(report.summary.orders, 1);
   assert.equal(report.summary.sessions, 10);
   assert.equal(report.summary.purchases, 2);
+  assert.equal(report.daily.find(d => d.date === '2026-10-20').purchases, 2, 'daily purchases use GA4 totals, without adding acquisition breakdowns');
   assert.equal(report.summary.spend, 20);
   assert.equal(report.orders.length, 2);
   assert.equal(report.coupons.length, 2);

@@ -51,6 +51,10 @@ test('marketing keeps traffic and campaigns inside the same main section', async
   fireEvent.click(traffic);
   expect(await screen.findByText('Origem do tráfego')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('region', { name: 'Tráfego e compras no GA4' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Vendas e investimento' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Sessões GA4' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Compras GA4' })).toBeInTheDocument();
 });
 
 test('marketing prioritizes charts and exposes CPM, impressions and CTR controls', async () => {
@@ -59,6 +63,9 @@ test('marketing prioritizes charts and exposes CPM, impressions and CTR controls
   } : {...report, daily:[{date:'2026-10-21',spend:20,impressions:1000,clicks:10}], excludedOrders:[{id:'1'}]} }));
   render(<EcommerceView section="ads" onNavigate={jest.fn()} />);
   const chart=await screen.findByRole('region', {name:'Receita diária de produtos'});
+  const notes=screen.getByLabelText('Avisos e critérios dos dados');
+  expect(notes).not.toHaveAttribute('open');
+  expect(screen.getByText('Performance por campanha · atribuição da plataforma').compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   for(const element of [screen.getByText('Eficiência da mídia'),screen.getByText('Buscar nos resultados'),screen.getByText(/Google Analytics 4: Requer atenção/),screen.getByText(/pedidos marcados como teste/)]) {
     expect(chart.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }

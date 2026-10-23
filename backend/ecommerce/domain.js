@@ -158,6 +158,7 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
     daily.push({ date, revenue: available('woocommerce') ? sum(dayOrders, 'revenue') : null,
       orders: available('woocommerce') ? dayOrders.length : null,
       sessions: available('ga4') ? sum(traffic.filter(m => m.date === date && m.kind === 'total'), 'sessions') : null,
+      purchases: available('ga4') ? sum(traffic.filter(m => m.date === date && m.kind === 'total'), 'purchases') : null,
       activeUsers: available('ga4') ? sum(traffic.filter(m => m.date === date && m.kind === 'total'), 'activeUsers') : null,
       unpaidValue: available('woocommerce') ? sum(unpaid.filter(o => o.createdDay === date), 'total') : null,
       googleSpend: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'spend') : null,
