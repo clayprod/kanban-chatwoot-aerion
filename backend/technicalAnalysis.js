@@ -199,6 +199,7 @@ function createTechnicalAnalysis(deps) {
   const getItems = (ids, page) => pncpRead(() => deps.getItems(ids, page));
   const getFiles = ids => pncpRead(() => deps.getFiles(ids));
   let running = false;
+  let preferredKind = 'product';
   const providerCooldowns = new Map();
   const settings = async account => (await pool.query('SELECT * FROM technical_config WHERE account_id=$1', [account])).rows[0] || { account_id: account, ...DEFAULTS };
   const accessoriesFor = async account => (await pool.query("SELECT * FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type='accessory' AND superseded_by IS NULL ORDER BY id", [account])).rows.map(safeProduct);
@@ -500,9 +501,6 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     const accessoryVersions = Object.fromEntries(accessoryCatalog.map(p => [String(p.id), p.specs_version]));
     if (state.accessory_versions && hash(state.accessory_versions) !== hash(accessoryVersions)) return finish(job, 'partial', null, 'Acessórios alterados. Uma nova versão da análise será enfileirada.');
     if (state.catalog_versions && hash(state.catalog_versions) !== hash(Object.fromEntries(catalog.map(p => [String(p.id), p.specs_version])))) return finish(job, 'partial', null, 'Catálogo alterado. Uma nova versão da análise será enfileirada.');
-    // Wait for catalogue extraction, rather than silently skip unfinished products.
-    const pendingProducts = await pool.query("SELECT 1 FROM technical_jobs WHERE account_id=$1 AND kind='product' AND status IN ('queued','running') AND target=ANY($2::text[]) LIMIT 1", [job.account_id, catalog.map(p => String(p.id))]);
-    if (pendingProducts.rows.length) throw new BudgetWait('Aguardando processamento das fichas técnicas.');
     if (!state.items) {
       state.catalog_versions = Object.fromEntries(catalog.map(p => [String(p.id), p.specs_version]));
       state.accessory_versions = accessoryVersions;
@@ -551,6 +549,10 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       state.requirements_ready = true; state.compare_cursor = 0;
     }
     if (!state.pairs) {
+      // Source reading does not depend on product specs. Wait only when the
+      // comparison is ready, allowing document coverage to advance in parallel.
+      const pendingProducts = await pool.query("SELECT 1 FROM technical_jobs WHERE account_id=$1 AND kind='product' AND status IN ('queued','running') AND target=ANY($2::text[]) LIMIT 1", [job.account_id, catalog.map(p => String(p.id))]);
+      if (pendingProducts.rows.length) { await checkpoint(job); throw new BudgetWait('Aguardando processamento das fichas técnicas.'); }
       state.pairs = [];
       const allProductSources = (await pool.query(`SELECT ps.product_id,s.id,s.pages,s.notes FROM technical_sources s JOIN technical_product_sources ps ON ps.source_id=s.id
         WHERE ps.account_id=$1 AND ps.active=TRUE`, [job.account_id])).rows;
@@ -670,15 +672,16 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         WHERE j.status IN ('queued','running') AND j.next_run_at<=NOW() AND (c.provider_retry_at IS NULL OR c.provider_retry_at<=NOW() OR
           (j.kind='notice' AND (NOT COALESCE((j.state->>'initialized')::boolean,FALSE) OR COALESCE((j.state->>'file_cursor')::int,0)<jsonb_array_length(COALESCE(j.state->'files','[]'::jsonb))))) AND (j.kind='product' OR (c.enabled=TRUE AND
           COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) >= CASE WHEN c.limit_mode='score' THEN GREATEST(68,c.min_score) ELSE c.min_score END))
-        ORDER BY CASE WHEN j.kind='product' THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN j.kind=$1 THEN 0 ELSE 1 END,
           COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) DESC,
           CASE WHEN j.state->>'notice_checked'='true' OR j.state->>'initialized'='true' THEN 0 ELSE 1 END,
-          j.updated_at LIMIT 1`);
+          j.updated_at LIMIT 1`, [preferredKind]);
       const job = rows.rows[0];
       if (!job) return;
       const config = await settings(job.account_id);
       const claimed = await pool.query("UPDATE technical_jobs SET status='running',error=NULL,updated_at=NOW() WHERE id=$1 AND status IN ('queued','running')", [job.id]);
       if (claimed.rowCount === 0) return;
+      preferredKind = job.kind==='product' ? 'notice' : 'product';
       try {
         if (job.kind === 'product') await productStep(job, config); else await noticeStep(job, config);
         await pool.query("UPDATE technical_jobs SET status='queued',attempts=0 WHERE id=$1 AND status='running'", [job.id]);
