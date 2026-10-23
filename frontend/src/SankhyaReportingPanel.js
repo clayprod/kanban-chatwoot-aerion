@@ -25,9 +25,9 @@ export default function SankhyaReportingPanel({ year }) {
   const invoices = streams.find(row => row.resource === 'invoices' && row.company_id === 102);
   const time = value => new Date(value).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const detail = [orders?.error, invoices?.error].filter(Boolean).join(' ');
-  const hybrid = data?.currentRevenueSource === 'hybrid_100_database_102_orders';
+  const hybrid = data?.currentRevenueSource === 'hybrid_100_database_102_invoices';
   const status = !data ? 'Consultando atualização da 102…' : !streams.length ? 'ERP 102 ainda não configurado.'
-    : hybrid ? `100: base atual · 102: ERP automático (pedidos confirmados)${orders?.last_success_at ? ` · ${time(orders.last_success_at)}` : ' · aguardando atualização'}.`
+    : hybrid ? `100: base atual · 102: ERP automático (notas autorizadas)${invoices?.last_success_at ? ` · ${time(invoices.last_success_at)}` : ' · aguardando notas fiscais'}.`
       : `Pedidos 102: ${orders?.last_success_at ? `atualizados em ${time(orders.last_success_at)}` : 'aguardando atualização'}. Faturamento: base anterior${!invoices?.last_success_at || invoices?.error ? ' · notas pendentes' : ''}.`;
   return <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted" aria-label="Sincronização do ERP Sankhya">
     {streams.some(row => row.enabled) && <button type="button" disabled={busy} onClick={update} aria-label="Atualizar ERP" title="Solicitar atualização da empresa 102" className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-md hover:bg-bg2 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"><ArrowPathIcon className={`h-4 w-4 ${busy ? 'motion-safe:animate-spin' : ''}`} aria-hidden="true" /></button>}

@@ -1,12 +1,12 @@
-// Commercial result: company 100 stays in the reporting database; 102 comes
+// Invoiced revenue: company 100 stays in the reporting database; 102 comes
 // exclusively from the published ERP snapshot. Never add the old 102 import.
 async function hybridRealizado({ pool, legacyPool, year, month = null, bySeller = false }) {
   const config = (await pool.query('SELECT * FROM sankhya_reporting_connections WHERE company_id=102 AND enabled')).rows[0];
   if (!config?.feed_realizado) return null;
-  const stream = (await pool.query("SELECT * FROM sankhya_reporting_streams WHERE company_id=102 AND resource='orders'")).rows[0];
+  const stream = (await pool.query("SELECT * FROM sankhya_reporting_streams WHERE company_id=102 AND resource='invoices'")).rows[0];
   const sources = [
     { company: 100, source: 'reporting_database', basis: 'faturamento_produtos', available: Boolean(legacyPool) },
-    { company: 102, source: 'sankhya_orders', basis: 'pedidos_confirmados_produtos', available: Boolean(stream?.last_success_at), last_success_at: stream?.last_success_at || null },
+    { company: 102, source: 'sankhya_invoices', basis: 'notas_autorizadas_produtos', available: Boolean(stream?.last_success_at), last_success_at: stream?.last_success_at || null },
   ];
   const documents = [];
   if (legacyPool) {
@@ -25,11 +25,12 @@ async function hybridRealizado({ pool, legacyPool, year, month = null, bySeller 
   if (stream?.last_success_at) {
     const { rows } = await pool.query(`SELECT d.data FROM sankhya_reporting_documents d
       JOIN sankhya_reporting_streams s ON s.company_id=d.company_id AND s.resource=d.resource AND s.published_generation=d.generation
-      WHERE d.company_id=102 AND d.resource='orders' AND d.date>=make_date($1,1,1) AND d.date<make_date($1+1,1,1)
+      WHERE d.company_id=102 AND d.resource='invoices' AND d.date>=make_date($1,1,1) AND d.date<make_date($1+1,1,1)
         AND ($2::int IS NULL OR extract(month FROM d.date)=$2)`, [year, month]);
     for (const { data: row } of rows) {
       const operation = String(row.operationName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-      if (!row.confirmed || row.pending || operation.includes('orcamento')) continue;
+      // Confirmed/non-pending orders are not proof of invoicing.
+      if (row.resource !== 'invoices' || !row.authorized || row.invoiceStatus !== '1' || operation.includes('orcamento')) continue;
       const brl = row.currency === 'BRL' || (row.currencyCode === '0' && config.national_currency === 'BRL');
       if (!brl || row.productValue == null || !Number.isFinite(row.productValue)) { skipped++; continue; }
       documents.push({ company: 102, id: row.id, month: Number(row.date.slice(5, 7)), sellerCode: row.sellerCode,
@@ -48,8 +49,8 @@ async function hybridRealizado({ pool, legacyPool, year, month = null, bySeller 
   }
   const output = group => ({ receita: group.cents / 100, receita_100: group.c100 / 100, receita_102: group.c102 / 100,
     vendas: group.ids.size, vendas_100: group.ids100.size, vendas_102: group.ids102.size });
-  const metadata = { configured: sources.some(s => s.available), ano: year, source: 'hybrid_100_database_102_orders',
-    scope: 'companies_100_102', basis: 'faturamento_100_pedidos_confirmados_102', sources,
+  const metadata = { configured: sources.some(s => s.available), ano: year, source: 'hybrid_100_database_102_invoices',
+    scope: 'companies_100_102', basis: 'faturamento_notas_autorizadas', sources,
     partial: sources.some(s => !s.available) || skipped > 0, excludedIncompleteDocuments: skipped };
   if (bySeller) return { ...metadata, ...(month ? { mes: month } : {}), vendedores: [...groups.values()]
     .map(group => ({ vendedor: group.vendedor, ...output(group) })).sort((a, b) => b.receita - a.receita) };

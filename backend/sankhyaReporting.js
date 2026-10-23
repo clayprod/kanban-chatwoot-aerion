@@ -135,9 +135,9 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
       GROUP BY c.company_id,c.enabled,s.resource,s.status,s.error,s.last_success_at,s.last_attempt_at,s.next_run_at
       ORDER BY c.company_id,s.resource`, [year]);
     const config = (await pool.query('SELECT feed_realizado FROM sankhya_reporting_connections WHERE company_id=102 AND enabled')).rows[0];
-    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: config?.feed_realizado ? 'hybrid_100_database_102_orders' : 'existing_reporting_database',
+    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: config?.feed_realizado ? 'hybrid_100_database_102_invoices' : 'existing_reporting_database',
       scope: 'Empresa 102 e documentos visíveis à chave de parceiro; não consolida a empresa 100.',
-      note: 'A parcela automática da 102 usa produtos de pedidos confirmados e não pendentes; não comprova faturamento fiscal.',
+      note: 'A parcela automática da 102 usa somente notas fiscais autorizadas; pedidos confirmados não comprovam faturamento.',
       streams: rows.map(row => ({ ...row, gross_total: row.last_success_at && !row.unknown_currency_documents ? row.gross_total : null,
         authorized_gross_total: row.last_success_at && !row.unknown_currency_documents ? row.authorized_gross_total : null })) });
   });

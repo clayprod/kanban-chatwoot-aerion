@@ -27,12 +27,12 @@ test('unavailable ERP does not fabricate a successful or empty import', async ()
   expect(screen.queryByRole('button', { name: 'Atualizar ERP' })).not.toBeInTheDocument();
 });
 
-test('active hybrid source identifies company 100 database and live confirmed company 102 orders', async () => {
-  axios.get.mockResolvedValue({ data: { currentRevenueSource: 'hybrid_100_database_102_orders', streams: [
+test('active hybrid source identifies company 100 database and authorized company 102 invoices', async () => {
+  axios.get.mockResolvedValue({ data: { currentRevenueSource: 'hybrid_100_database_102_invoices', streams: [
     { company_id: 102, resource: 'orders', enabled: true, last_success_at: '2026-10-22T20:00:00Z' },
     { company_id: 102, resource: 'invoices', enabled: true, error: 'HTTP 502' },
   ] } });
   render(<SankhyaReportingPanel year={2026} />);
-  expect(await screen.findByText(/100: base atual · 102: ERP automático \(pedidos confirmados\)/)).toBeInTheDocument();
+  expect(await screen.findByText(/100: base atual · 102: ERP automático \(notas autorizadas\)/)).toBeInTheDocument();
   expect(screen.queryByText(/Faturamento: base anterior/)).not.toBeInTheDocument();
 });

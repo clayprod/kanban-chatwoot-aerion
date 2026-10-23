@@ -38,11 +38,11 @@ app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range
     queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
 app.get('/api/ecommerce/audiences', (req, res) => res.json({ available: true, uploaded: false, observedAt: new Date().toISOString(),
   segments: [{ id: 'qualified', label: 'Qualificados e oportunidades', stages: '6 a 12', contacts: 47, emails: 21, suppressed: 0, use: 'Remarketing comercial' }], stages: [], profiles: [] }));
-app.get('/api/sankhya/report', (req, res) => res.json({ currentRevenueSource: 'hybrid_100_database_102_orders', streams: [
+app.get('/api/sankhya/report', (req, res) => res.json({ currentRevenueSource: 'hybrid_100_database_102_invoices', streams: [
   { company_id: 102, resource: 'orders', enabled: true, documents: 6, last_success_at: new Date().toISOString() },
   { company_id: 102, resource: 'invoices', enabled: true, last_success_at: null, error: 'Consulta de notas fiscais recusada pelo proxy (HTTP 502). Últimos dados preservados.' },
 ] }));
-app.get('/api/vendas/realizado/ano', (req, res) => res.json({ configured: true, source: 'hybrid_100_database_102_orders', meses: Array.from({length:12}, (_,i)=>({mes:i+1,receita:i===4?15000:0,receita_100:i===4?10000:0,receita_102:i===4?5000:0,vendas:i===4?3:0})) }));
+app.get('/api/vendas/realizado/ano', (req, res) => res.json({ configured: true, source: 'hybrid_100_database_102_invoices', meses: Array.from({length:12}, (_,i)=>({mes:i+1,receita:i===4?15000:0,receita_100:i===4?10000:0,receita_102:i===4?5000:0,vendas:i===4?3:0})) }));
 app.get('/api/vendas/realizado/vendedores/ano', (req, res) => res.json({ configured: true, vendedores: [] }));
 app.use('/api', (req, res) => res.json([]));
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
@@ -93,7 +93,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
     await clickSection('Metas e Resultados');
-    await page.waitForFunction(() => document.body.textContent.includes('100: base atual · 102: ERP automático') && document.body.textContent.includes('Meta × realizado comercial'));
+    await page.waitForFunction(() => document.body.textContent.includes('100: base atual · 102: ERP automático') && document.body.textContent.includes('Meta × faturamento'));
     await page.screenshot({ path: path.join(output, 'erp-desktop.png'), fullPage: true });
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await page.reload({ waitUntil: 'networkidle0' });
