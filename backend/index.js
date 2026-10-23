@@ -49,6 +49,14 @@ const {
   createAiFollowupTable,
   carregarContextoConversa,
   runAiFollowupTick,
+  // Usados pelos crons do despachante e da prospeccao. Estavam faltando aqui, e como
+  // sao referenciados dentro de callback de cron o Node nao reclamava no boot: cada
+  // tick estourava "dentroDaJanela is not defined" e morria no catch. Resultado: o
+  // despachante NUNCA entregou uma mensagem, e o follow-up registrava "sent" porque
+  // tinha conseguido enfileirar. Checado com eslint no-undef em 2026-10-23.
+  dentroDaJanela,
+  enviarPeloChatwoot,
+  validarMensagem,
 } = require('./aiFollowups');
 const {
   PROSPECCAO_LOG_TABLE,
@@ -63,7 +71,14 @@ const {
   createOutboundQueueTable,
   enfileirar,
   despacharTick,
+  cargaPorInbox,
 } = require('./outboundQueue');
+const {
+  criarMapaDeInstancias,
+  instanciaPermitida,
+  escolherInstancia,
+  criarEnvioEvolution,
+} = require('./evolutionInstancias');
 const {
   createAiSettingsTable,
   carregarSettings,
@@ -737,7 +752,89 @@ const requireAdmin = (req, res, next) => {
   return res.status(403).json({ error: 'Acesso restrito a administradores.' });
 };
 
+// ICP e catalogo: quem e o lead, e o que podemos afirmar sobre produto e preco.
+const {
+  classificarIcp, podeFalarTabelaRevenda, blocoPromptIcp,
+} = require('./icp');
+const { criarCatalogoAerion } = require('./aerionCatalogo');
+const {
+  carregarConfigResponder, createResponderTable, runAiResponderTick,
+  RESPONDER_LOG_TABLE,
+} = require('./aiResponder');
+const { decrypt: decryptEcommerce, encryptionKey: ecommerceKey } = require('./ecommerce/domain');
+
 const ecommerce = createEcommerce({ pool, getUserById });
+
+// A credencial da loja ja vive em ecommerce_connections, cifrada. Reusar e melhor que
+// criar env nova: env de servico nesta stack ja se perdeu em deploy mais de uma vez.
+const carregarConfigLoja = async () => {
+  const { rows } = await pool.query(
+    "SELECT config, secrets FROM ecommerce_connections WHERE provider = 'woocommerce'"
+  );
+  if (!rows[0]) throw new Error('loja WooCommerce não conectada');
+  return { ...rows[0].config, ...decryptEcommerce(rows[0].secrets, ecommerceKey(process.env)) };
+};
+
+const catalogoAerion = criarCatalogoAerion({ carregarConfigLoja });
+
+// Numeros da operacao comercial: o par inbox<->instancia sai do proprio Chatwoot.
+const mapaInstancias = criarMapaDeInstancias({ pool });
+const enviarPelaEvolution = criarEnvioEvolution();
+// Quais numeros a automacao pode usar. Default no codigo porque env de servico nesta
+// stack ja se perdeu em deploy, e perder env nunca pode liberar um numero errado.
+// Sao os tres do comercial; thelga_lins e inbox de pessoa e fica de fora, e numero
+// pessoal (claytoncosta) e de outro projeto (c2finance) nem tem inbox nesta conta.
+const INSTANCIAS_PADRAO = ['Comercial - Aerion Technologies', 'iago_aerion', 'ian_aerion'];
+const INSTANCIAS_PERMITIDAS = (() => {
+  const doEnv = String(process.env.AERION_INSTANCIAS || '')
+    .split(',').map((v) => v.trim()).filter(Boolean);
+  return doEnv.length ? doEnv : INSTANCIAS_PADRAO;
+})();
+
+const cnpjDoContato = (attrs) => {
+  const bruto = attrs?.CNPJ_CPF || attrs?.CNPJ || attrs?.cnpj || '';
+  const limpo = String(bruto).replace(/[^0-9A-Za-z]/g, '');
+  return limpo.length === 14 ? limpo : null;
+};
+
+// Contexto comercial de um lead: em que ICP ele cai, se pode ver tabela de revenda e
+// o catalogo com SO o preco que ele pode ver. Usado pelo follow-up, pela prospeccao
+// ativa e pelo respondedor — um lugar so, para os tres falarem a mesma lingua.
+const contextoComercialDoLead = async ({
+  razaoSocial = '', nomeFantasia = '', cnae = '', cnaeDescricao = '',
+  cnpj = null, historico = '', comCatalogo = true,
+} = {}) => {
+  let cadastroB2b = false;
+  if (cnpj) {
+    const aprovado = await catalogoAerion.cnpjAprovadoNaLoja(cnpj);
+    cadastroB2b = aprovado === true;
+  }
+  const classificacao = classificarIcp({
+    razaoSocial, nomeFantasia, cnae, cnaeDescricao, cadastroB2b, historico,
+  });
+  const revendaConfirmada = podeFalarTabelaRevenda(classificacao);
+  const resultado = {
+    icp: classificacao.icp,
+    confianca: classificacao.confianca,
+    revendaConfirmada,
+    tier: 'none',
+    blocoIcp: blocoPromptIcp(classificacao),
+    blocoCatalogo: '',
+  };
+  if (!comCatalogo) return resultado;
+  try {
+    const produtos = await catalogoAerion.carregarCatalogo();
+    resultado.blocoCatalogo = catalogoAerion.blocoCatalogo(produtos, {
+      revendaConfirmada, tier: resultado.tier,
+    });
+  } catch (err) {
+    // Loja fora do ar nao pode virar preco inventado: sem catalogo, o bloco avisa a IA
+    // para nao afirmar nada de produto.
+    resultado.blocoCatalogo = catalogoAerion.blocoCatalogo([], { revendaConfirmada });
+    console.warn('[catalogo] indisponível:', err.message);
+  }
+  return resultado;
+};
 app.use('/api/ecommerce', ecommerce.router);
 const sankhyaReporting = createSankhyaReporting({ pool, authorize: requireAdmin });
 app.use('/api/sankhya', sankhyaReporting.router);
@@ -3856,6 +3953,9 @@ const processWatchlistNotifications = async (limit = 20) => {
         }
       }
       if (!sourceRow) throw new Error('Signal nao encontrado para notificacao');
+      // Alerta INTERNO de licitacao, para o proprio time: sai pela instancia da env
+      // mesmo, que e o numero pessoal. Nao trocar para numero do comercial — aviso
+      // interno nao e mensagem para cliente e nao passa pela fila de disparo.
       await sendEvolutionTextMessage(notification.recipient, buildWatchlistNotificationMessage(notification.source, sourceRow));
       await pool.query(
         `UPDATE ${WATCHLIST_NOTIFICATIONS_TABLE}
@@ -23736,15 +23836,34 @@ const registerBackgroundSchedules = () => {
         },
         // Contato que ja tem conversa recebe por dentro do Chatwoot, para a mensagem
         // cair na thread. Lead frio ainda nao tem conversa nenhuma: vai pela Evolution,
-        // que e quem abre a conversa no Chatwoot ao entregar.
-        enviar: (item) => (item.conversation_id
-          ? enviarPeloChatwoot({
+        // pela instancia escolhida em evolutionInstancias.js — nunca por uma env solta,
+        // que foi como duas mensagens sairam do numero pessoal do Clayton em 23/10.
+        enviar: async (item) => {
+          if (item.conversation_id) {
+            return enviarPeloChatwoot({
               config: chatwoot,
               accountId: CHATWOOT_ACCOUNT_ID,
               conversationId: item.conversation_id,
               texto: item.texto,
-            })
-          : sendEvolutionTextMessage(item.telefone, item.texto)),
+            });
+          }
+          const mapa = await mapaInstancias.carregar(CHATWOOT_ACCOUNT_ID);
+          const carga = await cargaPorInbox(pool, CHATWOOT_ACCOUNT_ID);
+          const escolha = escolherInstancia(mapa, {
+            inboxId: item.inbox_id,
+            carga,
+            permitidas: INSTANCIAS_PERMITIDAS,
+          });
+          if (escolha.erro) throw new Error(escolha.erro);
+          if (!instanciaPermitida(mapa, escolha.instancia)) {
+            throw new Error(`instância "${escolha.instancia}" não é da operação comercial`);
+          }
+          return enviarPelaEvolution({
+            numero: item.telefone,
+            texto: item.texto,
+            instancia: escolha.instancia,
+          });
+        },
       });
       if (resultado.despachados || resultado.falhas) {
         console.log('[fila] tick:', resultado);

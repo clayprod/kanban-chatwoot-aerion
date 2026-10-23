@@ -599,6 +599,24 @@ test('com a fila ligada o worker enfileira em vez de enviar', async () => {
   assert.equal(enfileirados[0].texto, 'Oi, como anda o projeto?');
   assert.match(enfileirados[0].dedupeKey, /^followup:/, 'dedupe evita item duplicado na fila');
   assert.equal(r.enviados, 1);
+  // Enfileirado NAO e entregue. Em 23/10/2026 o despachante estava estourando
+  // ReferenceError a cada tick e cinco follow-ups apareceram como "sent" no painel
+  // sem nunca sair do servidor. O estado tem que dizer a verdade.
+  assert.equal(pool.gravados.at(-1).status, 'queued');
+});
+
+test('sem fila, o envio direto continua sendo "sent"', async () => {
+  const pool = fakePool({ candidatos: [CANDIDATO], historico: HISTORICO });
+  await runAiFollowupTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async () => ({
+      ok: true, data: { situacao: 'silencio', acao: 'escrever', mensagem: 'Oi, como anda?', confianca: 0.9 },
+    }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({}) }),
+    config: CONFIG_BASE,
+    now: new Date('2026-09-23T17:00:00.000Z'),
+  });
+  assert.equal(pool.gravados.at(-1).status, 'sent');
 });
 
 test('dry run grava a mensagem e não chama o Chatwoot', async () => {

@@ -440,9 +440,18 @@ const runStageClassificationTick = async (pool, {
         provider: ia.provider, model: ia.model,
       };
 
+      // `motivo` tem que entrar aqui: e nele que `ehAdiamento` le a frase do cliente
+      // para converter Descartado em Nurturing. Sem ele o guarda nunca dispara.
       const veredito = avaliarSugestao({
-        etapaAtual: cand.etapa_atual, sugerida, confianca, etapas, config,
+        etapaAtual: cand.etapa_atual, sugerida, confianca, motivo, etapas, config,
       });
+
+      // O destino pode nao ser o que a IA sugeriu: "no momento nao" vira Nurturing.
+      const destino = veredito.alvoCorrigido || sugerida;
+      if (veredito.alvoCorrigido) {
+        comum.toStage = destino;
+        comum.motivo = `${motivo} [${veredito.motivo}]`.slice(0, 500);
+      }
 
       if (veredito.acao === 'skipped') {
         await registrarStage(pool, { ...comum, status: 'skipped', skipReason: veredito.motivo });
@@ -454,7 +463,7 @@ const runStageClassificationTick = async (pool, {
         await registrarStage(pool, { ...comum, status: 'suggested', skipReason: veredito.motivo });
         r.sugeridos += 1;
         if (notify) {
-          await Promise.resolve(notify({ tipo: 'suggested', contato: cand, para: sugerida, motivo })).catch(() => {});
+          await Promise.resolve(notify({ tipo: 'suggested', contato: cand, para: destino, motivo })).catch(() => {});
         }
         continue;
       }
@@ -467,7 +476,7 @@ const runStageClassificationTick = async (pool, {
 
       const res = await aplicarEtapa(pool, {
         accountId, contactId: cand.contact_id,
-        fromStage: cand.etapa_atual, toStage: sugerida, historyTable,
+        fromStage: cand.etapa_atual, toStage: destino, historyTable,
       });
       if (!res.aplicado) {
         await registrarStage(pool, { ...comum, status: 'skipped', skipReason: res.motivo });
@@ -479,7 +488,7 @@ const runStageClassificationTick = async (pool, {
 
       // Etapa fria com data de volta: agenda o retorno para a propria IA puxar depois.
       let retomada = null;
-      if ((config.etapasFrias || ETAPAS_FRIAS_PADRAO).includes(sugerida)) {
+      if ((config.etapasFrias || ETAPAS_FRIAS_PADRAO).includes(destino)) {
         retomada = normalizarRetomada(ia.data?.retomar_em_dias, config);
         if (retomada && agendarRetorno) {
           try {

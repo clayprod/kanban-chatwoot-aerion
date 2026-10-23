@@ -186,7 +186,7 @@ const createAiFollowupTable = async (pool) => {
       conversation_id BIGINT,
       attempt INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'sent', 'skipped', 'failed', 'dry_run')),
+        CHECK (status IN ('pending', 'queued', 'sent', 'skipped', 'failed', 'dry_run')),
       skip_reason TEXT,
       provider TEXT,
       model TEXT,
@@ -441,6 +441,7 @@ const diasDesde = (data, now = new Date()) => {
 const montarPrompt = ({
   contato, historico, followupsAnteriores, diasSilencio,
   anteriores = [], maxPorContato = 3, agora = new Date(),
+  blocoIcp = '', blocoCatalogo = '',
 }) => {
   const tentativa = Math.min(Number(followupsAnteriores || 0) + 1, Math.max(1, maxPorContato));
   const system = [
@@ -478,6 +479,8 @@ const montarPrompt = ({
     '- Esta é uma SEQUÊNCIA. Nunca repita a abordagem nem a pergunta de uma tentativa',
     '  anterior: se já perguntou se há interesse, mude o ângulo.',
     '',
+    ...(blocoIcp ? ['', blocoIcp, ''] : []),
+    ...(blocoCatalogo ? [blocoCatalogo, ''] : []),
     'Técnicas do processo comercial da Aerion (base Chris Voss) — use, não cite:',
     '- PERGUNTA CALIBRADA: comece por "Como" ou "O que". Nunca "por que" (soa cobrança),',
     '  nunca pergunta fechada de sim/não que o cliente responde com uma palavra e some.',
@@ -630,7 +633,14 @@ const enviarPeloChatwoot = async ({ config, accountId, conversationId, texto, fe
         'Content-Type': 'application/json',
         api_access_token: config.chatwootToken,
       },
-      body: JSON.stringify({ content: texto, message_type: 'outgoing' }),
+      // aerion_ai marca a mensagem como nossa, automatica. O respondedor
+      // (backend/aiResponder.js) usa isso para saber se quem respondeu o cliente
+      // foi gente ou foi a IA — sem a marca, conta como gente.
+      body: JSON.stringify({
+        content: texto,
+        message_type: 'outgoing',
+        content_attributes: { aerion_ai: true },
+      }),
       signal: controller.signal,
     });
     if (!resp.ok) {
@@ -677,6 +687,7 @@ const runAiFollowupTick = async (pool, {
   agendarRetorno = null,
   atribuirResponsavel = null,
   enfileirarEnvio = null,
+  contextoComercial = null,
   fetchImpl = fetch,
   now = new Date(),
   config = carregarConfig(),
@@ -720,6 +731,12 @@ const runAiFollowupTick = async (pool, {
         accountId,
         contactId: candidato.contact_id,
       });
+      // Quem e esse lead define O QUE dizer: com revenda a conversa e margem e
+      // parceria, com cliente final e a operacao dele. Sem isso a mensagem sai
+      // generica e a pessoa nao ve valor.
+      const contexto = contextoComercial
+        ? await contextoComercial({ contato: candidato, historico })
+        : { blocoIcp: '', blocoCatalogo: '' };
       const { system, user } = montarPrompt({
         contato: candidato,
         historico,
@@ -728,6 +745,8 @@ const runAiFollowupTick = async (pool, {
         anteriores,
         maxPorContato: config.maxPorContato,
         agora: now,
+        blocoIcp: contexto.blocoIcp,
+        blocoCatalogo: contexto.blocoCatalogo,
       });
       const ia = await chatCompletionJson({ system, user, maxTokens: 500, temperature: 0.4 });
       if (!ia.ok) {
@@ -813,6 +832,10 @@ const runAiFollowupTick = async (pool, {
         continue;
       }
 
+      // Enfileirar NAO e entregar. O registro distingue os dois porque chamar a fila
+      // de "sent" escondeu uma fila travada: o despachante estourava ReferenceError a
+      // cada tick e 5 follow-ups ficaram "sent" no painel sem nunca sair (23/10/2026).
+      let entregue = false;
       if (enfileirarEnvio) {
         await enfileirarEnvio({
           contactId: candidato.contact_id,
@@ -823,6 +846,7 @@ const runAiFollowupTick = async (pool, {
           dedupeKey: `followup:${candidato.contact_id}:${base.attempt}`,
         });
       } else {
+        entregue = true;
         await enviarPeloChatwoot({
           config,
           accountId,
@@ -833,7 +857,7 @@ const runAiFollowupTick = async (pool, {
       }
       await registrarDecisao(pool, {
         ...base,
-        status: 'sent',
+        status: entregue ? 'sent' : 'queued',
         provider: ia.provider,
         model: ia.model,
         confidence: confianca,
@@ -852,7 +876,7 @@ const runAiFollowupTick = async (pool, {
 
       if (notify) {
         await Promise.resolve(
-          notify({ tipo: 'sent', contato: candidato, mensagem: texto })
+          notify({ tipo: entregue ? 'sent' : 'queued', contato: candidato, mensagem: texto })
         ).catch(() => {});
       }
     } catch (error) {
