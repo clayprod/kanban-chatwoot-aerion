@@ -19,13 +19,13 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
         CREATE TABLE edital_watchlist(id BIGSERIAL PRIMARY KEY,account_id INTEGER,palavras_chave TEXT[],filtros JSONB DEFAULT '{}');
         CREATE TABLE edital_signals(id BIGSERIAL PRIMARY KEY,account_id INTEGER,watchlist_id BIGINT,payload JSONB,criado_em TIMESTAMPTZ DEFAULT NOW(),quality_hidden BOOLEAN DEFAULT FALSE,status TEXT DEFAULT 'novo');`);
       await createTechnicalTables(pool); await createTechnicalTables(pool);
-      let calls = 0, downloads = 0;
+      let calls = 0, downloads = 0, filesRevision = 0;
       const input = { titulo: 'Compra de drones', orgao_cnpj: '12345678000195', ano: '2026', sequencial: '1', score: 75, open: true, numero_controle_pncp: '12345678000195-1-000001/2026' };
       const getIds = i => ({ cnpj: i.orgao_cnpj || '', ano: i.ano || '', sequencial: i.sequencial || '' });
       const dependencies = { pool, getAccountId: req => Number(req.headers['x-test-account'] || 1), getIds,
         getNotice: async () => ({ open: true }),
         getItems: async () => Object.assign([{ numeroItem: 1, descricao: 'Drone profissional', quantidade: 2, unidadeMedida: 'UNIDADE', valorUnitarioEstimado: 120 }], { complete: true, nextPage: null }),
-        getFiles: async () => [{ titulo: 'Termo.txt', url: 'https://example.org/termo.txt' }],
+        getFiles: async () => [{ titulo: 'Termo.txt', url: 'https://example.org/termo.txt', dataAtualizacao: filesRevision }],
         gate: async fn => fn(), heavy: async (_name, fn) => fn(), isEligible: i => i.open === true,
         documentIO: { ...docs, download: async () => { downloads++; return { bytes: Buffer.from('Drone profissional. Autonomia mínima de 41 min.'), content_type: 'text/plain', url: 'https://example.org/termo.txt' }; } },
         ai: async ({ user }) => {
@@ -92,6 +92,39 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal((await request('GET', `${base}/technical/jobs/${jobId}`, null, 2)).status, 404);
       const brief = (await request('POST', `${base}/technical/notice`, { item: input, profile: { terms: ['drone'] }, summary: true })).data.analysis;
       assert.equal(brief.summary_only, true); assert.equal(brief.result.items[0].products, undefined);
+      const beforeEquivalent = calls;
+      const equivalent = await service.observe(1, input, { terms: ['drone', 'uav'] });
+      assert.notEqual(equivalent.id, jobId);
+      assert.equal(equivalent.context.reused_from, jobId); assert.equal(equivalent.status, 'completed');
+      assert.equal(equivalent.result.items[0].products[0].requirements[0].status, 'nao_ok');
+      assert.equal(calls, beforeEquivalent);
+      const excluded = await service.observe(1, input, { terms: ['drone'], excluded_terms: ['drone'] });
+      assert.equal(excluded.result, null); assert.equal(excluded.context.reused_from, undefined);
+      await pool.query("UPDATE technical_jobs SET status='superseded' WHERE id=$1", [excluded.id]);
+      // Daily copies from the old scheduler cannot hide the existing result or
+      // consume AI again. Adopt an evidenced legacy result into the stable key.
+      const beforeReuse = calls;
+      await pool.query("UPDATE technical_jobs SET context=context-'semantic_revision'-'rules_version' WHERE id=$1", [jobId]);
+      const dailyCopy = (await pool.query("INSERT INTO technical_jobs(account_id,kind,target,revision,context) SELECT account_id,kind,target,'daily-copy',context FROM technical_jobs WHERE id=$1 RETURNING id", [jobId])).rows[0];
+      assert.equal((await service.observe(1, input, { terms: ['drone'] })).id, jobId);
+      assert.equal((await pool.query('SELECT status FROM technical_jobs WHERE id=$1', [dailyCopy.id])).rows[0].status, 'superseded');
+      assert.equal(calls, beforeReuse);
+      // A daily freshness check reads the manifest, not the entire AI pipeline.
+      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours' WHERE id=$1", [jobId]);
+      const validating = await service.observe(1, input, { terms: ['drone'] });
+      assert.equal(validating.id, jobId); assert.equal(validating.state.needs_revalidation, true);
+      assert.equal((await service.refreshedJob(validating)).result.documents_complete, false);
+      await service.tick();
+      assert.equal((await pool.query('SELECT status FROM technical_jobs WHERE id=$1', [jobId])).rows[0].status, 'completed');
+      assert.equal(calls, beforeReuse); assert.equal(downloads, 1);
+      // A changed attachment invalidates the old comparison immediately.
+      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours' WHERE id=$1", [jobId]);
+      filesRevision = 1;
+      await service.observe(1, input, { terms: ['drone'] }); await service.tick();
+      assert.equal((await request('GET', `${base}/technical/jobs/${jobId}`)).data.result, null);
+      assert.equal((await pool.query('SELECT state->>\'needs_revalidation\' AS pending FROM technical_jobs WHERE id=$1', [equivalent.id])).rows[0].pending, 'true');
+      for (let n = 0; n < 12; n++) await service.tick();
+      assert.equal((await request('GET', `${base}/technical/jobs/${jobId}`)).data.status, 'completed');
       const jid = '00000000-0000-0000-0000-000000000021';
       await pool.query("INSERT INTO pncp_search_jobs(id,account_id,terms) VALUES($1,1,ARRAY['drone'])", [jid]);
       await pool.query("INSERT INTO pncp_search_job_results(job_id,account_id,result_key,score,visibility,payload) VALUES($1,1,'notice',75,'visible',$2::jsonb)", [jid, JSON.stringify(input)]);
@@ -192,6 +225,9 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.match(limited.provider_error, /groq:429/);
       assert.ok(new Date(limited.provider_retry_at).getTime() - Date.now() < 3 * 60 * 1000);
       assert.equal((await pool.query("SELECT attempts FROM technical_jobs WHERE account_id=90 AND kind='product'")).rows[0].attempts, 0);
+      const revised = await service.observe(1, { ...input, dataAtualizacao: '2026-10-20T10:00:00Z' }, { terms: ['drone'] });
+      assert.notEqual(revised.id, jobId);
+      assert.equal((await service.observe(1, input, { terms: ['drone'] })).id, revised.id);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

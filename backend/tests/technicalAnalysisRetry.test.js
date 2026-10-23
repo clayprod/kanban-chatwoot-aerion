@@ -3,14 +3,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTechnicalAnalysis } = require('../technicalAnalysis');
 
-function worker(state = {}, overrides = {}) {
+function worker(state = {}, overrides = {}, config = { enabled: true, daily_limit: 30 }) {
   const job = { id: 1, account_id: 1, kind: 'notice', state, context: { ids: {}, profile: {}, payload: {} }, attempts: 2 };
   const queries = [];
   const query = async (sql, args) => {
     queries.push({ sql, args });
     if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
     if (sql.startsWith('SELECT j.*')) return { rows: [job] };
-    if (sql.startsWith('SELECT * FROM technical_config')) return { rows: [{ enabled: true, daily_limit: 30 }] };
+    if (sql.startsWith('SELECT * FROM technical_config')) return { rows: [config] };
     if (sql.includes('SELECT notices FROM technical_usage')) return { rows: [{ notices: 0 }] };
     return { rows: [] };
   };
@@ -93,4 +93,13 @@ test('a failure listing items does not discard a successful notice request', asy
   assert.equal(job.state.notice_checked, true); assert.equal(job.state.items_loaded, undefined);
   await service.tick(); await service.tick();
   assert.equal(job.state.initialized, true); assert.equal(notices, 1); assert.equal(items, 2);
+});
+
+test('the account daily limit is never mislabeled as PNCP throttle', async () => {
+  const { service, queries } = worker({ notice_checked: true, items_loaded: true }, {
+    getFiles: async () => [], isPncpThrottleError: e => /limite/i.test(e.message),
+  }, { enabled: true, daily_limit: 0 });
+  await service.tick();
+  assert.equal(queries.some(q => q.sql.includes("stage='waiting_pncp'")), false);
+  assert.ok(queries.some(q => q.sql.includes("::date+1") && /Limite diário/.test(q.args?.[1])));
 });

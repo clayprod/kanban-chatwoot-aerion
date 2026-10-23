@@ -15,6 +15,9 @@ const isPncpTransportError = error => /^(terminated|fetch failed)$/i.test(String
 const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(x => /^\d+$/.test(x)))].slice(0, 100);
 const safeProduct = p => ({ ...p, sale_price: Number(p.sale_price), specs: p.specs || [] });
 const profileKey = profile => hash({ terms: profile?.terms || [], match_mode: profile?.match_mode || 'literal', related_terms: profile?.related_terms || [], excluded_terms: profile?.excluded_terms || [], item_kind: profile?.item_kind || 'all', product_ids: cleanIds(profile?.product_ids) });
+const noticeUpdated = payload => payload?.data_atualizacao_pncp || payload?.dataAtualizacao || payload?.data_atualizacao || null;
+const noticeRevision = (payload, catalog, accessories, profile) => hash({ notice_updated: noticeUpdated(payload), version: VERSION, format: 2,
+  catalog: catalog.map(p => [p.id, p.specs_version, p.active, p.category, p.keywords]), accessories: accessories.map(p => [p.id, p.specs_version]), profile });
 const fileList = raw => {
   const list = Array.isArray(raw) ? raw : raw?.data;
   if (!Array.isArray(list)) throw new Error('Lista de documentos não confirmada.');
@@ -30,20 +33,20 @@ function itemInScope(item, profile, products) {
   const productTerms = products.flatMap(p => [...(p.keywords || []), p.name, p.model, p.category]).filter(v => text(v).length >= 3);
   return [...terms, ...productTerms].some(term => matchesTerm(value, term));
 }
-const labelStatus = { queued: 'Na fila', metadata: 'Consultando dados e anexos do edital', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada' };
+const labelStatus = { queued: 'Na fila', metadata: 'Consultando dados e anexos do edital', validating: 'Conferindo atualização dos documentos', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada', superseded: 'Substituída por análise atual' };
 function technicalFilterClause(mode) {
   if (!['full', 'uncertain', 'no_full', 'pending'].includes(mode)) return '';
   const link = `FROM technical_candidates tc JOIN technical_jobs tj ON tj.id=tc.job_id AND tj.account_id=tc.account_id
     WHERE tc.account_id=pncp_search_job_results.account_id AND tc.source_context='job:'||pncp_search_job_results.job_id::text AND tc.result_key=pncp_search_job_results.result_key`;
-  const full = `EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(tj.result->'items','[]'::jsonb)) ti
+  const full = `(tj.state->>'needs_revalidation' IS DISTINCT FROM 'true' AND tj.result->>'documents_complete'='true' AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(tj.result->'items','[]'::jsonb)) ti
     JOIN technical_products tp ON tp.id::text=ti->'recommended_product'->>'product_id' AND tp.account_id=tj.account_id
     WHERE tp.active=TRUE AND tp.specs_complete=TRUE AND tp.specs_version::text=tj.state->'catalog_versions'->>tp.id::text
     AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(ti->'recommended_product'->'configuration'->'additions','[]'::jsonb)) addition
       LEFT JOIN technical_products accessory ON accessory.id::text=addition->>'product_id' AND accessory.account_id=tj.account_id
-      WHERE accessory.id IS NULL OR NOT accessory.active OR accessory.specs_version::text<>addition->>'specs_version' OR NOT accessory.id=ANY(tp.compatible_ids)))`;
+      WHERE accessory.id IS NULL OR NOT accessory.active OR accessory.specs_version::text<>addition->>'specs_version' OR NOT accessory.id=ANY(tp.compatible_ids))))`;
   if (mode === 'pending') return ` AND NOT EXISTS(SELECT 1 ${link} AND tj.result IS NOT NULL)`;
   const condition = mode === 'full' ? full : mode === 'no_full' ? `NOT ${full}`
-    : `(tj.result->>'documents_complete'='false' OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(tj.result->'items','[]'::jsonb)) ti WHERE ti->>'in_scope'='true' AND
+    : `(tj.state->>'needs_revalidation'='true' OR tj.result->>'documents_complete'='false' OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(tj.result->'items','[]'::jsonb)) ti WHERE ti->>'in_scope'='true' AND
       (jsonb_array_length(COALESCE(ti->'products','[]'::jsonb))=0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(ti->'products','[]'::jsonb)) pr WHERE pr->>'status'='uncertain'))))`;
   return ` AND EXISTS(SELECT 1 ${link} AND tj.result IS NOT NULL AND (${condition}))`;
 }
@@ -91,6 +94,7 @@ async function createTechnicalTables(pool) {
     UNIQUE(account_id,kind,target,revision))`);
   await pool.query('CREATE INDEX IF NOT EXISTS technical_jobs_due ON technical_jobs(next_run_at,account_id) WHERE status IN (\'queued\',\'running\')');
   await pool.query('CREATE INDEX IF NOT EXISTS technical_jobs_target ON technical_jobs(account_id,kind,target,id DESC)');
+  await pool.query("CREATE INDEX IF NOT EXISTS technical_jobs_notice ON technical_jobs(account_id,(context->>'notice_key'),id DESC) WHERE kind='notice'");
   await pool.query(`CREATE TABLE IF NOT EXISTS technical_usage (
     account_id INTEGER NOT NULL, day DATE NOT NULL, notices INTEGER NOT NULL DEFAULT 0,
     tokens BIGINT NOT NULL DEFAULT 0, actual_tokens BIGINT NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0,
@@ -136,7 +140,7 @@ async function createTechnicalTables(pool) {
 function createTechnicalAnalysis(deps) {
   const { pool, getAccountId, ai, getIds, gate, heavy, isEligible } = deps;
   const documentIO = deps.documentIO || documents;
-  const isPncpWait = error => isPncpDeferred(error) || Boolean(deps.isPncpThrottleError?.(error));
+  const isPncpWait = error => !(error instanceof BudgetWait) && (isPncpDeferred(error) || Boolean(deps.isPncpThrottleError?.(error)));
   // Classify transport errors only at PNCP reads, never at an AI/provider call.
   const pncpRead = async work => {
     try { return await work(); }
@@ -152,7 +156,7 @@ function createTechnicalAnalysis(deps) {
   const providerCooldowns = new Map();
   const settings = async account => (await pool.query('SELECT * FROM technical_config WHERE account_id=$1', [account])).rows[0] || { account_id: account, ...DEFAULTS };
   const accessoriesFor = async account => (await pool.query("SELECT * FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type='accessory' AND superseded_by IS NULL ORDER BY id", [account])).rows.map(safeProduct);
-  const productsFor = async (account, ids = [], includeSpecs = true) => (await pool.query(`SELECT ${includeSpecs ? '*' : 'id,name,model,category,keywords,sale_price,unit,package_confirmed,active,specs_version,version,specs_complete,compatible_ids'} FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type<>'accessory' AND superseded_by IS NULL ${ids.length ? 'AND (id=ANY($2::bigint[]) OR id IN(SELECT superseded_by FROM technical_products WHERE account_id=$1 AND id=ANY($2::bigint[])))' : ''} ORDER BY id`, ids.length ? [account, cleanIds(ids)] : [account])).rows.map(safeProduct);
+  const productsFor = async (account, ids = [], includeSpecs = true) => (await pool.query(`SELECT ${includeSpecs ? '*' : 'id,name,model,category,keywords,sale_price,unit,package_confirmed,active,specs_version,version,specs_complete,compatible_ids,updated_at'} FROM technical_products WHERE account_id=$1 AND active=TRUE AND product_type<>'accessory' AND superseded_by IS NULL ${ids.length ? 'AND (id=ANY($2::bigint[]) OR id IN(SELECT superseded_by FROM technical_products WHERE account_id=$1 AND id=ANY($2::bigint[])))' : ''} ORDER BY id`, ids.length ? [account, cleanIds(ids)] : [account])).rows.map(safeProduct);
   async function enqueue(account, kind, target, revision, context) {
     return (await pool.query(`INSERT INTO technical_jobs(account_id,kind,target,revision,context) VALUES($1,$2,$3,$4,$5::jsonb)
       ON CONFLICT(account_id,kind,target,revision) DO UPDATE SET context=technical_jobs.context || EXCLUDED.context RETURNING *`,
@@ -273,7 +277,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     await pool.query(`INSERT INTO technical_extractions(account_id,source_id,kind,context_hash,chunk_index,data) VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT DO NOTHING`, [job.account_id, s.id, kind, contextHash, chunk.chunk, JSON.stringify(data)]);
     return data;
   }
-  const checkpoint = async job => pool.query('UPDATE technical_jobs SET state=$2::jsonb,stage=$3,updated_at=NOW() WHERE id=$1', [job.id, JSON.stringify(job.state), job.stage]);
+  const checkpoint = async job => pool.query("UPDATE technical_jobs SET state=$2::jsonb,stage=$3,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id, JSON.stringify(job.state), job.stage]);
   async function observe(account, payload, profile = {}, sourceContext = 'live', resultKey = '', sourceUpdated = null) {
     const cfg = await settings(account), ids = getIds(payload);
     if (!/^[A-Z0-9]{12}\d{2}$/i.test(String(ids.cnpj)) || !/^\d{4}$/.test(String(ids.ano)) || !/^\d{1,10}$/.test(String(ids.sequencial)) || Number(ids.sequencial) <= 0) {
@@ -285,20 +289,63 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     const target = `${noticeKey}:${pKey}`;
     const catalog = await productsFor(account, cleanIds(profile.product_ids), false);
     const accessories = await accessoriesFor(account);
-    const revision = hash({ day: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }), notice_updated: payload.data_atualizacao_pncp || payload.dataAtualizacao || payload.data_atualizacao || null, version: VERSION, catalog: catalog.map(p => [p.id, p.specs_version, p.active, p.category, p.keywords]), accessories: accessories.map(p => [p.id, p.specs_version]), profile: pKey });
+    const noticeJobs = (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND context->>'notice_key'=$2 AND status<>'superseded' ORDER BY id DESC LIMIT 200", [account, noticeKey])).rows;
+    const existing = noticeJobs.filter(j => j.target === target);
+    const latest = noticeJobs.reduce((best, candidate) => new Date(noticeUpdated(candidate.context.payload)) > new Date(noticeUpdated(best?.context.payload)) ? candidate : best, noticeJobs[0]);
+    // An old browser tab cannot restore an older source revision.
+    if (noticeUpdated(latest?.context.payload) && (!noticeUpdated(payload) || new Date(noticeUpdated(latest.context.payload)) > new Date(noticeUpdated(payload)))) payload = { ...payload, data_atualizacao_pncp: noticeUpdated(latest.context.payload) };
+    const revision = noticeRevision(payload, catalog, accessories, pKey);
     let job;
     if (cfg.enabled && Number(payload.base_score ?? payload.score) >= cfg.min_score && isEligible(payload) && catalog.length) {
-      job = await enqueue(account, 'notice', target, revision, { notice_key: noticeKey, ids, payload, profile });
-      // An older open browser tab must not restore an analysis from before a
-      // retification already observed by the background collector.
-      job = (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND target=$2 ORDER BY id DESC LIMIT 1", [account, target])).rows[0];
+      const versions = values => Object.fromEntries(values.map(p => [String(p.id), p.specs_version]));
+      const compatibleEvidence = candidate => VERSION === 2 && (!candidate.context.rules_version || candidate.context.rules_version === VERSION) && noticeUpdated(candidate.context.payload) === noticeUpdated(payload) &&
+        candidate.state.extraction_format === 2 && hash(candidate.state.catalog_versions || {}) === hash(versions(catalog)) &&
+        hash(candidate.state.accessory_versions || {}) === hash(versions(accessories)) &&
+        [...catalog, ...accessories].every(p => new Date(p.updated_at) <= new Date(candidate.updated_at));
+      job = [...existing].sort((a, b) => Number(Array.isArray(b.result?.items)) - Number(Array.isArray(a.result?.items)) || Number(b.id) - Number(a.id)).find(candidate => {
+        if (candidate.context.semantic_revision) return candidate.context.semantic_revision === revision;
+        if (VERSION !== 2 || noticeUpdated(candidate.context.payload) !== noticeUpdated(payload)) return false;
+        if (!candidate.state.catalog_versions) return !candidate.result && !candidate.state.items;
+        return compatibleEvidence(candidate);
+      });
+      // Terms may differ while selecting exactly the same numbered items. Reuse
+      // only after comparing scope for EVERY original item and the full catalog.
+      const reusable = !Array.isArray(job?.result?.items) && noticeJobs.find(candidate =>
+        Array.isArray(candidate.result?.items) && candidate.state.items_complete && compatibleEvidence(candidate) &&
+        candidate.state.items_raw?.length === candidate.result.items.length && candidate.state.items_raw.every(raw => {
+          const assessed = candidate.result.items.find(i => String(i.number) === String(raw.numeroItem ?? raw.numero_item));
+          return assessed && assessed.in_scope === itemInScope(raw, profile, catalog);
+        }));
+      const context = { notice_key: noticeKey, ids, payload, profile, semantic_revision: revision, rules_version: VERSION };
+      if (job) {
+        job.context = { ...job.context, ...context };
+        await pool.query('UPDATE technical_jobs SET context=$2::jsonb WHERE id=$1', [job.id, JSON.stringify(job.context)]);
+      } else job = await enqueue(account, 'notice', target, revision, context);
+      if (reusable && String(reusable.id) !== String(job.id)) {
+        job.state = JSON.parse(JSON.stringify(reusable.state));
+        job.result = { ...reusable.result, ...summarize(reusable.result.items, payload.base_score ?? payload.score) };
+        job.status = reusable.status; job.stage = reusable.stage; job.error = null; job.updated_at = reusable.updated_at;
+        job.context.reused_from = reusable.id;
+        await pool.query('UPDATE technical_jobs SET state=$2::jsonb,result=$3::jsonb,status=$4,stage=$5,error=NULL,context=$6::jsonb,updated_at=$7 WHERE id=$1',
+          [job.id, JSON.stringify(job.state), JSON.stringify(job.result), job.status, job.stage, JSON.stringify(job.context), job.updated_at]);
+      }
+      const obsolete = existing.filter(j => String(j.id) !== String(job.id) && ['queued', 'running'].includes(j.status)).map(j => j.id);
+      if (obsolete.length) {
+        await pool.query("UPDATE technical_jobs SET status='superseded',error=NULL WHERE account_id=$1 AND id=ANY($2::bigint[]) AND status IN ('queued','running')", [account, obsolete]);
+        await pool.query('UPDATE technical_candidates SET job_id=$3,updated_at=NOW() WHERE account_id=$1 AND job_id=ANY($2::bigint[])', [account, obsolete, job.id]);
+      }
+      if (Array.isArray(job.result?.items) && Date.now() - new Date(job.updated_at).getTime() > 24 * 60 * 60 * 1000 && !job.state.needs_revalidation) {
+        job.state.needs_revalidation = true; job.state.final_manifest_verified = false;
+        job.status = 'queued'; job.stage = 'validating';
+        await pool.query("UPDATE technical_jobs SET status='queued',stage='validating',state=$2::jsonb,next_run_at=NOW() WHERE id=$1", [job.id, JSON.stringify(job.state)]);
+      }
     }
     if (sourceContext !== 'live') await pool.query(`INSERT INTO technical_candidates(account_id,source_context,result_key,notice_key,profile_hash,source_updated_at,job_id)
       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_context,result_key) DO UPDATE SET notice_key=EXCLUDED.notice_key,profile_hash=EXCLUDED.profile_hash,source_updated_at=EXCLUDED.source_updated_at,job_id=EXCLUDED.job_id,updated_at=NOW()`,
     [account, sourceContext, String(resultKey), noticeKey, pKey, sourceUpdated, job?.id || null]);
     if (job?.result && sourceContext !== 'live') await persistScore(job, (await refreshedJob(job)).result);
     else if (job && sourceContext !== 'live') await persistScore(job, { score: payload.base_score ?? payload.score });
-    return job || (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND target=$2 ORDER BY id DESC LIMIT 1", [account, target])).rows[0] || null;
+    return job || existing[0] || null;
   }
   async function sweep(account) {
     // Continue through persisted results, including old open results, rather than
@@ -342,7 +389,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     await finish(job, state.complete ? 'completed' : 'partial', { specs: state.facts, notes: state.notes || [] });
   }
   async function finish(job, status, result, error = null) {
-    await pool.query('UPDATE technical_jobs SET status=$2,stage=$2,result=$3::jsonb,error=$4,state=$5::jsonb,updated_at=NOW() WHERE id=$1', [job.id, status, JSON.stringify(result), error, JSON.stringify(job.state)]);
+    await pool.query("UPDATE technical_jobs SET status=$2,stage=$2,result=$3::jsonb,error=$4,state=$5::jsonb,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id, status, JSON.stringify(result), error, JSON.stringify(job.state)]);
   }
   async function noticeStep(job, config) {
     const state = job.state, { ids, profile, payload } = job.context;
@@ -459,9 +506,16 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const latest = await heavy('technical-final-check', async () => ({ notice: await getNotice(ids), files: fileList(await getFiles(ids)) }));
       if (!isEligible(latest.notice)) return finish(job, 'partial', null, 'Licitação deixou de estar aberta durante a análise.');
       if (manifest(state.files) !== manifest(latest.files)) {
+        await pool.query(`UPDATE technical_jobs SET status='queued',stage='validating',next_run_at=NOW(),
+          state=state || '{"needs_revalidation":true,"final_manifest_verified":false}'::jsonb
+          WHERE account_id=$1 AND kind='notice' AND context->>'notice_key'=$2 AND id<>$3
+            AND status IN ('completed','partial') AND jsonb_typeof(result->'items')='array' AND state->'files' IS DISTINCT FROM $4::jsonb`,
+        [job.account_id, job.context.notice_key, job.id, JSON.stringify(latest.files)]);
+        await pool.query('UPDATE technical_jobs SET result=NULL WHERE id=$1', [job.id]);
         job.state = {}; job.stage = 'documents'; await checkpoint(job); return;
       }
       state.final_manifest_verified = true;
+      delete state.needs_revalidation;
     }
     result.documents_complete = state.complete && state.items_complete; result.sources = sources.map(s => ({ id: s.id, name: s.name, url: s.url, complete: s.complete, notes: s.notes })); result.notes = state.notes;
     const partial = !result.documents_complete || result.items.some(i => i.in_scope && (!i.requirements.length || !i.products.length || i.products.every(p => p.status === 'uncertain')));
@@ -495,7 +549,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const job = rows.rows[0];
       if (!job) return;
       const config = await settings(job.account_id);
-      await pool.query("UPDATE technical_jobs SET status='running',error=NULL,updated_at=NOW() WHERE id=$1", [job.id]);
+      const claimed = await pool.query("UPDATE technical_jobs SET status='running',error=NULL,updated_at=NOW() WHERE id=$1 AND status IN ('queued','running')", [job.id]);
+      if (claimed.rowCount === 0) return;
       try {
         if (job.kind === 'product') await productStep(job, config); else await noticeStep(job, config);
         await pool.query("UPDATE technical_jobs SET status='queued',attempts=0 WHERE id=$1 AND status='running'", [job.id]);
@@ -503,11 +558,11 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         if (isPncpWait(e)) {
           // Release the heavy slot and retry the same checkpoint. Deferrals do
           // not exhaust the failure budget or silently skip a document.
-          await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1", [job.id]);
+          await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id]);
         } else if (e instanceof BudgetWait) {
           const delay = e instanceof ProviderWait ? "NOW()+INTERVAL '2 minutes'" : /cr[eé]dit/i.test(e.message) ? "NOW()+INTERVAL '1 hour'" : /fichas/.test(e.message) ? "NOW()+INTERVAL '2 minutes'" : "((NOW() AT TIME ZONE 'America/Sao_Paulo')::date+1)::timestamp AT TIME ZONE 'America/Sao_Paulo'";
-          await pool.query(`UPDATE technical_jobs SET status='queued',error=$2,next_run_at=${delay} WHERE id=$1`, [job.id, e.message]);
-        } else await pool.query(`UPDATE technical_jobs SET attempts=attempts+1,status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'queued' END,error=$2,next_run_at=NOW()+INTERVAL '10 minutes' WHERE id=$1`, [job.id, e.message]);
+          await pool.query(`UPDATE technical_jobs SET status='queued',error=$2,next_run_at=${delay} WHERE id=$1 AND status<>'superseded'`, [job.id, e.message]);
+        } else await pool.query(`UPDATE technical_jobs SET attempts=attempts+1,status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'queued' END,error=$2,next_run_at=NOW()+INTERVAL '10 minutes' WHERE id=$1 AND status<>'superseded'`, [job.id, e.message]);
       }
     } finally { if (client) { await client.query('SELECT pg_advisory_unlock(81620471)').catch(() => {}); client.release(); } running = false; }
   }
@@ -633,7 +688,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const o = (await pool.query('SELECT * FROM licitacao_opportunities WHERE account_id=$1 AND id=$2', [account, req.params.id])).rows[0];
       if (!o) return res.status(404).json({ error: 'Oportunidade não encontrada.' });
       let job = o.technical_analysis_id ? (await pool.query('SELECT * FROM technical_jobs WHERE account_id=$1 AND id=$2', [account, o.technical_analysis_id])).rows[0] : null;
-      if (job) job = (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND target=$2 ORDER BY id DESC LIMIT 1", [account, job.target])).rows[0] || job;
+      if (job) job = (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND target=$2 AND status<>'superseded' ORDER BY id DESC LIMIT 1", [account, job.target])).rows[0] || job;
       if (!job) {
         const ids = getIds({ ...o, url: o.links?.edital || o.links?.pncp, numero_controle_pncp: o.metadados?.pncp_numero_controle || o.metadados?.numero_controle_pncp || o.numero_compra });
         if (ids.cnpj) job = (await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND context->>'notice_key'=$2 ORDER BY (result IS NOT NULL) DESC,id DESC LIMIT 1", [account, `${ids.cnpj}/${ids.ano}/${ids.sequencial}`])).rows[0];
@@ -651,7 +706,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const product = current.get(String(p.product_id));
       const additions = (p.configuration?.additions || []).map(a => ({ ...a, unit_price: accessories.get(String(a.product_id))?.sale_price ?? a.unit_price }));
       const accessoryStale = additions.some(a => { const now = accessories.get(String(a.product_id)); return !now || now.specs_version !== a.specs_version || !(product.compatible_ids || []).map(String).includes(String(a.product_id)); });
-      const stale = accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
+      const stale = job.state.needs_revalidation || accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
       const comparable = commercialUnit(product.unit) === commercialUnit(i.unit) && Number(i.reference_price) > 0 && product.package_confirmed;
       const extraPrice = additions.reduce((sum, a) => sum + Math.round(a.unit_price * 100) * a.quantity, 0) / 100;
       const price = (Math.round(Number(product.sale_price) * 100) + Math.round(extraPrice * 100)) / 100, ref = Number(i.reference_price);
@@ -662,7 +717,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         commercial_bonus: !stale && p.status === 'full' && comparable ? relation === 'below' ? 5 : relation === 'equal' ? 3 : 1 : 0,
         price_comparison: comparable ? { reference: ref, offered: price, difference: price - ref, relation } : null };
     }) }));
-    return { ...publicJob(job), result: { ...job.result, ...summarize(items, job.result.base_score) } };
+    return { ...publicJob(job), result: { ...job.result, ...(job.state.needs_revalidation ? { documents_complete: false } : {}), ...summarize(items, job.result.base_score) } };
   }
   async function refreshCatalog(account) {
     // Reuse extracted requirements, compare afresh locally; no new AI calls for prices.
