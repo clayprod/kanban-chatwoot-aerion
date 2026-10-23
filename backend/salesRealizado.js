@@ -1,8 +1,8 @@
 // Commercial result: company 100 stays in the reporting database; 102 comes
 // exclusively from the published ERP snapshot. Never add the old 102 import.
 async function hybridRealizado({ pool, legacyPool, year, month = null, bySeller = false }) {
-  const config = (await pool.query('SELECT * FROM sankhya_reporting_connections WHERE company_id=102 AND enabled AND feed_realizado')).rows[0];
-  if (!config) return null;
+  const config = (await pool.query('SELECT * FROM sankhya_reporting_connections WHERE company_id=102 AND enabled')).rows[0];
+  if (!config?.feed_realizado) return null;
   const stream = (await pool.query("SELECT * FROM sankhya_reporting_streams WHERE company_id=102 AND resource='orders'")).rows[0];
   const sources = [
     { company: 100, source: 'reporting_database', basis: 'faturamento_produtos', available: Boolean(legacyPool) },

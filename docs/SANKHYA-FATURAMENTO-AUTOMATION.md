@@ -1,5 +1,18 @@
 # Automação do faturamento Sankhya — diagnóstico em 22/10/2026
 
+## Composição híbrida autorizada em 23/10/2026
+
+O usuário solicitou alimentar o gráfico existente mantendo a empresa **100 na base atual** e usando a empresa **102 automática**. `backend/salesRealizado.js` atende os quatro endpoints de realizado (mensal, anual, por vendedor mensal e anual) quando a conexão 102 tem `feed_realizado=true`.
+
+- A parcela da 100 mantém a apuração de produtos AERION/Venda do PostgreSQL existente, com filtro explícito `empresa=100`.
+- A parcela da 102 usa exclusivamente a última geração completa de pedidos sincronizados. Não soma novamente os registros manuais antigos da 102 nem registros da empresa 3.
+- Entram somente pedidos confirmados, não pendentes e que não sejam orçamento. O valor é a soma de `itens[].valorTotal`, sem adicionar frete ou impostos do cabeçalho. Não se usa `valorNota` como substituto do valor dos produtos.
+- O código de moeda nacional `0` só é aceito como BRL quando a conexão foi explicitamente configurada com `national_currency='BRL'`. Documentos sem moeda ou valor de produtos identificados são sinalizados como cobertura parcial.
+- As respostas incluem valores e contagens separados por empresa, origem, critério e atualização. O gráfico mantém o formato atual e detalha as parcelas no tooltip. A legenda identifica **100: faturamento; 102: pedidos confirmados**. O total é realizado comercial, sem afirmar que os pedidos já são notas faturadas.
+- As metas comerciais continuam na mesma tabela. Em falha de página posterior da sincronização, conserva-se a geração completa anterior da 102.
+
+O parâmetro `feed_realizado` é uma ativação administrativa explícita; sem ele, permanece a consulta anterior. O antigo diagnóstico abaixo registra a situação anterior a essa composição. A rota de NF-e com 502 continua sendo um problema separado, sem impedir a alimentação comercial pelos pedidos que o usuário autorizou.
+
 ## Resultado
 
 O proxy documentado permite consultar pedidos da empresa **102**, mas não oferece acesso à **100** nem consultas livres a tabelas do ERP. Ele não atende, sozinho, à substituição integral da carga manual das duas empresas. O nome `api-empresa100.gohobby.com.br` não representa a autorização: o PDF v3 restringe explicitamente as operações à 102, inclusive sobrescrevendo `codigoEmpresa` enviado pelo cliente.

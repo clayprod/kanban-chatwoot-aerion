@@ -23,11 +23,16 @@ function normalizeHeader(row, companyId, resource) {
   if (!Number.isFinite(total)) throw fail('Documento sem valorNota numérico; lote não confirmado.');
   const date = erpDate(row.dataNegociacao);
   if (!date) throw fail('Documento sem dataNegociacao válida; lote não confirmado.');
+  const items = Array.isArray(row.itens) ? row.itens : [];
+  const validItems = items.length > 0 && items.every(item => item.valorTotal != null && item.valorTotal !== '' && Number.isFinite(Number(item.valorTotal)));
   // Fiscal/customer identifiers, addresses and financial titles are deliberately
   // omitted. These operational snapshots do not replace product-level revenue.
   return { id, companyId, number: String(row.numeroNota || ''), resource,
     date, modifiedAt: String(row.dataHoraAlteracao || ''),
     total, currency: ['REAL', 'REAIS', 'BRL', 'R$'].includes(String(row.nomeMoeda || '').trim().toUpperCase()) ? 'BRL' : null,
+    currencyCode: row.codigoMoeda == null ? null : String(row.codigoMoeda),
+    productValue: validItems ? items.reduce((n, item) => n + Math.round(Number(item.valorTotal) * 100), 0) / 100 : null,
+    operationName: String(row.nomeTipoOperacao || ''), sellerName: String(row.nomeVendedor || '').trim().slice(0, 150),
     invoiceStatus: row.statusNFe == null ? null : String(row.statusNFe),
     authorized: resource === 'invoices' && String(row.statusNFe) === '1',
     confirmed: ['S', 'SIM', 'TRUE', '1'].includes(String(row.confirmada).toUpperCase()),
@@ -50,6 +55,8 @@ async function createTables(pool) {
       company_id int PRIMARY KEY, origin text NOT NULL, secrets text NOT NULL,
       enabled boolean NOT NULL DEFAULT false, updated_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE sankhya_reporting_connections ADD COLUMN IF NOT EXISTS feed_realizado boolean NOT NULL DEFAULT false;
+    ALTER TABLE sankhya_reporting_connections ADD COLUMN IF NOT EXISTS national_currency text;
     CREATE TABLE IF NOT EXISTS sankhya_reporting_streams (
       company_id int NOT NULL REFERENCES sankhya_reporting_connections(company_id), resource text NOT NULL,
       status text NOT NULL DEFAULT 'pending', error text, cursor jsonb, published_generation text, previous_generation text,
@@ -88,15 +95,19 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
     // an updated provider contract, not sending codigoEmpresa=100 to this proxy.
     if (companyId !== 102) return res.status(400).json({ error: 'O contrato atual permite somente a empresa 102.' });
     if (req.body.origin && req.body.origin !== ORIGIN) return res.status(400).json({ error: 'Origem ERP não autorizada.' });
-    const old = (await pool.query('SELECT secrets FROM sankhya_reporting_connections WHERE company_id=$1', [companyId])).rows[0];
+    const old = (await pool.query('SELECT * FROM sankhya_reporting_connections WHERE company_id=$1', [companyId])).rows[0];
+    const feedRealizado = typeof req.body.feed_realizado === 'boolean' ? req.body.feed_realizado : Boolean(old?.feed_realizado);
+    const nationalCurrency = req.body.national_currency ?? old?.national_currency ?? null;
+    if (nationalCurrency != null && nationalCurrency !== 'BRL') return res.status(400).json({ error: 'A moeda nacional configurada deve ser BRL.' });
     const key = String(req.body.partner_key || '').trim() || (old ? decrypt(old.secrets, encryptionKey(env)).partner_key : '');
     if (!key || key.length > 1000 || /[\r\n]/.test(key)) return res.status(400).json({ error: 'Informe uma chave de parceiro válida.' });
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(`INSERT INTO sankhya_reporting_connections(company_id,origin,secrets,enabled) VALUES($1,$2,$3,$4)
-        ON CONFLICT(company_id) DO UPDATE SET secrets=EXCLUDED.secrets,enabled=EXCLUDED.enabled,updated_at=now()`,
-      [companyId, ORIGIN, encrypt({ partner_key: key }, encryptionKey(env)), req.body.enabled === true]);
+      await client.query(`INSERT INTO sankhya_reporting_connections(company_id,origin,secrets,enabled,feed_realizado,national_currency) VALUES($1,$2,$3,$4,$5,$6)
+        ON CONFLICT(company_id) DO UPDATE SET secrets=EXCLUDED.secrets,enabled=EXCLUDED.enabled,
+          feed_realizado=EXCLUDED.feed_realizado,national_currency=EXCLUDED.national_currency,updated_at=now()`,
+      [companyId, ORIGIN, encrypt({ partner_key: key }, encryptionKey(env)), req.body.enabled === true, feedRealizado, nationalCurrency]);
       for (const resource of Object.keys(RESOURCES)) await client.query(`INSERT INTO sankhya_reporting_streams(company_id,resource) VALUES($1,$2)
         ON CONFLICT(company_id,resource) DO UPDATE SET next_run_at=now()`, [companyId, resource]);
       await client.query('COMMIT');
@@ -123,9 +134,10 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
         AND d.date >= make_date($1,1,1) AND d.date < make_date($1+1,1,1)
       GROUP BY c.company_id,c.enabled,s.resource,s.status,s.error,s.last_success_at,s.last_attempt_at,s.next_run_at
       ORDER BY c.company_id,s.resource`, [year]);
-    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: 'existing_reporting_database',
+    const config = (await pool.query('SELECT feed_realizado FROM sankhya_reporting_connections WHERE company_id=102 AND enabled')).rows[0];
+    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: config?.feed_realizado ? 'hybrid_100_database_102_orders' : 'existing_reporting_database',
       scope: 'Empresa 102 e documentos visíveis à chave de parceiro; não consolida a empresa 100.',
-      note: 'Pedidos não são faturamento. Valores de notas são brutos; não substituem a receita de produtos das metas.',
+      note: 'A parcela automática da 102 usa produtos de pedidos confirmados e não pendentes; não comprova faturamento fiscal.',
       streams: rows.map(row => ({ ...row, gross_total: row.last_success_at && !row.unknown_currency_documents ? row.gross_total : null,
         authorized_gross_total: row.last_success_at && !row.unknown_currency_documents ? row.authorized_gross_total : null })) });
   });

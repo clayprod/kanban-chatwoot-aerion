@@ -7955,6 +7955,7 @@ function App() {
   const [metasYear, setMetasYear] = useState(new Date().getFullYear());
   const [metasRows, setMetasRows] = useState([]);
   const [realizadoRows, setRealizadoRows] = useState([]);
+  const [realizadoInfo, setRealizadoInfo] = useState(null);
   const [realizadoVendedores, setRealizadoVendedores] = useState([]);
   const [metasLoading, setMetasLoading] = useState(false);
   const [vendaMeta, setVendaMeta] = useState(null);
@@ -8744,13 +8745,13 @@ function App() {
     Promise.all([
       axios.get('/api/metas', { params: { ano: year } }).then(r => r.data || []).catch(() => []),
       axios.get('/api/vendas/realizado/ano', { params: { ano: year } })
-        .then(r => (r.data && r.data.configured ? (r.data.meses || []) : []))
-        .catch(() => []),
+        .then(r => (r.data && r.data.configured ? r.data : null))
+        .catch(() => null),
       axios.get('/api/vendas/realizado/vendedores/ano', { params: { ano: year } })
         .then(r => (r.data && r.data.configured ? (r.data.vendedores || []) : []))
         .catch(() => []),
     ])
-      .then(([metas, meses, vendedores]) => { setMetasRows(metas); setRealizadoRows(meses); setRealizadoVendedores(vendedores); })
+      .then(([metas, realizado, vendedores]) => { setMetasRows(metas); setRealizadoRows(realizado?.meses || []); setRealizadoInfo(realizado); setRealizadoVendedores(vendedores); })
       .finally(() => {
         if (!background) setMetasLoading(false);
       });
@@ -21217,7 +21218,7 @@ function App() {
                   <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
                     <ChartPanel
                       className="xl:col-span-4"
-                      title="Faturamento por vendedor"
+                      title="Realizado comercial por vendedor"
                       subtitle="Ranking do ano em curso"
                     >
                       {overviewData.faturamentoVendedores.length ? (
@@ -23360,7 +23361,8 @@ function App() {
               <SankhyaReportingPanel year={metasYear} />
               <div className="toolbar-meta mb-6">
                 <p className="min-w-0 text-sm text-muted">
-                  Receita em R$: <span className="font-semibold text-ink/80 dark:text-white/80">meta</span> (plano) vs <span className="font-semibold text-ink/80 dark:text-white/80">realizado</span> (faturamento). Por mês e no ano.
+                  {realizadoInfo?.source === 'hybrid_100_database_102_orders' ? 'Meta × realizado comercial em R$ · 100: faturamento da base atual · 102: produtos de pedidos confirmados.' : <>Receita em R$: <span className="font-semibold text-ink/80 dark:text-white/80">meta</span> (plano) vs <span className="font-semibold text-ink/80 dark:text-white/80">realizado</span> (faturamento). Por mês e no ano.</>}
+                  {realizadoInfo?.partial && <span className="ml-1">Cobertura parcial das fontes.</span>}
                 </p>
                 <select value={metasYear} onChange={(e) => setMetasYear(Number(e.target.value))} className={`${select} filter-select h-10 w-full font-mono sm:w-auto sm:min-w-[7rem]`}>
                   {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(y => <option key={y} value={y}>{y}</option>)}
@@ -23389,6 +23391,8 @@ function App() {
                     meta,
                     done,
                     vendas: Number(realRow.vendas) || 0,
+                    from100: Number(realRow.receita_100) || 0,
+                    from102: Number(realRow.receita_102) || 0,
                     pct: meta > 0 ? Math.round((done / meta) * 100) : null,
                   };
                 });
@@ -23524,7 +23528,7 @@ function App() {
                                   <div
                                     key={row.mes}
                                     className="flex min-w-0 flex-1 flex-col items-center gap-1"
-                                    title={`${row.fullName}\nMeta: ${formatCompactCurrency(row.meta) || 'R$ 0'}\nRealizado: ${formatCompactCurrency(row.done) || 'R$ 0'}`}
+                                    title={`${row.fullName}\nMeta: ${formatCompactCurrency(row.meta) || 'R$ 0'}\nRealizado: ${formatCompactCurrency(row.done) || 'R$ 0'}${realizadoInfo?.source === 'hybrid_100_database_102_orders' ? `\n100 · faturado: ${formatCompactCurrency(row.from100) || 'R$ 0'}\n102 · pedidos confirmados: ${formatCompactCurrency(row.from102) || 'R$ 0'}` : ''}`}
                                   >
                                     <div
                                       className={`relative mx-auto w-full max-w-[40px] ${isFocus ? 'opacity-100' : 'opacity-90'}`}
@@ -23578,7 +23582,7 @@ function App() {
                     {/* Vendedores */}
                     <ChartPanel
                       title="Realizado por vendedor"
-                      subtitle="Faturamento do ano"
+                      subtitle={realizadoInfo?.source === 'hybrid_100_database_102_orders' ? '100: faturamento · 102: pedidos confirmados' : 'Faturamento do ano'}
                       actions={(
                         <span className="font-mono text-[11px] text-muted">{sellerRows.length} vendedor{sellerRows.length === 1 ? '' : 'es'}</span>
                       )}
