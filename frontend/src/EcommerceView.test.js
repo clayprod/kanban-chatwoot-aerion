@@ -40,7 +40,7 @@ test('chart series can be hidden, restored and switched to volume without mixing
   expect(screen.getByText('Selecione uma linha acima para exibir o gráfico.')).toBeInTheDocument();
   fireEvent.click(revenue);
   expect(revenue).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.change(screen.getByLabelText('Métrica do gráfico'), { target: { value: 'volume' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Pedidos e sessões' }));
   expect(screen.getByRole('button', { name: 'Pedidos pagos' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.queryByRole('button', { name: 'Receita de produtos' })).not.toBeInTheDocument();
 });
@@ -51,6 +51,22 @@ test('marketing keeps traffic and campaigns inside the same main section', async
   fireEvent.click(traffic);
   expect(await screen.findByText('Origem do tráfego')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
+});
+
+test('marketing prioritizes charts and exposes CPM, impressions and CTR controls', async () => {
+  axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? {
+    connections: [{provider:'ga4',status:'error',enabled:true}], encryptionReady:true,
+  } : {...report, daily:[{date:'2026-10-21',spend:20,impressions:1000,clicks:10}], excludedOrders:[{id:'1'}]} }));
+  render(<EcommerceView section="ads" onNavigate={jest.fn()} />);
+  const chart=await screen.findByRole('region', {name:'Receita diária de produtos'});
+  for(const element of [screen.getByText('Eficiência da mídia'),screen.getByText('Buscar nos resultados'),screen.getByText(/Google Analytics 4: Requer atenção/),screen.getByText(/pedidos marcados como teste/)]) {
+    expect(chart.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  }
+  fireEvent.click(screen.getByRole('button',{name:'CPM e impressões'}));
+  expect(screen.getByRole('button',{name:'CPM total'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByRole('button',{name:'Impressões totais'})).toHaveAttribute('aria-pressed','true');
+  fireEvent.click(screen.getByRole('button',{name:'Impressões e CTR'}));
+  expect(screen.getByRole('button',{name:'CTR total'})).toHaveAttribute('aria-pressed','true');
 });
 
 test('Search Console stays in Marketing and shows organic totals separately from sales', async () => {

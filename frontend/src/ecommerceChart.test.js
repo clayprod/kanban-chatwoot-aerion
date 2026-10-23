@@ -41,3 +41,14 @@ test('reach chart uses separate impression and percentage axes and weighted plat
   const empty = prepareSalesChart([{ date: '2026-10-19', impressions: 0, clicks: 0 }], 'reach', 'day', ['ctr']);
   expect(empty.points[0].ctr).toBeNull();
 });
+test('CPM uses grouped investment and impressions, keeping platforms and missing data distinct', () => {
+  const { points } = prepareSalesChart([
+    { date: '2026-10-19', spend: 10, impressions: 100, metaSpend: 10, metaImpressions: 100 },
+    { date: '2026-10-20', spend: 20, impressions: 900, googleSpend: 20, googleImpressions: 900 },
+  ], 'cpm', 'week', ['cpm', 'impressions', 'metaCpm', 'googleCpm']);
+  expect(points[0].cpm).toBe(30);
+  expect(points[0].metaCpm).toBe(100);
+  expect(points[0].googleCpm).toBeCloseTo(20000 / 900);
+  const empty = prepareSalesChart([{ date: '2026-10-19', spend: 5, impressions: 0 }], 'cpm', 'day', ['cpm']);
+  expect(empty.points[0].cpm).toBeNull();
+});

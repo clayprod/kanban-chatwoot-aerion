@@ -82,13 +82,24 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       await page.waitForFunction(expected => [...document.querySelectorAll('h2')].some(h => h.textContent === expected), {}, heading);
       if (id === 'traffic') await page.waitForFunction(() => document.body.textContent.includes('Qualificados e oportunidades'));
       if (id === 'overview') {
-        await page.select('#ecommerce-chart-mode', 'efficiency');
+        await clickSection('CPC e ROAS');
         await page.waitForFunction(() => document.body.textContent.includes('CPC ponderado por cliques'));
         await page.screenshot({ path: path.join(output, 'efficiency-desktop.png'), fullPage: true });
-        await page.select('#ecommerce-chart-mode', 'reach');
+        await clickSection('Impressões e CTR');
         await page.waitForFunction(() => document.body.textContent.includes('CTR ponderado por impressões'));
         await page.screenshot({ path: path.join(output, 'reach-desktop.png'), fullPage: true });
-        await page.select('#ecommerce-chart-mode', 'money');
+        await clickSection('Vendas e investimento');
+      }
+      if (id === 'ads') {
+        await clickSection('CPM e impressões');
+        await page.waitForFunction(() => document.body.textContent.includes('CPM total'));
+        const order = await page.evaluate(() => {
+          const chart = document.querySelector('[aria-label="Receita diária de produtos"]');
+          const indicators = [...document.querySelectorAll('h3')].find(el => el.textContent === 'Eficiência da mídia');
+          const search = document.querySelector('input[placeholder="Produto, campanha, cupom ou pedido"]');
+          return chart.getBoundingClientRect().top < indicators.getBoundingClientRect().top && chart.getBoundingClientRect().top < search.getBoundingClientRect().top;
+        });
+        assert(order, 'Marketing charts must precede indicators and result filters.');
       }
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
     }
@@ -102,7 +113,11 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     await clickSection('Visão geral');
     await page.waitForSelector('table');
     await page.screenshot({ path: path.join(output, 'overview-mobile.png'), fullPage: true });
-    await clickSection('Marketing'); await clickSection('Busca orgânica e SEO');
+    await clickSection('Marketing');
+    await clickSection('Impressões e CTR');
+    await page.screenshot({ path: path.join(output, 'reach-mobile.png'), fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Mobile chart controls must fit the viewport.');
+    await clickSection('Busca orgânica e SEO');
     await page.screenshot({ path: path.join(output, 'seo-mobile.png'), fullPage: true });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, 'The mobile page must not overflow horizontally.');

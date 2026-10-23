@@ -10,15 +10,20 @@ export const CHART_SERIES = {
     ['impressions', 'Impressões totais', '#8b78f5', 'left'], ['metaImpressions', 'Impressões Meta', '#3b82f6', 'left'], ['googleImpressions', 'Impressões Google', '#d97706', 'left'],
     ['ctr', 'CTR total', '#0d9488', 'right'], ['metaCtr', 'CTR Meta', '#60a5fa', 'right'], ['googleCtr', 'CTR Google', '#fbbf24', 'right'],
   ],
+  cpm: [
+    ['cpm', 'CPM total', '#8b78f5', 'left'], ['metaCpm', 'CPM Meta', '#3b82f6', 'left'], ['googleCpm', 'CPM Google', '#d97706', 'left'],
+    ['impressions', 'Impressões totais', '#0d9488', 'right'], ['metaImpressions', 'Impressões Meta', '#60a5fa', 'right'], ['googleImpressions', 'Impressões Google', '#fbbf24', 'right'],
+  ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
 };
 export const CHART_AXES = {
   money: ['Receita e pendentes · R$', 'Investimento · R$'],
   efficiency: ['CPC · R$/clique', 'ROAS · vezes'],
   reach: ['Impressões', 'CTR · %'],
+  cpm: ['CPM · R$/mil impressões', 'Impressões'],
   volume: ['Pedidos pagos', 'Sessões GA4'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], volume: ['orders', 'sessions'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'] };
 
 function axisMaximum(values) {
   const max = values.reduce((n, value) => Math.max(n, value || 0), 0);
@@ -46,6 +51,8 @@ export function prepareSalesChart(rows, mode, interval, visible) {
     for (const prefix of ['', 'meta', 'google']) {
       const impressions = point[prefix ? `${prefix}Impressions` : 'impressions'];
       const clicks = point[prefix ? `${prefix}Clicks` : 'clicks'];
+      const spend = point[prefix ? `${prefix}Spend` : 'spend'];
+      point[prefix ? `${prefix}Cpm` : 'cpm'] = impressions > 0 && spend != null ? 1000 * spend / impressions : null;
       point[prefix ? `${prefix}Ctr` : 'ctr'] = impressions > 0 && clicks != null ? 100 * clicks / impressions : null;
     }
   }
