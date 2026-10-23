@@ -9,3 +9,11 @@ export function createPncpOpportunityPreview(item, profile = {}, focus = null) {
     __preview: item, __profile: profile, __focus: focus,
   };
 }
+export function mergePncpItems(items = [], known = []) {
+  const merged = new Map();
+  for (const item of [...known,...items]) {
+    const number = item.numeroItem ?? item.numero_item;
+    if (number != null) merged.set(String(number),item);
+  }
+  return [...merged.values()];
+}

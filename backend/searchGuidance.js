@@ -1,5 +1,5 @@
 'use strict';
-const { normalizeProfile, unique, applyQuality, words } = require('./searchQuality');
+const { normalizeProfile, unique, applyQuality, words, scopeProcurementItems } = require('./searchQuality');
 
 function fallbackInterpret(description) {
   const term = description.replace(/^(?:quero|busco|procuro|preciso de|comprar|vender|encontrar|monitorar|busca por|oportunidades de|licitacoes de)\s+/i, '').trim();
@@ -63,6 +63,10 @@ Não autorize sugestões automaticamente e não diga que houve consulta ao PNCP.
 
 function registerSearchGuidance(app, deps) {
   const { pool, getAccountId, interpret, preview } = deps;
+  app.post('/api/licitacoes/search/guide/items', (req,res) => {
+    if (!Array.isArray(req.body?.items) || req.body.items.length > 2500) return res.status(400).json({error:'Lista de itens inválida.'});
+    res.json(scopeProcurementItems(req.body.items,req.body.profile || {},Array.isArray(req.body.known_item_numbers) ? req.body.known_item_numbers : []));
+  });
   app.post('/api/licitacoes/search/guide/interpret', async (req, res) => {
     const description = String(req.body?.description || '').trim().slice(0, 2000);
     if (words(description).length === 0) return res.status(400).json({ error: 'Descreva o que você procura.' });

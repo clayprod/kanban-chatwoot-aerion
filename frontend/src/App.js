@@ -11,8 +11,9 @@ import TechnicalResult from './TechnicalResult';
 import OpportunityPreview from './OpportunityPreview';
 import PncpNoticePage from './PncpNoticePage';
 import PncpSearchDialog from './PncpSearchDialog';
-import { readPncpPage, pncpPageUrl } from './pncpNavigation';
-import { createPncpOpportunityPreview } from './pncpPreview';
+import { readPncpPage, pncpPageUrl, readPipelinePage, pipelinePageUrl } from './pncpNavigation';
+import PipelineOpportunityPage from './PipelineOpportunityPage';
+import { createPncpOpportunityPreview, mergePncpItems } from './pncpPreview';
 import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
@@ -7999,10 +8000,11 @@ function App() {
   const disparoDetalheRef = useRef(null);
   const [licitacaoLoading, setLicitacaoLoading] = useState(false);
   const [licitacaoSearch, setLicitacaoSearch] = useState('');
-  const [licitacaoSubview, setLicitacaoSubview] = useState(() => readPncpPage().job ? 'editais' : 'overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
+  const [licitacaoSubview, setLicitacaoSubview] = useState(() => readPipelinePage() ? 'board' : readPncpPage().job ? 'editais' : 'overview'); // 'overview' | 'board' | 'editais' | 'pca' | 'editais_watchlist' | …
   const [selectedOpportunity, setSelectedOpportunity] = useState(null);
   const [pncpPreviewLoading, setPncpPreviewLoading] = useState(false);
   const [pncpPreviewError, setPncpPreviewError] = useState('');
+  const [pncpPreviewOtherItems, setPncpPreviewOtherItems] = useState([]);
   const pncpPreviewRequest = useRef(0);
   const selectedOpportunityIdentity = selectedOpportunity?.__preview || selectedOpportunity?.id || null;
   useEffect(() => { if (selectedOpportunityIdentity == null) pncpPreviewRequest.current++; }, [selectedOpportunityIdentity]);
@@ -8102,6 +8104,15 @@ function App() {
   const closePncpNewSearch = useCallback(() => { setPncpNewSearchOpen(false); setPncpGuideJob(null); }, []);
   const [pncpPage, setPncpPage] = useState(readPncpPage);
   const [pncpPageError, setPncpPageError] = useState('');
+  const [pipelinePageId, setPipelinePageId] = useState(readPipelinePage);
+  const [pipelinePageError, setPipelinePageError] = useState('');
+  const closePipelineOpportunity = () => {
+    document.activeElement?.blur?.();
+    pncpPreviewRequest.current++;
+    setSelectedOpportunity(null); setContactLinkQuery(''); setPipelinePageError('');
+    if (window.history.state?.pipelineFromBoard) window.history.back();
+    else { window.history.replaceState({}, '', pipelinePageUrl(null)); setPipelinePageId(null); setLicitacaoSubview('board'); }
+  };
   const pncpMainScroll = useRef(null);
   const pncpPageRequest = useRef(0);
   const pncpJobOpenRequest = useRef(0);
@@ -8116,7 +8127,7 @@ function App() {
     else navigatePncpPage({ job: activePncpSearchJobId });
   };
   useEffect(() => {
-    const onPop = () => setPncpPage(readPncpPage());
+    const onPop = () => { document.activeElement?.blur?.(); setPncpPage(readPncpPage()); setPipelinePageId(readPipelinePage()); };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -8351,7 +8362,7 @@ function App() {
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
-  const [activeView, setActiveView] = useState(() => readPncpPage().job ? 'Licitações' : new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
+  const [activeView, setActiveView] = useState(() => readPipelinePage() || readPncpPage().job ? 'Licitações' : new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
   const [ecommerceSubview, setEcommerceSubview] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'connections' : 'overview');
   const [processActiveSection, setProcessActiveSection] = useState(processBlueprint.map[0]?.id || 'metas-2026');
   const [processQuery, setProcessQuery] = useState('');
@@ -10798,9 +10809,8 @@ function App() {
   // Trava o scroll do body e Esc fecha o modal ativo (nova licitação ou detalhe).
   // Depend only on open/closed — NOT on the full selectedOpportunity object.
   // Re-running this on every keystroke was toggling body overflow and blurring inputs.
-  const hasSelectedOpportunityModal = Boolean(selectedOpportunity && !selectedOpportunity.__preview);
   useEffect(() => {
-    const anyModal = showNewOpportunityForm || hasSelectedOpportunityModal;
+    const anyModal = showNewOpportunityForm;
     if (!anyModal) return undefined;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -10818,7 +10828,7 @@ function App() {
       document.body.style.overflow = prev;
       window.removeEventListener('keydown', onKey);
     };
-  }, [showNewOpportunityForm, hasSelectedOpportunityModal, resetNewOpportunityFormState]);
+  }, [showNewOpportunityForm, resetNewOpportunityFormState]);
 
   const createOpportunity = async () => {
     if (!newOpportunityForm.titulo.trim()) {
@@ -12754,6 +12764,7 @@ function App() {
         numero_item: String(entry?.numero_item || entry?.numeroItem || '').trim() || null,
         descricao: String(entry.__descricao_resolvida || '').trim(),
         modelo_produto: null,
+        scope_pending: entry.scope_pending === true,
         quantidade: Number.isFinite(Number(entry?.quantidade)) ? Number(entry.quantidade) : null,
         unidade: String(entry?.unidade || entry?.unidadeMedida || '').trim() || null,
         valor_referencia: Number.isFinite(Number(entry?.valor_referencia ?? entry?.valor_unitario_estimado ?? entry?.valorUnitarioEstimado))
@@ -12803,6 +12814,14 @@ function App() {
     return allItems;
   };
 
+  const resolvePncpFocusedItems = async (item, profile, { allItems = false } = {}) => {
+    const known = Array.isArray(item.itens_pertinentes) ? item.itens_pertinentes : [];
+    const items = allItems || !known.length ? mergePncpItems(await fetchAllPncpItemsForImport(item),known) : known;
+    const { data } = await axios.post('/api/licitacoes/search/guide/items', { items, profile,
+      known_item_numbers: known.map(i => i.numero_item ?? i.numeroItem).filter(n => n != null) });
+    return data;
+  };
+
   const previewPncpOpportunity = async (item, focus = null, options = {}) => {
     const request = ++pncpPreviewRequest.current;
     const profile = options.profile || activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] };
@@ -12812,11 +12831,16 @@ function App() {
     }
     setSelectedOpportunity(createPncpOpportunityPreview(item, profile, focus));
     setSelectedItems(mapPncpImportItemsToDraft(item.itens_pertinentes || []));
+    setPncpPreviewOtherItems([]);
     setItemRequirementsMap({}); setSelectedCommercialRequirements([]); setSelectedLinkedContacts([]); setSelectedComments([]);
     setPncpPreviewLoading(true); setPncpPreviewError('');
     try {
-      const items = await fetchAllPncpItemsForImport(item);
-      if (request === pncpPreviewRequest.current && items.length) setSelectedItems(mapPncpImportItemsToDraft(items));
+      const scoped = await resolvePncpFocusedItems(item,profile,{allItems:true});
+      if (request === pncpPreviewRequest.current) {
+        setSelectedItems(mapPncpImportItemsToDraft(scoped.relevant));
+        setPncpPreviewOtherItems(mapPncpImportItemsToDraft(scoped.other));
+        if (scoped.unscoped) setPncpPreviewError('Critérios de foco indisponíveis. Confira os itens antes de importar.');
+      }
     } catch {
       if (request === pncpPreviewRequest.current) setPncpPreviewError('Não foi possível carregar todos os itens. Os itens disponíveis continuam abaixo.');
     } finally { if (request === pncpPreviewRequest.current) setPncpPreviewLoading(false); }
@@ -12880,7 +12904,7 @@ function App() {
   }, [activeView, licitacaoSubview]);
 
   // Importar licitação do PNCP para criar uma oportunidade
-  const importPncpLicitacao = async (item) => {
+  const importPncpLicitacao = async (item, options = {}) => {
     setPncpImportingId(item.id);
     try {
       const pickPncpDate = (source, keys = []) => {
@@ -12916,16 +12940,10 @@ function App() {
       const statusFromPncp = pncpSituacaoNome.includes('suspens') ? 'suspenso'
         : (pncpSituacaoNome.includes('revogad') || pncpSituacaoNome.includes('anuladoo') || pncpSituacaoNome.includes('cancel')) ? 'cancelado'
         : 'ativo';
-      const queryText = normalizeText(pncpSearchFilters.q || '').trim();
-      const shouldImportAllItems = queryText.length < 3;
-
-      let importedItemsDraft = [];
-      if (!shouldImportAllItems && Array.isArray(item.itens_pertinentes) && item.itens_pertinentes.length > 0) {
-        importedItemsDraft = mapPncpImportItemsToDraft(item.itens_pertinentes);
-      } else {
-        const allPncpItems = await fetchAllPncpItemsForImport(item);
-        importedItemsDraft = mapPncpImportItemsToDraft(allPncpItems);
-      }
+      const profile = options.profile || activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [pncpSearchFilters.q].filter(Boolean), excluded_terms: activePncpSearchJob?.negative_terms || [] };
+      const scoped = options.items ? {relevant:options.items} : await resolvePncpFocusedItems(item,profile,{allItems:true});
+      const importedItemsDraft = mapPncpImportItemsToDraft(scoped.relevant);
+      if (!importedItemsDraft.length) throw new Error('Nenhum item corresponde ao foco atual da busca. Confira os critérios na página do edital.');
       const estimatedValue = Number(item.valor_itens_pertinentes) > 0
         ? Number(item.valor_itens_pertinentes)
         : (item.valor_total_estimado ?? item.valor_global ?? '');
@@ -12978,12 +12996,21 @@ function App() {
       setPncpSearchExpanded(false);
     } catch (error) {
       console.error('Error importing PNCP items:', error);
+      alert(error.response?.data?.error || error.message || 'Não foi possível preparar a importação.');
     } finally {
       setPncpImportingId(null);
     }
   };
 
-  const openOpportunity = async (opportunity) => {
+  const openOpportunity = async (opportunity, { updateRoute = true } = {}) => {
+    if (updateRoute) {
+      const fromBoard = activeView === 'Licitações' && licitacaoSubview === 'board' && !readPipelinePage();
+      window.history.replaceState({ ...window.history.state, pncpScroll: pncpMainScroll.current?.scrollTop || 0, pipelineScroll: boardScrollRef.current?.scrollLeft || 0 }, '', window.location.href);
+      window.history.pushState({ pipelineFromBoard: fromBoard }, '', pipelinePageUrl(opportunity.id));
+      setPipelinePageId(String(opportunity.id));
+    }
+    setActiveView('Licitações'); setLicitacaoSubview('board'); setPipelinePageError('');
+    if (pncpMainScroll.current) pncpMainScroll.current.scrollTop = 0;
     const request = ++pncpPreviewRequest.current;
     // Discard the previous view's item totals before opening a persisted record.
     // Its autosave must never use the items from a read-only preview or another opportunity.
@@ -13031,6 +13058,39 @@ function App() {
       setItemChecklistAiMap({});
     }
   };
+
+
+  useEffect(() => {
+    if (!authStatus.authenticated) return;
+    let cancelled = false;
+    if (!pipelinePageId) {
+      setSelectedOpportunity(current => current && !current.__preview ? null : current);
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        if (pncpMainScroll.current && !readPncpPage().job) pncpMainScroll.current.scrollTop = window.history.state?.pncpScroll || 0;
+        if (boardScrollRef.current) boardScrollRef.current.scrollLeft = window.history.state?.pipelineScroll || 0;
+      });
+      return () => { cancelled = true; };
+    }
+    setActiveView('Licitações'); setLicitacaoSubview('board'); setPipelinePageError('');
+    if (String(selectedOpportunity?.id) !== pipelinePageId) {
+      pncpPreviewRequest.current++;
+      setSelectedOpportunity(null);
+      axios.get('/api/licitacoes/opportunities/' + encodeURIComponent(pipelinePageId)).then(({data}) => {
+        if (!cancelled) openOpportunity(data, { updateRoute: false });
+      }).catch(error => { if (!cancelled) setPipelinePageError(error.response?.data?.error || 'Não foi possível carregar a oportunidade.'); });
+    }
+    return () => { cancelled = true; };
+    // Navigation is the trigger; editing fields must not reload the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus.authenticated, pipelinePageId]);
+
+  useEffect(() => {
+    if (activeView === 'Licitações' && licitacaoSubview === 'board') return;
+    if (!pipelinePageId) return;
+    if (readPipelinePage()) window.history.replaceState({}, '', pipelinePageUrl(null));
+    setPipelinePageId(null);
+  }, [activeView, licitacaoSubview, pipelinePageId]);
 
   const addComment = async () => {
     if (!selectedOpportunity || !newCommentText.trim()) {
@@ -13110,7 +13170,7 @@ function App() {
     try {
       await axios.delete(`/api/licitacoes/opportunities/${opportunityId}`);
       setLicitacaoOpportunities(prev => prev.filter(item => String(item.id) !== String(opportunityId)));
-      setSelectedOpportunity(null);
+      closePipelineOpportunity();
       setSelectedCommercialRequirements([]);
       setSelectedItems([]);
       setItemRequirementsMap({});
@@ -15956,7 +16016,7 @@ function App() {
                 </div>
               )}
 
-              {activeView === 'Licitações' && licitacaoSubview === 'board' && (
+              {activeView === 'Licitações' && licitacaoSubview === 'board' && !pipelinePageId && (
                 <div className="toolbar-row toolbar-row--search-action mt-3 sm:mt-4 min-w-0 pb-3">
                   <div className="relative min-w-0 w-full">
                     <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-muted">
@@ -16591,80 +16651,46 @@ function App() {
               <>
               {pncpPageError && <div role="alert" className="my-4 rounded-xl border border-status-warning p-4 text-sm text-ink">{pncpPageError}<button type="button" className="ml-4 text-primary underline" onClick={() => navigatePncpPage({ job: activePncpSearchJobId })}>Voltar aos resultados</button></div>}
               {pncpPage.result && !selectedOpportunity?.__preview && !pncpPageError && <div role="status" className="my-5 rounded-xl border border-line bg-surf p-6 text-sm text-muted">Carregando o edital e suas análises…</div>}
-              {selectedOpportunity?.__preview && <PncpNoticePage opportunity={selectedOpportunity} jobName={activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q} items={selectedItems} loading={pncpPreviewLoading} error={pncpPreviewError}
+              {selectedOpportunity?.__preview && <PncpNoticePage opportunity={selectedOpportunity} jobName={activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q} items={selectedItems} otherItems={pncpPreviewOtherItems} loading={pncpPreviewLoading} error={pncpPreviewError}
                 onBack={backToPncpResults} onSearches={() => navigatePncpPage({})}
                 canImport={canEditPage('Licitações') && selectedOpportunity.__preview.__visibility !== 'pipeline' && selectedOpportunity.__preview.__visibility_db !== 'pipeline'}
-                onImport={() => { const item = selectedOpportunity.__preview; setSelectedOpportunity(null); pncpPreviewRequest.current++; navigatePncpPage({ job: activePncpSearchJobId }); importPncpLicitacao(item); }} />}
+                onImport={() => { const item = selectedOpportunity.__preview; const options = {profile:selectedOpportunity.__profile, ...(!pncpPreviewLoading && !pncpPreviewError ? {items:selectedItems} : {})}; setSelectedOpportunity(null); pncpPreviewRequest.current++; navigatePncpPage({ job: activePncpSearchJobId }); importPncpLicitacao(item,options); }} />}
               {/* Criação em diálogo; listagem e resultados em páginas. */}
               <div className={pncpJobModalOpen || selectedOpportunity?.__preview ? 'hidden' : 'mt-6 space-y-5'}>
-                {(pncpNewSearchOpen || pncpGuideJob) && <PncpSearchDialog onClose={closePncpNewSearch}>
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className={`${sectionTitle} text-base`}>Nova busca de editais</h3>
-                    </div>
-                    <button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={`${btnSecondarySm}`}>
-                      Watchlists
-                    </button>
-                  </div>
+                {(pncpNewSearchOpen || pncpGuideJob) && <PncpSearchDialog onClose={closePncpNewSearch} title={pncpGuideJob ? 'Revisar busca de editais' : 'Nova busca de editais'}>
+                <div>
 
-                  <SearchGuide key={pncpGuideJob?.id || 'new'} source="edital"
-                    onRestoreFilters={restored => setPncpSearchFilters(prev => ({ ...prev, ...restored }))}
-                    initialProfile={pncpGuideJob?.filters?.search_profile || (pncpGuideJob ? {
-                      description: pncpGuideJob.filters?.q || pncpGuideJob.nome, objective: pncpGuideJob.filters?.q || pncpGuideJob.nome,
-                      terms: [pncpGuideJob.filters?.q || pncpGuideJob.terms?.[0]].filter(Boolean), related_terms: [], excluded_terms: pncpGuideJob.negative_terms || [],
-                      match_mode: 'literal', item_kind: 'all',
-                    } : null)}
-                    filters={pncpGuideJob?.filters || {
-                      tipos_documento: pncpSearchFilters.tipos_documento, status: pncpSearchFilters.status,
-                      modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id, uf: pncpSearchFilters.uf,
-                      esfera_id: pncpSearchFilters.esfera_id, tipo_id: pncpSearchFilters.tipo_id,
-                      modo_disputa_id: pncpSearchFilters.modo_disputa_id,
-                      orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
-                      unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
-                      negative_terms: pncpSearchFilters.negative_terms,
-                    }} activating={pncpSearchLoading}
-                    onCancel={closePncpNewSearch}
-                    onActivate={async profile => {
-                      if (pncpGuideJob) {
-                        setPncpSearchLoading(true);
-                        try {
-                          await axios.put('/api/licitacoes/pncp/search/deep/' + pncpGuideJob.id + '/profile', { profile });
-                          setPncpGuideJob(null); setPncpNewSearchOpen(false); await loadPncpSearchJobs();
-                        } catch (e) { alert(e.response?.data?.error || 'Não foi possível salvar os critérios.'); }
-                        finally { setPncpSearchLoading(false); }
-                      } else {
-                        await runPncpSearch(1, { q: profile.terms[0], search_profile: profile, usar_ia: false, negative_terms: profile.excluded_terms.join('; ') });
-                      }
-                    }} />
-
+                  <SearchGuide key={pncpGuideJob?.id || 'new'} source="edital" hideHeader
+                    filtersPanel={<details className="group rounded-xl border border-line">
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm focus-visible:ring-2 focus-visible:ring-primary"><span className="min-w-0"><span className="block font-medium text-ink">Filtros da consulta</span><span className="mt-0.5 block truncate text-xs text-muted">{pncpSearchFilters.tipos_documento === 'edital' ? 'Editais' : 'Documentos selecionados'} · {pncpSearchFilters.status === 'recebendo_proposta' ? 'Recebendo propostas' : 'Status personalizado'} · {pncpSearchFilters.uf || 'Todos os estados'}</span></span><ChevronDownIcon className="h-4 w-4 shrink-0 text-muted transition-transform group-open:rotate-180" /></summary>
+                      <div className="space-y-4 border-t border-line p-4">
                   <div className="grid min-w-0 grid-cols-1 gap-2">
-                    <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-                      <select value={pncpSearchFilters.tipos_documento} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
+                    <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+                      <label className="block space-y-1.5 text-xs font-medium text-muted"><span>Documento</span><select value={pncpSearchFilters.tipos_documento} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, tipos_documento: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="edital">Editais</option>
                         <option value="ata">Atas de Registro</option>
                         <option value="contrato">Contratos</option>
                         <option value="edital,ata">Editais e Atas</option>
                         <option value="edital,ata,contrato">Todos</option>
-                      </select>
-                      <select value={pncpSearchFilters.status} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
+                      </select></label>
+                      <label className="block space-y-1.5 text-xs font-medium text-muted"><span>Status</span><select value={pncpSearchFilters.status} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, status: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="recebendo_proposta">Recebendo proposta</option>
                         <option value="encerrada">Encerrada</option>
                         <option value="suspensa">Suspensa</option>
                         <option value="todos">Todos os status</option>
-                      </select>
-                      <select value={pncpSearchFilters.modalidade_licitacao_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
+                      </select></label>
+                      <label className="block space-y-1.5 text-xs font-medium text-muted"><span>Modalidade</span><select value={pncpSearchFilters.modalidade_licitacao_id} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, modalidade_licitacao_id: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="">Todas modalidades</option>
                         {modalidadeOptions.map(item => (
                           <option key={item.id} value={item.id}>{item.nome}</option>
                         ))}
-                      </select>
-                      <select value={pncpSearchFilters.uf} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
+                      </select></label>
+                      <label className="block space-y-1.5 text-xs font-medium text-muted"><span>Estado</span><select value={pncpSearchFilters.uf} onChange={(event) => setPncpSearchFilters(prev => ({ ...prev, uf: event.target.value }))} className={`${select} filter-select h-8 rounded-[10px] text-xs`}>
                         <option value="">Todos os estados</option>
                         {['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'].map(uf => (
                           <option key={uf} value={uf}>{uf}</option>
                         ))}
-                      </select>
+                      </select></label>
                     </div>
                     <div className="flex min-w-0">
                       <button type="button" onClick={() => setPncpSearchExpanded(!pncpSearchExpanded)} className={`${btnSecondarySm} w-full sm:w-auto`}>
@@ -16779,6 +16805,38 @@ function App() {
                       </section>
                     </div>
                   )}
+                      </div>
+                    </details>}
+                    onRestoreFilters={restored => setPncpSearchFilters(prev => ({ ...prev, ...restored }))}
+                    initialProfile={pncpGuideJob?.filters?.search_profile || (pncpGuideJob ? {
+                      description: pncpGuideJob.filters?.q || pncpGuideJob.nome, objective: pncpGuideJob.filters?.q || pncpGuideJob.nome,
+                      terms: [pncpGuideJob.filters?.q || pncpGuideJob.terms?.[0]].filter(Boolean), related_terms: [], excluded_terms: pncpGuideJob.negative_terms || [],
+                      match_mode: 'literal', item_kind: 'all',
+                    } : null)}
+                    filters={pncpGuideJob?.filters || {
+                      tipos_documento: pncpSearchFilters.tipos_documento, status: pncpSearchFilters.status,
+                      modalidade_licitacao_id: pncpSearchFilters.modalidade_licitacao_id, uf: pncpSearchFilters.uf,
+                      esfera_id: pncpSearchFilters.esfera_id, tipo_id: pncpSearchFilters.tipo_id,
+                      modo_disputa_id: pncpSearchFilters.modo_disputa_id,
+                      orgao_cnpj: pncpSearchFilters.orgao_cnpj || pncpOrgaoLookupQuery,
+                      unidade_codigo: pncpSearchFilters.unidade_codigo || pncpUasgLookupQuery,
+                      negative_terms: pncpSearchFilters.negative_terms,
+                    }} activating={pncpSearchLoading}
+                    onCancel={closePncpNewSearch}
+                    onActivate={async profile => {
+                      if (pncpGuideJob) {
+                        setPncpSearchLoading(true);
+                        try {
+                          await axios.put('/api/licitacoes/pncp/search/deep/' + pncpGuideJob.id + '/profile', { profile });
+                          setPncpGuideJob(null); setPncpNewSearchOpen(false); await loadPncpSearchJobs();
+                        } catch (e) { alert(e.response?.data?.error || 'Não foi possível salvar os critérios.'); }
+                        finally { setPncpSearchLoading(false); }
+                      } else {
+                        await runPncpSearch(1, { q: profile.terms[0], search_profile: profile, usar_ia: false, negative_terms: profile.excluded_terms.join('; ') });
+                      }
+                    }} />
+
+
                 </div>
 
                 </PncpSearchDialog>}
@@ -16792,7 +16850,7 @@ function App() {
                         {pncpSearchJobs.some(j => isPncpJobLive(j.status)) ? ' · Atualizando status ao vivo…' : ''}
                       </p>
                     </div>
-                    <div className="flex gap-2"><button type="button" onClick={() => setPncpNewSearchOpen(true)} className={btnPrimarySm}><PlusIcon className="h-4 w-4" /> Nova busca</button>
+                    <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setLicitacaoSubview('editais_watchlist')} className={btnSecondarySm}>Watchlists</button><button type="button" onClick={() => setPncpNewSearchOpen(true)} className={btnPrimarySm}><PlusIcon className="h-4 w-4" /> Nova busca</button>
                     <button type="button" onClick={loadPncpSearchJobs} className={`${btnSecondarySm}`}>
                       <ArrowPathIcon className="h-3.5 w-3.5" /> Atualizar
                     </button></div>
@@ -18288,18 +18346,8 @@ function App() {
                                                   SRP
                                                 </span>
                                               )}
-                                              {item.modo_disputa?.nome && (
-                                                <span title="Modo de disputa" className="inline-flex max-w-[8rem] items-center truncate rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
-                                                  {item.modo_disputa.nome}
-                                                </span>
-                                              )}
-                                              {item.amparo_legal?.nome && (
-                                                <span title={item.amparo_legal.descricao || item.amparo_legal.nome} className="inline-flex max-w-[7rem] items-center truncate rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
-                                                  {String(item.amparo_legal.nome).replace(/^Lei\s*14\.?133\/?(?:2021)?,?\s*/i, '') || item.amparo_legal.nome}
-                                                </span>
-                                              )}
                                               <span className="inline-flex shrink-0 items-center rounded-md border border-line bg-bg2 px-2 py-0.5 text-[11px] text-muted">
-                                                {item.esfera?.nome ? `${item.esfera.nome} · ` : ''}{item.uf || 'BR'}
+                                                {item.uf || 'BR'}
                                               </span>
                                               {item.__visibility === 'hidden' && (
                                                 <span className="inline-flex shrink-0 items-center rounded-md bg-amber/15 px-2 py-0.5 text-[11px] font-semibold text-amber">
@@ -18313,8 +18361,6 @@ function App() {
                                               ) : item.titulo}
                                             </h4>
                                             <p className="mt-1 line-clamp-2 text-xs text-muted">{item.descricao}</p>
-                                            <SearchEvidence item={item} />
-                                            <button type="button" className="mt-2 text-xs font-semibold text-primary underline" onClick={() => previewPncpOpportunity(item)}>Ver edital e comparação</button>
                                             <TechnicalResult compact item={item} profile={activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [] }} onOpenMatch={(number, productId) => previewPncpOpportunity(item, number == null ? null : { number: String(number), productId: productId == null ? null : String(productId) })} />
                                             <p className="mt-2 truncate text-xs text-muted" title={item.orgao?.nome || ''}>
                                               <span className="font-mono text-[10px] uppercase tracking-wide text-muted2">Órgão</span>{' '}
@@ -18963,6 +19009,7 @@ function App() {
 
               {licitacaoSubview === 'board' && (
               <>
+              <div className={pipelinePageId ? 'hidden' : ''}>
               {licitacaoLoading && (
                 <div className={`mt-4 ${subtle}`}>Carregando licitações...</div>
               )}
@@ -19021,22 +19068,10 @@ function App() {
               </div>
               </div>
 
-              {selectedOpportunity && !selectedOpportunity.__preview && createPortal(
-                <div
-                  className="fixed inset-0 z-modal flex items-center justify-center p-2 sm:p-4"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="licitacao-detail-title"
-                >
-                  <button
-                    type="button"
-                    className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
-                    aria-label="Fechar detalhes"
-                    onClick={() => {
-                      setSelectedOpportunity(null);
-                      setContactLinkQuery('');
-                    }}
-                  />
+              </div>
+              {pipelinePageId && !selectedOpportunity && <div className="my-5 rounded-xl border border-line p-5"><p role={pipelinePageError ? 'alert' : 'status'} className="text-sm text-muted">{pipelinePageError || 'Carregando oportunidade…'}</p><button type="button" onClick={closePipelineOpportunity} className="mt-3 text-sm text-primary">← Voltar ao pipeline</button></div>}
+              {selectedOpportunity && !selectedOpportunity.__preview && (
+                <PipelineOpportunityPage title={selectedOpportunity.titulo} onBack={closePipelineOpportunity}>
                   {(() => {
                     const oppReqAll = selectedItems.flatMap((it) => itemRequirementsMap[it.id] || []);
                     const oppReqCounts = countRequirementStatuses(oppReqAll);
@@ -19045,10 +19080,9 @@ function App() {
                     const oppSectionHead = 'mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-line/70 pb-2.5';
                     const oppSectionTitle = 'text-[11px] font-semibold uppercase tracking-[0.07em] text-muted';
                     return (
-                  <div className="relative flex w-full max-w-6xl max-h-[min(94vh,980px)] flex-col overflow-hidden rounded-2xl border border-line bg-bg2 shadow-[0_24px_64px_rgba(0,0,0,.35)] dark:bg-[#0e1220] dark:border-[#232c40]">
+                  <div className="w-full rounded-xl border border-line bg-bg2">
                     {/* Header */}
                     <div className="shrink-0 border-b border-line bg-surf dark:bg-[#141a28]">
-                      <div className="h-1 w-full bg-[linear-gradient(90deg,#7c5cff_0%,#38d6e6_55%,#f59e0b_100%)]" aria-hidden />
                       <div className="flex items-start justify-between gap-3 px-4 py-3.5 sm:px-5">
                         <div className="min-w-0 flex-1">
                           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
@@ -19116,23 +19150,12 @@ function App() {
                           >
                             Excluir
                           </button>}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedOpportunity(null);
-                              setContactLinkQuery('');
-                            }}
-                            className={`${iconBtn} !h-8 !w-8`}
-                            aria-label="Fechar"
-                          >
-                            <XMarkIcon className="h-4 w-4" />
-                          </button>
                         </div>
                       </div>
                     </div>
 
                     {/* Body */}
-                    <VerticalScrollArrows className="min-h-0 flex-1" contentClassName="space-y-3.5 p-3.5 sm:p-5">
+                    <div className="space-y-3.5 p-3.5 sm:p-5">
                       {selectedOpportunity.__preview ? <OpportunityPreview key={selectedOpportunity.__preview.numero_controle_pncp || selectedOpportunity.__preview.id} opportunity={selectedOpportunity} items={selectedItems} loading={pncpPreviewLoading} error={pncpPreviewError} sectionClass={oppSection} /> : <>
                       <section className={oppSection}>
                         <div className={oppSectionHead}>
@@ -19414,7 +19437,7 @@ function App() {
                           <div>
                             <h4 className={oppSectionTitle}>Itens de participação</h4>
                             <p className="mt-0.5 text-[11px] text-muted">Expanda o item para o checklist técnico e o assistente de conformidade</p>
-                            <TechnicalResult opportunityId={selectedOpportunity.id} />
+                            <TechnicalResult opportunityId={selectedOpportunity.id} allowedItemNumbers={selectedItems.map(i=>i.numero_item)} />
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <button
@@ -20330,12 +20353,11 @@ function App() {
                         </VerticalScrollArrows>
                       </section>
                       </>}
-                    </VerticalScrollArrows>
+                    </div>
                   </div>
                     );
                   })()}
-                </div>,
-                document.body
+                </PipelineOpportunityPage>
               )}
 
               </>

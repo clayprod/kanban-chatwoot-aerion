@@ -9,6 +9,11 @@ const spec = { id: 's', key: 'flight_time', kind: 'numeric', value: 40, unit: 'm
 const sources = [{ id: 'edital', text: req.quote }, { id: 'ficha', text: spec.quote }];
 const product = { id: '1', name: 'Produto A', sale_price: 100, unit: 'un', package_confirmed: true, specs_complete: true, specs: [spec] };
 const mapping = [{ requirement_id: 'r', spec_ids: ['s'] }];
+test('technical triage cannot broaden an AUTEL-only search with generic catalogue terms',()=>{
+  const catalog=[{keywords:['drone'],name:'Drone cadastrado'}];
+  assert.equal(itemInScope({numeroItem:1,descricao:'Drone DJI'},{terms:['AUTEL']},catalog),false);
+  assert.equal(itemInScope({numeroItem:2,descricao:'Bateria compatível'},{terms:['AUTEL']},catalog,['2']),true);
+});
 test('41 minutes minimum rejects 40, accepts 41, never rounds', () => {
   assert.equal(compareNumeric(req, spec).status, 'nao_ok');
   assert.equal(compareNumeric(req, { ...spec, value: 41, quote: 'Autonomia de 41 min' }).status, 'ok');

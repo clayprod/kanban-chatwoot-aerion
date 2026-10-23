@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import TechnicalResult from './TechnicalResult';
+import SearchEvidence from './SearchEvidence';
 const money = value => value == null ? 'Não informado' : Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-export default function OpportunityPreview({ opportunity, items = [], loading, error, sectionClass }) {
+export default function OpportunityPreview({ opportunity, items = [], otherItems = [], loading, error, sectionClass }) {
   const raw = opportunity.__preview;
   const [focus, setFocus] = useState(opportunity.__focus);
   const [opened, setOpened] = useState({});
@@ -19,24 +20,29 @@ export default function OpportunityPreview({ opportunity, items = [], loading, e
         ['Prazo', raw.prazo_info?.label], ['Valor estimado', money(opportunity.valor_oportunidade)],
       ].map(([label, value]) => <div key={label} className="min-w-0"><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 break-words text-ink">{value || 'Não informado'}</dd></div>)}</dl>
       {raw.descricao && <p className="mt-3 whitespace-pre-wrap text-sm text-ink">{raw.descricao}</p>}
+      <SearchEvidence item={raw} />
+      <p className="mt-3 text-xs text-muted">{[raw.modo_disputa?.nome, raw.amparo_legal?.nome, raw.esfera?.nome].filter(Boolean).join(' · ')}</p>
       {raw.url && <a href={raw.url} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs text-primary underline">Edital no PNCP ↗</a>}
     </section>
     <section className={sectionClass}>
       <h4 className="text-sm font-semibold">Análise técnica e produtos</h4>
-      <TechnicalResult overview expanded item={raw} profile={opportunity.__profile} onOpenMatch={select} />
+      <TechnicalResult overview expanded allowedItemNumbers={items.map(i=>i.numero_item)} item={raw} profile={opportunity.__profile} onOpenMatch={select} />
     </section>
     <section className={sectionClass}>
-      <h4 className="mb-3 border-b border-line pb-2 text-sm font-semibold">Itens de participação</h4>
+      <h4 className="mb-2 text-sm font-semibold">Itens de interesse · {items.length}</h4>
+      <p className="mb-3 border-b border-line pb-3 text-xs text-muted">Selecionados pelos critérios desta busca. São os itens preparados para importação.</p>
       {loading && <p role="status" className="mb-3 text-xs text-muted">Carregando os itens do PNCP…</p>}
       {error && <p role="alert" className="mb-3 text-xs text-status-warning">{error}</p>}
       <div className="space-y-2">{items.map(item => <details key={item.numero_item || item.id} ref={node => { itemRefs.current[String(item.numero_item)] = node; }} open={String(focus?.number) === String(item.numero_item) || undefined} onToggle={event => { const isOpen = event.currentTarget.open; setOpened(current => current[item.numero_item] === isOpen ? current : { ...current, [item.numero_item]: isOpen }); }} className="rounded-xl border border-line bg-bg2/30">
         <summary className="cursor-pointer px-3 py-3 text-sm font-semibold"><span className="mr-2 text-primary">Item {item.numero_item || '—'}</span>{item.descricao}</summary>
         <div className="space-y-3 border-t border-line p-3">
           <p className="text-xs text-muted">Quantidade: {item.quantidade ?? 'Não informada'} {item.unidade || ''} · Referência unitária: {money(item.valor_referencia)}</p>
+          {item.scope_pending && <p className="text-xs text-status-warning">O texto corresponde à busca; a classificação material/serviço ainda precisa ser confirmada.</p>}
           {(opened[item.numero_item] || String(focus?.number) === String(item.numero_item)) && <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />}
         </div>
       </details>)}</div>
-      {!items.length && !loading && <p className="text-sm text-muted">Nenhum item disponível para pré-visualização.</p>}
+      {!items.length && !loading && <p className="text-sm text-muted">Nenhum item de interesse confirmado com os critérios atuais.</p>}
     </section>
+    {!!otherItems.length && <details className={sectionClass}><summary className="cursor-pointer text-sm font-medium text-muted">Outros itens do edital · {otherItems.length}</summary><p className="mt-2 text-xs text-muted">Fora da seleção desta busca. Não serão incluídos automaticamente na importação.</p><ul className="mt-3 divide-y divide-line">{otherItems.map(item => <li key={item.numero_item || item.id} className="py-3 text-sm text-muted"><span className="font-medium">Item {item.numero_item} · </span>{item.descricao}</li>)}</ul></details>}
   </div>;
 }

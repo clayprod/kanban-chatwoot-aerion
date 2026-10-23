@@ -7545,6 +7545,17 @@ app.get('/api/licitacoes/opportunities/sessoes-hoje', async (req, res) => {
   }
 });
 
+app.get('/api/licitacoes/opportunities/:id', async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'Oportunidade não encontrada.' });
+  try {
+    const row = (await pool.query(`SELECT o.*,i.razao_social AS intermediario_razao_social,${getPrazoStatusSql('o.')} AS prazo_status
+      FROM ${LICITACAO_TABLE} o LEFT JOIN ${LICITACAO_INTERMEDIARIOS_TABLE} i ON i.id=o.intermediario_id
+      WHERE o.id=$1 AND o.account_id=$2`, [req.params.id,getAccountId(req)])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Oportunidade não encontrada.' });
+    res.json(row);
+  } catch (error) { res.status(500).json({ error: 'Não foi possível carregar a oportunidade.' }); }
+});
+
 app.get('/api/licitacoes/opportunities', async (req, res) => {
   const accountId = getAccountId(req);
   try {

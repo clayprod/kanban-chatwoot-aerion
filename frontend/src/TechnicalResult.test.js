@@ -2,9 +2,15 @@ import React from 'react';
 import {render,screen,fireEvent} from '@testing-library/react';
 import '@testing-library/jest-dom';
 import axios from 'axios';
-import TechnicalResult,{ProductMatchSummary,TechnicalItem} from './TechnicalResult';
+import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem} from './TechnicalResult';
 jest.mock('axios',()=>({get:jest.fn(),post:jest.fn()}));
 const match=(id,ok,price,status='uncertain')=>({product_id:id,product_name:`Produto ${id}`,sale_price:price,status,counts:{ok,total:10,verificar:10-ok,nao_ok:0},requirements:[]});
+test('result card only exposes a compact product chip and opens the exact item',()=>{
+  const onSelect=jest.fn();render(<ProductMatchChips items={[{number:'2',in_scope:true,products:[match('A',9,100)]}]} onSelect={onSelect} />);
+  expect(screen.getByText('90%')).toBeVisible();
+  expect(screen.queryByText(/exigências|Compatibilidade com|Pacote para/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'Comparar Produto A no item 2'}));expect(onSelect).toHaveBeenCalledWith('2','A');
+});
 test('compact card shows the first ranked candidate, item and honest percentage',()=>{
   const onSelect=jest.fn();
   render(<ProductMatchSummary compact onSelect={onSelect} items={[{number:'2',description:'Aeronave',in_scope:true,products:[match('A',9,100),match('B',8,10)]}]} />);

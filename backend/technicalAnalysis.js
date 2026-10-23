@@ -4,7 +4,7 @@ const documents = require('./technicalDocuments');
 const { FACTS_FORMAT, MAPPING_FORMAT } = require('./technicalAiFormat');
 const { cleanPackageItems, assembleProduct } = require('./productPackages');
 const { EXTRACTION_VERSION, normalizeFact, uniqueFacts, requirementsForItem, rankMatches } = require('./technicalQuality');
-const { matchesTerm, classifyItem } = require('./searchQuality');
+const { matchesTerm, classifyItem, scopeProcurementItems } = require('./searchQuality');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
 class BudgetWait extends Error {}
@@ -17,7 +17,7 @@ const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).map(String).
 const safeProduct = p => ({ ...p, sale_price: Number(p.sale_price), specs: p.specs || [] });
 const profileKey = profile => hash({ terms: profile?.terms || [], match_mode: profile?.match_mode || 'literal', related_terms: profile?.related_terms || [], excluded_terms: profile?.excluded_terms || [], item_kind: profile?.item_kind || 'all', product_ids: cleanIds(profile?.product_ids) });
 const noticeUpdated = payload => payload?.data_atualizacao_pncp || payload?.dataAtualizacao || payload?.data_atualizacao || null;
-const noticeRevision = (payload, catalog, accessories, profile) => hash({ notice_updated: noticeUpdated(payload), version: VERSION, format: EXTRACTION_VERSION,
+const noticeRevision = (payload, catalog, accessories, profile) => hash({ notice_updated: noticeUpdated(payload), version: VERSION, format: EXTRACTION_VERSION, item_scope_policy: 2,
   catalog: catalog.map(p => [p.id, p.specs_version, p.active, p.category, p.keywords]), accessories: accessories.map(p => [p.id, p.specs_version]), profile });
 const fileList = raw => {
   const list = Array.isArray(raw) ? raw : raw?.data;
@@ -25,12 +25,13 @@ const fileList = raw => {
   return list.filter(f => f.statusAtivo !== false).map(f => ({ name: f.titulo || f.nomeArquivo || f.nome || 'Anexo', url: f.url || f.urlDownload || f.uri || f.link || f.urlArquivo, id: f.sequencialDocumento || f.id, updated: f.dataPublicacao || f.dataAtualizacao }));
 };
 const manifest = files => hash(files.map(f => ({ id: f.id || f.url?.split('?')[0] || f.name, name: f.name, updated: f.updated })).sort((a, b) => String(a.id).localeCompare(String(b.id))));
-function itemInScope(item, profile, products) {
+function itemInScope(item, profile, products, knownNumbers = []) {
   const value = item.descricao || item.descricaoItem || item.description || '';
   if ((profile?.excluded_terms || []).some(term => matchesTerm(value, term))) return false;
   const kind = classifyItem(item).kind;
   if (['material', 'service'].includes(profile?.item_kind) && kind !== 'unknown' && kind !== profile.item_kind) return false;
   const terms = [...(profile?.terms || []), ...(profile?.match_mode === 'expanded' ? profile.related_terms || [] : [])];
+  if (terms.length || knownNumbers.length) return scopeProcurementItems([item],profile,knownNumbers).relevant.length > 0;
   const productTerms = products.flatMap(p => [...(p.keywords || []), p.name, p.model, p.category]).filter(v => text(v).length >= 3);
   return [...terms, ...productTerms].some(term => matchesTerm(value, term));
 }
@@ -136,6 +137,9 @@ async function createTechnicalTables(pool) {
     ON CONFLICT DO NOTHING RETURNING account_id
   ) UPDATE technical_candidates c SET updated_at=NOW()-INTERVAL '25 hours' FROM accounts a WHERE c.account_id=a.account_id`, [EXTRACTION_VERSION]);
   await pool.query(`ALTER TABLE technical_config ALTER COLUMN extraction_version SET DEFAULT 3`);
+  await pool.query(`UPDATE technical_candidates c SET updated_at=NOW()-INTERVAL '25 hours'
+    WHERE EXISTS(SELECT 1 FROM technical_jobs j WHERE j.id=c.job_id AND j.account_id=c.account_id
+      AND j.kind='notice' AND j.state->>'item_scope_policy' IS DISTINCT FROM '2')`);
   // Older workers treated gate deferrals as failures. Preserve checkpoints and
   // recover only this known transient condition, without retrying real failures.
   await pool.query(`UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW(),updated_at=NOW()
@@ -344,7 +348,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     if (cfg.enabled && Number(payload.base_score ?? payload.score) >= cfg.min_score && isEligible(payload) && catalog.length) {
       const versions = values => Object.fromEntries(values.map(p => [String(p.id), p.specs_version]));
       const compatibleEvidence = candidate => (!candidate.context.rules_version || candidate.context.rules_version === VERSION) && noticeUpdated(candidate.context.payload) === noticeUpdated(payload) &&
-        candidate.state.extraction_format === EXTRACTION_VERSION && hash(candidate.state.catalog_versions || {}) === hash(versions(catalog)) &&
+        candidate.state.extraction_format === EXTRACTION_VERSION && candidate.state.item_scope_policy === 2 && hash(candidate.state.catalog_versions || {}) === hash(versions(catalog)) &&
         hash(candidate.state.accessory_versions || {}) === hash(versions(accessories)) &&
         [...catalog, ...accessories].every(p => new Date(p.updated_at) <= new Date(candidate.updated_at));
       job = [...existing].sort((a, b) => Number(Array.isArray(b.result?.items)) - Number(Array.isArray(a.result?.items)) || Number(b.id) - Number(a.id)).find(candidate => {
@@ -359,7 +363,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         Array.isArray(candidate.result?.items) && candidate.state.items_complete && compatibleEvidence(candidate) &&
         candidate.state.items_raw?.length === candidate.result.items.length && candidate.state.items_raw.every(raw => {
           const assessed = candidate.result.items.find(i => String(i.number) === String(raw.numeroItem ?? raw.numero_item));
-          return assessed && assessed.in_scope === itemInScope(raw, profile, catalog);
+          return assessed && assessed.in_scope === itemInScope(raw, profile, catalog, (payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem));
         }));
       const context = { notice_key: noticeKey, ids, payload, profile, semantic_revision: revision, rules_version: VERSION };
       if (job) {
@@ -503,7 +507,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     if (!state.items) {
       state.catalog_versions = Object.fromEntries(catalog.map(p => [String(p.id), p.specs_version]));
       state.accessory_versions = accessoryVersions;
-      state.items = state.items_raw.map(i => ({ number: String(i.numeroItem ?? i.numero_item), description: i.descricao || i.descricaoItem || '', quantity: i.quantidade, unit: i.unidadeMedida || i.unidade || '', reference_price: i.valorUnitarioEstimado ?? null, in_scope: itemInScope(i, profile, catalog), requirements: [], products: [] }));
+      state.item_scope_policy = 2;
+      state.items = state.items_raw.map(i => ({ number: String(i.numeroItem ?? i.numero_item), description: i.descricao || i.descricaoItem || '', quantity: i.quantidade, unit: i.unidadeMedida || i.unidade || '', reference_price: i.valorUnitarioEstimado ?? null, in_scope: itemInScope(i, profile, catalog, (payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem)), requirements: [], products: [] }));
     }
     const sources = [];
     for (const id of state.source_ids) { const s = await parsedSource(job.account_id, id); state.complete &&= s.complete; sources.push(s); }
@@ -809,7 +814,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const product = current.get(String(p.product_id));
       const additions = (p.configuration?.additions || []).map(a => ({ ...a, unit_price: accessories.get(String(a.product_id))?.sale_price ?? a.unit_price }));
       const accessoryStale = additions.some(a => { const now = accessories.get(String(a.product_id)); return !now || now.specs_version !== a.specs_version || !(product.compatible_ids || []).map(String).includes(String(a.product_id)); });
-      const stale = job.result.version !== VERSION || job.state.needs_revalidation || accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
+      const stale = job.result.version !== VERSION || job.state.item_scope_policy !== 2 || job.state.needs_revalidation || accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
       const comparable = commercialUnit(product.unit) === commercialUnit(i.unit) && Number(i.reference_price) > 0 && product.package_confirmed;
       const extraPrice = additions.reduce((sum, a) => sum + Math.round(a.unit_price * 100) * a.quantity, 0) / 100;
       const price = (Math.round(Number(product.sale_price) * 100) + Math.round(extraPrice * 100)) / 100, ref = Number(i.reference_price);

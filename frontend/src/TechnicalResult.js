@@ -50,6 +50,18 @@ export function ProductMatchSummary({ items = [], onSelect, documentsComplete, c
     <span className="block text-[11px] font-normal text-muted">Percentual de exigências técnicas comprovadas por item. Clique no produto para comparar.</span>
   </span>;
 }
+export function ProductMatchChips({ items = [], onSelect, documentsComplete }) {
+  const matches = items.filter(i => i.in_scope).map(i => ({ item: i, product: (i.product_matches || i.products || [])[0] })).filter(p => p.product);
+  return <div className="mt-2 flex flex-wrap gap-1.5" onClick={e => e.stopPropagation()}>
+    {matches.slice(0,3).map(({item,product:p}) => {
+      const percent = p.evidence_current !== false && p.counts?.total > 0 ? Math.floor(p.counts.ok / p.counts.total * 100) : null;
+      const full = p.status === 'full' && (item.documents_complete ?? documentsComplete) !== false;
+      return <button key={item.number} type="button" aria-label={`Comparar ${p.product_name} no item ${item.number}`} title={`Item ${item.number} · ${labels[full ? 'full' : p.status === 'failed' ? 'failed' : 'uncertain']} · Ver comparação`} onClick={() => onSelect?.(item.number,p.product_id)} className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] focus-visible:ring-2 focus-visible:ring-primary ${full ? 'border-status-success/30 bg-status-success/5 text-status-success' : 'border-line bg-bg2 text-muted hover:border-primary hover:text-ink'}`}>
+        <span className="shrink-0 text-muted">Item {item.number}</span><span className="truncate font-medium">{p.product_name}</span><span className="shrink-0 font-semibold tabular-nums">{percent == null ? '?' : `${percent}%`}</span>
+      </button>;
+    })}
+  </div>;
+}
 export function TechnicalItem({ item, highlightProductId, onCompareMore, pending }) {
   const [visibleCount, setVisibleCount] = useState(3);
   if (!item) return <p className="text-xs text-muted">Este item ainda não tem análise técnica automática vinculada.</p>;
@@ -79,7 +91,7 @@ export function TechnicalItem({ item, highlightProductId, onCompareMore, pending
     {!item.products?.length && <p className="text-xs text-muted">{item.requirements?.length || 0} exigências extraídas. Cadastre uma ficha de produto pertinente para comparar.</p>}
   </div>;
 }
-export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false }) {
+export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [fetching, setFetching] = useState(true);
@@ -101,11 +113,14 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     // key includes the procurement identity and reviewed search profile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  if (error) return <p className="mt-2 text-xs text-muted">{error}</p>;
-  if (fetching && !analysis) return <p role="status" className="mt-2 text-xs text-muted">Carregando análise técnica…</p>;
-  if (!analysis) return opportunityId ? null : <p className="mt-2 text-xs text-muted">{enabled ? 'Análise automática: aguardando elegibilidade e catálogo.' : 'Análise automática configurável em Licitações → Produtos.'}</p>;
+  if (error) return compact ? null : <p className="mt-2 text-xs text-muted">{error}</p>;
+  if (fetching && !analysis) return compact ? null : <p role="status" className="mt-2 text-xs text-muted">Carregando análise técnica…</p>;
+  if (!analysis) return opportunityId || compact ? null : <p className="mt-2 text-xs text-muted">{enabled ? 'Análise automática: aguardando elegibilidade e catálogo.' : 'Análise automática configurável em Licitações → Produtos.'}</p>;
+  if (compact && !analysis.result) return null;
   if (!analysis.result) return <div className="mt-3 space-y-1 rounded-lg border border-line bg-bg2/40 px-3 py-2 text-xs"><p className="font-semibold text-ink">Compatibilidade com seus produtos</p><p className="text-muted">Análise técnica · {analysis.stage_label}{analysis.error ? ` · ${analysis.error}` : ''}</p><p className="text-[11px] text-muted">Produtos e percentuais aparecerão após a comparação das fichas com o edital.</p></div>;
-  const result = analysis.result;
+  const visibleItems = allowedItemNumbers ? analysis.result.items.filter(i => allowedItemNumbers.map(String).includes(String(i.number))) : analysis.result.items;
+  const result = { ...analysis.result, items: visibleItems,
+    ...(allowedItemNumbers ? { relevant_items: visibleItems.filter(i=>i.in_scope).length, full_items: visibleItems.filter(i=>i.in_scope && (i.recommended_product || i.products?.some(p=>p.status==='full'))).length } : {}) };
   const compareMore = async number => {
     setDetailError('');
     try {
@@ -137,7 +152,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
   if (itemNumber != null) return <div className="my-2 rounded-lg border border-line p-3">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
-  if (compact) return <div className="mt-3 space-y-2 rounded-lg border border-line p-3" onClick={e => e.stopPropagation()}><ProductMatchSummary compact items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} /></div>;
+  if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>
     <ProductMatchSummary items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />
     <details ref={detailsRef} open={expanded || undefined} onToggle={event => { if (event.currentTarget.open) loadDetails(); }}>

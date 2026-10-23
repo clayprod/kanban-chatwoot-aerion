@@ -1,10 +1,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { scopeProcurementItems } = require('../searchQuality');
 const { normalizeProfile, matchesTerm, classifyItem, evaluateResult, applyQuality, buildPcaPredicate } = require('../searchQuality');
 const { fallbackInterpret, sanitizeInterpretation, registerSearchGuidance } = require('../searchGuidance');
 const { scanSearchTerm } = require('../searchScan');
 
 const profile = extra => normalizeProfile({ terms: ['AUTEL'], confirmed_at: '2026-10-19', ...extra });
+test('preview and import scope retain interested items, use whole terms and honor official service exclusion', () => {
+  const items=[
+    {numeroItem:1,descricao:'Aeronave AUTEL',materialOuServico:'M'},
+    {numeroItem:2,descricao:'Providência cautelar',materialOuServico:'M'},
+    {numeroItem:3,descricao:'Manutenção AUTEL',materialOuServico:'S'},
+    {numeroItem:4,descricao:'Bateria AUTEL',materialOuServico:'M'},
+    {numeroItem:5,descricao:'Peça AUTEL'},
+  ];
+  const result=scopeProcurementItems(items,profile({item_kind:'material',excluded_terms:['manutenção']}),[1,3]);
+  assert.deepEqual(result.relevant.map(i=>i.numeroItem),[1,4,5]);
+  assert.deepEqual(result.other.map(i=>i.numeroItem),[2,3]);
+  assert.equal(result.relevant[2].scope_pending,true);
+  assert.equal(result.unscoped,false);
+});
+test('known pertinent numbers survive abbreviated descriptions without widening to unrelated items', () => {
+  const result=scopeProcurementItems([{numero_item:'22',descricao:'Bateria compatível',materialOuServico:'M'},{numero_item:'23',descricao:'Papel sulfite'}],profile(),['22']);
+  assert.deepEqual(result.relevant.map(i=>i.numero_item),['22']);
+  assert.equal(scopeProcurementItems([{numeroItem:1,descricao:'Sem critério disponível'}],{}).unscoped,true);
+});
 test('AUTEL is never a substring match and legacy expansion does not broaden the brand', () => {
   for (const text of ['cautelar', 'cautela', 'acautelamento', 'AUTELAR', 'aquisição cautelar de drones']) {
     assert.equal(evaluateResult({ descricao: text }, profile()).accepted, false, text);

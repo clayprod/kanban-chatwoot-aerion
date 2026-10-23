@@ -170,5 +170,22 @@ function pcaClassificationSql(alias = 'i') {
     WHEN ${material} AND NOT ${service} THEN 'M' WHEN ${service} AND NOT ${material} THEN 'S' ELSE NULL END)`;
 }
 
+function scopeProcurementItems(items, profile, knownNumbers = []) {
+  const p = normalizeProfile(profile);
+  const known = new Set(knownNumbers.filter(n => n != null).map(String));
+  const terms = [...p.terms, ...(p.match_mode === 'expanded' ? p.related_terms : [])];
+  const unscoped = !terms.length && !known.size;
+  const relevant = [], other = [];
+  for (const item of items) {
+    const value = contentText(item), number = String(item.numeroItem ?? item.numero_item);
+    const classification = classifyItem(item);
+    const excluded = p.excluded_terms.some(t => matchesTerm(value,t));
+    const opposite = p.item_kind !== 'all' && classification.kind !== 'unknown' && classification.kind !== p.item_kind;
+    const matches = unscoped || known.has(number) || terms.some(t => matchesTerm(value,t));
+    if (matches && !excluded && !opposite) relevant.push({ ...item, scope_pending: !unscoped && p.item_kind !== 'all' && classification.kind === 'unknown' });
+    else other.push(item);
+  }
+  return { relevant, other, unscoped };
+}
 module.exports = { QUALITY_VERSION, normalize, unique, words, matchesTerm, termPattern,
-  normalizeProfile, classifyItem, evaluateResult, applyQuality, buildPcaPredicate, pcaClassificationSql };
+  normalizeProfile, classifyItem, evaluateResult, applyQuality, buildPcaPredicate, pcaClassificationSql, scopeProcurementItems };

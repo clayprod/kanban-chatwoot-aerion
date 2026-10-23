@@ -4,7 +4,7 @@ import axios from 'axios';
 const split = value => [...new Set(String(value || '').split(/[;\n,]/).map(v => v.trim()).filter(Boolean))];
 const list = values => (values || []).join('; ');
 
-export default function SearchGuide({ source = 'edital', filters = {}, initialProfile = null, onActivate, activating = false, onCancel, onRestoreFilters, onCriteriaChange }) {
+export default function SearchGuide({ source = 'edital', filters = {}, initialProfile = null, onActivate, activating = false, onCancel, onRestoreFilters, onCriteriaChange, hideHeader = false, filtersPanel = null }) {
   const [description, setDescription] = useState(initialProfile?.description || '');
   const [profile, setProfile] = useState(initialProfile);
   const [itemKind, setItemKind] = useState(initialProfile?.item_kind || 'all');
@@ -100,11 +100,17 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
     setNotice('Rascunho recuperado. Confira os critérios e gere uma nova amostra.');
   };
 
-  return <section className="space-y-4 text-ink" aria-label="Criar busca guiada">
-    <div className="flex flex-wrap items-start justify-between gap-3">
+  return <section className="space-y-5 text-ink" aria-label="Criar busca guiada">
+    {!hideHeader && (initialProfile || onCancel) && <div className="flex flex-wrap items-start justify-between gap-3">
       {initialProfile && <h3 className="text-base font-semibold">Revisar critérios</h3>}
       {onCancel && <button type="button" className={secondary} onClick={onCancel}>Fechar</button>}
-    </div>
+    </div>}
+    {hideHeader && <ol aria-label="Etapas da busca" className="flex items-center gap-3 border-b border-line pb-4 text-xs sm:gap-5">
+      {['Critérios', 'Revisão', 'Amostra'].map((label,index) => {
+        const current = preview ? 2 : profile ? 1 : 0;
+        return <li key={label} aria-current={index === current ? 'step' : undefined} className={`flex items-center gap-2 ${index === current ? 'font-semibold text-primary' : 'text-muted'}`}><span>{index+1}. {label}</span>{index < 2 && <span aria-hidden="true" className="ml-1 text-muted">›</span>}</li>;
+      })}
+    </ol>}
     {drafts.length > 0 && <label className="block text-sm">Continuar um rascunho
       <select className={`${fieldClass} mt-1`} value="" onChange={e => { const draft = drafts.find(d => String(d.id) === e.target.value); if (draft) loadDraft(draft); }}>
         <option value="">Selecione um rascunho</option>{drafts.map(d => <option key={d.id} value={d.id}>{d.profile.objective || d.profile.description}</option>)}
@@ -114,26 +120,33 @@ export default function SearchGuide({ source = 'edital', filters = {}, initialPr
         placeholder="Descreva produtos, serviços, marcas ou necessidades. Diga também o que não interessa."
         onChange={e => { invalidate(); setDescription(e.target.value); setProfile(null); setQuestions([]); }} />
     </label>
+    <div className={`grid gap-4 ${products.length ? 'sm:grid-cols-2' : ''}`}>
     <div className="space-y-2">
       <label className="block text-sm font-medium">Tipo de item<select className={`${fieldClass} mt-1 font-normal`} value={itemKind} aria-describedby={itemKindHelpId} onChange={e => {
         const kind = e.target.value;
         invalidate(); setItemKind(kind); itemKindChosen.current = true;
         setProfile(p => p ? { ...p, item_kind: kind, confirmed_at: null } : p);
       }}><option value="all">Materiais e serviços</option><option value="material">Somente materiais — excluir serviços</option><option value="service">Somente serviços</option></select></label>
-      <p id={itemKindHelpId} className="text-xs text-muted">Classificação oficial do PNCP. Itens sem classificação ficam para revisão.</p>
+      <p id={itemKindHelpId} className="text-xs leading-relaxed text-muted">Classificação do PNCP. Itens sem classificação ficam para revisão.</p>
     </div>
-    {products.length > 0 && <div className="space-y-1">
-      <p className="text-xs text-muted">Sem selecionar produtos, o sistema considera todo o catálogo ativo e compara até 3 melhores candidatos por item. Selecione apenas para restringir os candidatos.</p>
-      <details className="text-sm"><summary className="cursor-pointer">Produtos para comparar · {productIds.length ? `${productIds.length} selecionados` : 'Todos os pertinentes'}</summary><fieldset className="mt-2 space-y-2"><legend className="sr-only">Produtos para análise técnica (opcional)</legend>
-      <div className="flex max-h-36 flex-wrap gap-3 overflow-auto">{products.map(p => <label key={p.id} className="flex items-center gap-2"><input type="checkbox" checked={productIds.map(String).includes(String(p.id))} onChange={e => { invalidate(); setProductIds(ids => e.target.checked ? [...ids, String(p.id)] : ids.filter(id => String(id) !== String(p.id))); }} />{p.name}</label>)}</div>
-    </fieldset></details></div>}
-    <div className="flex flex-wrap gap-2">
-      <button type="button" className={primary} disabled={!!busy || !description.trim()} onClick={interpret}>{busy === 'interpret' ? 'Interpretando…' : 'Definir minha busca'}</button>
+    {products.length > 0 && <div className="min-w-0 space-y-1">
+      <p className="text-sm font-medium">Produtos para comparar <span className="font-normal text-muted">(opcional)</span></p>
+      <details className="rounded-lg border border-line bg-bg2 text-sm"><summary className="cursor-pointer px-3 py-2 text-ink">{productIds.length ? `${productIds.length} selecionados` : 'Automático · todo o catálogo'}</summary><fieldset className="border-t border-line px-3 py-3"><legend className="sr-only">Produtos para análise técnica (opcional)</legend>
+      <div className="max-h-44 space-y-2.5 overflow-y-auto">{products.map(p => <label key={p.id} className="flex items-start gap-2 text-xs leading-5"><input className="mt-1 shrink-0 accent-primary" type="checkbox" checked={productIds.map(String).includes(String(p.id))} onChange={e => { invalidate(); setProductIds(ids => e.target.checked ? [...ids, String(p.id)] : ids.filter(id => String(id) !== String(p.id))); }} />{p.name}</label>)}</div>
+    </fieldset></details>
+      <p className="text-xs leading-relaxed text-muted">Sem selecionar, comparamos até 3 melhores candidatos do catálogo por item.</p>
+    </div>}
+    </div>
+    {filtersPanel}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+      <button type="button" className="rounded px-1 py-2 text-xs text-muted hover:text-ink focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50" disabled={!description.trim() || !!busy} onClick={saveDraft}>{busy === 'draft' ? 'Salvando…' : 'Salvar rascunho'}</button>
+      <div className="flex flex-wrap gap-2">
       {!profile && <button type="button" className={secondary} disabled={!description.trim() || !!busy} onClick={() => {
         setProfile({ description, objective: description, terms: [description], related_terms: [], excluded_terms: [], match_mode: 'literal', item_kind: itemKind, product_ids: productIds });
         setNotice('Defina os termos pesquisáveis e a abrangência manualmente.');
       }}>Definir manualmente</button>}
-      <button type="button" className={secondary} disabled={!description.trim() || !!busy} onClick={saveDraft}>{busy === 'draft' ? 'Salvando…' : 'Salvar rascunho'}</button>
+      {!profile && <button type="button" className={primary} disabled={!!busy || !description.trim()} onClick={interpret}>{busy === 'interpret' ? 'Interpretando…' : 'Definir minha busca'}</button>}
+      </div>
     </div>
     {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
     {notice && <p role="status" className="text-sm text-muted">{notice}</p>}
