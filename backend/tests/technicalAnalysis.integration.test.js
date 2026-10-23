@@ -35,7 +35,8 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
           if (!product) assert.ok(value.context.items.every(i => Object.keys(i).join(',') === 'number'), 'PNCP listing descriptions must not contaminate source extraction');
           const quote = product ? /Autonomia de (\d+) min/.exec(chunk.text)?.[0] : 'Autonomia mínima de 41 min';
           const n = Number(/(\d+) min/.exec(quote)?.[1]);
-          return { ok: true, data: { complete: true, facts: [{ item_number: product ? 'all' : '1', label: quote, key: 'flight_time', kind: 'numeric', value: n, unit: 'min', operator: product ? 'eq' : 'min', conditions: '', quote, location: chunk.location, source_id: chunk.source_id }] }, usage: { total_tokens: 100 } };
+          return { ok: true, data: { complete: true, facts: [{ item_number: product ? 'all' : '1', label: quote, key: 'flight_time', kind: 'numeric', value: n, unit: 'min', operator: product ? 'eq' : 'min', conditions: '', quote, location: chunk.location, source_id: chunk.source_id }],
+            ...(value.blocks ? {coverage:value.blocks.map(b=>({block_id:b.id,classification:'requirements',fact_indexes:[0],reason:'Exigência conferida no texto.'}))} : {}) }, usage: { total_tokens: 100 } };
         } };
       let service = createTechnicalAnalysis(dependencies);
       const app = express(); app.use(express.json()); service.register(app);
@@ -209,15 +210,15 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
         return args.providerOffset === 0 ? { ok: false, error: 'openai:429 You have no credits remaining' } : dependencies.ai(args);
       } });
       for (let n = 0; n < 5; n++) await fallbackService.tick();
-      assert.deepEqual(offsets, [0, 1]);
+      assert.deepEqual(offsets, [0, 1, 1]);
       assert.equal((await pool.query('SELECT specs_complete FROM technical_products WHERE id=$1', [fallbackProduct.id])).rows[0].specs_complete, true);
-      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 2);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 3);
       assert.equal((await fallbackService.settings(89)).provider_error, null);
       const nextProduct = (await request('POST', `${base}/products`, { name: 'Fallback next product', sale_price: 10 }, 89)).data;
       await request('POST', `${base}/products/${nextProduct.id}/sources`, { text: 'Autonomia de 43 min. Outra ficha técnica.' }, 89);
       for (let n = 0; n < 5; n++) await fallbackService.tick();
-      assert.deepEqual(offsets, [0, 1, 1]);
-      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 3);
+      assert.deepEqual(offsets, [0, 1, 1, 1, 1]);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 5);
       const limitedProduct = (await request('POST', `${base}/products`, { name: 'Limited fallback', sale_price: 10 }, 90)).data;
       await request('POST', `${base}/products/${limitedProduct.id}/sources`, { text: 'Autonomia de 44 min.' }, 90);
       const limitedService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args =>
@@ -242,7 +243,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
           const result = await dependencies.ai(args);
           if (JSON.parse(args.user).context?.items) {
             result.data.facts.forEach(f => { f.item_number='all'; f.category='equipment'; });
-            if (scopedConflict) { result.data.complete=false; result.data.conflicts=[{item_numbers:['1'],message:'Condição do item 1 requer revisão.'}]; }
+            if (scopedConflict) { result.data.conflicts=[{item_numbers:['1'],message:'Condição do item 1 requer revisão.',quote:'Autonomia mínima de 41 min'}]; }
           }
           return result;
         }
@@ -308,11 +309,12 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
         denseCalls++;const chunk=JSON.parse(args.user).document;
         if(chunk.text.length>2500)return{ok:false,error:'length',truncated:true,usage:{total_tokens:100}};
         const facts=chunk.text.includes('Autonomia de 42 min')?[{item_number:'all',label:'Autonomia',key:'flight_time',kind:'numeric',value:42,unit:'min',operator:'eq',conditions:'',quote:'Autonomia de 42 min',location:chunk.location,source_id:chunk.source_id}]:[];
-        return{ok:true,data:{complete:true,facts,conflicts:[]},usage:{total_tokens:100}};
+        const blocks=JSON.parse(args.user).blocks;
+        return{ok:true,data:{complete:true,facts,conflicts:[],...(blocks?{coverage:blocks.map(b=>({block_id:b.id,classification:b.text.includes('Autonomia de 42 min')?'requirements':'context',fact_indexes:b.text.includes('Autonomia de 42 min')?[0]:[],reason:'Trecho conferido.'}))}:{})},usage:{total_tokens:100}};
       }});
       for(let n=0;n<3;n++)await adaptiveService.tick();
       const denseProduct=(await request('GET',`${base}/products`,null,93)).data[0];
-      assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,3);
+      assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,5);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

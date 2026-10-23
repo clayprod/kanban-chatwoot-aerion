@@ -118,6 +118,7 @@ const { createSearchQualityTables, reviewSearchBatch, backfillPcaClassifications
 const { scanSearchTerm } = require('./searchScan');
 const { createTechnicalTables, createTechnicalAnalysis, technicalFilterClause } = require('./technicalAnalysis');
 const { guardLegacyRequirement } = require('./technicalRules');
+const { requestExceedsCapacity } = require('./technicalAiFormat');
 const { seedTechnicalCatalog } = require('./technicalCatalogSeed');
 
 // Carrega backend/.env (cwd do nodemon) e, se existir, .env da raiz do monorepo.
@@ -20261,6 +20262,8 @@ const chatCompletionJson = async ({
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
+        if (technical && maxProviderAttempts === 1 && requestExceedsCapacity(res.status,errText))
+          return { ok:false,error:`${provider.name}:${res.status} Pedido excedeu a capacidade do provedor.`,requestTooLarge:true };
         errors.push(`${provider.name}:${res.status} ${errText.slice(0, 160)}`);
         continue;
       }

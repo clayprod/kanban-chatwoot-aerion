@@ -24,14 +24,10 @@ def main(filename):
             return main(str(pathlib.Path(temp, source.stem + '.pdf')))
     info = command(['pdfinfo', str(source)])
     count = next(int(line.split(':', 1)[1].strip()) for line in info.splitlines() if line.startswith('Pages:'))
-    # A limit is always surfaced; it can never produce a full-compliance badge.
-    if count > 400:
-        complete = False
-        notes.append('Documento acima de 400 páginas; leitura parcial.')
-    raw = command(['pdftotext', '-layout', '-enc', 'UTF-8', '-f', '1', '-l', str(min(count, 400)), str(source), '-'], 120)
+    raw = command(['pdftotext', '-layout', '-enc', 'UTF-8', '-f', '1', '-l', str(count), str(source), '-'], 120)
     texts = raw.split('\f')
     with tempfile.TemporaryDirectory(prefix='technical-ocr-') as temp:
-        for index in range(min(count, 400)):
+        for index in range(count):
             content = texts[index].strip() if index < len(texts) else ''
             has_large_image = False
             if 0 < len(content) < 60:
@@ -43,24 +39,20 @@ def main(filename):
                     complete = False
                     notes.append('Não foi possível verificar imagens na página ' + str(index + 1))
             if len(content) < 15 or has_large_image:
-                if index >= 100:
-                    complete = False
-                    notes.append('OCR acima do limite de 100 páginas; leitura parcial.')
-                else:
-                    prefix = str(pathlib.Path(temp, 'page'))
-                    try:
-                        command(['pdftoppm', '-f', str(index + 1), '-l', str(index + 1), '-r', '160', '-png', '-singlefile', str(source), prefix])
-                        ocr_text = command(['tesseract', prefix + '.png', 'stdout', '-l', 'por+eng', '--psm', '3'], 90).strip()
-                        content = (content + '\n' + ocr_text).strip()
-                        tsv = command(['tesseract', prefix + '.png', 'stdout', '-l', 'por+eng', '--psm', '3', 'tsv'], 90)
-                        words = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
-                        if any(any(char.isdigit() for char in row.get('text', '')) and float(row.get('conf', '-1')) < 95 for row in words):
-                            complete = False
-                            notes.append('OCR com dúvida em números na página ' + str(index + 1))
-                        notes.append('OCR utilizado na página ' + str(index + 1))
-                    except (subprocess.SubprocessError, OSError):
+                prefix = str(pathlib.Path(temp, 'page'))
+                try:
+                    command(['pdftoppm', '-f', str(index + 1), '-l', str(index + 1), '-r', '160', '-png', '-singlefile', str(source), prefix])
+                    ocr_text = command(['tesseract', prefix + '.png', 'stdout', '-l', 'por+eng', '--psm', '3'], 90).strip()
+                    content = (content + '\n' + ocr_text).strip()
+                    tsv = command(['tesseract', prefix + '.png', 'stdout', '-l', 'por+eng', '--psm', '3', 'tsv'], 90)
+                    words = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
+                    if any(any(char.isdigit() for char in row.get('text', '')) and float(row.get('conf', '-1')) < 95 for row in words):
                         complete = False
-                        notes.append('Falha de OCR na página ' + str(index + 1))
+                        notes.append('OCR com dúvida em números na página ' + str(index + 1))
+                    notes.append('OCR utilizado na página ' + str(index + 1))
+                except (subprocess.SubprocessError, OSError):
+                    complete = False
+                    notes.append('Falha de OCR na página ' + str(index + 1))
             if len(content) < 15:
                 complete = False
                 notes.append('Página sem texto verificável: ' + str(index + 1))

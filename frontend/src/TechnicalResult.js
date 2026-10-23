@@ -73,6 +73,23 @@ export function ItemCompatibilitySummary({ item, documentsComplete }) {
     <span>{product.product_name}</span><span className="font-semibold tabular-nums">{percent == null ? '?' : `${percent}% comprovado`}</span><span>{labels[status]}</span>
   </span>;
 }
+export function ExtractionCoverage({ analysis, result }) {
+  const coverage=result?.coverage;
+  if(!coverage)return null;
+  const recovering=['queued','running'].includes(analysis?.status) && coverage.read_complete===false;
+  return <div className="space-y-2 border-b border-line pb-3">
+    <p className="font-semibold text-ink">Cobertura das exigências</p>
+    <dl className="flex flex-wrap gap-x-6 gap-y-2 text-muted">
+      <div><dt>Trechos validados</dt><dd className="font-semibold text-ink">{coverage.complete}/{coverage.chunks}</dd></div>
+      {coverage.blocks != null && <div><dt>Blocos conferidos</dt><dd className="font-semibold text-ink">{coverage.audited_blocks}/{coverage.blocks}</dd></div>}
+      {coverage.requirements != null && <div><dt>Exigências identificadas</dt><dd className="font-semibold text-ink">{coverage.requirements}</dd></div>}
+      {coverage.comparisons != null && <div><dt>Comparações técnicas realizadas</dt><dd className="font-semibold text-ink">{coverage.comparisons}</dd></div>}
+    </dl>
+    {recovering ? <p role="status" className="text-status-warning">Cobertura incompleta. O sistema vai reler os trechos pendentes; as comparações abaixo são parciais.{analysis.stage==='recovering' && analysis.next_run_at ? ` Retomada prevista: ${new Date(analysis.next_run_at).toLocaleString('pt-BR')}.` : ''}</p>
+      : coverage.read_complete===true ? <p className={result.documents_complete ? 'text-muted':'text-status-warning'}>{result.documents_complete ? 'Leitura e cobertura dos documentos conferidas. O atendimento depende das evidências de cada requisito.' : 'Leitura dos documentos conferida. Há divergências que precisam de revisão; veja os trechos de origem.'}</p>
+        : <p className="text-status-warning">Há trechos sem cobertura confirmada. A leitura ainda precisa de recuperação.</p>}
+  </div>;
+}
 export function TechnicalItem({ item, highlightProductId, onCompareMore, pending }) {
   const [visibleCount, setVisibleCount] = useState(3);
   if (!item) return <p className="text-xs text-muted">Este item ainda não tem análise técnica automática vinculada.</p>;
@@ -98,7 +115,7 @@ export function TechnicalItem({ item, highlightProductId, onCompareMore, pending
     </details>)}
     {!highlightProductId && (item.products?.length || 0) > visibleCount && <button type="button" className="block text-xs text-primary underline" onClick={() => setVisibleCount(n => n + 3)}>Ver mais produtos já comparados</button>}
     {item.candidate_count > (item.products?.length || 0) && onCompareMore && <button type="button" disabled={pending} onClick={() => onCompareMore(item.number)} className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">{pending ? 'Comparação em andamento…' : 'Comparar mais produtos'}</button>}
-    {!!item.obligations?.length && <details className="border-t border-line pt-2"><summary className="cursor-pointer text-xs font-semibold">Obrigações de fornecimento e documentação · {item.obligations.length}</summary><p className="my-2 text-xs text-muted">Conferência separada, fora do percentual técnico do produto.</p>{item.obligations.map(f => <div key={f.id} className="mb-3"><p className="text-xs font-medium">{f.label}</p><Evidence fact={f} /></div>)}</details>}
+    {!!item.obligations?.length && <details className="border-t border-line pt-2"><summary className="cursor-pointer text-xs font-semibold">Obrigações de fornecimento e documentação · {item.obligations.length}</summary><p className="my-2 text-xs text-muted">Conferência separada, fora do percentual técnico do produto. Cada obrigação exige comprovação da empresa.</p>{item.obligations.map(f => <div key={f.id} className="mb-3"><p className="text-xs font-medium">{f.label}</p><p className="text-xs text-status-warning">? · Comprovação pela empresa pendente</p><Evidence fact={f} /></div>)}</details>}
     {!item.products?.length && <p className="text-xs text-muted">{item.requirements?.length || 0} exigências extraídas. Cadastre uma ficha de produto pertinente para comparar.</p>}
   </div>;
 }
@@ -178,10 +195,12 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
       <p className="text-muted">Nota {result.score} · base {result.base_score} + técnica {result.technical_bonus} + preço {result.commercial_bonus}</p>
       {analysis.updated_at && <p className="text-muted">Verificação: {new Date(analysis.updated_at).toLocaleString('pt-BR')}</p>}
       {analysis.summary_only ? <p className="text-muted">{detailError || 'Carregando exigências e evidências…'}</p> : <>
+      <ExtractionCoverage analysis={analysis} result={result} />
       {!result.documents_complete && <p className="text-status-warning">Documentação incompleta. Atendimento pleno não confirmado.</p>}
       {result.coverage && <p className="text-muted">Extração: {result.coverage.processed}/{result.coverage.chunks} trechos processados · {result.coverage.complete} sem pendências.</p>}
       {!!result.sources?.length && <div className="space-y-2"><h5 className="font-semibold">Documentos utilizados</h5>{result.sources.map(s => <p key={s.id}><a href={`/api/licitacoes/technical/sources/${s.id}`} target="_blank" rel="noreferrer" className="text-primary underline">{s.name}</a> · {s.pages ?? '—'} páginas · {s.complete ? 'Leitura concluída' : 'Leitura com pendências'}{s.notes?.length ? ` · ${s.notes.join(' · ')}` : ''}</p>)}</div>}
       {!!result.notes?.length && <details><summary className="cursor-pointer text-status-warning">Pendências de leitura · {result.notes.length}</summary><div className="mt-2 space-y-2">{result.notes.map((note, i) => <p key={i} className="text-muted">{note}</p>)}</div></details>}
+      {!!result.conflicts?.length && <details><summary className="cursor-pointer text-status-warning">Divergências nos documentos · {result.conflicts.length}</summary><div className="mt-2 space-y-3">{result.conflicts.map((conflict,i)=><div key={i}><p>{conflict.message}</p><Evidence fact={conflict} /></div>)}</div></details>}
       {selection && <button type="button" className="rounded border border-line px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setSelection(null)}>Ver todos os itens</button>}
       {!overview && result.items.filter(i => !selection || String(i.number) === selection.number).map(i => <div key={i.number} className="space-y-1"><h5 className="font-semibold">Item {i.number} · {i.description}</h5><TechnicalItem item={i} highlightProductId={selection?.productId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>)}
       <p className="text-muted">Atendimento técnico não substitui a revisão das condições jurídicas e comerciais do edital.</p>

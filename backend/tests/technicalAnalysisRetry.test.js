@@ -104,3 +104,13 @@ test('metadata and downloads are not blocked by an AI notice budget before any A
   assert.equal(job.state.initialized,true);
   assert.equal(queries.some(q => q.sql.includes('INSERT INTO technical_usage')),false);
 });
+
+test('a failed attachment is never skipped and another notice can run before its scheduled retry', async () => {
+  const state={initialized:true,items_complete:true,files:[{name:'Termo de referência',url:'https://example.org/tr.pdf'}],file_cursor:0,source_ids:[],complete:true,notes:[]};
+  const {service,job,queries}=worker(state,{documentIO:{download:async()=>{throw new Error('HTTP 503');}}});
+  await service.tick();
+  assert.equal(state.file_cursor,0);assert.deepEqual(state.source_ids,[]);
+  assert.equal(job.stage,'recovering_documents');assert.equal(state.file_errors['0'].name,'Termo de referência');
+  assert.ok(queries.some(q=>q.sql.includes("INTERVAL '20 minutes'") && q.args[1].includes('não foi ignorado')));
+  assert.equal(queries.some(q=>q.sql.includes('attempts=attempts+1')),false);
+});

@@ -2,9 +2,22 @@ import React from 'react';
 import {render,screen,fireEvent} from '@testing-library/react';
 import '@testing-library/jest-dom';
 import axios from 'axios';
-import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,ItemCompatibilitySummary} from './TechnicalResult';
+import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,ItemCompatibilitySummary,ExtractionCoverage} from './TechnicalResult';
 jest.mock('axios',()=>({get:jest.fn(),post:jest.fn()}));
 const match=(id,ok,price,status='uncertain')=>({product_id:id,product_name:`Produto ${id}`,sale_price:price,status,counts:{ok,total:10,verificar:10-ok,nao_ok:0},requirements:[]});
+
+test('incomplete coverage visibly schedules recovery instead of appearing concluded',()=>{
+ render(<ExtractionCoverage analysis={{status:'queued',stage:'recovering',next_run_at:'2026-10-23T18:30:00Z'}} result={{documents_complete:false,coverage:{read_complete:false,chunks:109,complete:96,blocks:120,audited_blocks:118,requirements:60,comparisons:180}}} />);
+ expect(screen.getByText('96/109')).toBeVisible();expect(screen.getByText('118/120')).toBeVisible();
+ expect(screen.getByRole('status')).toHaveTextContent(/reler os trechos pendentes/);
+ expect(screen.getByRole('status')).toHaveTextContent(/Retomada prevista/);
+});
+
+test('complete reading with a documentary contradiction is distinguished from missing extraction',()=>{
+ render(<ExtractionCoverage analysis={{status:'partial'}} result={{documents_complete:false,coverage:{read_complete:true,chunks:10,complete:10}}} />);
+ expect(screen.getByText(/Há divergências que precisam de revisão/)).toBeVisible();
+ expect(screen.queryByText(/reler os trechos pendentes/)).not.toBeInTheDocument();
+});
 test('item summary shows the model without expansion and never promotes uncertain evidence to full compliance',()=>{
   render(<ItemCompatibilitySummary item={{documents_complete:false,products:[match('A',10,100,'full')]}} />);
   expect(screen.getByText('Produto A')).toBeVisible();expect(screen.getByText('100% comprovado')).toBeVisible();
