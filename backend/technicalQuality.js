@@ -3,8 +3,9 @@ const { text, hash, rankMatches } = require('./technicalRules');
 const EXTRACTION_VERSION = 3;
 const administrative = /\b(habilitacao|qualificacao econom|regularidade fiscal|proposta comercial|apresentacao de amostras|apresentacao de ficha tecnica|apresentar ficha tecnica|atestado de capacidade)\b/;
 function categoryOf(fact) {
-  if (administrative.test(text(`${fact.label} ${fact.quote}`)) || ['technical_sheet_required', 'sample_required'].includes(fact.key)) return 'administrative';
-  return ['equipment', 'kit', 'supply', 'administrative'].includes(fact.category) ? fact.category : 'equipment';
+  if (['technical_sheet_required', 'sample_required'].includes(fact.key)) return 'administrative';
+  if (['equipment', 'kit', 'supply', 'administrative'].includes(fact.category)) return fact.category;
+  return administrative.test(text(`${fact.label} ${fact.quote}`)) ? 'administrative' : 'equipment';
 }
 // Only explicit, unambiguous aliases. No fuzzy comparison of technical metrics.
 const aliases = { flight_duration: 'flight_time', flight_time_minutes: 'flight_time', battery_flight_time: 'flight_time', motorization: 'motor_type', return_home: 'return_to_home', rth: 'return_to_home' };

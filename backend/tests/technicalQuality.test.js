@@ -16,6 +16,8 @@ test('item association follows explicit numbers and shared scope, never identica
   assert.equal(requirementsForItem(facts, '1').requirements.length, 2);
   assert.equal(requirementsForItem(facts, '2').requirements.length, 1);
   assert.equal(requirementsForItem(facts, '1').obligations.length, 2);
+  const camera={...fact,key:'camera_sensor',category:'equipment',quote:'Apresentar ficha técnica comprovando sensor mínimo de 1 polegada.'};
+  assert.equal(requirementsForItem([camera],'1').requirements.length,1);
 });
 test('ranking puts compatibility before price, with price as the second criterion', () => {
   const p = (id,ok,price,status='uncertain') => ({ product_id:id,status,sale_price:price,price_rankable:true,counts:{ok,total:10} });
