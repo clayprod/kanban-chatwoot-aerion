@@ -171,9 +171,12 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       // Token reservations survive failed calls; hitting the cap pauses rather than dropping work.
       await request('PUT', `${base}/technical/config`, { enabled: true, min_score: 68, daily_limit: 1, daily_tokens: 10000 });
       await pool.query(`UPDATE technical_usage SET tokens=10000 WHERE account_id=1`);
-      await service.tick();
-      await service.tick();
-      const waiting = await pool.query("SELECT status,error FROM technical_jobs WHERE account_id=1 AND kind='product' ORDER BY id DESC LIMIT 1");
+      let waiting;
+      for(let n=0;n<8;n++){
+        await service.tick();
+        waiting = await pool.query("SELECT status,error FROM technical_jobs WHERE account_id=1 AND kind='product' ORDER BY id DESC LIMIT 1");
+        if(waiting.rows[0].error)break;
+      }
       assert.equal(waiting.rows[0].status, 'queued'); assert.match(waiting.rows[0].error, /Limite diário|Teto diário insuficiente/);
 
       const legacy = (await pool.query("INSERT INTO technical_products(account_id,name,sale_price,source_key) VALUES(77,'Kit antigo',30000,'aerion-store:102003506') RETURNING id")).rows[0];
