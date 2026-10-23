@@ -5,8 +5,16 @@ const { FACTS_FORMAT, COVERAGE_FORMAT } = require('./technicalAiFormat');
 
 // Coverage is about reading the source, not granting compliance. Real source
 // contradictions remain visible even after every block has been read.
-const AUDIT_VERSION = 1;
+const AUDIT_VERSION = 2;
 const MIN_SPLIT = 900;
+function canonicalItemNumber(value,items=[]) {
+  const number=String(value ?? '');
+  if(/^\d+$/.test(number)){
+    const match=items.find(i=>/^\d+$/.test(String(i.number)) && BigInt(i.number)===BigInt(number));
+    if(match)return String(match.number);
+  }
+  return number;
+}
 function mappedText(raw, joinWrappedWords) {
   let value='';const positions=[];
   for(let index=0;index<raw.length;){
@@ -62,11 +70,7 @@ function mergeFacts(...lists) {
 function validateFacts(raw, source, chunk, kind, context, prefix) {
   const rejected = [], facts = [], indexes = new Map();
   for (const [index, row] of (Array.isArray(raw) ? raw : []).entries()) {
-    let number = String(row.item_number ?? '');
-    if (kind === 'notice' && /^\d+$/.test(number)) {
-      const canonical = context.items.find(i => /^\d+$/.test(String(i.number)) && BigInt(i.number) === BigInt(number));
-      if (canonical) number = String(canonical.number);
-    }
+    const number=canonicalItemNumber(row.item_number,kind==='notice'?context.items:[]);
     const fact = normalizeFact({ ...row, item_number: number, id: `${prefix}:${index}`, source_id: String(source.id), location: chunk.location });
     const literal=literalEvidenceQuote(fact.quote,chunk.text);
     if(literal && literal!==fact.quote){fact.original_quote=fact.quote;fact.quote=literal;fact.quote_recovered=true;}
@@ -103,6 +107,12 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
         return at < end && at + text(fact.quote).length > start;
       });
       if (!supported) issues.push({block_id:block.id,reason:'Bloco com exigência sem fato e citação válidos.'});
+    } else if(entry.classification==='administrative') {
+      const quote=literalEvidenceQuote(entry.quote || '',block.text);
+      if(!quote || !entry.reason?.trim())issues.push({block_id:block.id,reason:'Classificação administrativa sem justificativa e citação do bloco.'});
+      if(quote)entry.quote=quote;
+      if(kind==='notice' && (/\d\s*(?:mm|cm|metros|m\/s|km\/h|km|kg|mhz|ghz|hz|mp|pixels|dpi|gb|tb|kw|w|v|mah|ah|wh|kwh|bar|kpa|rpm|polegadas)\b/i.test(block.text) || /\b(?:anatel|inmetro|abnt|nbr|iso\s*\d|treinamento|manual de operacao|assistencia tecnica)\b/.test(text(block.text))))
+        issues.push({block_id:block.id,reason:'Bloco administrativo contém possível especificação ou obrigação técnica; requer extração.'});
     } else if (entry.classification !== 'context' || !entry.reason?.trim()) issues.push({block_id:block.id,reason:'Classificação de cobertura não confirmada.'});
     else if (kind === 'notice' && /\b(devera|deverao|obrigatori[oa]|exigid[oa]s?|no minimo)\b/.test(text(block.text)))
       issues.push({block_id:block.id,reason:'Bloco com linguagem de exigência foi classificado sem requisitos; requer nova leitura.'});
@@ -112,28 +122,36 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
   for (const conflict of value.conflicts || []) {
     if (!evidenceValid({...conflict,source_id:String(source.id),location:chunk.location},[{id:String(source.id),text:chunk.text}]))
       issues.push({reason:'Conflito sem trecho literal verificável.',candidate:conflict});
-    else conflicts.push({...conflict,source_id:String(source.id),location:chunk.location});
+    else {
+      const item_numbers=(conflict.item_numbers || []).map(n=>canonicalItemNumber(n,context.items || []));
+      if(kind==='notice' && (!item_numbers.length || item_numbers.some(n=>n!=='all'&&!context.items.some(i=>String(i.number)===n))))issues.push({reason:'Conflito sem associação confirmada ao item.',candidate:conflict});
+      conflicts.push({...conflict,item_numbers,source_id:String(source.id),location:chunk.location});
+    }
   }
   if (value.complete !== true) issues.push({reason:'Revisor não confirmou leitura integral do trecho.'});
-  return { facts:validated.facts, complete:issues.length === 0, conflicts, issues, blocks:blocks.length,
+  return { facts:validated.facts, complete:issues.length === 0, conflicts, issues, blocks:blocks.length,block_reviews:entries.map(entry=>({...entry,block_ref:`${prefix}:${entry.block_id}`})),
     audited_blocks:blocks.filter(b=>entries.some(c=>c.block_id===b.id)).length };
 }
 
 function createExtractionRunner({ read, write, ask, isTruncated }) {
-  async function extract({job,config,source:s,chunk,kind,context,system,repair=false}) {
+  async function extract({job,config,source:s,chunk,kind,context,system,repair=false},work) {
     const key = hash({audit:AUDIT_VERSION,kind,context,text:chunk.text});
     const old = await read(job,s,kind,key,chunk.chunk);
     if (old?.audit_version === AUDIT_VERSION && old.complete) return {...old,cache_hit:true};
     // A partial cache is evidence for repair, never a permanent successful cache.
     const prefix = `${s.id}:${key.slice(0,12)}:${chunk.chunk}`;
-    let first;
+    let first,initial;
     const blocks = sourceBlocks(chunk.text);
-    let data;
+    let data=old?.children?.length ? {...old,child_done:old.pending_subtasks ? (old.child_done || old.children.map(()=>false)) : old.children.map(()=>false)} : null;
+    if(!data){
+    if(!work.remaining)return{facts:[],complete:false,pending_subtasks:true,parts:{done:0,total:1},conflicts:[],issues:[],blocks:0,audited_blocks:0};
+    work.remaining--;
     try {
-      first = await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
+      first = old?.phase==='auditing' ? old.first_response : await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
       if (!Array.isArray(first?.facts)) throw Object.assign(new Error('Extração fora do formato esperado.'),{code:'TECHNICAL_EXTRACTION_INVALID'});
-      const initial = validateFacts(first.facts,s,chunk,kind,context,`${prefix}:initial`);
-      const audit = await ask(job,config,`${system}\nVocê é o revisor de COBERTURA. Releia TODOS os blocos do trecho, inclusive obrigações de fornecimento e documentação. Extraia novamente TODAS as exigências atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne também coverage com exatamente uma entrada para CADA block.id: requirements (inclui exigências técnicas, kit, fornecimento e administrativas; fact_indexes aponta índices de facts que citam esse bloco), context (nenhuma exigência; justifique), ou unreadable (explique). complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,
+      initial = validateFacts(first.facts,s,chunk,kind,context,`${prefix}:initial`);
+      await write(job,s,kind,key,chunk.chunk,{audit_version:AUDIT_VERSION,phase:'auditing',first_response:first,complete:false});
+      const audit = await ask(job,config,`${system}\nVocê é o revisor de COBERTURA DAS EXIGÊNCIAS TÉCNICAS DOS ITENS. Releia TODOS os blocos do trecho. Extraia novamente TODAS as exigências técnicas atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura, componentes do kit, acessórios, garantia do equipamento, treinamento, entrega, instalação, manuais, assistência e documentação técnica/certificações. Procure essas exigências também em cláusulas administrativas. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne coverage com exatamente uma entrada para CADA block.id: requirements (qualquer exigência técnica ou obrigação de fornecimento/documentação técnica; fact_indexes aponta índices de facts que citam esse bloco); administrative (somente regras jurídicas/fiscais e ritos da disputa, sem requisito técnico do item; justifique e cite em quote um trecho literal de até 300 caracteres desse bloco); context (nenhuma exigência; justifique); ou unreadable (explique). quote pode ser vazio em requirements/context, pois as evidências técnicas estão em facts. Toda a página é lida; cláusulas jurídicas/fiscais puras são registradas na cobertura e não viram especificações de produto. complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,
         JSON.stringify({context,document:{...chunk,source_id:String(s.id)},blocks,previous_facts:initial.facts,rejected_candidates:initial.rejected,previous_conflicts:first.conflicts || []}),7000,COVERAGE_FORMAT);
       data = validateAudit(audit,s,chunk,kind,context,blocks,`${prefix}:audit`);
       // Preserve verified initial facts; unsupported model candidates are NOT
@@ -143,27 +161,41 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       data.facts = mergeFacts(initial.facts,data.facts);
     } catch (error) {
       if (!isTruncated(error)) throw error;
-      data = {facts:[],complete:false,conflicts:[],issues:[{reason:'Resposta excedeu a capacidade do trecho; subdivisão necessária.'}],blocks:blocks.length,audited_blocks:0};
+      data = {facts:initial?.facts || [],complete:false,conflicts:[],issues:[{reason:'Resposta excedeu a capacidade do trecho; subdivisão necessária.'}],blocks:blocks.length,audited_blocks:0};
     }
     if (!data.complete && chunk.text.length > MIN_SPLIT) {
       const middle = Math.floor(chunk.text.length / 2), overlap = 150;
-      const children = [
+      data = {...data,base_facts:data.facts,base_conflicts:data.conflicts,base_rejections:data.first_pass_rejections || [],child_done:[false,false],children:[
         {...chunk,text:chunk.text.slice(0,middle+overlap)},
         {...chunk,text:chunk.text.slice(middle-overlap),context_before:chunk.text.slice(Math.max(0,middle-1200),middle-overlap)},
-      ];
+      ]};
+      await write(job,s,kind,key,chunk.chunk,{...data,audit_version:AUDIT_VERSION,complete:false,pending_subtasks:true});
+    }
+    }
+    if(data.children?.length){
       const results = [];
-      for (const child of children) results.push(await extract({job,config,source:s,chunk:child,kind,context,system,repair:true}));
+      for (const [index,child] of data.children.entries()) {
+        const childKey=hash({audit:AUDIT_VERSION,kind,context,text:child.text});
+        const saved=data.child_done[index] ? await read(job,s,kind,childKey,child.chunk) : null;
+        const result=saved && saved.audit_version===AUDIT_VERSION && !saved.pending_subtasks && saved.phase!=='auditing'
+          ? {...saved,cache_hit:true} : await extract({job,config,source:s,chunk:child,kind,context,system,repair:true},work);
+        results.push(result);data.child_done[index]=!result.pending_subtasks;
+      }
       const childFacts = mergeFacts(...results.map(r=>r.facts));
-      data = { facts:mergeFacts(data.facts,childFacts), complete:results.every(r=>r.complete),
-        conflicts:results.flatMap(r=>r.conflicts),issues:results.flatMap(r=>r.issues || []),
-        first_pass_rejections:[...(data.first_pass_rejections || []),...results.flatMap(r=>r.first_pass_rejections || [])],
-        blocks:results.reduce((n,r)=>n+r.blocks,0),audited_blocks:results.reduce((n,r)=>n+r.audited_blocks,0),subdivided:true };
+      data = { ...data,facts:mergeFacts(data.base_facts || [],childFacts), complete:results.every(r=>r.complete),pending_subtasks:results.some(r=>r.pending_subtasks),
+        conflicts:[...(data.base_conflicts || []),...results.flatMap(r=>r.conflicts)],issues:results.flatMap(r=>r.issues || []),
+        first_pass_rejections:[...(data.base_rejections || []),...results.flatMap(r=>r.first_pass_rejections || [])],
+        blocks:results.reduce((n,r)=>n+(r.blocks || 0),0),audited_blocks:results.reduce((n,r)=>n+(r.audited_blocks || 0),0),subdivided:true,
+        block_reviews:results.flatMap(r=>r.block_reviews || []),
+        parts:{done:results.reduce((n,r)=>n+(r.parts?.done ?? (r.pending_subtasks?0:1)),0),total:results.reduce((n,r)=>n+(r.parts?.total || 1),0)} };
     }
     data = {...data,audit_version:AUDIT_VERSION,global_incomplete:!data.complete,repair,
       attempted_at:new Date().toISOString()};
     await write(job,s,kind,key,chunk.chunk,data);
     return data;
   }
-  return extract;
+  // At most one extraction/audit unit per scheduler turn. Children and first
+  // responses are durable, so another notice can run before the next unit.
+  return args=>extract(args,{remaining:1});
 }
-module.exports = { AUDIT_VERSION,sourceBlocks,literalEvidenceQuote,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
+module.exports = { AUDIT_VERSION,sourceBlocks,literalEvidenceQuote,canonicalItemNumber,validateFacts,validateAudit,mergeFacts,createExtractionRunner };

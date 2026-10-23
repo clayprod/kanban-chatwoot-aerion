@@ -41,3 +41,11 @@ test('fetching a page never discards a previously identified relevant item beyon
   expect(merged.find(i=>i.numero_item==='2200').descricao).toBe('Drone');
   expect(merged.find(i=>i.numeroItem===1).descricao).toBe('Descrição completa');
 });
+
+test('quantity, unit reference and item total stay visible without opening technical details',()=>{
+ const {container}=render(<OpportunityPreview opportunity={createPncpOpportunityPreview(raw)} items={[{numero_item:'1',descricao:'Drone',quantidade:2,unidade:'un',valor_referencia:111000}]} />);
+ const quantity=screen.getByText(/Quantidade:/),price=screen.getByText(/Referência unitária:/),total=screen.getByText(/Total do item:/);
+ expect(quantity).toBeVisible();expect(price).toBeVisible();expect(total).toBeVisible();
+ expect(quantity.closest('details')).toBeNull();expect(price.closest('details')).toBeNull();expect(total.closest('details')).toBeNull();
+ expect(total).toHaveTextContent(/222\.000,00/);expect(container.querySelector('details')).not.toHaveAttribute('open');
+});

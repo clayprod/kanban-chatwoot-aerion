@@ -161,6 +161,12 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       for (let n = 0; n < 3; n++) await service.tick();
       assert.ok((await pool.query("SELECT job_id FROM technical_candidates WHERE account_id=1 AND result_key='existing-unopened'")).rows[0]?.job_id);
       assert.equal((await pool.query("SELECT count(*)::int AS n FROM technical_candidates WHERE account_id=1 AND result_key LIKE 'invalid-%'")).rows[0].n, 45);
+      const observedAt=(await pool.query("SELECT updated_at::text AS value FROM technical_candidates WHERE account_id=1 AND result_key='existing-unopened'")).rows[0].value;
+      await service.tick();
+      assert.equal((await pool.query("SELECT updated_at::text AS value FROM technical_candidates WHERE account_id=1 AND result_key='existing-unopened'")).rows[0].value,observedAt,'unchanged microsecond timestamps must not repeatedly re-observe a saved notice');
+      await pool.query("UPDATE pncp_search_job_results SET updated_at=NOW()+INTERVAL '1 second' WHERE result_key='existing-unopened'");
+      await service.tick();
+      assert.equal((await pool.query("SELECT c.source_updated_at=date_trunc('milliseconds',r.updated_at) AS current FROM technical_candidates c JOIN pncp_search_job_results r ON r.result_key=c.result_key AND r.account_id=c.account_id WHERE c.account_id=1 AND c.result_key='existing-unopened'")).rows[0].current,true);
 
       // Explicit re-extraction invalidates the old verdict immediately.
       await request('POST', `${base}/products/${product.id}/sources`, { name: 'Ficha B.txt', text: 'Ficha da variante B. Autonomia de 42 min. Novos dados técnicos.' });
@@ -315,9 +321,20 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
         const blocks=JSON.parse(args.user).blocks;
         return{ok:true,data:{complete:true,facts,conflicts:[],...(blocks?{coverage:blocks.map(b=>({block_id:b.id,classification:b.text.includes('Autonomia de 42 min')?'requirements':'context',fact_indexes:b.text.includes('Autonomia de 42 min')?[0]:[],reason:'Trecho conferido.'}))}:{})},usage:{total_tokens:100}};
       }});
-      for(let n=0;n<3;n++)await adaptiveService.tick();
+      for(let n=0;n<8;n++)await adaptiveService.tick();
       const denseProduct=(await request('GET',`${base}/products`,null,93)).data[0];
       assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,5);
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const larger=(await request('POST',`${base}/products`,{name:'Fallback com capacidade maior',sale_price:100},99)).data;
+      await request('POST',`${base}/products/${larger.id}/sources`,{text:'Autonomia de 42 min.'},99);
+      const capacityOffsets=[];
+      const capacityService=createTechnicalAnalysis({...dependencies,getProviderCount:()=>2,ai:async args=>{
+        capacityOffsets.push(args.providerOffset);
+        return args.providerOffset===0?{ok:false,requestTooLarge:true,error:'413'}:dependencies.ai(args);
+      }});
+      for(let n=0;n<4;n++)await capacityService.tick();
+      assert.equal((await request('GET',`${base}/products`,null,99)).data[0].specs_complete,true);
+      assert.deepEqual(capacityOffsets,[0,1,0,1]);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

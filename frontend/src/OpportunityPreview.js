@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import TechnicalResult from './TechnicalResult';
 import SearchEvidence from './SearchEvidence';
+import {pncpItemEstimatedTotal} from './pncpPreview';
 const money = value => value == null ? 'Não informado' : Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 export default function OpportunityPreview({ opportunity, items = [], otherItems = [], loading, error, sectionClass }) {
   const raw = opportunity.__preview;
@@ -36,11 +37,15 @@ export default function OpportunityPreview({ opportunity, items = [], otherItems
       <div className="space-y-2">{items.map(item => <div key={item.numero_item || item.id} ref={node => { itemRefs.current[String(item.numero_item)] = node; }} className="rounded-xl border border-line bg-bg2/30">
         <div className="px-3 py-3"><h5 className="text-sm font-semibold"><span className="mr-2 text-primary">Item {item.numero_item || '—'}</span>{item.descricao}</h5>
           <TechnicalResult itemSummary item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} />
+          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
+            <p>Quantidade: <span className="font-medium text-ink">{item.quantidade ?? 'Não informada'} {item.unidade || ''}</span></p>
+            <p>Referência unitária: <span className="font-medium text-ink">{money(item.valor_referencia)}</span></p>
+            <p>Total do item: <span className="font-medium text-ink">{money(pncpItemEstimatedTotal(item))}</span></p>
+          </div>
         </div>
         <details open={String(focus?.number) === String(item.numero_item) || undefined} onToggle={event => { const isOpen = event.currentTarget.open; setOpened(current => current[item.numero_item] === isOpen ? current : { ...current, [item.numero_item]: isOpen }); }}>
           <summary className="cursor-pointer border-t border-line px-3 py-2 text-xs font-medium text-primary">Ver exigências e comparação</summary>
           <div className="space-y-3 border-t border-line p-3">
-            <p className="text-xs text-muted">Quantidade: {item.quantidade ?? 'Não informada'} {item.unidade || ''} · Referência unitária: {money(item.valor_referencia)}</p>
             {item.scope_pending && <p className="text-xs text-status-warning">O texto corresponde à busca; a classificação material/serviço ainda precisa ser confirmada.</p>}
             {(opened[item.numero_item] || String(focus?.number) === String(item.numero_item)) && <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />}
           </div>

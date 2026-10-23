@@ -2,7 +2,7 @@
 const { hash, text, commercialUnit, assessProduct, summarize, VERSION } = require('./technicalRules');
 const documents = require('./technicalDocuments');
 const { FACTS_FORMAT, MAPPING_FORMAT, COVERAGE_FORMAT } = require('./technicalAiFormat');
-const { createExtractionRunner } = require('./technicalExtraction');
+const { createExtractionRunner, canonicalItemNumber } = require('./technicalExtraction');
 const { splitMappingTask, mergeMappings } = require('./technicalMapping');
 const { cleanPackageItems, assembleProduct } = require('./productPackages');
 const { EXTRACTION_VERSION, normalizeFact, uniqueFacts, requirementsForItem, rankMatches } = require('./technicalQuality');
@@ -259,6 +259,7 @@ function createTechnicalAnalysis(deps) {
     // UTF-8 bytes bound input tokens conservatively, plus output cap; failed calls retain reservation.
     const reserved = Buffer.byteLength(system + user, 'utf8') + maxTokens + 1000;
     let result, day;
+    let oversized = false;
     const failures = [];
     const providers = Math.max(1, Math.min(3, Number(deps.getProviderCount?.()) || 1));
     for (let offset = 0; offset < providers; offset++) {
@@ -274,7 +275,11 @@ function createTechnicalAnalysis(deps) {
         UPDATE technical_ai_calls SET actual_tokens=$2 WHERE id=$1 AND actual_tokens IS NULL RETURNING account_id,day,reserved_tokens
       ) UPDATE technical_usage u SET tokens=GREATEST(0,u.tokens-s.reserved_tokens+$2),actual_tokens=u.actual_tokens+$2
         FROM settled s WHERE u.account_id=s.account_id AND u.day=s.day`, [day.id, actual]);
-      if ((result.truncated || result.requestTooLarge) && [FACTS_FORMAT,COVERAGE_FORMAT,MAPPING_FORMAT].includes(responseFormat)) throw new TechnicalChunkTooLarge('Trecho técnico excedeu a capacidade do modelo.');
+      if ((result.truncated || result.requestTooLarge) && [FACTS_FORMAT,COVERAGE_FORMAT,MAPPING_FORMAT].includes(responseFormat)) {
+        // Capacities differ. Try the configured fallback before splitting the
+        // request; only split when none can return a complete response.
+        oversized=true;failures.push(result.error || 'Resposta excedeu a capacidade do modelo.');continue;
+      }
       if (result.ok && !result.truncated) break;
       failures.push(result.error || 'Resposta de IA incompleta.');
       if (isCreditError(result.error || ''))
@@ -284,6 +289,7 @@ function createTechnicalAnalysis(deps) {
     }
     if (!result?.ok || result.truncated) {
       const message = failures.join(' | ');
+      if(oversized)throw new TechnicalChunkTooLarge('Trecho técnico excedeu a capacidade dos provedores disponíveis.');
       if (failures.length && failures.every(isCreditError)) {
         await pool.query("UPDATE technical_config SET provider_error=$2,provider_retry_at=NOW()+INTERVAL '1 hour' WHERE account_id=$1", [job.account_id, 'A API de IA está sem créditos. Regularize o saldo e retome as análises.']);
         throw new BudgetWait('A API de IA está sem créditos. Regularize o saldo e retome as análises.');
@@ -409,7 +415,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       FROM pncp_search_job_results r JOIN pncp_search_jobs j ON j.id=r.job_id
       LEFT JOIN technical_candidates c ON c.account_id=r.account_id AND c.source_context='job:'||r.job_id::text AND c.result_key=r.result_key
       WHERE r.account_id=$1 AND r.visibility IN ('visible','pipeline') AND r.quality_hidden=FALSE AND r.score >= $2
-      AND (c.updated_at IS NULL OR c.source_updated_at < r.updated_at OR c.updated_at < NOW()-INTERVAL '24 hours')
+      AND (c.updated_at IS NULL OR c.source_updated_at < date_trunc('milliseconds',r.updated_at) OR c.updated_at < NOW()-INTERVAL '24 hours')
       ORDER BY c.updated_at NULLS FIRST,r.score DESC LIMIT 40`, [account, minScore(cfg)]);
     for (const r of rows) await observe(account, r.payload, r.filters?.search_profile || { terms: r.terms || (r.filters?.q ? [r.filters.q] : []) }, `job:${r.job_id}`, r.result_key, r.updated_at);
     const signals = await pool.query(`SELECT s.id,s.payload,s.criado_em,w.palavras_chave,w.filtros->'search_profile' AS search_profile FROM edital_signals s JOIN edital_watchlist w ON w.id=s.watchlist_id
@@ -433,6 +439,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     if (state.cursor < chunks.length) {
       const { s, c } = chunks[state.cursor];
       const data = await extractChunk(job, config, s, c, 'product', { name: product.name, model: product.model, composition: product.composition });
+      if(data.pending_subtasks){state.extraction_parts=data.parts;await checkpoint(job);return;}
+      delete state.extraction_parts;
       if (!data.complete) state.notes = [...new Set([...(state.notes || []), `Extração incompleta ou conflitante em ${s.name}, ${c.location}.`, ...data.conflicts.map(v => typeof v === 'string' ? v : JSON.stringify(v))])];
       state.facts.push(...data.facts); state.complete &&= data.complete && !data.conflicts.length; state.cursor++; await checkpoint(job); return;
     }
@@ -530,12 +538,17 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       // every page made the model invent the same conflict on unrelated pages.
       // Only the current source text is evidence; metadata supplies identifiers.
       const data = await extractChunk(job, config, s, c, 'notice', { items: state.items.filter(i => i.in_scope).map(i => ({ number: i.number, quantity:i.quantity, unit:i.unit })) });
+      if(data.pending_subtasks){state.extraction_parts=data.parts;await checkpoint(job);return;}
+      delete state.extraction_parts;
       if (!data.complete) state.notes.push(`Extração incompleta ou associação duvidosa em ${s.name}, ${c.location}.`, ...data.conflicts.map(v => v.message || String(v)));
       for (const issue of data.issues || []) state.notes.push(`${s.name}, ${c.location}${issue.block_id ? `, bloco ${issue.block_id}` : ''}: ${issue.reason}`);
       state.chunk_coverage.push({ source_id: s.id, location: c.location, chunk:c.chunk, complete: data.complete, facts: data.facts.length, conflicts: data.conflicts,
         blocks:data.blocks,audited_blocks:data.audited_blocks,issues:data.issues || [],audit_version:data.audit_version });
-      for (const conflict of data.conflicts) for (const number of conflict.item_numbers || ['all']) if (number !== 'all' && !state.blocked_items.includes(number)) state.blocked_items.push(number);
-      if (data.conflicts.some(conflict=>(conflict.item_numbers || ['all']).includes('all'))) state.global_conflicts = true;
+      for (const conflict of data.conflicts) for (const raw of conflict.item_numbers?.length ? conflict.item_numbers : ['all']) {
+        const number=canonicalItemNumber(raw,state.items);
+        if(number==='all'||!state.items.some(i=>i.number===number))state.global_conflicts=true;
+        else if(!state.blocked_items.includes(number))state.blocked_items.push(number);
+      }
       state.facts.push(...data.facts); state.complete &&= !data.global_incomplete; state.extract_cursor++;
       await checkpoint(job);
       if (!data.cache_hit) return;
@@ -700,10 +713,12 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
   function publicJob(job) {
     if (!job) return null;
     const progress = { files: job.state?.file_cursor || 0, total_files: job.state?.files?.length || 0, chunks: job.state?.extract_cursor || job.state?.cursor || 0, total_chunks: job.state?.total_chunks || 0, compared: job.state?.compare_cursor || 0, total_comparisons: job.state?.pairs?.length || 0 };
+    progress.extraction_parts=job.state?.extraction_parts || null;
     let label = labelStatus[job.status === 'failed' ? 'failed' : job.stage] || job.stage;
     if (['queued','running'].includes(job.status)) {
       if (job.stage === 'extracting' && progress.total_chunks) label += ` · ${progress.chunks}/${progress.total_chunks} trechos`;
       if (job.stage === 'comparing' && progress.total_comparisons) label += ` · ${progress.compared}/${progress.total_comparisons} comparações`;
+      if(job.stage==='extracting' && progress.extraction_parts)label+=` · ${progress.extraction_parts.done}/${progress.extraction_parts.total} partes do trecho`;
     }
     return { id: job.id, status: job.status, stage: job.stage, stage_label: label, error: job.error, updated_at: job.updated_at, next_run_at:job.next_run_at, result: job.result, progress };
   }

@@ -13,8 +13,8 @@ const COVERAGE_FORMAT = format('technical_coverage', object({
   complete: { type: 'boolean' }, facts: { type: 'array', items: fact },
   conflicts: { type: 'array', items: object({ item_numbers: { type: 'array', items: string }, message: string, quote: string }) },
   coverage: { type: 'array', items: object({ block_id: string,
-    classification: { type: 'string', enum: ['requirements', 'context', 'unreadable'] },
-    fact_indexes: { type: 'array', items: { type: 'integer', minimum: 0 } }, reason: string }) },
+    classification: { type: 'string', enum: ['requirements', 'administrative', 'context', 'unreadable'] },
+    fact_indexes: { type: 'array', items: { type: 'integer', minimum: 0 } }, reason: string, quote:string }) },
 }));
 const MAPPING_FORMAT = format('technical_mapping', object({ matches: { type: 'array', items: object({ requirement_id: string, spec_ids: { type: 'array', items: string }, same_metric: { type: 'boolean' } }) } }));
 function requestExceedsCapacity(status, body) {
