@@ -20930,11 +20930,19 @@ const resolveCnaeCodes = async (rawCodes = [], rawLabels = []) => {
       seen.add(String(hit.codigo).replace(/\D/g, ''));
       resolved.push({ codigo: hit.codigo, descricao: hit.descricao });
     } else if (raw) {
-      // keep AI suggestion even if not in local table yet
+      // Nao resolveu na tabela local. O codigo cru da IA costuma vir formatado
+      // ("7520-0/00") ou simplesmente nao existir, e a coluna cnae_fiscal_principal
+      // guarda 7 digitos: medido em producao em 2026-10-23, "7520-0/00" devolve
+      // total 0 em 0.0s. Mantem como rotulo para a tela, mas marca como nao
+      // resolvido para nao envenenar o filtro da busca.
       const pretty = String(raw).trim();
       if (!seen.has(pretty)) {
         seen.add(pretty);
-        resolved.push({ codigo: pretty, descricao: descHint || pretty });
+        resolved.push({
+          codigo: digits.length === 7 ? digits : pretty,
+          descricao: descHint || pretty,
+          unresolved: digits.length !== 7,
+        });
       }
     }
   };
@@ -21121,7 +21129,8 @@ const normalizeIntelSuggestions = async (rawIntel = {}, trendsPayload = {}) => {
       filters: {
         uf,
         ufs: groundedUfs.slice(0, 5),
-        cnae: cnaeResolved.map((c) => c.codigo),
+        // Só o que casa com a base entra no filtro; o resto fica como rótulo.
+        cnae: cnaeResolved.filter((c) => !c.unresolved).map((c) => c.codigo),
         cnae_labels: cnaeResolved,
         porte: normalizePorteCode(filtersIn.porte),
         capital_min: capitalMin,
@@ -23582,6 +23591,43 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Todo /api esta atras do middleware de auth (401 sem cookie). As chamadas que o
+  // worker faz em 127.0.0.1 iam sem credencial e voltavam {"error":"Unauthorized"},
+  // derrubando o tick. Assina um cookie curto para o proprio processo.
+  const cookieInterno = () => {
+    const token = signAuthToken({
+      sub: 'worker:prospeccao',
+      role: 'admin',
+      interno: true,
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+    return `${AUTH_COOKIE_NAME}=${token}`;
+  };
+
+  // O /api/leads/import espera o formato que a tela de importacao monta, nao a linha
+  // crua da busca RFB (que traz municipio_nome, cnae_descricao, ddd1/telefone1).
+  // Sem traduzir, o contato nascia sem telefone, sem cidade e sem CNAE.
+  const leadDaEmpresaRfb = (empresa) => {
+    const ddd = empresa.ddd1 || empresa.ddd2 || '';
+    const numero = (empresa.ddd1 ? empresa.telefone1 : empresa.telefone2) || '';
+    return {
+      cnpj: empresa.cnpj,
+      razao_social: empresa.razao_social,
+      nome_fantasia: empresa.nome_fantasia,
+      email: empresa.correio_eletronico || null,
+      ddd_telefone_1: ddd && numero ? `(${ddd}) ${numero}` : null,
+      municipio: empresa.municipio_nome,
+      uf: empresa.uf,
+      cnae_fiscal: empresa.cnae_fiscal_principal,
+      cnae_fiscal_descricao: empresa.cnae_descricao,
+      capital_social: String(empresa.capital_social || '').replace(',', '.'),
+      descricao_situacao_cadastral: empresa.situacao_cadastral,
+      data_inicio_atividade: empresa.data_de_inicio_da_atividade,
+      descricao_porte: empresa.porte_da_empresa,
+      qsa: [],
+    };
+  };
+
   // Prospeccao ativa: busca empresas novas pelos perfis do Radar e faz o primeiro
   // contato. Enfileira com a prioridade mais baixa — contato frio nunca passa na
   // frente de quem ja respondeu.
@@ -23609,7 +23655,13 @@ const registerBackgroundSchedules = () => {
         carregarPerfis: async () => extrairPerfis(await loadTrendsIntelCacheOnly()),
         buscarEmpresas: async (filtros, tamanho) => {
           const qs = paramsDaBusca(filtros, { pageSize: tamanho });
-          const resp = await fetch(`http://127.0.0.1:${port}/api/rfb/search?${qs}`);
+          if (!qs.get('cnae') && !qs.get('uf') && !qs.get('nome')) {
+            // Sem CNAE, UF nem nome a busca seria uma varredura nacional: 504 garantido.
+            throw new Error('perfil sem filtro seletivo (CNAE/UF/nome)');
+          }
+          const resp = await fetch(`http://127.0.0.1:${port}/api/rfb/search?${qs}`, {
+            headers: { cookie: cookieInterno() },
+          });
           if (!resp.ok) throw new Error(`busca RFB HTTP ${resp.status}`);
           const dados = await resp.json();
           return dados.results || dados.rows || [];
@@ -23626,9 +23678,10 @@ const registerBackgroundSchedules = () => {
           if (rows[0]) return rows[0].id;
           const resp = await fetch(`http://127.0.0.1:${port}/api/leads/import`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', cookie: cookieInterno() },
             body: JSON.stringify({
-              leads: [empresa],
+              account_id: CHATWOOT_ACCOUNT_ID,
+              leads: [leadDaEmpresaRfb(empresa)],
               defaultStage: '1. Inbox (Novos)',
               labels: ['prospeccao-ia'],
             }),

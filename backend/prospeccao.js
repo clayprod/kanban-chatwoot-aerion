@@ -73,6 +73,22 @@ const createProspeccaoTable = async (pool) => {
 
 const soDigitos = (v) => String(v || '').replace(/[^0-9]/g, '');
 
+// A busca RFB devolve ddd e numero em colunas separadas (ddd1/telefone1). Ler
+// `ddd_telefone_1` — que so existe no formato de importacao — dava undefined em
+// todo candidato, e cada empresa era registrada como "sem telefone no cadastro".
+const telefoneDaEmpresa = (e) => {
+  const juntar = (ddd, num) => (ddd && num ? soDigitos(`${ddd}${num}`) : '');
+  const candidatos = [
+    juntar(e?.ddd1, e?.telefone1),
+    juntar(e?.ddd2, e?.telefone2),
+    soDigitos(e?.ddd_telefone_1),
+    soDigitos(e?.ddd_telefone_2),
+    soDigitos(e?.telefone),
+  ];
+  // 10 digitos = fixo com DDD, 11 = celular. Menos que isso nao da para discar.
+  return candidatos.find((t) => t.length >= 10) || '';
+};
+
 // Normaliza para comparar nome de perfil com razão social: sem acento, sem caixa,
 // sem pontuação. "SERTEC Engenharia LTDA" e "sertec engenharia" batem.
 const normalizar = (s) => String(s || '')
@@ -101,24 +117,42 @@ const perfilConfirmaEmpresa = (nomePerfil, razaoSocial, nomeFantasia) => {
 
 // Perfis que o Radar já sugere. Mesma forma que a tela usa em
 // searchCompaniesFromTrendProfile — nada de formato novo.
+//
+// O cache do Radar entrega { day, geo, trends, news, intel: { suggestions } }. Ler
+// `payload.suggestions` devolvia sempre [] e o worker parava em "nenhum perfil
+// sugerido" — foi por isso que a prospeccao ficou ligada horas sem abordar ninguem.
 const extrairPerfis = (trendsPayload) => {
-  const sugestoes = trendsPayload?.suggestions || trendsPayload?.perfis || [];
+  const sugestoes = trendsPayload?.intel?.suggestions
+    || trendsPayload?.suggestions
+    || trendsPayload?.perfis
+    || [];
   return sugestoes
     .filter((s) => s && s.filters && (s.filters.cnae?.length || s.filters.uf))
     .map((s) => ({ titulo: s.titulo || s.title || s.label || 'perfil', filtros: s.filters }));
 };
+
+// CNAE na base e 7 digitos sem pontuacao (4120400). Perfil sugerido as vezes trazia
+// o codigo formatado ("7520-0/00"), que nao casa com nada: medido em producao em
+// 2026-10-23, "7520-0/00" devolvia total 0 em 0.0s enquanto "4120400" devolvia
+// resultados. Normaliza aqui e descarta o que nao tiver 7 digitos.
+const cnaesValidos = (lista) => (Array.isArray(lista) ? lista : [])
+  .map((c) => String(c || '').replace(/[^0-9]/g, ''))
+  .filter((c) => c.length === 7);
 
 // Monta a query da busca RFB a partir do perfil sugerido.
 const paramsDaBusca = (filtros, { pageSize }) => {
   const p = new URLSearchParams();
   if (filtros.nome) p.set('nome', filtros.nome);
   if (filtros.uf) p.set('uf', filtros.uf);
-  if (Array.isArray(filtros.cnae) && filtros.cnae.length) p.set('cnae', filtros.cnae.join(','));
+  const cnaes = cnaesValidos(filtros.cnae);
+  if (cnaes.length) p.set('cnae', cnaes.join(','));
   if (filtros.porte) p.set('porte', filtros.porte);
   if (filtros.capital_min) p.set('capital_min', String(filtros.capital_min));
   if (filtros.capital_max) p.set('capital_max', String(filtros.capital_max));
-  if (filtros.abertura_min_anos) p.set('abertura_min_anos', String(filtros.abertura_min_anos));
-  if (filtros.abertura_max_anos) p.set('abertura_max_anos', String(filtros.abertura_max_anos));
+  // abertura_min_anos/abertura_max_anos ficam de fora DE PROPOSITO. Medido em
+  // producao em 2026-10-23: "cnae + idade 3-25 anos" estourou o statement timeout
+  // de 120s (504 em 140s), enquanto o mesmo CNAE com porte e capital respondeu em
+  // ~20s. Idade da empresa e refino desejavel; 504 a cada tick nao e.
   p.set('situacao', (filtros.situacao || ['2']).join ? (filtros.situacao || ['2']).join(',') : '2');
   p.set('only_matriz', filtros.only_matriz === false ? 'false' : 'true');
   p.set('page', '1');
@@ -247,18 +281,26 @@ const runProspeccaoTick = async (pool, {
   for (const perfil of perfis) {
     if (r.abordados >= limite) break;
 
-    const encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil);
+    // Busca fora do try matava o tick inteiro quando um perfil dava 504/401.
+    let encontradas;
+    try {
+      encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil);
+    } catch (error) {
+      r.falhas += 1;
+      r.errosBusca = [...(r.errosBusca || []), `${perfil.titulo}: ${String(error.message || error)}`];
+      continue;
+    }
     const novas = await filtrarNovos(pool, accountId, encontradas);
     if (!novas.length) continue;
 
     // Uma consulta à Evolution para o lote: existe? qual o nome do perfil?
-    const telefones = novas.map((e) => soDigitos(e.ddd_telefone_1 || e.telefone)).filter(Boolean);
+    const telefones = novas.map(telefoneDaEmpresa).filter(Boolean);
     const { existentes, perfis: perfisWpp } = await verificarNumerosWhatsapp(telefones);
 
     for (const empresa of novas) {
       if (r.abordados >= limite) break;
       r.avaliados += 1;
-      const tel = soDigitos(empresa.ddd_telefone_1 || empresa.telefone);
+      const tel = telefoneDaEmpresa(empresa);
       const base = {
         accountId, cnpj: empresa.cnpj, razaoSocial: empresa.razao_social,
         telefone: tel, perfil: perfil.titulo,
@@ -337,6 +379,8 @@ const runProspeccaoTick = async (pool, {
 };
 
 module.exports = {
+  cnaesValidos,
+  telefoneDaEmpresa,
   PROSPECCAO_LOG_TABLE,
   carregarConfigProspeccao,
   createProspeccaoTable,

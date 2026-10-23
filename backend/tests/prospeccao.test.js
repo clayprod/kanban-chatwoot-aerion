@@ -5,6 +5,8 @@ const {
   perfilConfirmaEmpresa,
   extrairPerfis,
   paramsDaBusca,
+  cnaesValidos,
+  telefoneDaEmpresa,
   montarPromptAbordagem,
   carregarConfigProspeccao,
   runProspeccaoTick,
@@ -83,6 +85,24 @@ test('so confirma a empresa com palavra significativa em comum', () => {
   assert.equal(perfilConfirmaEmpresa('', 'QUALQUER LTDA'), false);
 });
 
+// Por que a prospeccao ficou ligada horas sem abordar ninguem (reportado em 23/10):
+// o cache do Radar guarda as sugestoes em intel.suggestions, e o worker lia a raiz.
+test('le as sugestoes de onde o cache do Radar realmente guarda', () => {
+  const comoVemDoCache = {
+    day: '2026-10-23',
+    geo: 'BR',
+    trends: [],
+    news: [],
+    intel: {
+      summary: 'x',
+      suggestions: [{ title: 'Topografia', filters: { cnae: ['4120400'], uf: '' } }],
+    },
+  };
+  const p = extrairPerfis(comoVemDoCache);
+  assert.equal(p.length, 1, 'perfil do cache real tem que ser encontrado');
+  assert.equal(p[0].titulo, 'Topografia');
+});
+
 test('perfis do Radar entram sem formato novo', () => {
   const p = extrairPerfis({ suggestions: [
     { titulo: 'A', filters: { cnae: ['7119702'], uf: 'SP' } },
@@ -101,6 +121,43 @@ test('a busca so manda ativas e matriz por padrao', () => {
   assert.equal(qs.get('situacao'), '2', 'empresa baixada nao e lead');
   assert.equal(qs.get('only_matriz'), 'true');
   assert.equal(qs.get('page_size'), '40');
+});
+
+test('CNAE formatado nao vai para a busca', () => {
+  // Medido em producao em 23/10: "7520-0/00" devolve total 0 em 0.0s, porque a coluna
+  // guarda 7 digitos. Dois dos cinco perfis do dia tinham so codigo formatado.
+  assert.deepEqual(cnaesValidos(['7520-0/00', '3511-2/00', '4120400']), ['7520000', '3511200', '4120400']);
+  assert.deepEqual(cnaesValidos(['35', 'drone', null, '']), [], 'codigo curto ou texto nao vira filtro');
+  const qs = paramsDaBusca({ cnae: ['4120-4/00'] }, { pageSize: 10 });
+  assert.equal(qs.get('cnae'), '4120400', 'pontuacao e tirada antes de buscar');
+});
+
+test('a faixa de idade da empresa NAO vai para a busca', () => {
+  // Mesma medicao: CNAE + idade 3-25 anos estourou o statement timeout de 120s
+  // (504 em 140s); o mesmo CNAE com porte e capital respondeu em ~20s.
+  const qs = paramsDaBusca(
+    { cnae: ['4120400'], porte: '05', capital_min: 500000, abertura_min_anos: 3, abertura_max_anos: 25 },
+    { pageSize: 40 }
+  );
+  assert.equal(qs.get('abertura_min_anos'), null);
+  assert.equal(qs.get('abertura_max_anos'), null);
+  assert.equal(qs.get('porte'), '05', 'porte e capital continuam, que sao baratos');
+  assert.equal(qs.get('capital_min'), '500000');
+});
+
+test('telefone sai de ddd1/telefone1, como a busca RFB devolve', () => {
+  // Ler ddd_telefone_1 (formato de importacao) dava undefined em todo candidato e
+  // cada empresa era registrada como "sem telefone no cadastro".
+  assert.equal(telefoneDaEmpresa({ ddd1: '61', telefone1: '39644043' }), '6139644043');
+  assert.equal(telefoneDaEmpresa({ ddd1: '11', telefone1: '987654321' }), '11987654321');
+  assert.equal(
+    telefoneDaEmpresa({ ddd1: '', telefone1: '', ddd2: '85', telefone2: '98745632' }),
+    '8598745632',
+    'cai para o segundo telefone do cadastro'
+  );
+  assert.equal(telefoneDaEmpresa({ ddd_telefone_1: '(19) 98765-4321' }), '19987654321');
+  assert.equal(telefoneDaEmpresa({ ddd1: '61', telefone1: '3964' }), '', 'curto demais para discar');
+  assert.equal(telefoneDaEmpresa({}), '');
 });
 
 test('quando o perfil NAO confirma, a abertura tem que perguntar', () => {
