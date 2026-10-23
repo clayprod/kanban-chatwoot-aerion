@@ -20,6 +20,21 @@ const STAGE_LOG_TABLE = 'ai_stage_log';
 // é o sinal mais claro que existe e deixar o lead vivo no funil é pior.
 // De onde a IA NAO tira ninguem sozinha. Sair de um marco comercial e decisao
 // de gente: ou o negocio avancou, ou morreu, e os dois casos tem dono.
+// "No momento nao tenho interesse" e adiamento, nao recusa. O prompt manda tratar
+// assim, mas o modelo insistia em Descartado — entao a regra virou codigo.
+const ADIAMENTO = [
+  /n[a\u00e3]o\s+(tenho|temos|h[a\u00e1])?\s*(interesse|necessidade|demanda|previs[a\u00e3]o)?\s*(no|neste)\s+momento/i,
+  /(no|neste)\s+momento\s+n[a\u00e3]o/i,
+  /\bagora\s+n[a\u00e3]o\b/i,
+  /por\s+enquanto/i,
+  /sem\s+previs[a\u00e3]o/i,
+  /(esse|este)\s+ano\s+n[a\u00e3]o/i,
+  /ano\s+que\s+vem/i,
+  /mais\s+(para\s+|pra\s+)?frente/i,
+  /quando\s+(surgir|precisar|houver|tiver)/i,
+];
+const ehAdiamento = (texto) => ADIAMENTO.some((re) => re.test(String(texto || '')));
+
 const ORIGENS_PROTEGIDAS_PADRAO = [
   '7. Agendamento Demo',
   '8. Demo Realizada',
@@ -74,6 +89,8 @@ const carregarConfigStage = () => ({
   maxPorTick: inteiro('AI_STAGE_MAX_PER_TICK', 5),
   maxPorDia: inteiro('AI_STAGE_MAX_PER_DAY', 60),
   minConfianca: decimal('AI_STAGE_MIN_CONFIDENCE', 0.7),
+  // Descartar e o movimento mais caro de desfazer: exige mais certeza que os outros.
+  minConfiancaDescarte: decimal('AI_STAGE_MIN_CONFIDENCE_DISCARD', 0.9),
   alvosAutomaticos: lista('AI_STAGE_AUTO_TARGETS', ALVOS_AUTOMATICOS_PADRAO),
   etapasFrias: lista('AI_STAGE_COLD_TARGETS', ETAPAS_FRIAS_PADRAO),
   origensProtegidas: lista('AI_STAGE_PROTECTED_SOURCES', ORIGENS_PROTEGIDAS_PADRAO),
@@ -187,7 +204,22 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
     '',
     'Como julgar:',
     '- Olhe o que o CLIENTE disse, não o que nós dissemos. Nosso esforço não move etapa.',
-    '- Recusa explícita ("não tenho interesse", "já tenho fornecedor", "não trabalhamos com isso") = Descartado.',
+    '- Vale a posição ATUAL dele, não a mais antiga. Uma fala recente SUBSTITUI uma',
+    '  anterior: se ele disse "não estou procurando" em março e em agosto pediu a tabela,',
+    '  ele voltou a ter interesse. Julgue pela ÚLTIMA fala dele, que vem destacada.',
+    '',
+    'Descartado é o movimento mais caro de desfazer, então a régua é alta:',
+    '- Só use Descartado com recusa DEFINITIVA e ATUAL: "não trabalho com drones",',
+    '  "não usamos isso", "encerramos a atividade", "já fechei com outro fornecedor".',
+    '- "No momento não", "agora não", "esse ano não", "sem previsão" NÃO é Descartado:',
+    '  é Nurturing com data. A pessoa não disse que nunca quer, disse que não é agora.',
+    '- Tentativa de contato que não foi respondida NUNCA é Descartado. Silêncio não é',
+    '  recusa: pode ser número errado, pessoa ocupada ou mensagem não vista.',
+    '- Se a última coisa que o cliente disse demonstra qualquer abertura ("pode mandar",',
+    '  "vou salvar seu contato", "me manda depois"), NÃO é Descartado.',
+    '- Na dúvida entre Descartado e Nurturing, escolha Nurturing. Nurturing volta sozinho',
+    '  na data; Descartado precisa de alguém perceber o erro.',
+    '',
     '- Interesse vago ou "me chama depois" = Nurturing.',
     '- Conversa ativa sem qualificação clara = Em Contato.',
     '- Só diga que houve demo, proposta ou negociação se isso aparecer no histórico.',
@@ -204,16 +236,43 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
     '{"etapa": "<uma das etapas, texto exato>", "confianca": <0 a 1>, "motivo": "<a frase do cliente que te levou a isso>", "retomar_em_dias": <inteiro, 0 se não cabe>}',
   ].join('\n');
 
+  const agora = new Date();
+  const dias = (d) => {
+    const t = new Date(d).getTime();
+    return Number.isFinite(t) ? Math.floor((agora.getTime() - t) / 86400000) : null;
+  };
+  const quando = (d) => {
+    const n = dias(d);
+    return n === null ? 'data desconhecida' : n === 0 ? 'hoje' : n === 1 ? 'ontem' : `há ${n} dias`;
+  };
   const linhas = historico.length
-    ? historico.map((h) => `[${h.autor}] ${h.texto}`).join('\n')
+    ? historico.map((h) => `[${h.autor} — ${quando(h.em)}] ${h.texto}`).join('\n')
     : '(sem histórico textual)';
+
+  // A última fala do cliente define a posição atual dele. Sem destacar, o modelo
+  // acha uma recusa velha no meio do histórico e descarta quem voltou a engajar:
+  // o Flavio disse "não estou mais procurando" e depois "Pode mandar" — e foi
+  // descartado pela primeira frase.
+  const idxCliente = historico.map((h) => h.autor).lastIndexOf('cliente');
+  const falasFinais = [];
+  for (let i = idxCliente; i >= 0 && falasFinais.length < 4; i -= 1) {
+    if (historico[i].autor !== 'cliente') break;
+    falasFinais.unshift(historico[i]);
+  }
 
   const user = [
     `Contato: ${contato.name || 'sem nome'}`,
     contato.empresa ? `Empresa: ${contato.empresa}` : null,
     `Etapa atual: ${contato.etapa_atual}`,
     '',
-    'Conversa (mais antigo primeiro):',
+    idxCliente >= 0
+      ? [
+        `>>> POSIÇÃO ATUAL DO CLIENTE — o que ele falou por último (${quando(historico[idxCliente].em)}):`,
+        ...falasFinais.map((f) => `    "${f.texto}"`),
+      ].join(String.fromCharCode(10))
+      : '>>> O CLIENTE NUNCA RESPONDEU. Silêncio não é recusa — nunca classifique como Descartado.',
+    '',
+    'Conversa completa (mais antigo primeiro):',
     linhas,
     '',
     'Em que etapa este lead está?',
@@ -223,7 +282,7 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
 };
 
 // Decide se a sugestão vira movimento automático, sugestão ao vendedor, ou nada.
-const avaliarSugestao = ({ etapaAtual, sugerida, confianca, etapas, config }) => {
+const avaliarSugestao = ({ etapaAtual, sugerida, confianca, motivo = '', etapas, config }) => {
   const alvo = String(sugerida || '').trim();
   if (!alvo) return { acao: 'skipped', motivo: 'etapa vazia' };
   if (!etapas.includes(alvo)) return { acao: 'skipped', motivo: `etapa inexistente: ${alvo}` };
@@ -233,6 +292,25 @@ const avaliarSugestao = ({ etapaAtual, sugerida, confianca, etapas, config }) =>
   }
   if (!Number.isFinite(Number(confianca)) || Number(confianca) < config.minConfianca) {
     return { acao: 'skipped', motivo: `confiança ${confianca} abaixo de ${config.minConfianca}` };
+  }
+  // Descartado tem regua propria, acima da geral.
+  if (alvo === '16. Descartado') {
+    // A pessoa disse que nao e agora, nao que nunca mais. Descartar fecha a porta
+    // de quem so pediu tempo — e Nurturing volta sozinho na data.
+    if (ehAdiamento(motivo)) {
+      return {
+        acao: 'applied',
+        alvoCorrigido: '17. Nurturing',
+        motivo: 'adiamento, não recusa — vai para Nurturing com data em vez de Descartado',
+      };
+    }
+    const minDescarte = config.minConfiancaDescarte ?? 0.9;
+    if (Number(confianca) < minDescarte) {
+      return {
+        acao: 'suggested',
+        motivo: `descarte com confiança ${confianca} (mínimo ${minDescarte}) — precisa de confirmação humana`,
+      };
+    }
   }
   // Sair de marco comercial tambem e decisao de gente, nao so entrar.
   if ((config.origensProtegidas || ORIGENS_PROTEGIDAS_PADRAO).includes(etapaAtual)) {
@@ -419,7 +497,7 @@ const runStageClassificationTick = async (pool, {
 
       if (notify) {
         await Promise.resolve(notify({
-          tipo: 'applied', contato: cand, para: sugerida, motivo,
+          tipo: 'applied', contato: cand, para: destino, motivo,
           retomarEm: retomada?.dueAt || null,
         })).catch(() => {});
       }
@@ -435,6 +513,7 @@ const runStageClassificationTick = async (pool, {
 
 module.exports = {
   STAGE_LOG_TABLE,
+  ehAdiamento,
   ALVOS_AUTOMATICOS_PADRAO,
   ORIGENS_PROTEGIDAS_PADRAO,
   ETAPAS_FRIAS_PADRAO,

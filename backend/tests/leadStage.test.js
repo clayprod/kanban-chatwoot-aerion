@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   carregarConfigStage,
+  ehAdiamento,
   ORIGENS_PROTEGIDAS_PADRAO,
   avaliarSugestao,
   montarPromptStage,
@@ -23,6 +24,7 @@ const CFG = {
   maxPorTick: 5,
   maxPorDia: 60,
   minConfianca: 0.7,
+  minConfiancaDescarte: 0.9,
   alvosAutomaticos: ALVOS_AUTOMATICOS_PADRAO,
   origensProtegidas: ORIGENS_PROTEGIDAS_PADRAO,
   etapasFrias: ['16. Descartado', '17. Nurturing', '15. Pausado'],
@@ -141,6 +143,88 @@ test('nao rebaixa quem ja passou de marco comercial', () => {
     avaliarSugestao({ etapaAtual: '1. Inbox (Novos)', sugerida: '2. Em Contato', confianca: 0.85, etapas: ETAPAS, config: CFG }).acao,
     'applied'
   );
+});
+
+// Casos reais de 21/10, reportados pelo Clayton: a IA estava descartando lead sem
+// sinal claro de que a pessoa nao queria mais ser contatada.
+test('adiamento nao e recusa: "no momento nao" vai para Nurturing', () => {
+  // "E A V DO NASCIMENTO" foi descartado por "No momento não tenho interesse." —
+  // a pessoa disse que nao e agora, nao que nunca mais. Descartar fecha a porta de
+  // quem so pediu tempo; Nurturing volta sozinho na data.
+  const adiamentos = [
+    'No momento não tenho interesse.',
+    'Neste momento não temos demanda',
+    'Agora não, quem sabe mais para frente',
+    'Sem previsão de compra',
+    'Esse ano não vamos investir',
+    'Me chama quando surgir algo',
+    'Por enquanto estamos parados',
+  ];
+  for (const m of adiamentos) {
+    assert.ok(ehAdiamento(m), `deveria ser adiamento: ${m}`);
+    const v = avaliarSugestao({
+      etapaAtual: '1. Inbox (Novos)', sugerida: '16. Descartado',
+      confianca: 1, motivo: m, etapas: ETAPAS, config: CFG,
+    });
+    assert.equal(v.alvoCorrigido, '17. Nurturing', m);
+  }
+});
+
+test('recusa definitiva continua virando Descartado', () => {
+  for (const m of ['Não trabalho com drones.', 'Já fechamos com outro fornecedor', 'Encerramos a atividade']) {
+    assert.equal(ehAdiamento(m), false, m);
+    const v = avaliarSugestao({
+      etapaAtual: '1. Inbox (Novos)', sugerida: '16. Descartado',
+      confianca: 1, motivo: m, etapas: ETAPAS, config: CFG,
+    });
+    assert.equal(v.acao, 'applied');
+    assert.equal(v.alvoCorrigido, undefined, 'recusa real nao e desviada');
+  }
+});
+
+test('descartar exige mais certeza que mover entre etapas de trabalho', () => {
+  // Confianca que basta para Em Contato nao basta para fechar a porta.
+  assert.equal(
+    avaliarSugestao({ etapaAtual: '1. Inbox (Novos)', sugerida: '2. Em Contato',
+      confianca: 0.75, motivo: 'conversando', etapas: ETAPAS, config: CFG }).acao,
+    'applied'
+  );
+  const v = avaliarSugestao({ etapaAtual: '1. Inbox (Novos)', sugerida: '16. Descartado',
+    confianca: 0.75, motivo: 'não trabalho com isso', etapas: ETAPAS, config: CFG });
+  assert.equal(v.acao, 'suggested');
+  assert.match(v.motivo, /confirmação humana/);
+});
+
+test('o prompt destaca a posicao ATUAL do cliente, nao a fala mais antiga', () => {
+  // Caso Flavio: disse "não estou mais procurando drones" e, meses depois, "Pode
+  // mandar". A IA ancorou na primeira frase e descartou quem tinha voltado a engajar.
+  const { system, user } = montarPromptStage({
+    contato: { name: 'Flavio', etapa_atual: '17. Nurturing' },
+    historico: [
+      { autor: 'cliente', texto: 'não estou mais procurando drones', em: '2026-03-01T12:00:00.000Z' },
+      { autor: 'nós', texto: 'Temos 25% off', em: '2026-10-01T12:00:00.000Z' },
+      { autor: 'cliente', texto: 'Pode mandar', em: '2026-10-02T12:00:00.000Z' },
+    ],
+    etapas: ETAPAS,
+  });
+  const foco = user.split('Conversa completa')[0];
+  assert.match(foco, /POSIÇÃO ATUAL DO CLIENTE/);
+  assert.match(foco, /Pode mandar/);
+  assert.doesNotMatch(foco, /não estou mais procurando/, 'a fala velha nao pode estar no destaque');
+  // E o historico completo tem que mostrar a idade de cada fala.
+  assert.match(user, /há \d+ dias/);
+  assert.match(system, /SUBSTITUI uma/);
+  assert.match(system, /Silêncio não é\s+recusa/);
+});
+
+test('quem nunca respondeu nunca vira Descartado', () => {
+  const { user } = montarPromptStage({
+    contato: { name: 'Mudo', etapa_atual: '1. Inbox (Novos)' },
+    historico: [{ autor: 'nós', texto: 'Oi!', em: '2026-10-01T12:00:00.000Z' }],
+    etapas: ETAPAS,
+  });
+  assert.match(user, /NUNCA RESPONDEU/);
+  assert.match(user, /Silêncio não é recusa/);
 });
 
 test('rejeita etapa inexistente, igual a atual, ou confianca insuficiente', () => {
