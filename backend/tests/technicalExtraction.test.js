@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {createExtractionRunner,sourceBlocks,validateAudit,mergeFacts} = require('../technicalExtraction');
+const {createExtractionRunner,sourceBlocks,literalEvidenceQuote,validateAudit,mergeFacts} = require('../technicalExtraction');
 const {COVERAGE_FORMAT} = require('../technicalAiFormat');
 const {requirementsForItem} = require('../technicalQuality');
 const {assessProduct} = require('../technicalRules');
@@ -90,4 +90,22 @@ test('a mandatory clause cannot be dismissed as ordinary context',()=>{
   const chunk={text:'O equipamento deverá ter autonomia mínima de 41 min.',location:'Página 1'},blocks=sourceBlocks(chunk.text);
   const value={complete:true,facts:[],conflicts:[],coverage:[{block_id:'0',classification:'context',fact_indexes:[],reason:'Texto comum.'}]};
   assert.equal(validateAudit(value,{id:'s'},chunk,'notice',{items:[{number:'1'}]},blocks,'id').complete,false);
+});
+
+test('PDF line-wrapped words recover a contiguous literal quote without changing numerical evidence',()=>{
+ const source='Vídeo de 100 a 12.800 (normal) / até 51.200 (no-\nturno).';
+ const recovered=literalEvidenceQuote('Vídeo de 100 a 12.800 (normal) / até 51.200 (no-turno)',source);
+ assert.equal(recovered,'Vídeo de 100 a 12.800 (normal) / até 51.200 (no-\nturno)');
+ assert.equal(literalEvidenceQuote('até 51.200 (noturno)',source),'até 51.200 (no-\nturno)');
+ assert.equal(literalEvidenceQuote('até 51.201 (noturno)',source),null);
+ assert.equal(literalEvidenceQuote('até 51.200 (noturno)',`📄 ${source}`),'até 51.200 (no-\nturno)');
+ assert.equal(literalEvidenceQuote('autonomia mínima de 40 min','autonomia mínima de 41 min'),null);
+ assert.equal(literalEvidenceQuote('Primeira última exigência','Primeira outra condição última exigência'),null);
+});
+test('an invented first-pass candidate cannot force the reviewer to repeat unsupported evidence',async()=>{
+ const f=fixture('Autonomia mínima de 41 min.',(data,format)=>{
+  const facts=[fact(format===COVERAGE_FORMAT?'Autonomia mínima de 41 min':'Autonomia mínima de 99 min',{value:format===COVERAGE_FORMAT?41:99})];
+  return{complete:true,facts,conflicts:[],...(data.blocks?{coverage:coverage(data,facts)}:{})};
+ });
+ const result=await f.extract(f.args);assert.equal(result.complete,true);assert.equal(result.facts.length,1);assert.equal(result.facts[0].value,41);assert.equal(result.first_pass_rejections.length,1);
 });

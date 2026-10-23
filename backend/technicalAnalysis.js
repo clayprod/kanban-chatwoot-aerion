@@ -147,7 +147,7 @@ async function createTechnicalTables(pool) {
     SELECT account_id,'product',id::text,specs_version::text,jsonb_build_object('version',specs_version) FROM products
     ON CONFLICT DO NOTHING RETURNING account_id
   ) UPDATE technical_candidates c SET updated_at=NOW()-INTERVAL '25 hours' FROM accounts a WHERE c.account_id=a.account_id`, [EXTRACTION_VERSION]);
-  await pool.query(`ALTER TABLE technical_config ALTER COLUMN extraction_version SET DEFAULT 4`);
+  await pool.query(`ALTER TABLE technical_config ALTER COLUMN extraction_version SET DEFAULT ${EXTRACTION_VERSION}`);
   await pool.query(`UPDATE technical_candidates c SET updated_at=NOW()-INTERVAL '25 hours'
     WHERE EXISTS(SELECT 1 FROM technical_jobs j WHERE j.id=c.job_id AND j.account_id=c.account_id
       AND j.kind='notice' AND j.state->>'item_scope_policy' IS DISTINCT FROM '2')`);

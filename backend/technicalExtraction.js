@@ -7,6 +7,37 @@ const { FACTS_FORMAT, COVERAGE_FORMAT } = require('./technicalAiFormat');
 // contradictions remain visible even after every block has been read.
 const AUDIT_VERSION = 1;
 const MIN_SPLIT = 900;
+function mappedText(raw, joinWrappedWords) {
+  let value='';const positions=[];
+  for(let index=0;index<raw.length;){
+    const at=index,code=raw.codePointAt(index),char=String.fromCodePoint(code);index+=char.length;
+    if(/[-‐]/u.test(char) && /\p{L}/u.test(raw[at-1] || '')){
+      const wrap=/^[ \t]*\r?\n[ \t]*(?=\p{L})/u.exec(raw.slice(index));
+      if(wrap){index+=wrap[0].length;if(joinWrappedWords)continue;}
+    }
+    const normalized=char.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    for(const next of normalized){
+      if(/\s/u.test(next)){
+        if(value.endsWith(' ')){positions[positions.length-1].end=index;continue;}
+        value+=' ';positions.push({start:at,end:index});
+      }else{value+=next;for(let unit=0;unit<next.length;unit++)positions.push({start:at,end:index});}
+    }
+  }
+  return{value,positions};
+}
+function literalEvidenceQuote(quote,source) {
+  if(typeof quote!=='string' || text(quote).length<5)return null;
+  if(text(source).includes(text(quote)))return quote;
+  if(text(quote).length<12)return null;
+  // PDF line wrapping is formatting, not permission to fix numbers or wording.
+  // Locate the contiguous original span and save THAT literal source quotation.
+  for(const join of [false,true]){
+    const document=mappedText(source,join),needle=mappedText(quote,join).value.trim();
+    const start=document.value.indexOf(needle);
+    if(start>=0){const end=start+needle.length-1;return source.slice(document.positions[start].start,document.positions[end].end);}
+  }
+  return null;
+}
 function sourceBlocks(value, size = 1200) {
   const blocks = [];
   for (let start = 0; start < value.length;) {
@@ -37,6 +68,8 @@ function validateFacts(raw, source, chunk, kind, context, prefix) {
       if (canonical) number = String(canonical.number);
     }
     const fact = normalizeFact({ ...row, item_number: number, id: `${prefix}:${index}`, source_id: String(source.id), location: chunk.location });
+    const literal=literalEvidenceQuote(fact.quote,chunk.text);
+    if(literal && literal!==fact.quote){fact.original_quote=fact.quote;fact.quote=literal;fact.quote_recovered=true;}
     if (fact.replaces_quote || fact.replacement_statement) {
       const statement = text(fact.replacement_statement);
       fact.replacement_verified = !!fact.replaces_quote && !!statement && text(chunk.text).includes(statement) && statement.includes(text(fact.replaces_quote)) && statement.includes(text(fact.quote)) && /onde se le[\s\S]+leia[ -]se/.test(statement);
@@ -104,11 +137,10 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       const audit = await ask(job,config,`${system}\nVocê é o revisor de COBERTURA. Releia TODOS os blocos do trecho, inclusive obrigações de fornecimento e documentação. Extraia novamente TODAS as exigências atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne também coverage com exatamente uma entrada para CADA block.id: requirements (inclui exigências técnicas, kit, fornecimento e administrativas; fact_indexes aponta índices de facts que citam esse bloco), context (nenhuma exigência; justifique), ou unreadable (explique). complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,
         JSON.stringify({context,document:{...chunk,source_id:String(s.id)},blocks,previous_facts:initial.facts,rejected_candidates:initial.rejected,previous_conflicts:first.conflicts || []}),7000,COVERAGE_FORMAT);
       data = validateAudit(audit,s,chunk,kind,context,blocks,`${prefix}:audit`);
-      // Keep every independently supported initial fact, even if a reviewer
-      // overlooks it. An invalid initial candidate must be recovered or split.
-      const recovered = initial.rejected.every(({fact}) => data.facts.some(f => f.key===fact.key && f.kind===fact.kind && f.value===fact.value && f.unit===fact.unit && f.operator===fact.operator));
-      if (!recovered) data.issues.push({reason:'Candidato da primeira leitura ainda sem evidência verificável.'});
-      data.complete &&= recovered;
+      // Preserve verified initial facts; unsupported model candidates are NOT
+      // requirements. The independent auditor must cover the actual source and
+      // supply literal evidence, rather than being forced to repeat a hallucination.
+      data.first_pass_rejections=initial.rejected;
       data.facts = mergeFacts(initial.facts,data.facts);
     } catch (error) {
       if (!isTruncated(error)) throw error;
@@ -125,6 +157,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       const childFacts = mergeFacts(...results.map(r=>r.facts));
       data = { facts:mergeFacts(data.facts,childFacts), complete:results.every(r=>r.complete),
         conflicts:results.flatMap(r=>r.conflicts),issues:results.flatMap(r=>r.issues || []),
+        first_pass_rejections:[...(data.first_pass_rejections || []),...results.flatMap(r=>r.first_pass_rejections || [])],
         blocks:results.reduce((n,r)=>n+r.blocks,0),audited_blocks:results.reduce((n,r)=>n+r.audited_blocks,0),subdivided:true };
     }
     data = {...data,audit_version:AUDIT_VERSION,global_incomplete:!data.complete,repair,
@@ -134,4 +167,4 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
   }
   return extract;
 }
-module.exports = { AUDIT_VERSION,sourceBlocks,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
+module.exports = { AUDIT_VERSION,sourceBlocks,literalEvidenceQuote,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
