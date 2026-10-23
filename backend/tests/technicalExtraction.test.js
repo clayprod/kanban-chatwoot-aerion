@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {createExtractionRunner,sourceBlocks,literalEvidenceQuote,validateAudit,mergeFacts} = require('../technicalExtraction');
+const {createExtractionRunner,sourceBlocks,sourceLines,quoteFromLines,literalEvidenceQuote,validateAudit,mergeFacts} = require('../technicalExtraction');
 const {COVERAGE_FORMAT} = require('../technicalAiFormat');
 const {requirementsForItem} = require('../technicalQuality');
 const {assessProduct} = require('../technicalRules');
@@ -11,7 +11,7 @@ function fixture(content, handler, initialCache) {
   const dependencies = {
     read:async(_j,_s,_k,key,index)=>cache.get(`${key}:${index}`) || initialCache,
     write:async(_j,_s,_k,key,index,data)=>cache.set(`${key}:${index}`,data),
-    ask:async(_j,_c,_system,user,_tokens,format)=>{const input=JSON.parse(user);calls.push({input,format});return handler(input,format);},
+    ask:async(_j,_c,_system,user,_tokens,format)=>{const input=JSON.parse(user);calls.push({input,format});return handler(input,format?.json_schema?.name===COVERAGE_FORMAT.json_schema.name?COVERAGE_FORMAT:format);},
     isTruncated:e=>e.code==='truncated',
   };
   let runner=createExtractionRunner(dependencies);
@@ -157,4 +157,24 @@ test('fiscal clauses have explicit audited coverage while embedded technical spe
  assert.equal(validateAudit(classify(fiscal),{id:'s'},fiscal,'notice',{items:[{number:'1'}]},sourceBlocks(fiscal.text),'id').complete,true);
  const mixed={text:fiscal.text+' O produto deverá ter resolução mínima de 20 MP.',location:'Página 1'};
  assert.equal(validateAudit(classify(mixed),{id:'s'},mixed,'notice',{items:[{number:'1'}]},sourceBlocks(mixed.text),'id').complete,false);
+});
+
+test('line evidence copies the original source and the schema cannot invent line or block identifiers',async()=>{
+ const content='Cabeçalho.\nAutonomia mínima de 41 min.\nCondição de operação.';
+ assert.equal(quoteFromLines(['l1'],content),'Autonomia mínima de 41 min.');
+ assert.equal(quoteFromLines(['l0','l2'],content),content,'the full original span includes all intermediate conditions');assert.equal(quoteFromLines(['l99'],content),null);
+ const f=fixture(content,(data,format)=>{
+  const row=format===COVERAGE_FORMAT?fact('',{evidence_line_ids:['l1']}):fact('Autonomia mínima de 41 min');
+  return{complete:true,facts:[row],conflicts:[],...(data.blocks?{coverage:[{block_id:'0',classification:'requirements',fact_indexes:[0],reason:'Conferido.'}]}:{})};
+ });
+ const result=await f.extract(f.args);assert.equal(result.complete,true);assert.equal(result.facts.find(row=>row.evidence_line_ids)?.quote,'Autonomia mínima de 41 min.');
+ const format=f.calls[1].format.json_schema.schema;
+ assert.equal(format.properties.coverage.type,'object');assert.deepEqual(format.properties.coverage.required,['0']);
+ assert.deepEqual(Object.keys(format.properties.coverage.properties),['0']);assert.equal(format.properties.coverage.additionalProperties,false);
+ assert.deepEqual(format.properties.facts.items.properties.evidence_line_ids.items.enum,sourceLines(content).map(line=>line.id));
+ assert.deepEqual(format.properties.coverage.properties['0'].properties.evidence_line_ids.items.enum,['l0','l1','l2']);
+ const fiscal={text:'A empresa deverá comprovar a regularidade fiscal.',location:'Página 1'};
+ const review={complete:true,facts:[],conflicts:[],coverage:{'0':{classification:'administrative',reason:'Habilitação fiscal.',quote:'Paráfrase que não existe.',evidence_line_ids:['l0']}}};
+ const checked=validateAudit(review,{id:'s'},fiscal,'notice',{items:[{number:'1'}]},sourceBlocks(fiscal.text),'id');
+ assert.equal(checked.complete,true);assert.equal(checked.block_reviews[0].quote,fiscal.text);
 });

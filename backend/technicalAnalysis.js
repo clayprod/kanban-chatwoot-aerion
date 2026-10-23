@@ -8,7 +8,7 @@ const { cleanPackageItems, assembleProduct } = require('./productPackages');
 const { EXTRACTION_VERSION, normalizeFact, uniqueFacts, requirementsForItem, rankMatches } = require('./technicalQuality');
 const { matchesTerm, classifyItem, scopeProcurementItems } = require('./searchQuality');
 const GREEN_SCORE_THRESHOLD = 68;
-const NOTICE_CONTEXT_VERSION = 4;
+const NOTICE_CONTEXT_VERSION = 5;
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -275,7 +275,7 @@ function createTechnicalAnalysis(deps) {
         UPDATE technical_ai_calls SET actual_tokens=$2 WHERE id=$1 AND actual_tokens IS NULL RETURNING account_id,day,reserved_tokens
       ) UPDATE technical_usage u SET tokens=GREATEST(0,u.tokens-s.reserved_tokens+$2),actual_tokens=u.actual_tokens+$2
         FROM settled s WHERE u.account_id=s.account_id AND u.day=s.day`, [day.id, actual]);
-      if ((result.truncated || result.requestTooLarge) && [FACTS_FORMAT,COVERAGE_FORMAT,MAPPING_FORMAT].includes(responseFormat)) {
+      if ((result.truncated || result.requestTooLarge) && [FACTS_FORMAT,COVERAGE_FORMAT,MAPPING_FORMAT].some(format=>format.json_schema.name===responseFormat?.json_schema?.name)) {
         // Capacities differ. Try the configured fallback before splitting the
         // request; only split when none can return a complete response.
         oversized=true;failures.push(result.error || 'Resposta excedeu a capacidade do modelo.');continue;

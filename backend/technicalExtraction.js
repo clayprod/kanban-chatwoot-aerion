@@ -1,7 +1,7 @@
 'use strict';
 const { text, hash, evidenceValid } = require('./technicalRules');
 const { normalizeFact } = require('./technicalQuality');
-const { FACTS_FORMAT, COVERAGE_FORMAT } = require('./technicalAiFormat');
+const { FACTS_FORMAT, coverageFormatFor } = require('./technicalAiFormat');
 
 // Coverage is about reading the source, not granting compliance. Real source
 // contradictions remain visible even after every block has been read.
@@ -67,12 +67,23 @@ function mergeFacts(...lists) {
   for (const fact of lists.flat()) unique.set(factIdentity(fact), fact);
   return [...unique.values()];
 }
+function sourceLines(value) {
+  let position=0;
+  return value.split('\n').map((line,index)=>{const row={id:`l${index}`,text:line,start:position,end:position+line.length};position=row.end+1;return row;});
+}
+function quoteFromLines(ids,value) {
+  if(!Array.isArray(ids)||!ids.length)return null;
+  const lines=sourceLines(value),positions=[...new Set(ids.map(id=>/^l\d+$/.test(id)?Number(id.slice(1)):-1))].sort((a,b)=>a-b);
+  if(positions.some(n=>n<0||n>=lines.length))return null;
+  const quote=value.slice(lines[positions[0]].start,lines[positions.at(-1)].end);
+  return text(quote).length>=5?quote:null;
+}
 function validateFacts(raw, source, chunk, kind, context, prefix) {
   const rejected = [], facts = [], indexes = new Map();
   for (const [index, row] of (Array.isArray(raw) ? raw : []).entries()) {
     const number=canonicalItemNumber(row.item_number,kind==='notice'?context.items:[]);
     const fact = normalizeFact({ ...row, item_number: number, id: `${prefix}:${index}`, source_id: String(source.id), location: chunk.location });
-    const literal=literalEvidenceQuote(fact.quote,chunk.text);
+    const literal=quoteFromLines(row.evidence_line_ids,chunk.text) || literalEvidenceQuote(fact.quote,chunk.text);
     if(literal && literal!==fact.quote){fact.original_quote=fact.quote;fact.quote=literal;fact.quote_recovered=true;}
     if (fact.replaces_quote || fact.replacement_statement) {
       const statement = text(fact.replacement_statement);
@@ -91,7 +102,8 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
   const validated = validateFacts(value.facts, source, chunk, kind, context, prefix);
   const issues = validated.rejected.map(r => ({ reason: r.reason, candidate: r.fact }));
   if (!Array.isArray(value.facts)) issues.push({reason:'Lista de exigências ausente na auditoria.'});
-  const entries = Array.isArray(value.coverage) ? value.coverage : [];
+  const entries = Array.isArray(value.coverage) ? value.coverage : value.coverage && typeof value.coverage==='object'
+    ? Object.entries(value.coverage).map(([block_id,review])=>({...review,block_id})) : [];
   const normalizedSource = text(chunk.text);
   for (const block of blocks) {
     const matches = entries.filter(c => c.block_id === block.id);
@@ -108,7 +120,7 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
       });
       if (!supported) issues.push({block_id:block.id,reason:'Bloco com exigência sem fato e citação válidos.'});
     } else if(entry.classification==='administrative') {
-      const quote=literalEvidenceQuote(entry.quote || '',block.text);
+      const quote=literalEvidenceQuote(quoteFromLines(entry.evidence_line_ids,chunk.text) || '',block.text) || literalEvidenceQuote(entry.quote || '',block.text);
       if(!quote || !entry.reason?.trim())issues.push({block_id:block.id,reason:'Classificação administrativa sem justificativa e citação do bloco.'});
       if(quote)entry.quote=quote;
       if(kind==='notice' && (/\d\s*(?:mm|cm|metros|m\/s|km\/h|km|kg|mhz|ghz|hz|mp|pixels|dpi|gb|tb|kw|w|v|mah|ah|wh|kwh|bar|kpa|rpm|polegadas)\b/i.test(block.text) || /\b(?:anatel|inmetro|abnt|nbr|iso\s*\d|treinamento|manual de operacao|assistencia tecnica)\b/.test(text(block.text))))
@@ -150,9 +162,10 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       first = old?.phase==='auditing' ? old.first_response : await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
       if (!Array.isArray(first?.facts)) throw Object.assign(new Error('Extração fora do formato esperado.'),{code:'TECHNICAL_EXTRACTION_INVALID'});
       initial = validateFacts(first.facts,s,chunk,kind,context,`${prefix}:initial`);
+      const lines=sourceLines(chunk.text);
       await write(job,s,kind,key,chunk.chunk,{audit_version:AUDIT_VERSION,phase:'auditing',first_response:first,complete:false});
-      const audit = await ask(job,config,`${system}\nVocê é o revisor de COBERTURA DAS EXIGÊNCIAS TÉCNICAS DOS ITENS. Releia TODOS os blocos do trecho. Extraia novamente TODAS as exigências técnicas atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura, componentes do kit, acessórios, garantia do equipamento, treinamento, entrega, instalação, manuais, assistência e documentação técnica/certificações. Procure essas exigências também em cláusulas administrativas. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne coverage com exatamente uma entrada para CADA block.id: requirements (qualquer exigência técnica ou obrigação de fornecimento/documentação técnica; fact_indexes aponta índices de facts que citam esse bloco); administrative (somente regras jurídicas/fiscais e ritos da disputa, sem requisito técnico do item; justifique e cite em quote um trecho literal de até 300 caracteres desse bloco); context (nenhuma exigência; justifique); ou unreadable (explique). quote pode ser vazio em requirements/context, pois as evidências técnicas estão em facts. Toda a página é lida; cláusulas jurídicas/fiscais puras são registradas na cobertura e não viram especificações de produto. complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,
-        JSON.stringify({context,document:{...chunk,source_id:String(s.id)},blocks,previous_facts:initial.facts,rejected_candidates:initial.rejected,previous_conflicts:first.conflicts || []}),7000,COVERAGE_FORMAT);
+      const audit = await ask(job,config,`${system}\nPara cada fato, preencha evidence_line_ids com os identificadores [lN] das linhas CONTÍGUAS que contêm a exigência. O servidor copia essas linhas originais; quote pode ser vazio quando as linhas forem indicadas. A cobertura administrative também pode indicar evidence_line_ids para copiar sua justificativa literal. O servidor sempre preserva o intervalo inteiro, incluindo linhas intermediárias e condições. Nunca use o texto dos marcadores [lN] na citação. Não altere números, unidades, operadores ou condições. coverage é um OBJETO com uma propriedade para CADA block.id, conforme as chaves obrigatórias do schema; não use array nem repita blocos. Os identificadores de linhas permitidos estão restritos no schema.\nVocê é o revisor de COBERTURA DAS EXIGÊNCIAS TÉCNICAS DOS ITENS. Releia TODOS os blocos do trecho. Extraia novamente TODAS as exigências técnicas atômicas em facts, inclusive as omitidas ou rejeitadas na primeira leitura, componentes do kit, acessórios, garantia do equipamento, treinamento, entrega, instalação, manuais, assistência e documentação técnica/certificações. Procure essas exigências também em cláusulas administrativas. Não elimine uma exigência para satisfazer a validação. Copie citações contíguas literalmente de document.text, sem reticências ou junção de frases.\nRetorne coverage com exatamente uma entrada para CADA block.id: requirements (qualquer exigência técnica ou obrigação de fornecimento/documentação técnica; fact_indexes aponta índices de facts que citam esse bloco); administrative (somente regras jurídicas/fiscais e ritos da disputa, sem requisito técnico do item; justifique e cite em quote um trecho literal de até 300 caracteres desse bloco); context (nenhuma exigência; justifique); ou unreadable (explique). quote pode ser vazio em requirements/context, pois as evidências técnicas estão em facts. Toda a página é lida; cláusulas jurídicas/fiscais puras são registradas na cobertura e não viram especificações de produto. complete só confirma leitura integral, NÃO significa que o produto atende. Conflitos reais precisam de quote literal; ausência de exigências técnicas não é conflito. Não transforme falta de informação em requisito.`,
+        JSON.stringify({context,document:{...chunk,text:lines.map(line=>`[${line.id}] ${line.text}`).join('\n'),source_id:String(s.id)},blocks,previous_facts:initial.facts,rejected_candidates:initial.rejected,previous_conflicts:first.conflicts || []}),7000,coverageFormatFor(blocks,lines));
       data = validateAudit(audit,s,chunk,kind,context,blocks,`${prefix}:audit`);
       // Preserve verified initial facts; unsupported model candidates are NOT
       // requirements. The independent auditor must cover the actual source and
@@ -198,4 +211,4 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
   // responses are durable, so another notice can run before the next unit.
   return args=>extract(args,{remaining:1});
 }
-module.exports = { AUDIT_VERSION,sourceBlocks,literalEvidenceQuote,canonicalItemNumber,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
+module.exports = { AUDIT_VERSION,sourceBlocks,sourceLines,quoteFromLines,literalEvidenceQuote,canonicalItemNumber,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
