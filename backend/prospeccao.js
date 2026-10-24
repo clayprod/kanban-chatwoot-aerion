@@ -54,12 +54,15 @@ const createProspeccaoTable = async (pool) => {
       motivo TEXT,
       perfil_whatsapp TEXT,
       confirmou_empresa BOOLEAN,
+      icp TEXT,
       contact_id BIGINT,
       mensagem TEXT,
       error TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Tabela ja existia em producao antes do ICP entrar.
+  await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS icp TEXT`);
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prospeccao_cnpj
       ON ${PROSPECCAO_LOG_TABLE} (account_id, cnpj)
@@ -182,17 +185,25 @@ const filtrarNovos = async (pool, accountId, empresas) => {
   return empresas.filter((e) => !conhecidos.has(soDigitos(e.cnpj)));
 };
 
-const montarPromptAbordagem = ({ empresa, perfil, confirmouEmpresa, contexto }) => {
+const montarPromptAbordagem = ({
+  empresa, perfil, confirmouEmpresa, contexto, blocoIcp = '', blocoCatalogo = '',
+}) => {
   const curto = nomeCurtoEmpresa(empresa.razao_social || empresa.nome_fantasia) || 'a empresa';
   const system = [
     'Você escreve a PRIMEIRA mensagem de WhatsApp para uma empresa que ainda não conhece a Aerion,',
     'distribuidora da Autel Robotics no Brasil (drones enterprise).',
     '',
+    ...(blocoIcp ? [blocoIcp, ''] : []),
+    ...(blocoCatalogo ? [blocoCatalogo, ''] : []),
     'O que funciona na prática, medido em 870 aberturas reais desta base:',
-    '- prova social ("tenho conversado com empresas de topografia sobre como otimizar tempo',
-    '  e ganhar produtividade") responde 35%',
+    '- prova social ("tenho conversado com empresas do setor dele sobre como resolver',
+    '  [a dor do perfil]") responde 35%',
     '- pedir indicação ("poderia me indicar quem cuida disso?") responde 19%',
-    'Comece pela prova social, ancorada no setor real da empresa.',
+    'Comece pela prova social, ancorada no SETOR REAL desta empresa e numa dor do',
+    'perfil dela — não em produtividade genérica.',
+    '',
+    'Cada abordagem é única: ela tem que mostrar, na primeira frase, que você entendeu',
+    'o negócio DESTA empresa. Abertura que serviria para qualquer empresa está errada.',
     '',
     'Regras que não se quebram:',
     '- No máximo 3 frases curtas. Português do Brasil, tom de gente, não de folheto.',
@@ -233,13 +244,14 @@ const registrarProspeccao = async (pool, d) => {
   await pool.query(
     `INSERT INTO ${PROSPECCAO_LOG_TABLE}
        (account_id, cnpj, razao_social, telefone, perfil, status, motivo,
-        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, icp)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      ON CONFLICT (account_id, cnpj) WHERE cnpj IS NOT NULL DO NOTHING`,
     [
       d.accountId, soDigitos(d.cnpj) || null, d.razaoSocial ?? null, d.telefone ?? null,
       d.perfil ?? null, d.status, d.motivo ?? null, d.perfilWhatsapp ?? null,
       d.confirmouEmpresa ?? null, d.contactId ?? null, d.mensagem ?? null, d.error ?? null,
+      d.icp ?? null,
     ]
   );
 };
@@ -264,6 +276,7 @@ const runProspeccaoTick = async (pool, {
   importarLead,
   enfileirarEnvio,
   validarMensagem,
+  contextoComercial,
   config = carregarConfigProspeccao(),
 } = {}) => {
   if (!config.enabled) return { skipped: 'desligado' };
@@ -321,8 +334,12 @@ const runProspeccaoTick = async (pool, {
           nomePerfil, empresa.razao_social, empresa.nome_fantasia
         );
 
+        const contexto = contextoComercial
+          ? await contextoComercial({ empresa, perfil: perfil.titulo })
+          : { blocoIcp: '', blocoCatalogo: '' };
         const prompt = montarPromptAbordagem({
           empresa, perfil: perfil.titulo, confirmouEmpresa: confirmou,
+          blocoIcp: contexto.blocoIcp, blocoCatalogo: contexto.blocoCatalogo,
         });
         const ia = await chatCompletionJson({ ...prompt, maxTokens: 450, temperature: 0.4 });
         if (!ia.ok) {
@@ -348,7 +365,7 @@ const runProspeccaoTick = async (pool, {
         if (config.dryRun) {
           await registrarProspeccao(pool, {
             ...base, status: 'dry_run', mensagem: texto,
-            perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou,
+            perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou, icp: contexto.icp,
             motivo: confirmou ? 'perfil confirma a empresa' : 'abordagem pergunta com quem fala',
           });
           r.abordados += 1;
@@ -364,7 +381,7 @@ const runProspeccaoTick = async (pool, {
         });
         await registrarProspeccao(pool, {
           ...base, status: 'abordado', mensagem: texto, contactId,
-          perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou,
+          perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou, icp: contexto.icp,
         });
         r.abordados += 1;
       } catch (error) {
