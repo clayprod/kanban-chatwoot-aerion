@@ -18202,13 +18202,11 @@ function App() {
                                       Só o que passou no filtro. Universo bruto fica na Auditoria.
                                     </p>
                                   </div>
-                                  <label className="mt-2 block text-xs text-muted">Análise técnica
-                                    <select className={`${select} mt-1 w-full text-xs`} value={pncpTechnicalFilter} onChange={event => {
-                                      const technical = event.target.value; setPncpTechnicalFilter(technical); pncpTechnicalFilterRef.current = technical;
-                                      setPncpJobResultsPage(1); pncpJobResultsPageRef.current = 1;
-                                      if (activePncpSearchJobId) loadPncpJobResults(activePncpSearchJobId, 1, { technical });
-                                    }}><option value="">Todas</option><option value="full">Com item plenamente atendido</option><option value="uncertain">Com dúvidas técnicas</option><option value="no_full">Sem atendimento pleno</option><option value="pending">Sem análise concluída</option></select>
-                                  </label>
+                                  <label className="mt-3 flex items-center gap-2 text-xs text-ink"><input type="checkbox" role="switch" checked={pncpTechnicalFilter==='full'} onChange={event => {
+                                    const technical=event.target.checked?'full':'';setPncpTechnicalFilter(technical);pncpTechnicalFilterRef.current=technical;
+                                    setPncpJobResultsPage(1);pncpJobResultsPageRef.current=1;
+                                    if(activePncpSearchJobId)loadPncpJobResults(activePncpSearchJobId,1,{technical});
+                                  }}/>Somente atendem aos critérios</label>
                                   <div className="mt-1.5 grid min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,11rem)_minmax(0,8.5rem)] sm:items-center">
                                     <input
                                       className={`${input} h-7 w-full min-w-0 text-xs`}
@@ -18332,8 +18330,8 @@ function App() {
                                         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7.5rem,9.5rem)]">
                                           <div className="min-w-0 overflow-hidden">
                                             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                                              <span className={`inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${getPncpScoreClass(item.score)}`}>
-                                                {Number(item.score || 0)} · {item.score_label || 'Aderência'}
+                                              <span className={`inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${item.technical_percent!=null ? item.technical_full ? 'border-status-success/30 text-status-success' : 'border-line text-muted' : getPncpScoreClass(item.score)}`}>
+                                                {item.technical_percent!=null ? `${item.technical_percent}% técnico${item.technical_full ? ' · Atende' : item.technical_complete ? '' : ' · Parcial'}` : `${Number(item.score || 0)} · ${item.score_label || 'Aderência'}`}
                                               </span>
                                               <span className={`inline-flex max-w-full items-center truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
                                                 {item.prazo_info?.label || 'Prazo n/d'}
@@ -19438,7 +19436,7 @@ function App() {
                           <div>
                             <h4 className={oppSectionTitle}>Itens de participação</h4>
                             <p className="mt-0.5 text-[11px] text-muted">Expanda o item para o checklist técnico e o assistente de conformidade</p>
-                            <TechnicalResult opportunityId={selectedOpportunity.id} allowedItemNumbers={selectedItems.map(i=>i.numero_item)} />
+                            <TechnicalResult overview opportunityId={selectedOpportunity.id} allowedItemNumbers={selectedItems.map(i=>i.numero_item)} />
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <button
@@ -19497,7 +19495,7 @@ function App() {
                                       <span className="mt-0.5 block truncate text-[10px] text-muted">Modelo: {item.modelo_produto}</span>
                                     )}
                                   </div>
-                                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${checklistStatus.className}`}>{checklistStatus.counts}</span>
+                                  {itemRequirements.length>0 && <span className="shrink-0 text-xs text-muted">{itemRequirements.length} anotações</span>}
                                   <span className="hidden shrink-0 font-mono text-[11px] font-semibold text-ink sm:inline">{formatCurrency(getItemParticipationTotal(item)) || 'R$ 0'}</span>
                                   <button
                                     type="button"
@@ -19842,10 +19840,10 @@ function App() {
                                         ));
 
                                         return (
-                                          <>
+                                          <details className="mt-4 border-t border-line pt-3"><summary className="cursor-pointer text-sm font-medium">Anotações e ajustes manuais</summary>
                                             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                                               <div>
-                                                <h5 className="text-xs font-semibold tracking-tight text-ink">Checklist técnico</h5>
+                                                <h5 className="text-xs font-semibold tracking-tight text-ink">Anotações do item</h5>
                                                 <p className="mt-0.5 text-[10px] text-muted">
                                                   Organizado por seções do edital · custos opcionais por requisito
                                                 </p>
@@ -20281,7 +20279,7 @@ function App() {
                                                 </div>
                                               )}
                                             </div>
-                                          </>
+                                          </details>
                                         );
                                       })()}
                                     </div>

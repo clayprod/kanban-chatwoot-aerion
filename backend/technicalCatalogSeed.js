@@ -2,6 +2,7 @@
 const { hash } = require('./technicalRules');
 const catalog = require('./data/aerionCatalog.json');
 const { canonicalCatalog, replacements } = require('./aerionCatalogModel');
+const {reviseTechnicalCatalog}=require('./technicalCatalogRevision');
 const IMPORT_VERSION = 'original-packages-v2';
 async function seedTechnicalCatalog(pool, accountId) {
   if (!Number.isInteger(Number(accountId)) || Number(accountId) <= 0) throw Error('Conta Aerion inválida para importar catálogo.');
@@ -12,6 +13,7 @@ async function seedTechnicalCatalog(pool, accountId) {
     await client.query('CREATE TABLE IF NOT EXISTS technical_catalog_imports(account_id INTEGER,version TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(account_id,version))');
     const rows = canonicalCatalog(catalog);
     if ((await client.query('SELECT 1 FROM technical_catalog_imports WHERE account_id=$1 AND version=$2', [accountId, IMPORT_VERSION])).rows.length) {
+      await reviseTechnicalCatalog(client,accountId);
       await client.query('COMMIT'); return { inserted: 0, available: rows.length, price_basis: catalog.price_basis };
     }
     await client.query('INSERT INTO technical_config(account_id) VALUES($1) ON CONFLICT DO NOTHING', [accountId]);
@@ -42,6 +44,7 @@ async function seedTechnicalCatalog(pool, accountId) {
     await client.query('UPDATE technical_config SET enabled=TRUE,updated_at=NOW() WHERE account_id=$1', [accountId]);
     await client.query("UPDATE technical_candidates SET updated_at=NOW()-INTERVAL '25 hours' WHERE account_id=$1", [accountId]);
     await client.query('INSERT INTO technical_catalog_imports(account_id,version) VALUES($1,$2)', [accountId, IMPORT_VERSION]);
+    await reviseTechnicalCatalog(client,accountId);
     await client.query('COMMIT'); return { inserted, available: rows.length, price_basis: catalog.price_basis };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }

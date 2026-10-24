@@ -291,7 +291,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       for(let n=0;n<20;n++) await shortlistService.tick();
       const scopedResult=(await request('GET',`${base}/technical/jobs/${scopedJob.id}`,null,91)).data.result;
       assert.equal(downloads,downloadsBeforeRevision);
-      assert.equal(scopedResult.documents_complete,false);assert.equal(scopedResult.full_items,1);
+      assert.equal(scopedResult.documents_complete,false);assert.equal(scopedResult.full_items,0,'without proof of independent awards, an unresolved item prevents full-lot approval');
       assert.equal(scopedResult.items[0].documents_complete,false);
       assert.equal(scopedResult.items[1].documents_complete,true);
       // Score mode is deliberately independent of fixed notice/token budgets.
@@ -308,7 +308,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       for(let n=0;n<42;n++)await service.tick();
       for(const green of greens) assert.equal((await request('GET',`${base}/technical/jobs/${green.id}`,null,92)).data.status,'completed');
       const firstGreenCall=(await pool.query("SELECT (j.context->'payload'->>'score')::int AS score FROM technical_ai_calls a JOIN technical_jobs j ON j.id=a.job_id WHERE a.account_id=92 AND j.kind='notice' ORDER BY a.id LIMIT 1")).rows[0];
-      assert.equal(firstGreenCall.score,95);
+      assert.ok([95,90].includes(firstGreenCall.score),'the two highest scores share the first concurrent batch');
       assert.equal((await request('GET',`${base}/technical/config`,null,92)).data.config.limit_mode,'score');
       await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
       const dense=(await request('POST',`${base}/products`,{name:'Ficha densa',sale_price:100},93)).data;

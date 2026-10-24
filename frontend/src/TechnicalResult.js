@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import TechnicalChecklist from './TechnicalChecklist';
 
 const money = value => Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const labels = { full: 'Atende plenamente', uncertain: '? — Verificar', failed: 'Não atende' };
@@ -90,35 +91,7 @@ export function ExtractionCoverage({ analysis, result }) {
         : <p className="text-status-warning">Há trechos sem cobertura confirmada. A leitura ainda precisa de recuperação.</p>}
   </div>;
 }
-export function TechnicalItem({ item, highlightProductId, onCompareMore, pending }) {
-  const [visibleCount, setVisibleCount] = useState(3);
-  if (!item) return <p className="text-xs text-muted">Este item ainda não tem análise técnica automática vinculada.</p>;
-  if (!item.in_scope) return <p className="text-xs text-muted">Item fora do escopo desta busca e do catálogo.</p>;
-  const product = item.products?.find(p => String(p.product_id) === String(highlightProductId)) || item.recommended_product || item.potential_product || item.products?.[0];
-  return <div className="space-y-2 text-sm">
-    {product && product.status !== 'failed' ? <p className={`font-semibold ${product.status === 'full' ? 'text-status-success' : 'text-ink'}`}>
-      {product.product_name} · {labels[product.status]} · {money(product.sale_price)}
-    </p> : <p className="text-muted">Nenhum produto com atendimento comprovado para este item.</p>}
-    <p className="text-xs text-muted">{item.products?.length || 0} produto{item.products?.length === 1 ? '' : 's'} comparado{item.products?.length === 1 ? '' : 's'} de {item.candidate_count ?? item.products?.length ?? 0} candidatos. Maior compatibilidade primeiro; menor preço no empate.</p>
-    {item.documents_complete === false && <p className="text-xs text-status-warning">Há pendências na extração deste item. Atendimento pleno ainda não confirmado.</p>}
-    {item.products?.filter(p => !highlightProductId || String(p.product_id) === String(highlightProductId)).slice(0, highlightProductId ? 1 : visibleCount).map(p => <details key={p.product_id} open={String(product?.product_id) === String(p.product_id) || undefined} className="border-t border-line pt-2">
-      <summary className="cursor-pointer text-xs font-semibold">{p.product_name} · {labels[p.status]} · {p.evidence_current === false ? 'Reanálise necessária' : p.counts.total ? Math.floor(p.counts.ok / p.counts.total * 100) + '% comprovado' : 'Sem percentual'} · {money(p.sale_price)}</summary>
-      {p.evidence_current === false ? <p className="my-2 text-xs text-status-warning">A ficha ou as regras mudaram. Aguarde a atualização das evidências para confirmar o atendimento.</p> : <>
-      {!p.specs_complete && p.specs_complete !== undefined && <p className="my-2 text-xs text-status-warning">Ficha do produto incompleta: faltas de evidência aparecem como “?”, sem confirmar incompatibilidade.</p>}
-      {!!p.configuration?.additions?.length && <div className="my-2 rounded-lg bg-bg2 p-3 text-xs"><p className="font-semibold">Configuração para este edital</p><p>Pacote original: {money(p.configuration.base_price)}</p><ul>{p.configuration.additions.map(a => <li key={a.product_id}>{a.quantity} × {a.name} · {money(a.unit_price * a.quantity)}</li>)}</ul><p className="mt-1 font-semibold">Total com complementos: {money(p.sale_price)}</p></div>}
-      {p.configuration?.missing?.map((note, i) => <p key={i} className="my-1 text-xs text-status-warning">{note}</p>)}
-      <p className="my-2 text-xs text-muted">{p.price_comparison ? `Referência unitária: ${money(p.price_comparison.reference)} · ${p.price_comparison.relation === 'below' ? 'abaixo da referência' : p.price_comparison.relation === 'above' ? 'acima da referência' : 'igual à referência'}` : 'Preço sem comparação segura: confira unidade, composição e referência.'}</p>
-      <ol className="space-y-3">{p.requirements.map(r => <li key={r.requirement.id} className="border-l-2 border-line pl-3">
-        <p className="text-xs font-medium">{rowLabels[r.status]} · {r.requirement.label}</p><p className="text-xs text-muted">{r.reason}</p>
-        <div className="mt-2 grid gap-3 sm:grid-cols-2"><div className="min-w-0"><p className="text-xs font-semibold">O edital exige</p><Evidence fact={r.requirement} /></div><div className="min-w-0"><p className="text-xs font-semibold">O produto oferece</p>{r.evidence.length ? r.evidence.map(f => <Evidence key={f.id} fact={f} />) : <p className="mt-1 text-xs text-muted">Especificação não comprovada nas fontes cadastradas.</p>}</div></div>
-      </li>)}</ol></>}
-    </details>)}
-    {!highlightProductId && (item.products?.length || 0) > visibleCount && <button type="button" className="block text-xs text-primary underline" onClick={() => setVisibleCount(n => n + 3)}>Ver mais produtos já comparados</button>}
-    {item.candidate_count > (item.products?.length || 0) && onCompareMore && <button type="button" disabled={pending} onClick={() => onCompareMore(item.number)} className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">{pending ? 'Comparação em andamento…' : 'Comparar mais produtos'}</button>}
-    {!!item.obligations?.length && <details className="border-t border-line pt-2"><summary className="cursor-pointer text-xs font-semibold">Obrigações de fornecimento e documentação · {item.obligations.length}</summary><p className="my-2 text-xs text-muted">Conferência separada, fora do percentual técnico do produto. Cada obrigação exige comprovação da empresa.</p>{item.obligations.map(f => <div key={f.id} className="mb-3"><p className="text-xs font-medium">{f.label}</p><p className="text-xs text-status-warning">? · Comprovação pela empresa pendente</p><Evidence fact={f} /></div>)}</details>}
-    {!item.products?.length && <p className="text-xs text-muted">{item.requirements?.length || 0} exigências extraídas. Cadastre uma ficha de produto pertinente para comparar.</p>}
-  </div>;
-}
+export function TechnicalItem(props) { return <TechnicalChecklist {...props} />; }
 export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
@@ -181,7 +154,8 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     await loadDetails();
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
-  if (itemNumber != null) return <div className="my-2 rounded-lg border border-line p-3">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
+  if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
+  if (overview) return <p role="status" className="text-sm text-muted">{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : 'Análise em andamento. Os resultados disponíveis aparecem nos itens abaixo.'}</p>;
   if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>
     <ProductMatchSummary items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />

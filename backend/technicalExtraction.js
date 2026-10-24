@@ -1,11 +1,11 @@
 'use strict';
-const { text, hash, evidenceValid } = require('./technicalRules');
+const { text, hash, evidenceValid,quotedNumber } = require('./technicalRules');
 const { normalizeFact } = require('./technicalQuality');
 const { FACTS_FORMAT, coverageFormatFor } = require('./technicalAiFormat');
 
 // Coverage is about reading the source, not granting compliance. Real source
 // contradictions remain visible even after every block has been read.
-const AUDIT_VERSION = 2;
+const AUDIT_VERSION = 3;
 const MIN_SPLIT = 900;
 function canonicalItemNumber(value,items=[]) {
   const number=String(value ?? '');
@@ -34,7 +34,7 @@ function mappedText(raw, joinWrappedWords) {
   return{value,positions};
 }
 function literalEvidenceQuote(quote,source) {
-  if(typeof quote!=='string' || text(quote).length<5)return null;
+  if(typeof quote!=='string' || text(quote).length<3)return null;
   if(text(source).includes(text(quote)))return quote;
   if(text(quote).length<12)return null;
   // PDF line wrapping is formatting, not permission to fix numbers or wording.
@@ -83,7 +83,7 @@ function validateFacts(raw, source, chunk, kind, context, prefix) {
   for (const [index, row] of (Array.isArray(raw) ? raw : []).entries()) {
     const number=canonicalItemNumber(row.item_number,kind==='notice'?context.items:[]);
     const fact = normalizeFact({ ...row, item_number: number, id: `${prefix}:${index}`, source_id: String(source.id), location: chunk.location });
-    const literal=quoteFromLines(row.evidence_line_ids,chunk.text) || literalEvidenceQuote(fact.quote,chunk.text);
+    const literal=literalEvidenceQuote(fact.quote,chunk.text) || quoteFromLines(row.evidence_line_ids,chunk.text);
     if(literal && literal!==fact.quote){fact.original_quote=fact.quote;fact.quote=literal;fact.quote_recovered=true;}
     if (fact.replaces_quote || fact.replacement_statement) {
       const statement = text(fact.replacement_statement);
@@ -91,6 +91,7 @@ function validateFacts(raw, source, chunk, kind, context, prefix) {
     }
     const reason = !evidenceValid(fact, [{id: String(source.id), text: chunk.text}]) ? 'Citação não encontrada literalmente neste trecho.'
       : !fact.key || !fact.label ? 'Exigência sem identificação.'
+        : fact.kind==='numeric' && !quotedNumber(fact,fact.value) ? 'O valor extraído não está no trecho citado.'
         : (fact.replaces_quote || fact.replacement_statement) && !fact.replacement_verified ? 'Substituição sem declaração literal verificável.'
           : kind === 'notice' && number !== 'all' && !context.items.some(i => String(i.number) === number) ? 'Associação com item não confirmado.' : null;
     if (reason) rejected.push({ index, reason, fact });
@@ -119,6 +120,19 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
         return at < end && at + text(fact.quote).length > start;
       });
       if (!supported) issues.push({block_id:block.id,reason:'Bloco com exigência sem fato e citação válidos.'});
+      // A single fact cannot stand in for an entire table row. Independently
+      // account for every explicit measurement and standalone capability token.
+      const mentions=[...block.text.matchAll(/\b\d+(?:[.,]\d+)?\s*(?:m\/s|km\/h|GHz|MHz|MP|mAh|Wh|GB|TB|rpm|polegadas|min(?:utos)?|[kK](?![a-z]))\b/g)].map(m=>m[0]);
+      const facts=validated.facts.filter(f=>text(block.text).includes(text(f.quote)) || text(f.quote).includes(text(block.text).slice(0,35)));
+      for(const mention of mentions){
+        if(!facts.some(f=>text(f.quote).includes(text(mention)) && (quotedNumber({quote:mention},f.value) || typeof f.value==='string' && text(f.value).includes(text(mention)))))
+          issues.push({block_id:block.id,reason:`Medida técnica ainda sem exigência individual: ${mention}.`});
+      }
+      for(const token of block.text.match(/\b(?:GPS|GNSS|RTH|Bluetooth|Wi[ -]Fi)\b/gi) || []){
+        const normalized=v=>text(v).replace(/[ -]/g,'');
+        if(!facts.some(f=>normalized(f.quote).includes(normalized(token)) && normalized(f.value).includes(normalized(token))))
+          issues.push({block_id:block.id,reason:`Característica ainda sem exigência individual: ${token}.`});
+      }
     } else if(entry.classification==='administrative') {
       const quote=literalEvidenceQuote(quoteFromLines(entry.evidence_line_ids,chunk.text) || '',block.text) || literalEvidenceQuote(entry.quote || '',block.text);
       if(!quote || !entry.reason?.trim())issues.push({block_id:block.id,reason:'Classificação administrativa sem justificativa e citação do bloco.'});

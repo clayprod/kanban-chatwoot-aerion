@@ -1,0 +1,3648 @@
+{
+  "verified_at": "2026-10-24T14:43:28.323Z",
+  "products": [
+    {
+      "sku": "HUBSAN-MINI-7",
+      "source_key": "aerion-store:HUBSAN-MINI-7",
+      "name": "HUBSAN Mini 7",
+      "source_url": "https://aerion.com.br/loja/produto/hubsan-mini-7/",
+      "variant": "HUBSAN Mini 7",
+      "rows": [
+        {
+          "section": "AERONAVE",
+          "label": "Peso de decolagem",
+          "value": "Menos de 249 g"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Dimensões aberta",
+          "value": "203 × 162 × 62 mm"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Dimensões dobrada",
+          "value": "137 × 88 × 62 mm"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Velocidade horizontal máxima",
+          "value": "16 m/s no modo Sport"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Altitude máxima de decolagem",
+          "value": "4.000 m"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Resistência ao vento",
+          "value": "Nível 5, de 8,5 a 10,5 m/s"
+        },
+        {
+          "section": "AERONAVE",
+          "label": "Tempo máximo de voo",
+          "value": "28 min com bateria de 3.000 mAh"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Sensor",
+          "value": "CMOS de 1 polegada"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Resolução fotográfica",
+          "value": "48 MP"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Lente",
+          "value": "Campo de visão de 84°, abertura f/1.9 e foco de 5 m ao infinito"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Vídeo",
+          "value": "Até 4K a 30 fps"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Obturador",
+          "value": "3 s a 1/8000 s"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Recursos",
+          "value": "Modo noturno e captura vertical"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Formato de foto",
+          "value": "JPEG"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Vídeo e codec",
+          "value": "MP4 com H.264"
+        },
+        {
+          "section": "CÂMERA",
+          "label": "Armazenamento",
+          "value": "Cartão microSD U3 de até 2 TB"
+        },
+        {
+          "section": "GIMBAL",
+          "label": "Estabilização",
+          "value": "Mecânica em 3 eixos"
+        },
+        {
+          "section": "GIMBAL",
+          "label": "Faixa mecânica de inclinação",
+          "value": "-111,1° a +45°"
+        },
+        {
+          "section": "GIMBAL",
+          "label": "Faixa mecânica de rolagem",
+          "value": "±35°"
+        },
+        {
+          "section": "GIMBAL",
+          "label": "Faixa mecânica de guinada",
+          "value": "±35°"
+        },
+        {
+          "section": "GIMBAL",
+          "label": "Velocidade máxima de controle",
+          "value": "120°/s"
+        },
+        {
+          "section": "SISTEMA DE VISÃO",
+          "label": "Dianteiro",
+          "value": "Binocular; precisão de 0,5 a 12 m e detecção acima de 15 m"
+        },
+        {
+          "section": "SISTEMA DE VISÃO",
+          "label": "Traseiro",
+          "value": "Binocular; precisão de 0,5 a 9 m e detecção acima de 12 m"
+        },
+        {
+          "section": "SISTEMA DE VISÃO",
+          "label": "Inferior",
+          "value": "Câmera monocular e TOF, de 0,3 a 5 m"
+        },
+        {
+          "section": "SISTEMA DE VISÃO",
+          "label": "Retorno visual",
+          "value": "Reconhecimento do ponto de decolagem e da área de pouso"
+        },
+        {
+          "section": "TRANSMISSÃO E POSICIONAMENTO",
+          "label": "Sistema de transmissão",
+          "value": "SyncLeas 5.0"
+        },
+        {
+          "section": "TRANSMISSÃO E POSICIONAMENTO",
+          "label": "Distância máxima de transmissão",
+          "value": "16 km"
+        },
+        {
+          "section": "TRANSMISSÃO E POSICIONAMENTO",
+          "label": "Taxa de transmissão de vídeo",
+          "value": "5 Mbps"
+        },
+        {
+          "section": "TRANSMISSÃO E POSICIONAMENTO",
+          "label": "Latência",
+          "value": "Até 250 ms"
+        },
+        {
+          "section": "TRANSMISSÃO E POSICIONAMENTO",
+          "label": "Conectividade",
+          "value": "Wi-Fi 6E e Bluetooth"
+        },
+        {
+          "section": "RECURSOS DE VOO E CAPTURA",
+          "label": "Planejamento",
+          "value": "Waypoints, memória de rota e voo em linha"
+        },
+        {
+          "section": "RECURSOS DE VOO E CAPTURA",
+          "label": "Movimentos inteligentes",
+          "value": "Órbita e rastreamento do assunto"
+        },
+        {
+          "section": "RECURSOS DE VOO E CAPTURA",
+          "label": "Captura criativa",
+          "value": "Hyperlapse, panorama e modos cinematográficos automatizados"
+        },
+        {
+          "section": "RECURSOS DE VOO E CAPTURA",
+          "label": "Aplicativo",
+          "value": "X-Hubsan 3.0"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Tela",
+          "value": "5,5 polegadas, 1920 × 1080 e brilho de 2.000 nits"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Sistema",
+          "value": "Android 10"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Autonomia",
+          "value": "Até 6 h"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Tempo aproximado de recarga",
+          "value": "2,5 h"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Conexões",
+          "value": "USB-C, HDMI e slot para cartão TF"
+        },
+        {
+          "section": "CONTROLE HT55",
+          "label": "Posicionamento",
+          "value": "GPS, GLONASS, Galileo e BeiDou"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tipo",
+          "value": "Lítio 2S"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Capacidade",
+          "value": "3.000 mAh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão nominal",
+          "value": "7,2 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Recarga recomendada",
+          "value": "Carregador rápido de 9 V / 2 A"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tempo aproximado de recarga",
+          "value": "1,5 h"
+        }
+      ]
+    },
+    {
+      "sku": "901030202",
+      "source_key": "aerion-store:901030202",
+      "name": "Autel Mapper licença perpétua",
+      "source_url": "https://aerion.com.br/loja/produto/autel-mapper-perpetuo/",
+      "variant": "Autel Mapper",
+      "rows": [
+        {
+          "section": "Especificações",
+          "label": "Plataforma",
+          "value": "Software profissional"
+        },
+        {
+          "section": "Especificações",
+          "label": "Processamento",
+          "value": "Local ou em nuvem"
+        }
+      ]
+    },
+    {
+      "sku": "102003505",
+      "source_key": "aerion-store:102003505",
+      "name": "EVO Max 4T V2 sem baterias",
+      "source_url": "https://aerion.com.br/loja/produto/evo-max-4t-v2/",
+      "variant": "EVO Max V2 4T",
+      "rows": [
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Design",
+          "value": "Dobrável robusto"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso (com bateria e gimbal)",
+          "value": "1665 g (bateria ABX41-D, gimbal Fusion 4T V2 e hélices incluídos)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões do fuselagem (desdobrado, incl. hélices)",
+          "value": "563×657×147 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Distância diagonal",
+          "value": "467 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Classificação IP",
+          "value": "IP43"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Tamanho",
+          "value": "11 polegadas, 1158"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Passo",
+          "value": "5.8 polegadas"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Material",
+          "value": "Nylon + Fibra de Carbono"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Peso",
+          "value": "10.3 g"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Velocidade máxima de rotação",
+          "value": "7500 RPM"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Temperatura de operação",
+          "value": "-20℃ a +50℃ (sem carga) / -20℃ a +40℃ (carga completa)"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Armazenamento interno",
+          "value": "128GB interno, 64GB disponível*"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Nota armazenamento",
+          "value": "*O espaço disponível restante varia com diferentes versões de firmware"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Cartões microSD suportados",
+          "value": "Class 10, UHS-3 ou superior, até 1TB"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de subida",
+          "value": "Lento: 2.5 m/s, Suave: 3 m/s, Padrão: 6 m/s, Modo Sport: 8 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de descida",
+          "value": "Lento: 2.5 m/s, Suave: 3 m/s, Padrão: 6 m/s, Modo Sport: 6 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de voo*",
+          "value": "Lento: 3 m/s, Suave: 10 m/s, Padrão: 15 m/s (frente/trás), 10 m/s (lateral), Modo Sport: 23 m/s (frente), 18 m/s (trás), 20 m/s (lateral)",
+          "note": "Nota velocidade: *Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota velocidade",
+          "value": "*Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Teto máximo de serviço acima do nível do mar",
+          "value": "4500 metros (usando bateria ABX41-D)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Altitude máxima de voo*",
+          "value": "China/UE: Não mais que 120 metros, EUA: Não mais que 400 pés",
+          "note": "Nota altitude: *A altitude pode ser configurada de 20 a 800 metros no app de voo. Para configurar altitude acima do exigido por lei, é necessária aprovação das autoridades"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota altitude",
+          "value": "*A altitude pode ser configurada de 20 a 800 metros no app de voo. Para configurar altitude acima do exigido por lei, é necessária aprovação das autoridades"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de voo*",
+          "value": "42 minutos",
+          "note": "Nota tempo voo: *Dados de teste de laboratório em ambiente sem vento na velocidade de 8 m/s durante voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota tempo voo",
+          "value": "*Dados de teste de laboratório em ambiente sem vento na velocidade de 8 m/s durante voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Distância máxima de voo*",
+          "value": "25 km",
+          "note": "Nota distância: *Dados de teste de laboratório em ambiente sem vento na velocidade de 14 m/s durante voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota distância",
+          "value": "*Dados de teste de laboratório em ambiente sem vento na velocidade de 14 m/s durante voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de pairar*",
+          "value": "37 minutos",
+          "note": "Nota pairar: *Dados de teste de laboratório em ambiente sem vento durante pairar, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota pairar",
+          "value": "*Dados de teste de laboratório em ambiente sem vento durante pairar, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Resistência máxima ao vento",
+          "value": "Fase de decolagem e pouso: 10.7 m/s, Fase de cruzeiro: 12 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Ângulo máximo de inclinação",
+          "value": "Lento: 10°, Suave: 30°, Padrão: 30°, Modo Sport: 36°"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota modo Sport",
+          "value": "*No modo Sport, os sensores de colisão podem ser desligados"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade angular máxima",
+          "value": "Eixo de inclinação: 300°/s, Eixo de guinada: 120°/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Verticalmente",
+          "value": "±0.1 m (quando posicionamento visual funciona normalmente) / ±0.5 m (quando GNSS funciona normalmente)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Horizontalmente",
+          "value": "±0.3 m (quando posicionamento visual funciona normalmente) / ±0.5 m (quando sistema de posicionamento de alta precisão funciona normalmente)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Peso máximo de decolagem",
+          "value": "1999 g"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Peso máximo de decolagem (certificação C2 UE)",
+          "value": "1890 g"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Possui câmera térmica",
+          "value": "Sim"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Termógrafo",
+          "value": "Microbolômetro VOX não resfriado"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Lente",
+          "value": "FOV: 61°, Distância focal: 9.1 mm, Abertura: f/1.0, Distância de foco: 2.2 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Taxa de zoom digital equivalente",
+          "value": "1-16x zoom digital"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Diferença de temperatura equivalente ao ruído",
+          "value": "≤50mK@25℃, F#1.0"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Pitch de pixel",
+          "value": "12 um"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Banda espectral",
+          "value": "8-14 um"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Método de medição de temperatura",
+          "value": "Medição de temperatura de ponto central/Ponto específico/Área"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Faixa de medição de temperatura",
+          "value": "Modo High Gain: -20℃ a 150℃, Modo Low Gain: 0 a 550℃"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Precisão de medição de temperatura",
+          "value": "±2℃ ou leitura ±2% (usar o maior valor) @ temperatura ambiente de -10℃ a 50℃"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Distância de medição de temperatura",
+          "value": "1-100 m"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Alerta de temperatura",
+          "value": "Suportado (limiares de alarme de alta/baixa temperatura, coordenadas e valores)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Paleta",
+          "value": "White Hot/Black Hot/Ironbow/Rainbow 1/Rainbow 2/Lava/Arctic/Ironbow/Medical/Tint"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Resolução térmica",
+          "value": "640×512"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Tamanho de foto",
+          "value": "640×512"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Modo de fotografia",
+          "value": "Single"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Formato de foto",
+          "value": "JPG* (*as imagens contêm informações de temperatura e são analisadas por SDK dedicado e ferramentas PC)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Resolução de vídeo",
+          "value": "640×512@30fps / 640×512@25fps"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Nota vídeo térmico",
+          "value": "*Devido a diferenças nos fornecedores de sensores de imagem térmica, as duas especificações são enviadas em lotes mistos. A especificação exata está sujeita ao produto real comprado"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Bitrate máximo de vídeo",
+          "value": "10Mbps"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Formato de vídeo",
+          "value": "MP4"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Sistema de arquivos suportado",
+          "value": "exFAT/FAT32"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Sensor de imagem",
+          "value": "1/2\" CMOS, 48MP efetivos"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Lente",
+          "value": "DFOV: 83.4°, Distância focal equivalente: 24 mm, Abertura: f/2.8, Foco: 1.5 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Faixa ISO",
+          "value": "Auto/Manual: ISO100-ISO6400, Modo Noturno: ISO100-ISO320000 (auto)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Velocidade do obturador",
+          "value": "Captura: 8s-1/10000s, Gravação: 1/30s-1/10000s"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Zoom",
+          "value": "1-2.6x zoom digital"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Tamanho de foto",
+          "value": "JPG: 4000×3000, 8000×6000; DNG: 4000×3000"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Modo de fotografia",
+          "value": "Single"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Resolução de vídeo",
+          "value": "4000×3000@30fps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Modo noturno vídeo",
+          "value": "2400×1800@30fps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Bitrate máximo de vídeo",
+          "value": "60Mbps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Formato de vídeo",
+          "value": "MP4"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Legendas de vídeo",
+          "value": "Suportado"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Codificação de vídeo",
+          "value": "H.264/H.265"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Sistema de arquivos suportado",
+          "value": "exFAT/FAT32"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Possui câmera zoom",
+          "value": "Sim"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Sensor de imagem",
+          "value": "1/2\" CMOS, 48MP efetivos"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Lente",
+          "value": "DFOV: 40°-10.3°, Distância focal equivalente: 64-234 mm, Abertura: f/2.8-f/4.8, Foco: 2 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Faixa ISO",
+          "value": "Auto/Manual: ISO100-ISO6400"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Velocidade do obturador",
+          "value": "Captura: 8s-1/10000s, Gravação: 1/30s-1/10000s"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Zoom",
+          "value": "2.7-10x zoom óptico contínuo, 20x zoom híbrido, 160x zoom digital"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Tamanho de foto",
+          "value": "JPG: 4000×3000, 8000×6000; DNG: 4000×3000"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Modo de fotografia",
+          "value": "Single"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Resolução de vídeo",
+          "value": "4000×3000@30fps"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Bitrate máximo de vídeo",
+          "value": "60Mbps"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Formato de vídeo",
+          "value": "MP4"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Legendas de vídeo",
+          "value": "Suportado"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Codificação de vídeo",
+          "value": "H.264/H.265"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Sistema de arquivos suportado",
+          "value": "exFAT/FAT32"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Telêmetro laser",
+          "value": "Sim"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Comprimento de onda",
+          "value": "905 nm"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Segurança do laser",
+          "value": "Classe 1"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Precisão de medição",
+          "value": "±(1 m + D×0.15%)*"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Nota precisão laser",
+          "value": "*Onde D é a distância até um plano refletor vertical"
+        },
+        {
+          "section": "SENSORES E MEDIÇÃO",
+          "label": "Alcance de medição",
+          "value": "5-1200 m"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Tipo de gimbal",
+          "value": "Fusion 4T V2"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Peso do gimbal",
+          "value": "214 g"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance mecânico",
+          "value": "Inclinação: -135° a 45°, Rolagem: -50° a 50°, Panorâmica: -45° a 45°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance controlável",
+          "value": "Inclinação: -90° a 30°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Sistema de estabilização",
+          "value": "Gimbal mecânico 3 eixos (inclinação, rolagem, panorâmica)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Velocidade máxima de controle",
+          "value": "Inclinação: 100°/s"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Faixa de vibração angular",
+          "value": "< 0.005°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Número de câmeras",
+          "value": "3 (Térmica + RGB + Zoom)"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "GNSS",
+          "value": "GPS + Galileo + BDS + GLONASS"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "Módulo RTK",
+          "value": "Opcional"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "Precisão RTK",
+          "value": "Centimétrica"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "Navegação visual",
+          "value": "SLAM alta precisão"
+        },
+        {
+          "section": "EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Sistema de evitação",
+          "value": "720° omnidirecional"
+        },
+        {
+          "section": "EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Sensores",
+          "value": "Múltiplas direções"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Alcance de detecção - Frente",
+          "value": "0.5 ~ 30 m"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Alcance de detecção - Trás",
+          "value": "0.5 ~ 25 m"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Alcance de detecção - Lateral",
+          "value": "0.5 ~ 40 m"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Alcance de detecção - Cima",
+          "value": "0.5 ~ 40 m"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Alcance de detecção - Baixo",
+          "value": "0.5 ~ 35 m"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "FOV - Frente e Trás",
+          "value": "60°(H), 80°(V)"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "FOV - Cima",
+          "value": "180° (lateral), 120° (frente e trás)"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "FOV - Baixo",
+          "value": "180° (lateral), 120° (frente e trás)"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Ambiente operacional - Frente, trás, lateral e cima",
+          "value": "A superfície tem texturas ricas, sob ambiente de iluminação suficiente (>15 lux, ambiente de iluminação fluorescente interno normal)"
+        },
+        {
+          "section": "SISTEMA DE EVITAÇÃO DE OBSTÁCULOS VISUAL",
+          "label": "Ambiente operacional - Baixo",
+          "value": "A superfície tem texturas ricas, e a superfície é um material difuso com refletividade >20% (paredes, árvores, humanos, etc.), sob ambiente de iluminação suficiente (>15 lux, ambiente de iluminação fluorescente interno normal)"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Frequência de transmissão",
+          "value": "24G: 24.0-24.25 GHz, 60G: 60-64 GHz"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "EIRP - 60G",
+          "value": "≤20dBm (CE/UKCA/FCC)"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "EIRP - 24G",
+          "value": "≤20dBm (CE/UKCA/FCC), ≤13dBm (SRRC)"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance de detecção - Radar 60G - Cima",
+          "value": "0.3 ~ 18 m @ linha de transmissão de alta tensão"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance de detecção - Radar 60G - Baixo",
+          "value": "0.15 ~ 40 m @ piso de concreto"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance de detecção - Radar 60G - Frente e Trás",
+          "value": "0.15 ~ 18 m @ linha de transmissão de alta tensão, com velocidade de voo 10 m/s"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance de detecção - Radar 60G - Lateral",
+          "value": "0.15 ~ 18 m @ linha de transmissão de alta tensão, com velocidade de voo 10 m/s"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance de detecção - Radar 24G - Baixo",
+          "value": "0.8 ~ 12 m @ piso de concreto"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "FOV - Horizontal (6dB)",
+          "value": "±30°/±15° (60G/24G)"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "FOV - Vertical (6dB)",
+          "value": "±40°/±15° (60G/24G)"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Ambiente operacional - Radar 60G",
+          "value": "Suporta evitação de obstáculos para todas as condições climáticas para vidro, água, linha de transmissão, edifícios e árvores em 6 direções. Sua distância de evitação de obstáculos varia com a capacidade do obstáculo de refletir ondas eletromagnéticas e seu tamanho de superfície"
+        },
+        {
+          "section": "SISTEMA DE RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Ambiente operacional - Radar 24G",
+          "value": "Suporta detecção para baixo, e seu alcance de detecção varia com o material do solo. Por exemplo, o alcance de detecção do solo de cimento é de 12 metros, e o alcance de detecção da grama com espessura de mais de 3 cm é inferior a 6 metros"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Protocolo",
+          "value": "802.11a/b/g/n/ac/ax"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Frequência operacional - 2.4G",
+          "value": "2.400–2.476GHz*, 2.400–2.4835GHz"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Frequência operacional - 5.2G",
+          "value": "5.15-5.25GHz**, 5.17-5.25GHz***"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Frequência operacional - 5.8G",
+          "value": "5.725-5.829GHz*, 5.725-5.850GHz"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Nota frequências",
+          "value": "*Aplica-se apenas a regiões SRRC, **Aplica-se apenas a regiões FCC, CE (Alemanha excluída) e UKCA, ***Aplica-se apenas à Alemanha. Nota: Algumas frequências estão disponíveis apenas em algumas regiões ou apenas para uso interno. Para detalhes, consulte as leis e regulamentos locais"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED); ≤20dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC); ≤23dBm (CE/UKCA)"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm (FCC/ISED/SRRC); ≤14dBm (CE/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Frequência operacional - 900M",
+          "value": "902-928MHz*"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Frequência operacional - 2.4G",
+          "value": "2.400–2.476GHz**, 2.400–2.4835GHz"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Frequência operacional - 5.2G",
+          "value": "5.15-5.25GHz***, 5.17-5.25GHz****"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Frequência operacional - 5.8G",
+          "value": "5.725-5.829GHz**, 5.725-5.850GHz"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Nota frequências transmissão",
+          "value": "*Aplicável apenas a regiões FCC e ISED, **Aplicável apenas a regiões SRRC, ***Aplicável apenas a regiões FCC, CE (Alemanha excluída) e UKCA, ****Aplica-se apenas à Alemanha. Nota: Algumas frequências estão disponíveis apenas em algumas regiões ou apenas para uso interno. Para detalhes, consulte as leis e regulamentos locais"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "EIRP - 900M",
+          "value": "≤30dBm (FCC/ISED)"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED); ≤20dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC); ≤23 dBm (CE/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm(FCC/ISED/SRRC); ≤14dBm(CE/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 15km, SRRC/CE: 8km",
+          "note": "Nota distância transmissão: *Sem interferência e bloqueio"
+        },
+        {
+          "section": "TRANSMISSÃO DE VÍDEO",
+          "label": "Nota distância transmissão",
+          "value": "*Sem interferência e bloqueio"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Frequência operacional",
+          "value": "900MHz / 2.4 / 5.2 / 5.8 GHz"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Controle remoto",
+          "value": "Autel V3 (tela 6.0\" ou 7.9\")"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Resolução tela",
+          "value": "2048×1536"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Brilho da tela",
+          "value": "2000 nits"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Rede A-Mesh",
+          "value": "Sim"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Anti-interferência",
+          "value": "Superior"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Streaming de vídeo",
+          "value": "RTMP / RTSP"
+        },
+        {
+          "section": "COMUNICAÇÃO E CONTROLE",
+          "label": "Suporte para SIM Card 4G",
+          "value": "Sim"
+        },
+        {
+          "section": "BATERIA E ENERGIA",
+          "label": "Tipo de bateria",
+          "value": "ABX41-D inteligente"
+        },
+        {
+          "section": "BATERIA E ENERGIA",
+          "label": "Troca a quente",
+          "value": "Sim*"
+        },
+        {
+          "section": "BATERIA E ENERGIA",
+          "label": "Nota troca quente",
+          "value": "*A função de troca a quente de bateria deve ser habilitada no app de voo com antecedência"
+        },
+        {
+          "section": "BATERIA E ENERGIA",
+          "label": "Detecção bateria local",
+          "value": "Sim (ABX41-D)"
+        },
+        {
+          "section": "STROBE",
+          "label": "Strobe integrado",
+          "value": "Sim"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Voo autônomo",
+          "value": "Autonomy Engine"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Planejamento 3D",
+          "value": "Sim"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Reconhecimento IA",
+          "value": "Sim"
+        },
+        {
+          "section": "SOFTWARE E COMPATIBILIDADE",
+          "label": "App de controle",
+          "value": "Autel Enterprise"
+        },
+        {
+          "section": "SOFTWARE E COMPATIBILIDADE",
+          "label": "Combinação alto-falante",
+          "value": "Opcional"
+        },
+        {
+          "section": "SOFTWARE E COMPATIBILIDADE",
+          "label": "EVO Nest (base auto)",
+          "value": "Opcional"
+        }
+      ]
+    },
+    {
+      "sku": "901030260",
+      "source_key": "aerion-store:901030260",
+      "name": "Autel Alpha L35T com 2 baterias",
+      "source_url": "https://aerion.com.br/loja/produto/autel-alpha-l35t/",
+      "variant": "Autel Alpha",
+      "rows": [
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Design",
+          "value": "Industrial dobrável"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso vazio (sem gimbal)",
+          "value": "5535 g (bateria inteligente e hélices incluídas)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso operacional",
+          "value": "6480 g (bateria inteligente, gimbal e hélices incluídos)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "MTOM (peso máximo de decolagem)",
+          "value": "8400 g"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões desdobrado (incl. hélices)",
+          "value": "1205×980×278 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões desdobrado (sem hélices)",
+          "value": "780×568×278 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões dobrado",
+          "value": "455×263×248 mm (sem hélices)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Distância diagonal",
+          "value": "814 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Classificação IP",
+          "value": "IP55"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de subida",
+          "value": "Lento: 2.5 m/s, Suave: 3 m/s, Padrão: 6 m/s, Modo Sport: 15 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de descida",
+          "value": "Lento: 2.5 m/s, Suave: 3 m/s, Padrão: 5 m/s, Modo Sport: 10 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de voo*",
+          "value": "Lento: 3 m/s, Suave: 10 m/s, Padrão: 15 m/s (frente/trás), 10 m/s (laterais), Modo Sport: 25 m/s (todas as direções)",
+          "note": "Nota velocidade: *Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota velocidade",
+          "value": "*Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Teto máximo de serviço",
+          "value": "4500 m"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Altitude máxima (App)",
+          "value": "800 m"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de voo*",
+          "value": "40 minutos (sem vento, 10.5 m/s)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Distância máxima de voo",
+          "value": "30 km (hélice fibra de carbono) / 27.5 km (hélice injetada)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de pairar*",
+          "value": "38 minutos"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Resistência ao vento",
+          "value": "Decolagem/Pouso: 10.7 m/s, Cruzeiro: 12 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Ângulo máximo de inclinação",
+          "value": "Lento: 10°, Suave: 30°, Padrão: 30°, Modo Sport: 36°"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade angular máxima",
+          "value": "Pitch 300°/s, Yaw 120°/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Temperatura de operação",
+          "value": "-20°C a +50°C"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Baterias hot swap",
+          "value": "Suportado"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "GNSS",
+          "value": "GPS + Galileo + BeiDou + GLONASS"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "Precisão de pairar - Vertical",
+          "value": "±0.1 m (visual) / ±0.3 m (GNSS) / ±0.1 m (RTK FIX)"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "Precisão de pairar - Horizontal",
+          "value": "±0.15 m (visual) / ±0.3 m (GNSS) / ±0.1 m (RTK FIX)"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "Frequência operacional",
+          "value": "900M (902-928 MHz)* / 2.4G (2.400–2.4835 GHz)** / 5.2G (5.15-5.25 GHz***, 5.17-5.25 GHz****) / 5.8G (5.725-5.850 GHz**)"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "Notas frequência",
+          "value": "*FCC/ISED | **SRRC | ***FCC, CE (exceto Alemanha), UKCA | ****Alemanha"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 15 km, CE: 8 km"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "EIRP - 900M",
+          "value": "≤30 dBm (FCC/ISED)"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "EIRP - 2.4G",
+          "value": "≤30 dBm (FCC/ISED); ≤20 dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "EIRP - 5.2G",
+          "value": "≤30 dBm (FCC); ≤23 dBm (CE/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO",
+          "label": "EIRP - 5.8G",
+          "value": "≤30 dBm (FCC/ISED/SRRC); ≤14 dBm (CE/UKCA)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Frente",
+          "value": "0.2 - 31 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Trás",
+          "value": "0.2 - 26 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Laterais",
+          "value": "0.5 - 45 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Cima",
+          "value": "0.2 - 45 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Baixo",
+          "value": "0.2 - 45 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Todos os eixos",
+          "value": "90° (H) × 90° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Ambiente operacional",
+          "value": "Superfícies com textura e iluminação >15 lux (material difuso >20% no eixo inferior)"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Frequências",
+          "value": "60G: 60-64 GHz | 24G: 24.0-24.25 GHz"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "EIRP",
+          "value": "60G ≤20 dBm (CE/UKCA/FCC); 24G ≤20 mW (SRRC)"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance 60G",
+          "value": "Cima: 0.3-20 m | Baixo: 0.15-40 m | Frente/Trás/Laterais: 0.3-30 m"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Alcance 24G",
+          "value": "Baixo: 0.8-20 m"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "FOV (6 dB)",
+          "value": "Horizontal ±35°/±22° (60G/24G) | Vertical ±30°/±20° (60G/24G)"
+        },
+        {
+          "section": "RADAR DE ONDAS MILIMÉTRICAS",
+          "label": "Notas",
+          "value": "Versões 24G possuem radar superior/desligado e operam apenas com visual em baixa iluminação"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Protocolo",
+          "value": "802.11a/b/g/n/ac/ax"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Frequência operacional",
+          "value": "2.4G: 2.400–2.4835 GHz*, 5.2G: 5.15-5.25 GHz**, 5.8G: 5.725-5.850 GHz*"
+        },
+        {
+          "section": "WI-FI",
+          "label": "Notas",
+          "value": "*SRRC | **FCC/CE (exceto Alemanha)/UKCA | ***Alemanha"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 2.4G",
+          "value": "≤30 dBm (FCC/ISED); ≤20 dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 5.2G",
+          "value": "≤30 dBm (FCC); ≤23 dBm (CE/UKCA)"
+        },
+        {
+          "section": "WI-FI",
+          "label": "EIRP - 5.8G",
+          "value": "≤30 dBm (FCC/ISED/SRRC); ≤14 dBm (CE/UKCA)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Modelo",
+          "value": "DG-L35T destacável (design em E)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Dimensões",
+          "value": "144.7×133.3×158.4 mm"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Peso",
+          "value": "920 g"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Classificação IP",
+          "value": "IP55"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Temperatura operação",
+          "value": "-20°C a +50°C"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Temperatura armazenamento",
+          "value": "-30°C a +70°C"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Armazenamento",
+          "value": "microSD até 256 GB (UHS-I U3/V30 mínimo 30 MB/s)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance mecânico",
+          "value": "Pitch -135° a 45°, Roll -60° a 60°, Yaw -90° a 90°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance controlável",
+          "value": "Pitch -90° a 30°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Velocidade máxima (pitch)",
+          "value": "100°/s"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Precisão de vibração",
+          "value": "<0.005°"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Sensor",
+          "value": "1/1.8\" CMOS, 8 MP"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Distância focal",
+          "value": "7.1 - 171.95 mm (±5%)"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Equivalente 35 mm",
+          "value": "34.7 - 838 mm"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Abertura",
+          "value": "f/1.61 (wide) - f/5.19 (tele) ±5%"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Foco",
+          "value": "10 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "ISO",
+          "value": "Normal ISO100-25600, Super Night ISO100-160000"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Obturador",
+          "value": "Foto 0.5s-1/8000s | Vídeo 1/30s-1/8000s"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Zoom",
+          "value": "Óptico contínuo 1.4-35x, digital 35-560x"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Resolução foto",
+          "value": "3840×2160"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Formato foto",
+          "value": "JPG"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Vídeo",
+          "value": "3840×2160@30p (MP4)"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Bitrate máx.",
+          "value": "30 Mbps"
+        },
+        {
+          "section": "CÂMERA ZOOM / TELEOBJETIVA",
+          "label": "Sistemas de arquivos",
+          "value": "exFAT/FAT32"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Sensor",
+          "value": "1/2\" CMOS, 48 MP"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Distância focal",
+          "value": "4.49 mm (equiv. 24 mm)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Abertura",
+          "value": "f/2.8"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "ISO",
+          "value": "ISO100-3200 (auto)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Obturador",
+          "value": "Foto 0.5s-1/8000s | Vídeo 1/30s-1/8000s"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Foto",
+          "value": "4000×3000 (JPG)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Vídeo",
+          "value": "4000×3000@25p (MP4)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Bitrate máx.",
+          "value": "30 Mbps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE",
+          "label": "Sistemas de arquivos",
+          "value": "exFAT/FAT32"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Sensor",
+          "value": "VOx não resfriado"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "FOV",
+          "value": "42°"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Distância focal",
+          "value": "13 mm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Abertura",
+          "value": "f/1.2"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Foco",
+          "value": "6 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Sensibilidade",
+          "value": "≤50 mK@f/1.0 (25°C)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Pitch de pixel",
+          "value": "12 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Faixa espectral",
+          "value": "8-14 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Faixa de temperatura",
+          "value": "-20°C a 150°C (alto ganho); 0 a 550°C (baixo ganho)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Precisão",
+          "value": "±3°C ou ±3% (maior valor) @ -20°C a 60°C"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Distância medição precisa",
+          "value": "5 m"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Zoom digital",
+          "value": "1-3.5x"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Alertas de temperatura",
+          "value": "Limiares alto/baixo com coordenadas"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Paletas",
+          "value": "White Hot, Black Hot, Searing, Rainbow, Grey, Ironbow, Cold & Hot"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Foto",
+          "value": "640×512 (JPG com dados de temperatura)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 1 (ANGULAR)",
+          "label": "Vídeo",
+          "value": "640×512@25fps (MP4)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Sensor",
+          "value": "VOx não resfriado"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "FOV",
+          "value": "12.3°"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Distância focal",
+          "value": "45 mm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Abertura",
+          "value": "f/1.2"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Foco",
+          "value": "35 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Sensibilidade",
+          "value": "≤50 mK@f/1.0 (25°C)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Pitch de pixel",
+          "value": "12 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Faixa espectral",
+          "value": "8-14 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Faixa de temperatura",
+          "value": "-20°C a 150°C / 0 a 550°C"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Precisão",
+          "value": "±5°C ou ±5% (maior valor) @ -20°C a 60°C"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Distância medição precisa",
+          "value": "35 m"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Zoom digital",
+          "value": "3.5-56x"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Alertas de temperatura",
+          "value": "Limiares alto/baixo com coordenadas"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Paletas",
+          "value": "White Hot, Black Hot, Searing, Rainbow, Grey, Ironbow, Cold & Hot"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Foto",
+          "value": "640×512 (JPG com dados de temperatura)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA 2 (TELE)",
+          "label": "Vídeo",
+          "value": "640×512@25fps (MP4)"
+        },
+        {
+          "section": "TELÊMETRO LASER",
+          "label": "Comprimento de onda",
+          "value": "905 nm"
+        },
+        {
+          "section": "TELÊMETRO LASER",
+          "label": "Precisão",
+          "value": "<400 m: ±1 m | >400 m: D × 0,3%"
+        },
+        {
+          "section": "TELÊMETRO LASER",
+          "label": "Alcance de medição",
+          "value": "10 - 2000 m"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Dimensões",
+          "value": "269×189×87 mm (antenas dobradas horiz.), 269×189×173 mm (antenas dobradas vert.), 269×302×87 mm (antenas abertas)"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Peso",
+          "value": "1194 g (sem case), 1365 g (com case)"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Temperatura operação",
+          "value": "-20°C a +40°C"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Temperatura armazenamento",
+          "value": "+15°C a +25°C (1 ano) / 0°C a +30°C (3 meses) / -20°C a +45°C (1 mês)"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Proteção",
+          "value": "IP43"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Armazenamento interno",
+          "value": "128 GB (sem microSD adicional)"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Sistema",
+          "value": "Android 11, suporta apps de terceiros"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Vídeo",
+          "value": "Reprodução 4K@24fps H.264/H.265"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "HDMI",
+          "value": "Saída até 1080p@60fps"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "USB-C",
+          "value": "Carga PD/QC até 65 W, dados USB 3.1 Gen2"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "USB-A",
+          "value": "Carga 5V/2A, dados USB 2.0"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "GNSS",
+          "value": "GPS + Galileo + BeiDou + GLONASS"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Wi-Fi",
+          "value": "802.11a/b/g/n/ac (2×2 MIMO)"
+        },
+        {
+          "section": "CONTROLADOR SMART CONTROLLER V3",
+          "label": "Bluetooth",
+          "value": "5.0 (≤20 dBm)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Antenas",
+          "value": "Duplas, 1T2R, design destacável"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Frequência",
+          "value": "900M 902-928 MHz*, 2.4G 2.400–2.4835 GHz**, 5.8G 5.725-5.850 GHz**"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Notas",
+          "value": "*FCC/ISED | **SRRC (consulte legislações locais)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 900M",
+          "value": "≤30 dBm (FCC/ISED)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 2.4G",
+          "value": "≤30 dBm (FCC/ISED); ≤20 dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 5.8G",
+          "value": "≤30 dBm (FCC/ISED/SRRC); ≤14 dBm (CE/UKCA)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Distância máxima*",
+          "value": "FCC: 15 km | CE/SRRC: 8 km",
+          "note": "Nota distância: *Sem interferência ou bloqueio"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Nota distância",
+          "value": "*Sem interferência ou bloqueio"
+        },
+        {
+          "section": "DISPLAY DO CONTROLADOR",
+          "label": "Tipo",
+          "value": "TFT LCD 7.9\""
+        },
+        {
+          "section": "DISPLAY DO CONTROLADOR",
+          "label": "Brilho",
+          "value": "2000 nits"
+        },
+        {
+          "section": "DISPLAY DO CONTROLADOR",
+          "label": "Resolução",
+          "value": "2048×1536"
+        },
+        {
+          "section": "DISPLAY DO CONTROLADOR",
+          "label": "Taxa de atualização",
+          "value": "60 Hz"
+        },
+        {
+          "section": "DISPLAY DO CONTROLADOR",
+          "label": "Toque",
+          "value": "Suporta multitoque de 10 pontos"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Tipo",
+          "value": "Li-Po 3S"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Capacidade",
+          "value": "5800 mAh"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Tensão",
+          "value": "11.55 V"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Energia",
+          "value": "67 Wh"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Tempo de carga",
+          "value": "≈120 minutos"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Autonomia",
+          "value": "2.5 h (brilho máximo) / 4 h (50%)"
+        },
+        {
+          "section": "BATERIA DO CONTROLADOR",
+          "label": "Substituição",
+          "value": "Não suportado"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Dimensões",
+          "value": "200×76.8×50 mm"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tipo",
+          "value": "LiPo 6S"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Capacidade",
+          "value": "10000 mAh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Energia",
+          "value": "237 Wh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão",
+          "value": "23.7 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão máx. carga",
+          "value": "26.7 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência nominal",
+          "value": "180 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência máxima",
+          "value": "260 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Peso",
+          "value": "995 g"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura operação",
+          "value": "-20°C a +50°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura carga",
+          "value": "+10°C a +40°C*"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Nota carga",
+          "value": "*Abaixo de +10°C ativa autoaquecimento; acima de +40°C interrompe carga"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Armazenamento ideal",
+          "value": "+22°C a +28°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Armazenamento (temp/umidade)",
+          "value": "-10°C a +30°C, 65±20% RH"
+        }
+      ]
+    },
+    {
+      "sku": "102002996",
+      "source_key": "aerion-store:102002996",
+      "name": "EVO Lite 6K Enterprise 6,0 com 2 baterias",
+      "source_url": "https://aerion.com.br/loja/produto/evo-lite-6k-enterprise-60/",
+      "variant": "EVO Lite Enterprise 6K",
+      "rows": [
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Design",
+          "value": "Dobrável compacto"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso (com bateria e gimbal)",
+          "value": "866 g (bateria e gimbal incluídos)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso máximo de decolagem",
+          "value": "866 g"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões dobrado",
+          "value": "210×123×95 mm (inclui hélices)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões desdobrado",
+          "value": "433×516×95 mm (inclui hélices)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Distância diagonal",
+          "value": "368 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Velocidade máxima de rotação",
+          "value": "8000 rpm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Classificação IP",
+          "value": "Não especificado"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Tamanho",
+          "value": "8.5 polegadas (8530)"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Material",
+          "value": "Moldagem por injeção"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Peso",
+          "value": "7.5 g"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de subida",
+          "value": "Lento: 3 m/s, Suave: 3 m/s, Padrão: 5 m/s, Modo Sport: 6 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de descida",
+          "value": "Lento: 3 m/s, Suave: 2 m/s, Padrão: 3 m/s, Modo Sport: 4 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de voo*",
+          "value": "Lento: 3 m/s, Suave: 5 m/s, Padrão: 10 m/s, Modo Sport: 18 m/s",
+          "note": "Nota velocidade: *Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota velocidade",
+          "value": "*Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Teto máximo de serviço acima do nível do mar",
+          "value": "3000 m"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Altitude máxima de voo*",
+          "value": "China/UE: até 120 m | EUA: até 400 pés",
+          "note": "Nota altitude: *Configurável de 0 a 800 m no aplicativo de voo (necessária autorização para exceder limites legais)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota altitude",
+          "value": "*Configurável de 0 a 800 m no aplicativo de voo (necessária autorização para exceder limites legais)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de voo*",
+          "value": "40 minutos",
+          "note": "Nota tempo voo: *Testado em laboratório sem vento a 10 m/s em voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota tempo voo",
+          "value": "*Testado em laboratório sem vento a 10 m/s em voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Distância máxima de voo",
+          "value": "24 km"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de pairar*",
+          "value": "37 minutos",
+          "note": "Nota pairar: *Testado em laboratório sem vento durante voo estacionário, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota pairar",
+          "value": "*Testado em laboratório sem vento durante voo estacionário, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Resistência máxima ao vento",
+          "value": "10.7 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Ângulo máximo de inclinação",
+          "value": "Lento: 15°, Suave: 30°, Padrão: 30°, Modo Sport: 33°"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade angular máxima",
+          "value": "Suave: 60°/s, Padrão: 120°/s, Modo Sport: 200°/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota modo Sport",
+          "value": "*No modo Sport, os sensores de colisão podem ser desligados"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Temperatura de operação",
+          "value": "-10°C a +40°C"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Verticalmente",
+          "value": "±0.1 m (visual) / ±0.3 m (GNSS)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Horizontalmente",
+          "value": "±0.15 m (visual) / ±0.3 m (GNSS)"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Armazenamento interno",
+          "value": "4GB onboard (suporta microSD até 256GB)"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "GNSS",
+          "value": "GPS + BDS + GLONASS"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 2.4G",
+          "value": "2.400–2.476 GHz*, 2.400–2.4835 GHz"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 5.2G",
+          "value": "5.15-5.25 GHz**"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 5.8G",
+          "value": "5.725-5.829 GHz*, 5.725-5.850 GHz"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Nota frequências",
+          "value": "*Aplicável apenas a regiões SRRC. **Aplicável apenas a regiões FCC. Consulte as legislações locais para frequências disponíveis"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 12 km, CE: 6 km",
+          "note": "Nota distância: *Sem interferência ou obstrução"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Nota distância",
+          "value": "*Sem interferência ou obstrução"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED/RCM); ≤20dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC)"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm (FCC/SRRC/ISED/RCM); ≤14dBm (CE/UKCA)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Frente",
+          "value": "0.2 ~ 23 m (velocidade <10 m/s)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Trás",
+          "value": "0.2 ~ 30 m (velocidade <10 m/s)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Baixo",
+          "value": "0.2 ~ 20 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Frente",
+          "value": "75° (H), 87° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Trás",
+          "value": "35° (H), 45° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Baixo",
+          "value": "99° (H), 83° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Ambiente operacional",
+          "value": "Superfícies com textura e iluminação >15 lux; material difuso com refletividade >20%"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Sensor de imagem",
+          "value": "1\" CMOS, 20 MP"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Lente",
+          "value": "DFOV: 82°, Distância focal equivalente: 29 mm, Abertura: f/2.8 - f/11"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Distância de foco",
+          "value": "0.5 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "ISO",
+          "value": "Auto/Manual: ISO100 ~ ISO6400 (até ISO48000 no modo noturno)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Velocidade do obturador",
+          "value": "1/10000 ~ 1/60 s"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Modo antifog",
+          "value": "Suportado"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Zoom",
+          "value": "1-16x digital"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Tamanho de foto",
+          "value": "5472×3076, 3840×2160"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Formato de foto",
+          "value": "JPG"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Resolução de vídeo",
+          "value": "3840×2160@30fps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Formato de vídeo",
+          "value": "MP4/MOV"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Codificação de vídeo",
+          "value": "H.265/H.264"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (6K)",
+          "label": "Sistema de arquivos",
+          "value": "FAT32/exFAT"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Disponibilidade",
+          "value": "Não possui"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Tipo de gimbal",
+          "value": "3 eixos (pitch, roll, yaw)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance mecânico",
+          "value": "Pitch: -135° a 45°, Roll: -45° a 45°, Yaw: -90° a 90°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance controlável",
+          "value": "Pitch: -90° a 30°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Velocidade máxima de controle",
+          "value": "Pitch: 100°/s"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Precisão de estabilização",
+          "value": "±0.003°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Número de câmeras",
+          "value": "1 (Visível)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Material",
+          "value": "PC + ABS"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Dimensões",
+          "value": "226.3×137.7×31.5 mm (antenas dobradas) / 226.3×215.4×31.5 mm (antenas abertas)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Peso",
+          "value": "607 g"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Temperatura de operação",
+          "value": "-10°C a +40°C"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Temperatura de armazenamento",
+          "value": "Curto prazo: -20°C a +45°C | Médio prazo: 0°C a +30°C | Ideal: +15°C a +25°C"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Armazenamento interno",
+          "value": "32GB (24GB disponíveis)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Sistema operacional",
+          "value": "Android 6.0.1 (suporta apps Android de terceiros)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Conectividade",
+          "value": "Wi-Fi 802.11a/b/g/n/ac (2×2 MIMO), Bluetooth 4.2, GNSS GPS/Galileo/BDS/GLONASS"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Tela",
+          "value": "1440×720, 60Hz, toque de 10 pontos"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Portas",
+          "value": "USB-C (PD/QC até 65W), USB-A (USB 2.0)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Bateria",
+          "value": "Li-Po 1900 mAh, 7.7 V (14.63 Wh) – autonomia 1.5 h (brilho máximo) / 2.5 h (50%), recarga ~90 min"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Proteção",
+          "value": "IP43"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Antenas",
+          "value": "Duplas, 1T2R, design destacável"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Frequência",
+          "value": "900M: 902-928MHz*, 2.4G: 2.400–2.476GHz**, 2.400–2.4835GHz, 5.2G: 5150-5250MHz***, 5.8G: 5.725-5.829GHz**, 5.725-5.850GHz"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Nota frequências",
+          "value": "*FCC/ISED | **SRRC | ***FCC/RCM. Consulte leis locais para uso"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 900M",
+          "value": "≤30dBm (FCC/ISED)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED/RCM); ≤20dBm (CE/SRRC)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC/RCM)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm (FCC/SRRC/ISED/RCM); ≤14dBm (CE)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 12 km, CE/SRRC: 8 km",
+          "note": "Nota distância transmissão: *Sem interferência ou bloqueio"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Nota distância transmissão",
+          "value": "*Sem interferência ou bloqueio"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tipo",
+          "value": "LiPo 3S inteligente"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Capacidade",
+          "value": "6175 mAh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Energia",
+          "value": "68.7 Wh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão",
+          "value": "11.13 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão máxima de carga",
+          "value": "12.75 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência de carga nominal",
+          "value": "63.75 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência máxima de carga",
+          "value": "78 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Peso",
+          "value": "309 g"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura de operação",
+          "value": "0°C a +40°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura de carga",
+          "value": "+5°C a +45°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Troca a quente",
+          "value": "Não suportado"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Entrada",
+          "value": "100-240V ~ 50/60 Hz, 1.5 A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Portas de saída",
+          "value": "Interface de bateria / USB-A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Interface de carga da bateria",
+          "value": "12.75V⎓5A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Porta USB",
+          "value": "5V⎓3A, 9V⎓2A, 12V⎓1.5A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Potência nominal",
+          "value": "63.75 W (máx.)"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Voo autônomo",
+          "value": "Básico"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Planejamento 3D",
+          "value": "Básico"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Reconhecimento IA",
+          "value": "Sim"
+        },
+        {
+          "section": "SOFTWARE E COMPATIBILIDADE",
+          "label": "App de controle",
+          "value": "Autel Enterprise"
+        }
+      ]
+    },
+    {
+      "sku": "102002930",
+      "source_key": "aerion-store:102002930",
+      "name": "EVO Lite 640T Enterprise 6,0 com 2 baterias",
+      "source_url": "https://aerion.com.br/loja/produto/evo-lite-640t-enterprise-60/",
+      "variant": "EVO Lite Enterprise 640T",
+      "rows": [
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Design",
+          "value": "Dobrável compacto"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso (com bateria e gimbal)",
+          "value": "866 g (bateria e gimbal incluídos)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Peso máximo de decolagem",
+          "value": "866 g"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões dobrado",
+          "value": "210×123×95 mm (inclui hélices)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Dimensões desdobrado",
+          "value": "433×516×95 mm (inclui hélices)"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Distância diagonal",
+          "value": "368 mm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Velocidade máxima de rotação",
+          "value": "8000 rpm"
+        },
+        {
+          "section": "CATEGORIA E PORTABILIDADE",
+          "label": "Classificação IP",
+          "value": "Não especificado"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Tamanho",
+          "value": "8.5 polegadas (8530)"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Material",
+          "value": "Moldagem por injeção"
+        },
+        {
+          "section": "HÉLICES (PROPELLERS)",
+          "label": "Peso",
+          "value": "7.5 g"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de subida",
+          "value": "Lento: 3 m/s, Suave: 3 m/s, Padrão: 5 m/s, Modo Sport: 6 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de descida",
+          "value": "Lento: 3 m/s, Suave: 2 m/s, Padrão: 3 m/s, Modo Sport: 4 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade máxima de voo*",
+          "value": "Lento: 3 m/s, Suave: 5 m/s, Padrão: 10 m/s, Modo Sport: 18 m/s",
+          "note": "Nota velocidade: *Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota velocidade",
+          "value": "*Sem vento, próximo ao nível do mar"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Teto máximo de serviço acima do nível do mar",
+          "value": "3000 m"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Altitude máxima de voo*",
+          "value": "China/UE: até 120 m | EUA: até 400 pés",
+          "note": "Nota altitude: *Configurável de 0 a 800 m no aplicativo de voo (necessária autorização para exceder limites legais)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota altitude",
+          "value": "*Configurável de 0 a 800 m no aplicativo de voo (necessária autorização para exceder limites legais)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de voo*",
+          "value": "40 minutos",
+          "note": "Nota tempo voo: *Testado em laboratório sem vento a 10 m/s em voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota tempo voo",
+          "value": "*Testado em laboratório sem vento a 10 m/s em voo horizontal, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Distância máxima de voo",
+          "value": "24 km"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Tempo máximo de pairar*",
+          "value": "37 minutos",
+          "note": "Nota pairar: *Testado em laboratório sem vento durante voo estacionário, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota pairar",
+          "value": "*Testado em laboratório sem vento durante voo estacionário, apenas para referência"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Resistência máxima ao vento",
+          "value": "10.7 m/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Ângulo máximo de inclinação",
+          "value": "Lento: 15°, Suave: 30°, Padrão: 30°, Modo Sport: 33°"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Velocidade angular máxima",
+          "value": "Suave: 60°/s, Padrão: 120°/s, Modo Sport: 200°/s"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Nota modo Sport",
+          "value": "*No modo Sport, os sensores de colisão podem ser desligados"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Temperatura de operação",
+          "value": "-10°C a +40°C"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Verticalmente",
+          "value": "±0.1 m (visual) / ±0.3 m (GNSS)"
+        },
+        {
+          "section": "DESEMPENHO DE VOO",
+          "label": "Precisão de pairar - Horizontalmente",
+          "value": "±0.15 m (visual) / ±0.3 m (GNSS)"
+        },
+        {
+          "section": "TEMPERATURA E ARMAZENAMENTO",
+          "label": "Armazenamento interno",
+          "value": "4GB onboard (suporta microSD até 256GB)"
+        },
+        {
+          "section": "SISTEMA DE POSICIONAMENTO",
+          "label": "GNSS",
+          "value": "GPS + BDS + GLONASS"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 2.4G",
+          "value": "2.400–2.476 GHz*, 2.400–2.4835 GHz"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 5.2G",
+          "value": "5.15-5.25 GHz**"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Frequência operacional - 5.8G",
+          "value": "5.725-5.829 GHz*, 5.725-5.850 GHz"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Nota frequências",
+          "value": "*Aplicável apenas a regiões SRRC. **Aplicável apenas a regiões FCC. Consulte as legislações locais para frequências disponíveis"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 12 km, CE: 6 km",
+          "note": "Nota distância: *Sem interferência ou obstrução"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "Nota distância",
+          "value": "*Sem interferência ou obstrução"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED/RCM); ≤20dBm (CE/SRRC/UKCA)"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC)"
+        },
+        {
+          "section": "COMUNICAÇÃO E TRANSMISSÃO",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm (FCC/SRRC/ISED/RCM); ≤14dBm (CE/UKCA)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Frente",
+          "value": "0.2 ~ 23 m (velocidade <10 m/s)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Trás",
+          "value": "0.2 ~ 30 m (velocidade <10 m/s)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Alcance de detecção - Baixo",
+          "value": "0.2 ~ 20 m"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Frente",
+          "value": "75° (H), 87° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Trás",
+          "value": "35° (H), 45° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "FOV - Baixo",
+          "value": "99° (H), 83° (V)"
+        },
+        {
+          "section": "VISÃO E EVITAÇÃO DE OBSTÁCULOS",
+          "label": "Ambiente operacional",
+          "value": "Superfícies com textura e iluminação >15 lux; material difuso com refletividade >20%"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Sensor de imagem",
+          "value": "1/2\" CMOS, 48 MP"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Lente",
+          "value": "DFOV: 83.4°, Distância focal equivalente: 24 mm, Abertura: f/2.8"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Distância de foco",
+          "value": "0.5 m ~ ∞ (foco fixo)"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "ISO",
+          "value": "Auto/Manual: ISO100 ~ ISO6400"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Velocidade do obturador",
+          "value": "1/10000 ~ 1/60 s"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Modo antifog",
+          "value": "Suportado"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Zoom",
+          "value": "4K: 1-16x digital | 8K: 1-8x digital"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Tamanho de foto",
+          "value": "4000×3000, 8000×6000"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Formato de foto",
+          "value": "JPG"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Resolução de vídeo",
+          "value": "4000×3000@30fps"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Formato de vídeo",
+          "value": "MP4/MOV"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Codificação de vídeo",
+          "value": "H.265/H.264"
+        },
+        {
+          "section": "CÂMERA WIDE-ANGLE (VISÍVEL)",
+          "label": "Sistema de arquivos",
+          "value": "FAT32/exFAT"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Sensor",
+          "value": "Microbolômetro VOX não resfriado"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Lente",
+          "value": "FOV: 61°, Distância focal: 9.1 mm, Abertura: f/1.0"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Distância de foco",
+          "value": "2.2 m ~ ∞"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Sensibilidade (NETD)",
+          "value": "≤50mK@f/1.0, 25°C"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Pitch de pixel",
+          "value": "12 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Faixa espectral",
+          "value": "8-14 µm"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Medição radiométrica",
+          "value": "Ponto central / Ponto / Área retangular"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Faixa de temperatura",
+          "value": "-20°C a 150°C (alto ganho); 0 a 550°C (baixo ganho)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Precisão de temperatura",
+          "value": "±3°C ou ±3% (o maior valor) @ -20°C a 60°C"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Distância de medição precisa",
+          "value": "1 ~ 25 m"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Zoom digital",
+          "value": "1-16x"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Alertas de temperatura",
+          "value": "Suporta limites alto/baixo com coordenadas e valores"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Paletas",
+          "value": "White Hot, Black Hot, Searing, Rainbow, Grey, Ironbow, Cold & Hot"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Tamanho de foto",
+          "value": "640×512"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Formato de foto",
+          "value": "JPG (com dados de temperatura)"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Resolução de vídeo",
+          "value": "640×512@30fps"
+        },
+        {
+          "section": "CÂMERA TÉRMICA",
+          "label": "Formato de vídeo",
+          "value": "MP4/MOV"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Tipo de gimbal",
+          "value": "3 eixos (pitch, roll, yaw)"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance mecânico",
+          "value": "Pitch: -135° a 45°, Roll: -50° a 50°, Yaw: -90° a 90°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Alcance controlável",
+          "value": "Pitch: -90° a 30°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Velocidade máxima de controle",
+          "value": "Pitch: 100°/s"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Precisão de estabilização",
+          "value": "±0.003°"
+        },
+        {
+          "section": "GIMBAL E ESTABILIZAÇÃO",
+          "label": "Número de câmeras",
+          "value": "2 (Visível + Térmica)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Material",
+          "value": "PC + ABS"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Dimensões",
+          "value": "226.3×137.7×31.5 mm (antenas dobradas) / 226.3×215.4×31.5 mm (antenas abertas)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Peso",
+          "value": "607 g"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Temperatura de operação",
+          "value": "-10°C a +40°C"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Temperatura de armazenamento",
+          "value": "Curto prazo: -20°C a +45°C | Médio prazo: 0°C a +30°C | Ideal: +15°C a +25°C"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Armazenamento interno",
+          "value": "32GB (24GB disponíveis)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Sistema operacional",
+          "value": "Android 6.0.1 (suporta apps Android de terceiros)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Conectividade",
+          "value": "Wi-Fi 802.11a/b/g/n/ac (2×2 MIMO), Bluetooth 4.2, GNSS GPS/Galileo/BDS/GLONASS"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Tela",
+          "value": "1440×720, 60Hz, toque de 10 pontos"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Portas",
+          "value": "USB-C (PD/QC até 65W), USB-A (USB 2.0)"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Bateria",
+          "value": "Li-Po 1900 mAh, 7.7 V (14.63 Wh) – autonomia 1.5 h (brilho máximo) / 2.5 h (50%), recarga ~90 min"
+        },
+        {
+          "section": "CONTROLADOR REMOTO (Autel Smart Controller SE V2)",
+          "label": "Proteção",
+          "value": "IP43"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Antenas",
+          "value": "Duplas, 1T2R, design destacável"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Frequência",
+          "value": "900M: 902-928MHz*, 2.4G: 2.400–2.476GHz**, 2.400–2.4835GHz, 5.2G: 5150-5250MHz***, 5.8G: 5.725-5.829GHz**, 5.725-5.850GHz"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Nota frequências",
+          "value": "*FCC/ISED | **SRRC | ***FCC/RCM. Consulte leis locais para uso"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 900M",
+          "value": "≤30dBm (FCC/ISED)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 2.4G",
+          "value": "≤30dBm (FCC/ISED/RCM); ≤20dBm (CE/SRRC)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 5.2G",
+          "value": "≤30dBm (FCC/RCM)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "EIRP - 5.8G",
+          "value": "≤30dBm (FCC/SRRC/ISED/RCM); ≤14dBm (CE)"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Distância máxima de transmissão*",
+          "value": "FCC: 12 km, CE/SRRC: 8 km",
+          "note": "Nota distância transmissão: *Sem interferência ou bloqueio"
+        },
+        {
+          "section": "TRANSMISSÃO DO CONTROLADOR",
+          "label": "Nota distância transmissão",
+          "value": "*Sem interferência ou bloqueio"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tipo",
+          "value": "LiPo 3S inteligente"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Capacidade",
+          "value": "6175 mAh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Energia",
+          "value": "68.7 Wh"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão",
+          "value": "11.13 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Tensão máxima de carga",
+          "value": "12.75 V"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência de carga nominal",
+          "value": "63.75 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Potência máxima de carga",
+          "value": "78 W"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Peso",
+          "value": "309 g"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura de operação",
+          "value": "0°C a +40°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Temperatura de carga",
+          "value": "+5°C a +45°C"
+        },
+        {
+          "section": "BATERIA INTELIGENTE",
+          "label": "Troca a quente",
+          "value": "Não suportado"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Entrada",
+          "value": "100-240V ~ 50/60 Hz, 1.5 A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Portas de saída",
+          "value": "Interface de bateria / USB-A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Interface de carga da bateria",
+          "value": "12.75V⎓5A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Porta USB",
+          "value": "5V⎓3A, 9V⎓2A, 12V⎓1.5A"
+        },
+        {
+          "section": "CARREGADOR",
+          "label": "Potência nominal",
+          "value": "63.75 W (máx.)"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Voo autônomo",
+          "value": "Básico"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Planejamento 3D",
+          "value": "Básico"
+        },
+        {
+          "section": "RECURSOS ESPECIAIS",
+          "label": "Reconhecimento IA",
+          "value": "Sim"
+        },
+        {
+          "section": "SOFTWARE E COMPATIBILIDADE",
+          "label": "App de controle",
+          "value": "Autel Enterprise"
+        }
+      ]
+    },
+    {
+      "sku": "102001513",
+      "source_key": "aerion-store:102001513",
+      "name": "Kit EVO II Pro 6K RTK V3 7,9 com 2 baterias",
+      "source_url": "https://aerion.com.br/loja/produto/kit-evo-ii-pro-6k-rtk-v3-2-baterias/",
+      "variant": "Kit EVO II Pro 6K RTK V3 7,9 com 2 baterias",
+      "rows": [
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Peso com hélices e bateria",
+          "value": "1237 g",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Peso máximo de decolagem",
+          "value": "1999 g; 1270 g para certificação C2 na União Europeia",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Dimensões dobrado",
+          "value": "230 × 130 × 143 mm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Dimensões aberto",
+          "value": "457 × 558 × 143 mm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Rotação máxima",
+          "value": "9000 rpm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Distância diagonal",
+          "value": "397 mm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Velocidade máxima de subida",
+          "value": "Iniciante 3 m/s; padrão 5 m/s; Ludicrous 8 m/s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Velocidade máxima de descida",
+          "value": "Iniciante 3 m/s; padrão 3 m/s; Ludicrous 4 m/s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Velocidade máxima horizontal",
+          "value": "Iniciante 3 m/s; padrão 10 m/s; Ludicrous 20 m/s, sem vento próximo ao nível do mar",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Teto de serviço",
+          "value": "5000 m",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Limite de altitude no aplicativo",
+          "value": "800 m, sujeito à regulamentação local",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Tempo máximo de voo",
+          "value": "38 min",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true,
+          "note": "Condição de autonomia: sem vento"
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Condição de autonomia",
+          "value": "Sem vento",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Distância máxima de voo",
+          "value": "21 km",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Tempo máximo de pairar",
+          "value": "32 min, sem vento",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Resistência máxima ao vento",
+          "value": "12 m/s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Inclinação máxima",
+          "value": "Iniciante 15°; padrão 30°; Ludicrous 33°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Velocidade angular máxima",
+          "value": "120°/s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Temperatura de operação",
+          "value": "−10 a +40 °C com bateria padrão; +10 a +40 °C com bateria aquecida",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Troca de bateria a quente",
+          "value": "Não suportada",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Armazenamento",
+          "value": "8 GB internos; microSD até 256 GB",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "GNSS",
+          "value": "GPS/Galileo/BeiDou/GLONASS",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Precisão de pairar vertical",
+          "value": "±0,1 m visual; ±0,5 m GNSS; ±0,1 m RTK",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Precisão de pairar horizontal",
+          "value": "±0,3 m visual; ±1,5 m GNSS; ±0,1 m RTK",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Distância máxima de transmissão",
+          "value": "FCC: 10 km; CE: 8 km; sem interferência e sem obstrução",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Sensores de obstáculos",
+          "value": "Frente 0,5–18 m; trás 0,5–16 m; laterais, superior e inferior 0,5–10 m",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Velocidade de detecção",
+          "value": "Frente e trás abaixo de 12 m/s; demais direções abaixo de 5 m/s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Condições dos sensores",
+          "value": "Textura e iluminação acima de 15 lux; superfície difusa com refletividade acima de 20% para sensores superior e inferior",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Precisão RTK",
+          "value": "Horizontal 1 cm + 1 ppm; vertical 1,5 cm + 1 ppm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Dimensões do módulo RTK",
+          "value": "55,5 × 72,5 × 57 mm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Peso do módulo RTK",
+          "value": "59,5 g",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Aeronave — manual p. 114–116",
+          "label": "Potência do módulo RTK",
+          "value": "Aproximadamente 3 W",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Sensor de imagem",
+          "value": "CMOS de 1 polegada; 20 MP",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Campo de visão",
+          "value": "82°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Distância focal equivalente",
+          "value": "29 mm",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Abertura",
+          "value": "f/2,8 a f/11",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Distância de foco",
+          "value": "0,5 m ao infinito, com foco automático",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "ISO vídeo",
+          "value": "100–6400; noturno até 44000",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "ISO foto",
+          "value": "100–12800",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Obturador foto",
+          "value": "1/8000 a 8 s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Obturador demais modos",
+          "value": "1/8000 a 1/30 s",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Zoom digital",
+          "value": "1–16×",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Tamanhos de fotografia",
+          "value": "5472×3648; 5472×3076; 3840×2160",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Formato de foto",
+          "value": "JPG/RAW/JPG+RAW",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Modos de fotografia",
+          "value": "Disparo único, contínuo, timelapse, AEB e HyperLight",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Resolução de vídeo",
+          "value": "5472×3076 a 24/25/30 fps; 3840×2160 até 60 fps; 2720×1528 até 60 fps; 1920×1080 até 120 fps",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Formato de vídeo",
+          "value": "MP4/MOV",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Bitrate máximo de vídeo",
+          "value": "120 Mbps",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Câmera grande angular — manual p. 117",
+          "label": "Sistema de arquivos",
+          "value": "FAT32/exFAT",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Gimbal — manual p. 117",
+          "label": "Estabilização",
+          "value": "Três eixos",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Gimbal — manual p. 117",
+          "label": "Inclinação mecânica",
+          "value": "−135° a +45°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Gimbal — manual p. 117",
+          "label": "Rolagem mecânica",
+          "value": "−45° a +45°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Gimbal — manual p. 117",
+          "label": "Guinada mecânica",
+          "value": "−100° a +100°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        },
+        {
+          "section": "Gimbal — manual p. 117",
+          "label": "Inclinação controlável",
+          "value": "−90° a +30°",
+          "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+          "reviewed": true
+        }
+      ],
+      "manufacturer_source": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+      "review_note": "Valores conferidos no Apêndice A do manual oficial V2.1 (2025.01), páginas impressas 114–117. Dados factuais transcritos em português; composição e preço permanecem os da loja Aerion."
+    },
+    {
+      "sku": "EVO-NEST",
+      "source_key": "aerion-store:EVO-NEST",
+      "name": "EVO Nest",
+      "source_url": "https://aerion.com.br/loja/produto/evo-nest/",
+      "variant": "EVO Nest Standard",
+      "rows": [
+        {
+          "section": "DIMENSÕES E PESO",
+          "label": "Dimensões (Fechado)",
+          "value": "93,40 × 64,11 × 77,50 cm"
+        },
+        {
+          "section": "DIMENSÕES E PESO",
+          "label": "Dimensões (Aberto)",
+          "value": "93,40 × 64,11 × 54,79 cm"
+        },
+        {
+          "section": "DIMENSÕES E PESO",
+          "label": "Peso",
+          "value": "59 kg"
+        },
+        {
+          "section": "PROTEÇÃO E AMBIENTE",
+          "label": "Nível de Proteção",
+          "value": "IP55"
+        },
+        {
+          "section": "PROTEÇÃO E AMBIENTE",
+          "label": "Temperatura de operação",
+          "value": "-30°C a 50°C"
+        },
+        {
+          "section": "PROTEÇÃO E AMBIENTE",
+          "label": "Umidade de operação",
+          "value": "95 ± 3% (20°C - 30°C)"
+        },
+        {
+          "section": "PROTEÇÃO E AMBIENTE",
+          "label": "Altitude de Operação",
+          "value": "3100 m"
+        },
+        {
+          "section": "ENERGIA",
+          "label": "Potência Máxima",
+          "value": "1200W ~ 2000W"
+        },
+        {
+          "section": "ENERGIA",
+          "label": "Potência em Stand-by",
+          "value": "10W"
+        },
+        {
+          "section": "ENERGIA",
+          "label": "Tensão de Operação",
+          "value": "AC 110V / 220V"
+        },
+        {
+          "section": "ENERGIA",
+          "label": "Corrente Máxima",
+          "value": "16A"
+        },
+        {
+          "section": "DESEMPENHO",
+          "label": "Duração da recarga",
+          "value": "10% ~ 90% em 25 min"
+        },
+        {
+          "section": "DESEMPENHO",
+          "label": "Ciclo de vida",
+          "value": "≥50.000 aberturas"
+        },
+        {
+          "section": "DESEMPENHO",
+          "label": "Modelo compatível",
+          "value": "EVO Max Series"
+        },
+        {
+          "section": "DESEMPENHO",
+          "label": "Conectividade",
+          "value": "Com fio, 4G, 5G"
+        },
+        {
+          "section": "DESEMPENHO",
+          "label": "Criptografia",
+          "value": "AES-256"
+        },
+        {
+          "section": "SISTEMA",
+          "label": "Software de comando",
+          "value": "Autel Integrated Command System (AICS)"
+        },
+        {
+          "section": "SISTEMA",
+          "label": "Capacidade de rede",
+          "value": "Múltiplos Nests em rede"
+        },
+        {
+          "section": "SISTEMA",
+          "label": "Transmissão de imagem",
+          "value": "Criptografada em tempo real"
+        },
+        {
+          "section": "SISTEMA",
+          "label": "Operação",
+          "value": "Autônoma, Semi-autônoma, Pilotagem remota"
+        }
+      ]
+    }
+  ]
+}

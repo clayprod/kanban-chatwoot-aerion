@@ -36,7 +36,9 @@ test('product registration sends distribution price, composition and explicit pa
 test('failed products are not presented as fully compliant and show both sources', () => {
   const requirement = { id: 'r', label: 'Autonomia mínima de 41 min', quote: 'Autonomia mínima de 41 min', source_id: '1', location: 'Página 5' };
   render(<TechnicalItem item={{ in_scope: true, recommended_product: null, products: [{ product_id: '2', product_name: 'Modelo 40', status: 'failed', sale_price: 100, counts: { ok: 0, total: 1 }, requirements: [{ requirement, status: 'nao_ok', reason: '40 min não atende mínimo 41 min.', evidence: [{ id: 's', quote: 'Autonomia 40 min', source_id: '3', location: 'Página 2' }] }] }] }} />);
-  expect(screen.getByText('Nenhum produto com atendimento comprovado para este item.')).toBeInTheDocument();
+  expect(screen.getByRole('table')).toBeVisible();
+  expect(screen.getByText('Não atende')).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'Ver evidências'}));
   expect(screen.getByText(/40 min não atende mínimo 41 min/)).toBeInTheDocument();
   expect(screen.queryByText(/Atende plenamente/)).not.toBeInTheDocument();
   expect(screen.getAllByRole('link')).toHaveLength(2);

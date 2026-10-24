@@ -20327,7 +20327,7 @@ const getAiChatProviders = ({ technical = false } = {}) => {
       name: 'openrouter',
       url: 'https://openrouter.ai/api/v1/chat/completions',
       key: OPENROUTER_API_KEY,
-      model: OPENROUTER_AI_MODEL,
+      model: technical ? (process.env.TECHNICAL_OPENROUTER_AI_MODEL || 'openai/gpt-4.1-mini') : OPENROUTER_AI_MODEL,
       headers: {
         'HTTP-Referer': 'https://sales.aerion.com.br',
         'X-Title': 'Aerion Sales Command',
@@ -20383,7 +20383,7 @@ const chatCompletionJson = async ({
           model: provider.model,
           messages,
           temperature,
-          max_tokens: technical && provider.name === 'groq' ? Math.min(maxTokens, 4000) : maxTokens,
+          max_tokens: maxTokens,
           ...(technical ? { response_format: responseFormat || { type: 'json_object' } } : {}),
           ...(technical && provider.name === 'openrouter' ? { provider: { require_parameters: true } } : {}),
           ...(technical && provider.name === 'groq' && provider.model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),

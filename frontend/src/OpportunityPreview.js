@@ -6,7 +6,6 @@ const money = value => value == null ? 'Não informado' : Number(value).toLocale
 export default function OpportunityPreview({ opportunity, items = [], otherItems = [], loading, error, sectionClass }) {
   const raw = opportunity.__preview;
   const [focus, setFocus] = useState(opportunity.__focus);
-  const [opened, setOpened] = useState({});
   const itemRefs = useRef({});
   const select = (number, productId) => setFocus({ number: String(number), productId: productId == null ? null : String(productId) });
   useEffect(() => { setFocus(opportunity.__focus); }, [opportunity]);
@@ -25,10 +24,7 @@ export default function OpportunityPreview({ opportunity, items = [], otherItems
       <p className="mt-3 text-xs text-muted">{[raw.modo_disputa?.nome, raw.amparo_legal?.nome, raw.esfera?.nome].filter(Boolean).join(' · ')}</p>
       {raw.url && <a href={raw.url} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs text-primary underline">Edital no PNCP ↗</a>}
     </section>
-    <section className={sectionClass}>
-      <h4 className="text-sm font-semibold">Análise técnica e produtos</h4>
-      <TechnicalResult overview expanded allowedItemNumbers={items.map(i=>i.numero_item)} item={raw} profile={opportunity.__profile} onOpenMatch={select} />
-    </section>
+    <TechnicalResult overview expanded allowedItemNumbers={items.map(i=>i.numero_item)} item={raw} profile={opportunity.__profile} onOpenMatch={select} />
     <section className={sectionClass}>
       <h4 className="mb-2 text-sm font-semibold">Itens de interesse · {items.length}</h4>
       <p className="mb-3 border-b border-line pb-3 text-xs text-muted">Selecionados pelos critérios desta busca. São os itens preparados para importação.</p>
@@ -43,11 +39,11 @@ export default function OpportunityPreview({ opportunity, items = [], otherItems
             <p>Total do item: <span className="font-medium text-ink">{money(pncpItemEstimatedTotal(item))}</span></p>
           </div>
         </div>
-        <details open={String(focus?.number) === String(item.numero_item) || undefined} onToggle={event => { const isOpen = event.currentTarget.open; setOpened(current => current[item.numero_item] === isOpen ? current : { ...current, [item.numero_item]: isOpen }); }}>
+        <details open>
           <summary className="cursor-pointer border-t border-line px-3 py-2 text-xs font-medium text-primary">Ver exigências e comparação</summary>
           <div className="space-y-3 border-t border-line p-3">
             {item.scope_pending && <p className="text-xs text-status-warning">O texto corresponde à busca; a classificação material/serviço ainda precisa ser confirmada.</p>}
-            {(opened[item.numero_item] || String(focus?.number) === String(item.numero_item)) && <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />}
+            <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />
           </div>
         </details>
       </div>)}</div>

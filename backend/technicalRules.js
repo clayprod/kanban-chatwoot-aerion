@@ -1,6 +1,8 @@
 'use strict';
 const crypto = require('node:crypto');
-const VERSION = 3;
+const VERSION = 4;
+const { metricKey, sameMetric, conditionsKey, conditionsCompatible, categoricalValue } = require('./technicalMetrics');
+const {fullAwardable}=require('./technicalAwarding');
 const text = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(v)).digest('hex');
 const commercialUnit = v => ({ un: 'unit', unidade: 'unit', unidades: 'unit', unit: 'unit', units: 'unit', und: 'unit', peca: 'unit', pecas: 'unit' }[text(v)] || text(v));
@@ -28,7 +30,7 @@ const unitInfo = value => {
 function evidenceValid(fact, sources) {
   if (!fact || !fact.source_id || !fact.quote || !fact.location) return false;
   const source = sources.find(s => String(s.id) === String(fact.source_id));
-  return !!source && text(source.text).includes(text(fact.quote)) && text(fact.quote).length >= 5;
+  return !!source && text(source.text).includes(text(fact.quote)) && text(fact.quote).length >= 3;
 }
 function quotedNumber(fact, value) {
   if (number(value) === null) return false;
@@ -44,14 +46,18 @@ function numericFactValid(fact, requirement = false) {
   if (!fact.conditions && /\b(?:sem (?:vento|carga)|com carga|fcc|ce)\b/.test(text(fact.quote))) return false;
   if (!requirement) return true;
   const q = text(fact.quote);
-  if (fact.operator === 'min') return /minim|pelo menos|no minimo|nao inferior|≥|>=/.test(q);
+  if (fact.operator === 'min') return /minim|pelo menos|no minimo|nao inferior|ou superior|≥|>=/.test(q);
   if (fact.operator === 'max') return /maxim|no maximo|nao superior|ate\b|≤|<=/.test(q);
   if (fact.operator === 'range') return quotedNumber(fact, fact.upper) && fact.upper >= fact.value && /entre|faixa|intervalo|\ba\b/.test(q);
   return fact.operator === 'eq' && !/minim|maxim|pelo menos|ate\b|superior|inferior/.test(q);
 }
 function compareNumeric(req, spec) {
   if (!numericFactValid(req, true) || !numericFactValid(spec)) return { status: 'verificar', reason: 'Número ou operador sem comprovação no trecho citado.' };
-  if (text(req.key) !== text(spec.key) || text(req.conditions) !== text(spec.conditions)) return { status: 'verificar', reason: 'Grandeza ou condições de medição diferentes.' };
+  if (!sameMetric(req,spec) || !conditionsCompatible(req,spec)) return { status: 'verificar', reason: 'Grandeza, componente ou condições de medição diferentes.' };
+  // A performance capability described as "até" is not an upper limit on the
+  // offered product. Do not approve a shorter flight simply because 40 <= 45.
+  if (req.operator==='max' && /\bate\b/.test(text(req.quote)) && /^(flight_time|flight_speed|flight_ceiling|takeoff_altitude|transmission_distance|range)$/.test(metricKey(req.key)) && !/nao superior|no maximo|limite|limitad|nao exced/.test(text(req.quote)))
+    return {status:'verificar',reason:'O texto descreve capacidade com “até”; é necessário confirmar o desempenho exigido, sem aprovar um valor inferior.'};
   const zoom = value => /optical|optico/.test(text(value)) ? 'optical' : /hibrid|hybrid/.test(text(value)) ? 'hybrid' : /digital/.test(text(value)) ? 'digital' : null;
   if (zoom(req.quote) && zoom(req.quote) !== zoom(spec.quote)) return { status: 'verificar', reason: 'Tipo de zoom diferente ou não comprovado.' };
   if (!/total|combinad|somad/.test(text(req.quote)) && /total|combinad|somad/.test(text(spec.quote))) return { status: 'verificar', reason: 'Valor total ou combinado não comprova desempenho individual.' };
@@ -75,7 +81,7 @@ function compareNumeric(req, spec) {
   return { status: ok ? 'ok' : 'nao_ok', reason: `${spec.value} ${spec.unit} ${ok ? 'atende' : 'não atende'} ${req.operator === 'min' ? 'mínimo' : req.operator === 'max' ? 'máximo' : req.operator === 'range' ? 'intervalo' : 'valor exigido'} ${req.value}${req.operator === 'range' ? `–${req.upper}` : ''} ${req.unit}.` };
 }
 function compareCompound(req, spec) {
-  if (text(req.key) !== text(spec.key) || text(req.conditions) !== text(spec.conditions)) return null;
+  if (!sameMetric(req,spec) || conditionsKey(req.conditions) !== conditionsKey(spec.conditions)) return null;
   const a = String(req.value || '').toUpperCase(), b = String(spec.value || '').toUpperCase();
   if (!text(req.quote).includes(text(a)) || !text(spec.quote).includes(text(b))) return null;
   const ipA = /^IP([0-6])([0-8])$/.exec(a), ipB = /^IP([0-6])([0-8])$/.exec(b);
@@ -107,33 +113,38 @@ function compareRequirement(req, specs, sources, mapping = {}) {
     return (source?.notes || []).some(note => /ocr.*(?:duvida|falha)|falha.*ocr/.test(text(note)) && (!page || !/pagina\s+(\d+)/.test(text(note)) || /pagina\s+(\d+)/.exec(text(note))?.[1] === page));
   };
   if (uncertainOcr(req)) return { ...base, reason: 'A leitura OCR desta exigência contém números incertos. Confira o documento original.' };
-  const selected = specs.filter(s => (mapping.spec_ids || []).includes(s.id) && evidenceValid(s, sources));
+  // Model IDs and same_metric are suggestions, not evidence of equivalence.
+  const selected = specs.filter(s => (mapping.spec_ids || []).includes(s.id) && sameMetric(req,s) && evidenceValid(s, sources));
   if (!selected.length) return base;
   base.evidence = selected;
   if (selected.some(uncertainOcr)) return { ...base, reason: 'A leitura OCR da ficha contém números incertos. Confira o documento original.' };
+  // Explicit lists are capabilities, not contradictory alternatives: a source
+  // may list JPEG and another JPEG/RAW. Every requested token must be evidenced.
+  if (['photo_formats','video_formats','gnss_systems'].includes(metricKey(req.key)) && req.value!=null && text(req.quote).includes(text(req.value))) {
+    const tokens=value=>text(value).replace(/jpeg/g,'jpg').replace(/beidou/g,'bds').match(/\b(?:jpg|raw|dng|png|tiff|mp4|mov|gps|glonass|galileo|bds|gnss)\b/g) || [];
+    const required=tokens(req.value);
+    const offered=new Set(selected.filter(s=>conditionsCompatible(req,s) && text(s.quote).includes(text(s.value))).flatMap(s=>tokens(s.value)));
+    if(required.length && required.every(t=>t==='gnss' ? ['gps','glonass','galileo','bds'].some(v=>offered.has(v)) : offered.has(t)))return {...base,status:'ok',reason:'Todos os formatos ou sistemas exigidos constam explicitamente na ficha.'};
+  }
   if (selected.length > 1) {
     const fingerprints = selected.map(s => s.kind === 'numeric' ? `${unitInfo(s.unit)[0]}:${s.value * (Array.isArray(unitInfo(s.unit)[1]) ? unitInfo(s.unit)[1][0] / unitInfo(s.unit)[1][1] : unitInfo(s.unit)[1])}:${text(s.conditions)}` : `${text(s.value)}:${text(s.conditions)}`);
     if (new Set(fingerprints).size > 1) return { ...base, reason: 'Fontes apresentam valores ou condições diferentes; confirme a especificação correta.' };
   }
   if (req.kind === 'numeric') {
-    const results = selected.map(s => compareNumeric(req, mapping.same_metric === true ? { ...s, key: req.key } : s));
+    const results = selected.map(s => compareNumeric(req, s));
     const statuses = new Set(results.map(r => r.status));
     if (statuses.size !== 1) return { ...base, reason: 'Fontes ou condições conflitantes; confira a variante e a composição.' };
     return { ...base, ...results[0] };
   }
   if (req.kind === 'compound') {
-    const results = selected.map(s => compareCompound(req, mapping.same_metric === true ? { ...s, key: req.key } : s));
+    const results = selected.map(s => compareCompound(req, s));
     if (results.every(Boolean) && new Set(results.map(r => r.status)).size === 1) return { ...base, ...results[0] };
     return { ...base, reason: 'Critério composto sem equivalência comprovada ou fontes conflitantes.' };
   }
   // A qualitative equivalence is not a licence to relax an exact requirement.
   // Only identical, explicitly extracted categorical values are auto-confirmed.
-  if (req.kind === 'categorical' && req.value != null && selected.every(s => s.value != null && text(s.key) === text(req.key) && text(s.conditions) === text(req.conditions))) {
-    const categorical = fact => {
-      const v = text(fact.value);
-      if (fact.key === 'motor_type' && /^(brushless|motores? eletricos? sem escova|motores? sem escova|sem escova)$/.test(v)) return 'brushless';
-      return v;
-    };
+  if (req.kind === 'categorical' && req.value != null && selected.every(s => s.value != null && sameMetric(req,s) && conditionsKey(s.conditions) === conditionsKey(req.conditions))) {
+    const categorical = categoricalValue;
     const values = new Set(selected.map(categorical));
     if (values.size === 1 && values.has(categorical(req)) && selected.every(s => text(s.quote).includes(text(s.value))) && text(req.quote).includes(text(req.value))) {
       return { ...base, status: 'ok', reason: 'Característica explicitamente comprovada nas fontes.' };
@@ -160,7 +171,7 @@ function assessProduct(product, requirements, sources, mappings = [], complete =
   const commercial = full && comparable ? price < reference ? 5 : price === reference ? 3 : 1 : 0;
   return { product_id: product.id, product_name: product.name, sale_price: price, product_version: product.version, specs_complete: product.specs_complete === true,
     price_rankable: sameUnit && product.package_confirmed === true && price > 0,
-    status, counts, requirements: rows, technical_bonus: technical, commercial_bonus: commercial,
+    status, counts, technical_percent: counts.total ? Math.floor(100*counts.ok/counts.total) : null, assessment_complete: complete && product.specs_complete===true, requirements: rows, technical_bonus: technical, commercial_bonus: commercial,
     price_comparison: comparable ? { reference, offered: price, difference: price - reference, relation: price < reference ? 'below' : price === reference ? 'equal' : 'above' } : null };
 }
 function summarize(items, baseScore = 0) {
@@ -170,21 +181,22 @@ function summarize(items, baseScore = 0) {
   const result = items.map(item => {
     const products = [...(item.products || [])].sort(rankMatches);
     const recommended = products.find(p => p.status === 'full') || null;
-    const potential = recommended || products.find(p => p.status === 'uncertain') || null;
+    const potential = recommended || products[0] || null;
     if (item.in_scope) {
       const weight = weighted ? Number(item.reference_price) * Number(item.quantity) : 1;
       weightSum += weight; technical += weight * (potential?.technical_bonus || 0); commercial += weight * (recommended?.commercial_bonus || 0);
     }
-    return { ...item, products, recommended_product: recommended, potential_product: potential };
+    return { ...item, products, awardable_full:fullAwardable(items,item), technical_percent: potential?.evidence_current===false ? null : potential?.technical_percent ?? (potential?.counts?.total ? Math.floor(100*potential.counts.ok/potential.counts.total) : null), recommended_product: recommended, potential_product: potential };
   });
   technical = weightSum ? Math.round(technical / weightSum * 100) / 100 : 0;
   commercial = weightSum ? Math.round(commercial / weightSum * 100) / 100 : 0;
-  return { version: VERSION, items: result, relevant_items: relevant.length, full_items: result.filter(i => i.in_scope && i.recommended_product).length,
+  return { version: VERSION, items: result, relevant_items: relevant.length, full_items: result.filter(i => i.in_scope && i.recommended_product && i.awardable_full).length,
+    technical_percent: result.filter(i=>i.in_scope && i.technical_percent!=null).length ? Math.max(...result.filter(i=>i.in_scope).map(i=>i.technical_percent ?? 0)) : null,
     base_score: Number(baseScore) || 0, technical_bonus: technical, commercial_bonus: commercial,
     score: Math.min(100, Math.round((Number(baseScore) || 0) + technical + commercial)), weighting: weighted ? 'reference_value' : 'equal' };
 }
 function rankMatches(a, b) {
-  const ratio = p => p.counts?.total > 0 ? p.counts.ok / p.counts.total : 0;
+  const ratio = p => p.evidence_current!==false && p.counts?.total > 0 ? p.counts.ok / p.counts.total : 0;
   const price = p => p.price_rankable !== false && Number(p.sale_price) > 0 ? Number(p.sale_price) : Infinity;
   return Number(b.status === 'full') - Number(a.status === 'full') || ratio(b) - ratio(a) || price(a) - price(b) || String(a.product_id).localeCompare(String(b.product_id), 'en', { numeric: true });
 }

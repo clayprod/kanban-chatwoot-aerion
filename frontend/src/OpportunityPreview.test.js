@@ -13,13 +13,13 @@ test('preview has no persistent identity or editing controls and opens the match
   const { container } = render(<OpportunityPreview opportunity={preview} items={items} />);
   expect(screen.getByText(/só entra no pipeline após confirmar/)).toBeVisible();
   expect(container.querySelectorAll('input,textarea,select')).toHaveLength(0);
-  expect(screen.queryByText('Comparação item 1 produto todos')).not.toBeInTheDocument();
+  expect(screen.getByText('Comparação item 1 produto todos')).toBeVisible();
   expect(screen.getByText('Modelo visível do item 1 · 90%')).toBeVisible();
   expect(screen.getByText('Modelo visível do item 1 · 90%').closest('details')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Produto recomendado · item 2' }));
   expect(screen.getByText('Comparação item 2 produto 9')).toBeVisible();
   expect(screen.getByText('Comparação item 2 produto 9').closest('details')).toHaveAttribute('open');
-  expect(screen.queryByText('Comparação item 1 produto todos')).not.toBeInTheDocument();
+  expect(screen.getByText('Comparação item 1 produto todos')).toBeVisible();
 });
 test('card focus opens the selected comparison immediately, including when item data arrives later', () => {
   const preview = createPncpOpportunityPreview(raw, {}, { number: '2', productId: '9' });
@@ -47,5 +47,5 @@ test('quantity, unit reference and item total stay visible without opening techn
  const quantity=screen.getByText(/Quantidade:/),price=screen.getByText(/Referência unitária:/),total=screen.getByText(/Total do item:/);
  expect(quantity).toBeVisible();expect(price).toBeVisible();expect(total).toBeVisible();
  expect(quantity.closest('details')).toBeNull();expect(price.closest('details')).toBeNull();expect(total.closest('details')).toBeNull();
- expect(total).toHaveTextContent(/222\.000,00/);expect(container.querySelector('details')).not.toHaveAttribute('open');
+ expect(total).toHaveTextContent(/222\.000,00/);expect(container.querySelector('details')).toHaveAttribute('open');
 });

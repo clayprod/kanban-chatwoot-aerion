@@ -1,7 +1,7 @@
 'use strict';
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const string = { type: 'string' };
-const fact = object({ item_number: string, label: string, key: string,
+const fact = object({ item_number: string, label: string, key: string, section:string, component:string,
   category: { type: 'string', enum: ['equipment', 'kit', 'supply', 'administrative'] },
   replaces_quote: string, replacement_statement: string,
   kind: { type: 'string', enum: ['numeric', 'categorical', 'compound'] },

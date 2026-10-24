@@ -1,0 +1,387 @@
+{
+  "102001513": {
+    "rows": [
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Peso com hélices e bateria",
+        "value": "1237 g",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Peso máximo de decolagem",
+        "value": "1999 g; 1270 g para certificação C2 na União Europeia",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Dimensões dobrado",
+        "value": "230 × 130 × 143 mm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Dimensões aberto",
+        "value": "457 × 558 × 143 mm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Rotação máxima",
+        "value": "9000 rpm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Distância diagonal",
+        "value": "397 mm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Velocidade máxima de subida",
+        "value": "Iniciante 3 m/s; padrão 5 m/s; Ludicrous 8 m/s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Velocidade máxima de descida",
+        "value": "Iniciante 3 m/s; padrão 3 m/s; Ludicrous 4 m/s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Velocidade máxima horizontal",
+        "value": "Iniciante 3 m/s; padrão 10 m/s; Ludicrous 20 m/s, sem vento próximo ao nível do mar",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Teto de serviço",
+        "value": "5000 m",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Limite de altitude no aplicativo",
+        "value": "800 m, sujeito à regulamentação local",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Tempo máximo de voo",
+        "value": "38 min",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true,
+        "note": "Condição de autonomia: sem vento"
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Condição de autonomia",
+        "value": "Sem vento",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Distância máxima de voo",
+        "value": "21 km",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Tempo máximo de pairar",
+        "value": "32 min, sem vento",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Resistência máxima ao vento",
+        "value": "12 m/s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Inclinação máxima",
+        "value": "Iniciante 15°; padrão 30°; Ludicrous 33°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Velocidade angular máxima",
+        "value": "120°/s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Temperatura de operação",
+        "value": "−10 a +40 °C com bateria padrão; +10 a +40 °C com bateria aquecida",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Troca de bateria a quente",
+        "value": "Não suportada",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Armazenamento",
+        "value": "8 GB internos; microSD até 256 GB",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "GNSS",
+        "value": "GPS/Galileo/BeiDou/GLONASS",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Precisão de pairar vertical",
+        "value": "±0,1 m visual; ±0,5 m GNSS; ±0,1 m RTK",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Precisão de pairar horizontal",
+        "value": "±0,3 m visual; ±1,5 m GNSS; ±0,1 m RTK",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Distância máxima de transmissão",
+        "value": "FCC: 10 km; CE: 8 km; sem interferência e sem obstrução",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Sensores de obstáculos",
+        "value": "Frente 0,5–18 m; trás 0,5–16 m; laterais, superior e inferior 0,5–10 m",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Velocidade de detecção",
+        "value": "Frente e trás abaixo de 12 m/s; demais direções abaixo de 5 m/s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Condições dos sensores",
+        "value": "Textura e iluminação acima de 15 lux; superfície difusa com refletividade acima de 20% para sensores superior e inferior",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Precisão RTK",
+        "value": "Horizontal 1 cm + 1 ppm; vertical 1,5 cm + 1 ppm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Dimensões do módulo RTK",
+        "value": "55,5 × 72,5 × 57 mm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Peso do módulo RTK",
+        "value": "59,5 g",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Aeronave — manual p. 114–116",
+        "label": "Potência do módulo RTK",
+        "value": "Aproximadamente 3 W",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Sensor de imagem",
+        "value": "CMOS de 1 polegada; 20 MP",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Campo de visão",
+        "value": "82°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Distância focal equivalente",
+        "value": "29 mm",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Abertura",
+        "value": "f/2,8 a f/11",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Distância de foco",
+        "value": "0,5 m ao infinito, com foco automático",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "ISO vídeo",
+        "value": "100–6400; noturno até 44000",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "ISO foto",
+        "value": "100–12800",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Obturador foto",
+        "value": "1/8000 a 8 s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Obturador demais modos",
+        "value": "1/8000 a 1/30 s",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Zoom digital",
+        "value": "1–16×",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Tamanhos de fotografia",
+        "value": "5472×3648; 5472×3076; 3840×2160",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Formato de foto",
+        "value": "JPG/RAW/JPG+RAW",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Modos de fotografia",
+        "value": "Disparo único, contínuo, timelapse, AEB e HyperLight",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Resolução de vídeo",
+        "value": "5472×3076 a 24/25/30 fps; 3840×2160 até 60 fps; 2720×1528 até 60 fps; 1920×1080 até 120 fps",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Formato de vídeo",
+        "value": "MP4/MOV",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Bitrate máximo de vídeo",
+        "value": "120 Mbps",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Câmera grande angular — manual p. 117",
+        "label": "Sistema de arquivos",
+        "value": "FAT32/exFAT",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Gimbal — manual p. 117",
+        "label": "Estabilização",
+        "value": "Três eixos",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Gimbal — manual p. 117",
+        "label": "Inclinação mecânica",
+        "value": "−135° a +45°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Gimbal — manual p. 117",
+        "label": "Rolagem mecânica",
+        "value": "−45° a +45°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Gimbal — manual p. 117",
+        "label": "Guinada mecânica",
+        "value": "−100° a +100°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      },
+      {
+        "section": "Gimbal — manual p. 117",
+        "label": "Inclinação controlável",
+        "value": "−90° a +30°",
+        "source_url": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+        "reviewed": true
+      }
+    ],
+    "manufacturer_source": "https://www.autelrobotics.com/wp-content/uploads/2025/01/EN_EVO-II-RTK-Series-V3-Multi-rotor-Drone-User-Manual_V2.1.pdf",
+    "review_note": "Valores conferidos no Apêndice A do manual oficial V2.1 (2025.01), páginas impressas 114–117. Dados factuais transcritos em português; composição e preço permanecem os da loja Aerion."
+  }
+}

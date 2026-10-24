@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
+import ProductSpecifications from './ProductSpecifications';
 const endpoint = '/api/licitacoes';
 const field = 'w-full rounded-lg border border-line bg-bg2 px-3 py-2 text-sm text-ink placeholder:text-muted focus-visible:ring-2 focus-visible:ring-primary';
 const button = 'rounded-lg border border-line px-3 py-2 text-sm text-ink disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-primary';
@@ -78,6 +79,7 @@ export default function ProductCatalog() {
           <button className={primary} disabled={busy} type="submit">Salvar produto</button>
         </form>
         {selected && <section hidden={tab !== 'sources'} className="space-y-3 pt-4" aria-label="Fichas técnicas do produto">
+          <ProductSpecifications specs={current?.specs || []}/>
           <h3 className="font-semibold">Fichas técnicas e fontes</h3><p className="text-xs text-muted">Use documentos da variante e composição cadastradas. Acessórios opcionais não contam como incluídos.</p>
           <label className="block text-sm">Enviar PDF ou Word (até 20 MB)<input type="file" accept=".pdf,.doc,.docx" className={`${field} mt-1`} onChange={upload} disabled={busy} /></label>
           <div className="flex flex-wrap items-end gap-2"><label className="min-w-0 flex-1 text-sm">Link público da ficha ou página<input className={`${field} mt-1`} type="url" value={source.url} onChange={e => setSource(s => ({ ...s, url: e.target.value }))} /></label><button className={button} disabled={busy || !source.url} onClick={() => attach({ url: source.url })}>Salvar link e ler</button></div>
