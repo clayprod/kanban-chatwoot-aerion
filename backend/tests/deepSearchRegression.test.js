@@ -93,7 +93,10 @@ test('technical providers request strict facts from an available model without c
   const request = { system: 'Extract JSON facts', user: 'data', maxTokens: 7000, maxProviderAttempts: 1, responseFormat: FACTS_FORMAT };
   assert.equal((await context.ask({ ...request, technical: true, providerOffset: 1 })).ok, true);
   assert.equal(requests[0].body.model, 'openai/gpt-oss-120b');
-  assert.equal(requests[0].body.max_tokens, 4000);
+  // O teto de 4000 tokens para chamada tecnica no Groq foi removido de proposito em
+  // 1b7e115 (`Math.min(maxTokens, 4000)` virou `maxTokens`); a assercao tinha ficado
+  // para tras e deixou a main vermelha, bloqueando deploy de todo mundo.
+  assert.equal(requests[0].body.max_tokens, 7000);
   assert.deepEqual(requests[0].body.response_format, FACTS_FORMAT);
   await context.ask({ ...request, technical: true, providerOffset: 2 });
   assert.equal(requests[1].body.provider.require_parameters, true);
