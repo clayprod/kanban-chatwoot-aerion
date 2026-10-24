@@ -22938,20 +22938,34 @@ app.get('/api/rfb/search', async (req, res) => {
     // Tempo de abertura em anos — comparação lexicográfica em YYYYMMDD (texto).
     // Evita regex + TO_DATE por linha (caros em scans grandes). Datas inválidas
     // ('00000000', vazio) ficam de fora via bound inferior '18000101'.
-    if (abertura_min_anos !== '') {
-      const years = parseInt(abertura_min_anos, 10);
-      // idade >= N anos → início <= hoje - N anos
+    // Idade da empresa. A data vem como texto YYYYMMDD, entao a comparacao e de
+    // string mesmo — o que ja e amigavel a indice.
+    //
+    // O limite era calculado com `to_char(NOW() - INTERVAL 'N years','YYYYMMDD')`
+    // dentro do SQL. Expressao assim nao e constante na hora de planejar: o Postgres
+    // nao consegue olhar o histograma da coluna e cai no chute padrao de
+    // seletividade para desigualdade. O chute faz a faixa parecer MUITO mais
+    // seletiva do que e (3-25 anos pega a maioria das empresas do Brasil), o planner
+    // abandona o caminho pelo indice de CNAE e a busca estoura o statement timeout.
+    // Medido em 23/10: "CNAE + idade 3-25" deu 504 em 140s; o mesmo CNAE com porte e
+    // capital respondeu em ~20s. Com a data calculada aqui e escrita como literal, o
+    // planner enxerga o valor real e mantem o plano bom.
+    const dataMenosAnos = (anos) => {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - anos);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${d.getFullYear()}${mm}${dd}`;
+    };
+    const idadeMin = abertura_min_anos !== '' ? parseInt(abertura_min_anos, 10) : null;
+    const idadeMax = abertura_max_anos !== '' ? parseInt(abertura_max_anos, 10) : null;
+    if (Number.isFinite(idadeMin) || Number.isFinite(idadeMax)) {
+      // idade >= N anos  → inicio <= hoje - N anos
+      // idade <= N anos  → inicio >= hoje - N anos
+      const limiteSuperior = Number.isFinite(idadeMin) ? dataMenosAnos(idadeMin) : dataMenosAnos(0);
+      const limiteInferior = Number.isFinite(idadeMax) ? dataMenosAnos(idadeMax) : '18000101';
       where.push(
-        `e.data_de_inicio_da_atividade >= '18000101'
-         AND e.data_de_inicio_da_atividade <= to_char(NOW() - INTERVAL '${years} years', 'YYYYMMDD')`
-      );
-    }
-    if (abertura_max_anos !== '') {
-      const years = parseInt(abertura_max_anos, 10);
-      // idade <= N anos → início >= hoje - N anos
-      where.push(
-        `e.data_de_inicio_da_atividade >= to_char(NOW() - INTERVAL '${years} years', 'YYYYMMDD')
-         AND e.data_de_inicio_da_atividade <= to_char(NOW(), 'YYYYMMDD')`
+        `e.data_de_inicio_da_atividade BETWEEN '${limiteInferior}' AND '${limiteSuperior}'`
       );
     }
 
@@ -23021,7 +23035,31 @@ app.get('/api/rfb/search', async (req, res) => {
     // Mesmo quando a ordenação comercial é aplicada no cliente, a paginação
     // precisa de uma ordem determinística para não repetir nem pular empresas
     // entre os lotes sucessivos que compõem a busca completa.
-    const paginationOrderClause = sqlOrderClause || 'e.cnpj_basico, e.cnpj_ordem';
+    //
+    // Exceção medida em 24/10, com o perfil do Radar "1 CNAE + porte Demais +
+    // capital 500k + abertura 3-25 anos", que dava timeout na tela:
+    //
+    //   ORDER BY e.cnpj_basico ...... 131s  (usa idx_rfb_est_basico, CNAE vira filtro)
+    //   sem ORDER BY .................. 2s  (usa idx_rfb_est_cnae e para no 25º)
+    //   ORDER BY cnae, cnpj_basico .. >150s (timeout)
+    //
+    // A causa não é o índice: é que QUALQUER ordenação total obriga a avaliar os
+    // ~95 mil estabelecimentos do CNAE — cada um com um lookup em rfb_empresas para
+    // testar porte e capital — antes de devolver a primeira linha. Sem ORDER BY, o
+    // scan pelo índice de CNAE para no 25º que passa.
+    //
+    // Nesse caso a ordem comercial já é por página (order_scope: 'page', aplicada em
+    // JS sobre o lote), então o ORDER BY no SQL só servia para a paginação não
+    // repetir empresa. Trocamos essa garantia pela ordem do índice de CNAE, que é
+    // estável enquanto o plano e os dados não mudam — e os dados da Receita só mudam
+    // na importação mensal. A alternativa era manter a garantia e a busca não
+    // funcionar.
+    const filtroEmpresaEscalar = porte.trim() !== '' || natureza.trim() !== ''
+      || capital_min !== '' || capital_max !== '';
+    const ordenacaoTotalInviavel = !useSqlOrder && cnae.trim() !== '' && filtroEmpresaEscalar;
+    const paginationOrderClause = ordenacaoTotalInviavel
+      ? null
+      : (sqlOrderClause || 'e.cnpj_basico, e.cnpj_ordem');
 
     let allCtes  = [...nomeCtes, ...cnaeCtes, ...endCtes, ...socioCtes];
     let allJoins = [...nomeJoins, ...cnaeJoins, ...endJoins, ...socioJoins];
@@ -23203,7 +23241,7 @@ app.get('/api/rfb/search', async (req, res) => {
 
     const dataQuery = `
         ${selectQuery}
-        ORDER BY ${paginationOrderClause}
+        ${paginationOrderClause ? `ORDER BY ${paginationOrderClause}` : ''}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
       `;
     const dataQueryFull  = `${ctePrefix} ${dataQuery}`;
@@ -23413,6 +23451,13 @@ app.get('/api/rfb/search', async (req, res) => {
       // UI pode avisar: CNAE secundário exige UF/município em buscas nacionais.
       payload.warnings = [
         'cnae_secundario_omitido_sem_uf: sem filtro de UF/município a busca usa só CNAE principal (secundário nacional estoura o tempo).',
+      ];
+    }
+    if (ordenacaoTotalInviavel) {
+      payload.warnings = [
+        ...(payload.warnings || []),
+        'ordem_por_indice: com CNAE junto de porte/capital a ordenação é por página; '
+        + 'a ordem entre páginas segue o índice de CNAE para a busca não estourar o tempo.',
       ];
     }
     if (cnpjFilterMovedToNome) {
