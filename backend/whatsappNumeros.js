@@ -1,3 +1,4 @@
+const { tokenDaInstancia } = require('./evolutionInstancias');
 // Verificação de existência de número no WhatsApp, antes de enfileirar campanha.
 //
 // Por que isto existe: mandar mensagem para número que não tem WhatsApp é um dos
@@ -60,8 +61,11 @@ const indexarResposta = (linhas, enviados, nomes = new Map()) => {
 // verificar (sem config ou erro) — quem chama decide o que fazer.
 const verificarNumerosWhatsapp = async (telefones, {
   baseUrl = process.env.EVOLUTION_API_URL,
-  instancia = process.env.EVOLUTION_INSTANCE,
-  apiKey = process.env.EVOLUTION_API_KEY,
+  // A verificacao sai por uma instancia da AERION, nao pela pessoal do Clayton.
+  // EVOLUTION_INSTANCE aponta para claytoncosta e e usada so pelo alerta interno de
+  // licitacao; usar o numero pessoal para consultar lead e misturar o que nao deve.
+  instancia = process.env.EVOLUTION_VERIFY_INSTANCE || 'Comercial - Aerion Technologies',
+  apiKey = null,
   fetchImpl = fetch,
   timeoutMs = 20000,
   agora = Date.now(),
@@ -71,7 +75,8 @@ const verificarNumerosWhatsapp = async (telefones, {
   if (!numeros.length) return { existentes: new Set(), perfis, indisponivel: false };
 
   const base = String(baseUrl || '').replace(/\/+$/, '');
-  if (!base || !instancia || !apiKey) {
+  const chave = apiKey || tokenDaInstancia(instancia) || process.env.EVOLUTION_API_KEY;
+  if (!base || !instancia || !chave) {
     return { existentes: new Set(numeros), perfis, indisponivel: true };
   }
 

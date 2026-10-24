@@ -100,19 +100,43 @@ const escolherInstancia = (mapa, { inboxId = null, carga = new Map(), permitidas
   return { ...ordenado[0], motivo: 'número menos carregado hoje' };
 };
 
+// O token de cada instância, por env própria.
+//
+// A chave GLOBAL do Evolution abre todas as instâncias do servidor — inclusive a
+// pessoal do Clayton e a do c2finance, que é outro projeto e não pertence à Aerion.
+// Dar essa chave ao kanban seria deixá-lo falar por números que não são da operação
+// comercial. Com um token por instância, o alcance é o que está configurado aqui:
+// sem o token, não envia, e não tem como alcançar o que não foi dado.
+const SLUG_DA_INSTANCIA = (nome) => String(nome || '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+const tokenDaInstancia = (instancia, env = process.env) => {
+  const slug = SLUG_DA_INSTANCIA(instancia);
+  // "Comercial - Aerion Technologies" → EVOLUTION_TOKEN_COMERCIAL_AERION_TECHNOLOGIES,
+  // e também um apelido curto pelo primeiro termo: EVOLUTION_TOKEN_COMERCIAL.
+  const curto = slug.split('_')[0];
+  return env[`EVOLUTION_TOKEN_${slug}`] || env[`EVOLUTION_TOKEN_${curto}`] || null;
+};
+
 // Envia pela instância escolhida. Sem default implícito: quem chama diz a instância,
 // e ela tem que estar na lista — é isso que impede repetir o erro de hoje.
 const criarEnvioEvolution = ({
   baseUrl = process.env.EVOLUTION_API_URL,
-  apiKey = process.env.EVOLUTION_API_KEY,
+  apiKey = null,
+  env = process.env,
   fetchImpl = fetch,
   timeoutMs = 20000,
 } = {}) => async ({ numero, texto, instancia }) => {
   const base = String(baseUrl || '').replace(/\/+$/, '');
-  if (!base || !apiKey) {
-    throw new Error('Evolution API não configurada (EVOLUTION_API_URL / EVOLUTION_API_KEY).');
-  }
+  if (!base) throw new Error('Evolution API não configurada (EVOLUTION_API_URL).');
   if (!instancia) throw new Error('instância não informada: envio sem número de origem definido');
+  const chave = apiKey || tokenDaInstancia(instancia, env);
+  if (!chave) {
+    throw new Error(
+      `sem token para a instância "${instancia}": defina EVOLUTION_TOKEN_${SLUG_DA_INSTANCIA(instancia)}`
+    );
+  }
   const digitos = String(numero || '').replace(/\D/g, '');
   if (digitos.length < 10) throw new Error(`número inválido para envio: "${numero}"`);
 
@@ -123,7 +147,7 @@ const criarEnvioEvolution = ({
       method: 'POST',
       // Evolution v2 aceita só `apikey` minúsculo; mandar as duas grafias faz o undici
       // colapsar o header e devolver 401.
-      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      headers: { 'Content-Type': 'application/json', apikey: chave },
       body: JSON.stringify({ number: digitos, text: String(texto || '') }),
       signal: controller.signal,
     });
@@ -138,6 +162,8 @@ const criarEnvioEvolution = ({
 };
 
 module.exports = {
+  SLUG_DA_INSTANCIA,
+  tokenDaInstancia,
   instanciaDoWebhook,
   criarMapaDeInstancias,
   instanciaPermitida,

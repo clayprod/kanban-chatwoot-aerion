@@ -307,3 +307,28 @@ test('o prompt destaca a pergunta, separa IA de vendedor e manda escalar', () =>
   // E diz por que ela existe: o vendedor teve a chance primeiro.
   assert.match(system, /vendedor humano teve a chance de responder primeiro/);
 });
+
+test('nao responde conversa legada: so o que chegou depois de ligar', async () => {
+  // Regra do Clayton (24/10). Pergunta de semana passada ja foi resolvida por
+  // telefone, por e-mail, ou esfriou — responder agora e pior que nao responder.
+  let sqlVisto = '';
+  let paramsVistos = null;
+  const pool = {
+    async query(sql, params) {
+      if (sql.includes('WITH ultima_entrada AS (')) { sqlVisto = sql; paramsVistos = params; return { rows: [] }; }
+      return { rows: [{ total: 0 }] };
+    },
+  };
+  const desde = new Date('2026-10-24T22:00:00.000Z');
+  await runAiResponderTick(pool, { accountId: 2, config: CONFIG, desde });
+  assert.match(sqlVisto, /\$5::timestamptz IS NULL OR m\.created_at >= \$5/);
+  assert.equal(paramsVistos[4], desde, 'o marco zero vai como parametro');
+});
+
+test('a regua de confianca do respondedor e mais alta que a do follow-up', () => {
+  const limpo = { ...process.env };
+  for (const k of Object.keys(process.env)) if (k.startsWith('AI_RESPONDER_')) delete process.env[k];
+  // Responder errado a quem perguntou algo concreto e pior que um follow-up morno.
+  assert.equal(carregarConfigResponder().minConfianca, 0.8);
+  process.env = limpo;
+});

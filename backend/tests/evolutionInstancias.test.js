@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  SLUG_DA_INSTANCIA,
+  tokenDaInstancia,
   instanciaDoWebhook,
   criarMapaDeInstancias,
   instanciaPermitida,
@@ -97,6 +99,34 @@ test('sem nenhum inbox com webhook, devolve erro em vez de chutar um numero', as
   assert.equal(escolha.instancia, undefined);
 });
 
+test('o token e por instancia: o kanban nao alcanca numero que nao e da Aerion', () => {
+  // A chave GLOBAL do Evolution abre todas as instancias do servidor, inclusive a
+  // pessoal do Clayton e a do c2finance, que e outro projeto. Com token por
+  // instancia, o alcance e exatamente o que foi configurado.
+  const env = {
+    EVOLUTION_TOKEN_COMERCIAL_AERION_TECHNOLOGIES: 'tok-comercial',
+    EVOLUTION_TOKEN_IAGO_AERION: 'tok-iago',
+    EVOLUTION_TOKEN_IAN: 'tok-ian-apelido',
+  };
+  assert.equal(SLUG_DA_INSTANCIA('Comercial - Aerion Technologies'), 'COMERCIAL_AERION_TECHNOLOGIES');
+  assert.equal(tokenDaInstancia('Comercial - Aerion Technologies', env), 'tok-comercial');
+  assert.equal(tokenDaInstancia('iago_aerion', env), 'tok-iago');
+  assert.equal(tokenDaInstancia('ian_aerion', env), 'tok-ian-apelido', 'apelido curto tambem serve');
+  assert.equal(tokenDaInstancia('c2f_transactions', env), null, 'outro projeto: sem token');
+  assert.equal(tokenDaInstancia('claytoncosta', env), null, 'numero pessoal: sem token');
+});
+
+test('sem token para a instancia, o envio falha em vez de usar chave global', async () => {
+  const enviar = criarEnvioEvolution({
+    baseUrl: 'https://evo.example', env: {},
+    fetchImpl: async () => { throw new Error('não devia chamar'); },
+  });
+  await assert.rejects(
+    () => enviar({ numero: '5511999999999', texto: 'oi', instancia: 'c2f_transactions' }),
+    /sem token para a inst[âa]ncia "c2f_transactions"/
+  );
+});
+
 test('o envio exige instancia explicita: nao existe default implicito', async () => {
   const enviar = criarEnvioEvolution({
     baseUrl: 'https://evo.example/', apiKey: 'k',
@@ -115,7 +145,8 @@ test('o envio exige instancia explicita: nao existe default implicito', async ()
 test('o envio usa a instancia na URL e apikey minusculo', async () => {
   const chamadas = [];
   const enviar = criarEnvioEvolution({
-    baseUrl: 'https://evo.example', apiKey: 'segredo',
+    baseUrl: 'https://evo.example',
+    env: { EVOLUTION_TOKEN_COMERCIAL_AERION_TECHNOLOGIES: 'segredo' },
     fetchImpl: async (url, opts) => { chamadas.push({ url, opts }); return { ok: true, json: async () => ({}) }; },
   });
   await enviar({ numero: '+55 (11) 99999-9999', texto: 'oi', instancia: 'Comercial - Aerion Technologies' });

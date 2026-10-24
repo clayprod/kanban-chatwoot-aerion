@@ -748,6 +748,29 @@ async function getUserById(id) {
   return mapUserAccessRow(u);
 }
 
+// Nota privada numa conversa do Chatwoot. O vendedor ve no proprio inbox, onde ja
+// esta trabalhando — melhor que um alerta num painel que ninguem abre.
+async function notaPrivadaChatwoot({ config, accountId, conversationId, texto }) {
+  if (!config?.chatwootBaseUrl || !config?.chatwootToken) {
+    throw new Error('Chatwoot não configurado para nota privada.');
+  }
+  const resp = await fetch(
+    `${config.chatwootBaseUrl}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', api_access_token: config.chatwootToken },
+      body: JSON.stringify({
+        content: texto,
+        message_type: 'outgoing',
+        private: true,
+        content_attributes: { aerion_ai: true },
+      }),
+    }
+  );
+  if (!resp.ok) throw new Error(`Chatwoot HTTP ${resp.status}`);
+  return resp.json().catch(() => null);
+}
+
 const requireAdmin = (req, res, next) => {
   if (req.auth && req.auth.role === 'admin') return next();
   return res.status(403).json({ error: 'Acesso restrito a administradores.' });
@@ -23524,7 +23547,7 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
 // as env já foram apagadas seis vezes e o worker ficou parado sem ninguém notar.
 app.post('/api/ai-settings', requireAdmin, async (req, res) => {
   const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run',
-    'prospeccao_enabled', 'prospeccao_dry_run'];
+    'prospeccao_enabled', 'prospeccao_dry_run', 'responder_enabled', 'responder_dry_run'];
   const body = req.body || {};
   const alvos = Object.keys(body).filter((k) => permitidas.includes(k));
   if (!alvos.length) {
@@ -23589,6 +23612,50 @@ app.post('/api/ai-stages/:id/aplicar', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('[ia-stage] acatar falhou:', error.message);
     res.status(500).json({ error: 'Não foi possível aplicar a sugestão.' });
+  }
+});
+
+// Observabilidade do respondedor: o que ele respondeu, o que escalou e por que.
+app.get('/api/ai-responder', requireAdmin, async (req, res) => {
+  const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+  try {
+    const [decisoes, agregado, settings] = await Promise.all([
+      pool.query(
+        `SELECT l.id, l.contact_id, l.conversation_id, l.status, l.icp, l.revenda_confirmada,
+                l.pergunta, l.mensagem, l.motivo, l.confianca AS confidence, l.error, l.created_at,
+                c.name AS contact_name
+           FROM ${RESPONDER_LOG_TABLE} l
+           LEFT JOIN contacts c ON c.id = l.contact_id AND c.account_id = l.account_id
+          WHERE l.account_id = $1 ORDER BY l.created_at DESC LIMIT $2`,
+        [CHATWOOT_ACCOUNT_ID, limite]
+      ),
+      pool.query(
+        `SELECT status, COUNT(*)::int AS total FROM ${RESPONDER_LOG_TABLE}
+          WHERE account_id = $1
+            AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                AT TIME ZONE 'America/Sao_Paulo'
+          GROUP BY status`,
+        [CHATWOOT_ACCOUNT_ID]
+      ),
+      carregarSettings(pool),
+    ]);
+    const configEnv = carregarConfigResponder();
+    res.json({
+      config: {
+        enabled: resolverFlag(settings, 'responder_enabled', configEnv.enabled),
+        dry_run: resolverFlag(settings, 'responder_dry_run', configEnv.dryRun),
+        espera_segundos: configEnv.esperaSegundos,
+        max_por_dia: configEnv.maxPorDia,
+        min_confianca: configEnv.minConfianca,
+        // Desde quando ele atua: conversa anterior a isto ele nao responde.
+        desde: settings?.responder_desde || null,
+      },
+      hoje: Object.fromEntries(agregado.rows.map((r) => [r.status, r.total])),
+      decisoes: decisoes.rows,
+    });
+  } catch (error) {
+    console.error('[responder] listagem falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível carregar o histórico do respondedor.' });
   }
 });
 
@@ -24062,6 +24129,92 @@ const registerBackgroundSchedules = () => {
     }
   }, { timezone: 'America/Sao_Paulo' });
 
+  // Respondedor: quem escreveu e ficou sem resposta.
+  //
+  // Regra do Clayton (24/10): "pra interacoes alem da inicial, a IA nao faz
+  // diretamente. Espera 5 minutos; se o cliente ficar sem resposta, ela age. Se o
+  // humano responder antes, ela nem entra mais no circuito." O cron roda de 2 em 2
+  // minutos so para CHECAR; quem decide esperar e a janela de 5 min na query.
+  //
+  // E nao responde conversa legada: o marco zero e o instante em que o respondedor
+  // foi ligado, guardado em ai_settings na primeira vez que ele roda ligado.
+  let responderRodando = false;
+  cron.schedule('*/2 * * * *', async () => {
+    if (!dataLayerReady || responderRodando) return;
+    const configEnv = carregarConfigResponder();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'responder_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'responder_dry_run', configEnv.dryRun),
+    };
+    if (!config.enabled) return;
+
+    // Marco zero: gravado uma vez, na primeira execucao ligada.
+    let desde = settings?.responder_desde ? new Date(settings.responder_desde) : null;
+    if (!desde || Number.isNaN(desde.getTime())) {
+      desde = new Date();
+      await gravarSetting(pool, 'responder_desde', desde.toISOString());
+      console.log(`[responder] marco zero gravado: ${desde.toISOString()} — não responde conversa anterior`);
+    }
+
+    responderRodando = true;
+    try {
+      const cfgJanela = carregarConfigAiFollowup();
+      const chatwoot = await resolverChatwootConfig(pool);
+      const resultado = await runAiResponderTick(pool, {
+        accountId: CHATWOOT_ACCOUNT_ID,
+        config,
+        desde,
+        chatCompletionJson,
+        catalogo: catalogoAerion,
+        // A janela do respondedor ignora o almoco: quem perguntou esta esperando
+        // agora, e um vendedor responderia. Mas fora do horario comercial nao:
+        // responder as 3h da manha e assinatura de robo.
+        dentroDaJanela: (quando) => dentroDaJanela({ ...cfgJanela, almoco: null }, quando),
+        classificarContato: async (pendente, historico) => {
+          const ctx = await contextoComercialDoLead({
+            razaoSocial: pendente?.contato_nome,
+            cnae: pendente?.custom_attributes?.CNAE_Codigo,
+            cnaeDescricao: pendente?.custom_attributes?.CNAE_Principal,
+            cnpj: cnpjDoContato(pendente?.custom_attributes),
+            historico: (historico || [])
+              .filter((h) => h.autor === 'cliente').map((h) => h.texto).join(' ').slice(0, 4000),
+          });
+          return { ...ctx, bloco: ctx.blocoIcp };
+        },
+        enviar: ({ contato, texto }) => enviarPeloChatwoot({
+          config: chatwoot,
+          accountId: CHATWOOT_ACCOUNT_ID,
+          conversationId: contato.conversation_id,
+          texto,
+        }),
+        notificarHumano: async ({ conversation_id: conversationId, contato_nome: nome, motivo, rascunho }) => {
+          // Nota privada na conversa: o vendedor ve no proprio Chatwoot, onde ja esta.
+          await notaPrivadaChatwoot({
+            config: chatwoot,
+            accountId: CHATWOOT_ACCOUNT_ID,
+            conversationId,
+            texto: [
+              `IA não respondeu: ${motivo}.`,
+              rascunho ? `Rascunho que ela escreveu: "${rascunho}"` : null,
+              'Precisa de alguém daqui.',
+            ].filter(Boolean).join(String.fromCharCode(10)),
+          }).catch((e) => console.warn('[responder] nota privada falhou:', e.message));
+          await atribuirResponsavelPadrao(pool, conversationId).catch(() => {});
+          void nome;
+        },
+      });
+      if (resultado.respondidos || resultado.escalados || resultado.falhas) {
+        console.log('[responder] tick:', resultado);
+      }
+    } catch (error) {
+      console.error('[responder] tick falhou:', error.message);
+    } finally {
+      responderRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
   // Classificação de etapa pela IA. Gatilho OPOSTO ao do follow-up: olha quem
   // RESPONDEU. Quem disse "não tenho interesse" nunca seria candidato lá (o follow-up
   // exige que a última palavra seja nossa), e é justamente quem mais precisa sair da
@@ -24360,6 +24513,7 @@ const initializeDataLayer = async () => {
   await createAiSettingsTable(pool);
   await createOutboundQueueTable(pool);
   await createProspeccaoTable(pool);
+  await createResponderTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();
   await createRFBTables();

@@ -43,7 +43,10 @@ const carregarConfigResponder = () => ({
   janelaMaximaHoras: inteiro('AI_RESPONDER_MAX_AGE_HOURS', 24),
   maxPorTick: inteiro('AI_RESPONDER_MAX_PER_TICK', 3),
   maxPorDia: inteiro('AI_RESPONDER_MAX_PER_DAY', 60),
-  minConfianca: Number.parseFloat(process.env.AI_RESPONDER_MIN_CONFIDENCE ?? '') || 0.7,
+  // Regra do Clayton (24/10): "so perguntas que ele possa responder com precisao".
+  // A regua aqui e mais alta que a do follow-up porque uma resposta errada a quem
+  // perguntou algo concreto e pior que uma mensagem proativa morna.
+  minConfianca: Number.parseFloat(process.env.AI_RESPONDER_MIN_CONFIDENCE ?? '') || 0.8,
   historicoMax: inteiro('AI_RESPONDER_HISTORY_MAX', 24),
 });
 
@@ -108,7 +111,7 @@ const motivoDeEscalar = (texto) => {
 // QUALQUER saída depois da fala do cliente, a conversa não é candidata. Humano que
 // responde em 30 segundos ou em 4 minutos simplesmente faz o registro desaparecer
 // daqui, e a IA nunca soube que ele existiu.
-const buscarPendentes = async (pool, { accountId, config }) => {
+const buscarPendentes = async (pool, { accountId, config, desde = null }) => {
   const { rows } = await pool.query(
     `
     WITH ultima_entrada AS (
@@ -120,6 +123,10 @@ const buscarPendentes = async (pool, { accountId, config }) => {
          AND COALESCE(m.private, false) = false
          AND m.content IS NOT NULL AND btrim(m.content) <> ''
          AND m.created_at >= NOW() - make_interval(hours => $3)
+         -- Marco zero: a IA nao responde conversa legada. So o que chegou depois de
+         -- ela ter sido ligada. Pedido do Clayton em 24/10, e e o certo: pergunta de
+         -- semana passada ja foi resolvida por telefone, por e-mail ou esfriou.
+         AND ($5::timestamptz IS NULL OR m.created_at >= $5)
        ORDER BY m.conversation_id, m.id DESC
     ),
     -- Qualquer saida depois da fala do cliente mata o candidato. E aqui que o
@@ -162,7 +169,7 @@ const buscarPendentes = async (pool, { accountId, config }) => {
      ORDER BY ue.created_at ASC
      LIMIT $4
     `,
-    [accountId, config.esperaSegundos, config.janelaMaximaHoras, config.maxPorTick * 4]
+    [accountId, config.esperaSegundos, config.janelaMaximaHoras, config.maxPorTick * 4, desde]
   );
   return rows;
 };
@@ -334,6 +341,8 @@ const runAiResponderTick = async (pool, {
   notificarHumano,
   dentroDaJanela,
   config = carregarConfigResponder(),
+  // Instante em que o respondedor foi ligado. Antes disso ele nao responde nada.
+  desde = null,
   agora = () => new Date(),
 } = {}) => {
   if (!config.enabled) return { skipped: 'desligado' };
@@ -342,7 +351,7 @@ const runAiResponderTick = async (pool, {
   const hoje = await contarHoje(pool, accountId);
   if (hoje >= config.maxPorDia) return { skipped: 'teto diário atingido', hoje };
 
-  const pendentes = await buscarPendentes(pool, { accountId, config });
+  const pendentes = await buscarPendentes(pool, { accountId, config, desde });
   if (!pendentes.length) return { skipped: 'ninguém esperando', hoje };
 
   const r = { respondidos: 0, escalados: 0, falhas: 0, avaliados: 0, pendentes: pendentes.length };

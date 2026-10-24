@@ -229,6 +229,7 @@ export default function AutomationView() {
   const [followups, setFollowups] = useState(null);
   const [stages, setStages] = useState(null);
   const [prospeccao, setProspeccao] = useState(null);
+  const [responder, setResponder] = useState(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
@@ -239,15 +240,17 @@ export default function AutomationView() {
     setCarregando(true);
     setErro('');
     try {
-      const [f, s, p] = await Promise.all([
+      const [f, s, p, resp] = await Promise.all([
         axios.get('/api/ai-followups?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/ai-stages?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/prospeccao?limit=120').catch((e) => ({ error: e })),
+        axios.get('/api/ai-responder?limit=120').catch((e) => ({ error: e })),
       ]);
-      if (f.error && s.error && p.error) throw f.error;
+      if (f.error && s.error && p.error && resp.error) throw f.error;
       setFollowups(f.error ? null : f.data);
       setStages(s.error ? null : s.data);
       setProspeccao(p.error ? null : p.data);
+      setResponder(resp.error ? null : resp.data);
     } catch (e) {
       setErro(e?.response?.data?.error || 'Não foi possível carregar a atividade da automação.');
     } finally {
@@ -290,7 +293,8 @@ export default function AutomationView() {
   const abas = [
     { id: 'followup', nome: 'Follow-up', icone: ChatBubbleLeftRightIcon, n: followups?.hoje?.sent || 0 },
     { id: 'etapa', nome: 'Classificação de etapa', icone: ViewColumnsIcon, n: (stages?.hoje?.applied || 0) + (stages?.hoje?.dry_run || 0) },
-    { id: 'prospeccao', nome: 'Prospecção ativa', icone: MagnifyingGlassCircleIcon, n: (prospeccao?.hoje?.abordado || 0) + (prospeccao?.hoje?.dry_run || 0) },
+    { id: 'prospeccao', nome: 'Prospecção ativa', icone: MagnifyingGlassCircleIcon, n: (prospeccao?.hoje?.abordado || 0) + (prospeccao?.hoje?.enfileirado || 0) + (prospeccao?.hoje?.dry_run || 0) },
+    { id: 'responder', nome: 'Respondedor', icone: ChatBubbleLeftRightIcon, n: (responder?.hoje?.sent || 0) + (responder?.hoje?.dry_run || 0) },
   ];
 
   return (
@@ -430,6 +434,33 @@ export default function AutomationView() {
         )}
       </div>
 
+        {aba === 'responder' && (
+          <Painel
+            dados={responder}
+            carregando={carregando}
+            onReload={carregar}
+            busca={busca}
+            chaves={{ enabled: 'responder_enabled', dryRun: 'responder_dry_run' }}
+            onToggle={alternar}
+            salvando={salvando}
+            vazio="Ninguém ficou sem resposta ainda."
+            linhas={(it) => (
+              <>
+                {it.pergunta && (
+                  <p className="text-[12px] text-ink">
+                    <span className="text-muted2">perguntou: </span>
+                    {it.pergunta}
+                  </p>
+                )}
+                {it.mensagem && <p className="whitespace-pre-wrap text-[12px] text-muted">{it.mensagem}</p>}
+                {(it.motivo || it.error) && (
+                  <p className="text-[11px] text-muted2">{it.motivo || it.error}</p>
+                )}
+                {it.icp && <p className="text-[10px] text-muted2">perfil: {it.icp}</p>}
+              </>
+            )}
+          />
+        )}
       {erro && <p className="mt-3 text-[13px] text-status-danger">{erro}</p>}
     </div>
   );
