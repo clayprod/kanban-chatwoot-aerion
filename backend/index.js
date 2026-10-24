@@ -758,6 +758,7 @@ const {
   classificarIcp, podeFalarTabelaRevenda, blocoPromptIcp,
 } = require('./icp');
 const { criarCatalogoAerion } = require('./aerionCatalogo');
+const { buscarContatoWeb } = require('./contatoWeb');
 const {
   carregarConfigResponder, createResponderTable, runAiResponderTick,
   RESPONDER_LOG_TABLE,
@@ -23916,6 +23917,14 @@ const registerBackgroundSchedules = () => {
         config,
         validarMensagem,
         verificarNumerosWhatsapp,
+        // O telefone da Receita quase nunca tem WhatsApp (2 em ~360, medido em
+        // 24/10). Antes de descartar, procura o contato real na web. A IA entra
+        // quando os indicios nao bastam para decidir sozinho.
+        buscarContatoWeb: (empresa) => buscarContatoWeb(empresa, {
+          decidirComIa: ({ system, user }) => chatCompletionJson({
+            system, user, maxTokens: 400, temperature: 0.2,
+          }),
+        }),
         contextoComercial: ({ empresa }) => contextoComercialDoLead({
           razaoSocial: empresa?.razao_social,
           nomeFantasia: empresa?.nome_fantasia,
