@@ -777,6 +777,35 @@ const carregarConfigLoja = async () => {
 
 const catalogoAerion = criarCatalogoAerion({ carregarConfigLoja });
 
+// Quais desses codigos de CNAE existem de verdade na base da Receita. A IA do Radar
+// sugere codigo com formato valido que nao existe, e a busca devolve zero calada.
+const cacheCnaesExistentes = new Map();
+const cnaesQueExistem = async (lista) => {
+  const codigos = [...new Set((Array.isArray(lista) ? lista : [])
+    .map((c) => String(c || '').replace(/[^0-9]/g, ''))
+    .filter((c) => c.length === 7))];
+  if (!codigos.length) return [];
+  const faltaConsultar = codigos.filter((c) => !cacheCnaesExistentes.has(c));
+  if (faltaConsultar.length) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT regexp_replace(codigo, '[^0-9]', '', 'g') AS cod
+           FROM rfb_cnaes
+          WHERE regexp_replace(codigo, '[^0-9]', '', 'g') = ANY($1::text[])`,
+        [faltaConsultar]
+      );
+      const achados = new Set(rows.map((r) => r.cod));
+      for (const c of faltaConsultar) cacheCnaesExistentes.set(c, achados.has(c));
+    } catch (err) {
+      // Sem a tabela de CNAEs nao da para validar: deixa passar em vez de travar a
+      // prospeccao inteira — o pior caso volta a ser uma busca vazia, nao nenhuma.
+      console.warn('[prospeccao] não validei CNAE:', err.message);
+      return codigos;
+    }
+  }
+  return codigos.filter((c) => cacheCnaesExistentes.get(c));
+};
+
 // Numeros da operacao comercial: o par inbox<->instancia sai do proprio Chatwoot.
 const mapaInstancias = criarMapaDeInstancias({ pool });
 const enviarPelaEvolution = criarEnvioEvolution();
@@ -14091,7 +14120,7 @@ app.get('/api/licitacoes/pncp/search/deep/:jobId/results', async (req, res) => {
           ? 'deadline_at DESC NULLS LAST, updated_at DESC'
           : ordenacao === 'data_asc'
             ? 'deadline_at ASC NULLS LAST, updated_at DESC'
-            : 'score DESC NULLS LAST, COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC';
+            : "COALESCE((payload->>'technical_full')::boolean,FALSE) DESC, (payload->>'technical_percent')::numeric DESC NULLS LAST, score DESC NULLS LAST, COALESCE(value_matched, value_estimated, 0) DESC, updated_at DESC";
     // Reconcile board → visibility=pipeline antes de paginar/contar.
     const visibilityCounts = await countPncpJobResultsByVisibility(job.id, accountId, { reconcile: true });
     // list/all/active/visible: só visibility=visible; pipeline: já no board;
@@ -21301,10 +21330,30 @@ Concorrentes (DJI, Mavic, etc.) também são sinal de demanda de mercado — use
 - PROIBIDO inferir UF por semelhança fonética, rima, anagrama ou pedaço de nome.
 - Evento/consulta sem local BR: escala nacional (uf:"").
 
+## Os ICPs da Aerion — a sugestão tem que cair em UM deles
+A Aerion é DISTRIBUIDORA da Autel. Só existem cinco perfis de cliente, e sugestão
+fora deles não serve para nada:
+1. REVENDA / INTEGRADOR (o principal, 70% do volume): revenda de tecnologia,
+   integrador, distribuidor regional, consultoria técnica que vende equipamento.
+2. Construção e topografia: construtora, topografia, georreferenciamento, engenharia.
+3. Inspeção industrial e energia: concessionária, parque solar/eólico, mineração,
+   óleo e gás, empresa de inspeção.
+4. Segurança pública e defesa civil: PM, PC, PRF, guarda municipal, Defesa Civil.
+5. Resgate, emergência e meio ambiente: bombeiros, Defesa Civil, órgão ambiental.
+
+AGRICULTURA NÃO É VERTICAL ATIVA. Não sugira perfil de agronegócio, lavoura,
+pulverização agrícola ou pecuária: foi descontinuado como vertical. Produtor rural
+só entra se o ângulo for topografia/mapeamento, nunca pulverização de safra.
+
 ## Outras regras
 - Conecte correlatos a casos de uso reais (inspeção, mapeamento, segurança, energia, obras).
 - Ignore fofoca/celebridade/esporte sem ângulo B2B.
 - Filtros: CNAEs BR reais (0000-0/00), porte 01|03|05, capital e idade em números, situacao ["2"].
+- CNAE TEM QUE EXISTIR de verdade na CNAE 2.3 do IBGE. Código com formato certo e que
+  não existe faz a busca devolver zero calada: "7520-0/00" e "3511-2/00" não existem e
+  queimaram duas sugestões em 23/10. Na dúvida, use o código da seção/divisão que você
+  tem certeza (ex.: 3511-5/01 para geração de energia, 7119-7/02 para topografia).
+- Não repita o mesmo CNAE duas vezes na mesma sugestão.
 - Varie perfis (novas/maduras/grandes). Máximo 5 sugestões, prioridade alta primeiro.
 - Responda SOMENTE JSON válido, sem markdown:
 {
@@ -23642,6 +23691,20 @@ const registerBackgroundSchedules = () => {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
         config: { ...config, ...chatwoot },
+        // Quem e o lead define O QUE dizer: com revenda a conversa e margem e
+        // parceria; com cliente final e a operacao dele. Sem isso a mensagem sai
+        // generica e a pessoa nao ve valor.
+        contextoComercial: ({ contato, historico }) => contextoComercialDoLead({
+          razaoSocial: contato?.empresa || contato?.name,
+          nomeFantasia: contato?.empresa_fantasia,
+          cnae: contato?.cnae_codigo,
+          cnaeDescricao: contato?.cnae_principal,
+          cnpj: cnpjDoContato(contato?.custom_attributes),
+          historico: (historico || [])
+            .filter((h) => h.autor === 'cliente')
+            .map((h) => h.texto).join(' ')
+            .slice(0, 4000),
+        }),
         // Em vez de mandar na hora, entra na fila e divide pista com campanha e
         // prospeccao. Quem decide o momento e o despachante, nao o worker.
         enfileirarEnvio: ({ contactId, conversationId, inboxId, texto, dedupeKey }) =>
@@ -23755,9 +23818,26 @@ const registerBackgroundSchedules = () => {
         config,
         validarMensagem,
         verificarNumerosWhatsapp,
+        contextoComercial: ({ empresa }) => contextoComercialDoLead({
+          razaoSocial: empresa?.razao_social,
+          nomeFantasia: empresa?.nome_fantasia,
+          cnae: empresa?.cnae_fiscal_principal,
+          cnaeDescricao: empresa?.cnae_descricao,
+          cnpj: String(empresa?.cnpj || '').replace(/[^0-9A-Za-z]/g, '') || null,
+        }),
         carregarPerfis: async () => extrairPerfis(await loadTrendsIntelCacheOnly()),
         buscarEmpresas: async (filtros, tamanho) => {
-          const qs = paramsDaBusca(filtros, { pageSize: tamanho });
+          // CNAE que a IA inventou tem o formato certo e nao existe. Medido em
+          // 24/10: "7520-0/00" e "3511-2/00" nao estao em rfb_cnaes, e o 7520 era o
+          // UNICO codigo do perfil "Defesa Civil e seguranca publica" — aquele perfil
+          // devolvia total 0 em 0.0s para sempre, sem ninguem saber por que.
+          const filtrosLimpos = { ...filtros, cnae: await cnaesQueExistem(filtros.cnae) };
+          if ((filtros.cnae || []).length && !filtrosLimpos.cnae.length) {
+            throw new Error(
+              `nenhum CNAE do perfil existe na base (${(filtros.cnae || []).join(', ')})`
+            );
+          }
+          const qs = paramsDaBusca(filtrosLimpos, { pageSize: tamanho });
           if (!qs.get('cnae') && !qs.get('uf') && !qs.get('nome')) {
             // Sem CNAE, UF nem nome a busca seria uma varredura nacional: 504 garantido.
             throw new Error('perfil sem filtro seletivo (CNAE/UF/nome)');

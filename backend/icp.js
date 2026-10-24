@@ -235,18 +235,25 @@ const TERMOS_ICP = [
   [REVENDA, ['revenda', 'revendedor', 'distribuidor', 'distribuidora', 'importadora',
     'comercio de equipamentos', 'integrador', 'solucoes em tecnologia', 'suprimentos',
     'representacao comercial', 'representacoes']],
-  [CONSTRUCAO, ['topografia', 'topografica', 'georreferenciamento', 'geotecnologia',
-    'agrimensura', 'cartografia', 'aerofotogrametria', 'construtora', 'construcoes',
-    'engenharia civil', 'empreiteira', 'terraplenagem', 'pavimentacao', 'incorporadora',
-    'geoprocessamento', 'levantamento']],
+  [CONSTRUCAO, ['topografia', 'topografica', 'topograf', 'georreferenciamento', 'geotecnologia',
+    'agrimensura', 'cartografia', 'aerofotogrametria', 'fotogrametria', 'construtora',
+    'construcoes', 'engenharia civil', 'empreiteira', 'terraplenagem', 'pavimentacao',
+    'incorporadora', 'geoprocessamento', 'levantamento', 'aerolevantamento',
+    'mapeament', 'volumetria', 'movimentacao de terra', 'ortomosaico', 'nuvem de pontos',
+    'pulveriza', 'agricultura de precisao']],
   [ENERGIA, ['energia', 'eletrica', 'eletrico', 'transmissao', 'subestacao', 'solar',
     'fotovoltaic', 'eolic', 'concessionaria', 'inspecao', 'manutencao industrial',
-    'termografia', 'mineracao', 'minerio', 'petroleo', 'oleoduto', 'gasoduto',
-    'usina', 'linha de transmissao']],
+    'termografia', 'termica', 'mineracao', 'minerio', 'petroleo', 'oleoduto', 'gasoduto',
+    'usina', 'linha de transmissao', 'rede de distribuicao', 'ponto quente',
+    'hotspot', 'isolador', 'torre de transmissao']],
+  // Siglas entram porque o cadastro desta base guarda "PMESP", nao "Policia Militar".
   [SEGURANCA, ['policia', 'militar', 'seguranca publica', 'vigilancia', 'guarda municipal',
-    'penitenciari', 'secretaria de seguranca', 'inteligencia', 'monitoramento']],
+    'penitenciari', 'secretaria de seguranca', 'inteligencia', 'monitoramento',
+    'pmesp', 'pmerj', 'pmmg', 'pmpr', 'pmsc', 'pmba', 'pmgo', 'pcesp', 'prf',
+    'gcm', 'rocam', 'batalhao', 'companhia de policia']],
   [RESGATE, ['bombeiro', 'resgate', 'defesa civil', 'samu', 'emergencia', 'socorro',
-    'ambiental', 'florestal', 'reflorestamento', 'brigada', 'incendio', 'conservacao']],
+    'ambiental', 'florestal', 'reflorestamento', 'brigada', 'incendio', 'conservacao',
+    'cbmesp', 'cbmerj', 'cbmmg', 'corpo de bombeiros', 'busca e salvamento']],
 ];
 
 const normalizarCnae = (cnae) => String(cnae || '').replace(/[^0-9]/g, '');
@@ -295,6 +302,18 @@ const classificarIcp = ({
   for (const [icp, termos] of TERMOS_ICP) {
     const achou = termos.find((t) => texto.includes(t));
     if (achou) somar(icp, 0.6, `"${achou}" no nome ou na atividade`);
+  }
+
+  // 5) O que a pessoa contou da operação dela. Peso menor que cadastro porque pode
+  //    ser menção de passagem ("meu cliente faz topografia"), mas é a única pista
+  //    para contato sem CNAE — a maioria da base, já que CNAE só vem de importação
+  //    da Receita. Sem isto, lead que conversou meses sobre inspeção de rede ainda
+  //    caía em "perfil não identificado".
+  if (falas.trim()) {
+    for (const [icp, termos] of TERMOS_ICP) {
+      const achou = termos.find((t) => falas.includes(t));
+      if (achou) somar(icp, 0.5, `"${achou}" no que a pessoa falou`);
+    }
   }
 
   if (!pontos.size) {

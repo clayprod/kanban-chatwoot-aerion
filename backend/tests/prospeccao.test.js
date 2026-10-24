@@ -267,3 +267,47 @@ test('mensagem reprovada na validacao nao sai', async () => {
   assert.equal(enfileirou, false);
   assert.equal(r.descartados, 1);
 });
+
+test('CNAE repetido nao vai duplicado para a busca', () => {
+  // Perfil do Radar de 24/10 veio com "0111301,0111301".
+  assert.deepEqual(cnaesValidos(['0111301', '0111301', '4120400']), ['0111301', '4120400']);
+  const qs = paramsDaBusca({ cnae: ['0111-3/01', '0111301'] }, { pageSize: 10 });
+  assert.equal(qs.get('cnae'), '0111301');
+});
+
+test('empresa fora dos ICPs nao e abordada', async () => {
+  // Medido em 24/10 em dry run: perfil de agronegocio (vertical descontinuada) trouxe
+  // uma produtora de arroz, e a IA escreveu abordagem sobre monitorar lavoura e pasto.
+  // Sem ICP nao se sabe a dor, e o modelo inventa uma.
+  const registros = [];
+  const pool = {
+    async query(sql, params) {
+      if (sql.includes('INSERT INTO prospeccao_log')) {
+        registros.push({ status: params[5], motivo: params[6] });
+        return { rows: [] };
+      }
+      if (sql.includes('FROM prospeccao_log')) return { rows: [] };
+      if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: 0 }] };
+      if (sql.includes('FROM contacts')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  let chamouIa = false;
+  const r = await runProspeccaoTick(pool, {
+    accountId: 2,
+    config: { enabled: true, dryRun: true, maxPorDia: 10, maxPorTick: 3, candidatosPorPerfil: 5, minConfianca: 0.6 },
+    carregarPerfis: async () => [{ titulo: 'Agronegócio', filtros: { cnae: ['0111301'] } }],
+    buscarEmpresas: async () => ([{
+      cnpj: '12345678000195', razao_social: 'BOM AMIGO AGROPECUARIA LTDA',
+      ddd1: '11', telefone1: '47943786', cnae_fiscal_principal: '0111301',
+      cnae_descricao: 'Cultivo de arroz',
+    }]),
+    verificarNumerosWhatsapp: async () => ({ existentes: new Set(['1147943786']), perfis: new Map() }),
+    chatCompletionJson: async () => { chamouIa = true; return { ok: false }; },
+    contextoComercial: async () => ({ icp: 'desconhecido', blocoIcp: '', blocoCatalogo: '' }),
+  });
+  assert.equal(chamouIa, false, 'nem gasta token escrevendo para quem nao e ICP');
+  assert.equal(r.descartados, 1);
+  assert.match(registros[0].motivo, /fora dos ICPs/);
+  assert.equal(registros[0].status, 'descartado');
+});

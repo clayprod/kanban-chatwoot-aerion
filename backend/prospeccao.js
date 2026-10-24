@@ -138,9 +138,13 @@ const extrairPerfis = (trendsPayload) => {
 // o codigo formatado ("7520-0/00"), que nao casa com nada: medido em producao em
 // 2026-10-23, "7520-0/00" devolvia total 0 em 0.0s enquanto "4120400" devolvia
 // resultados. Normaliza aqui e descarta o que nao tiver 7 digitos.
-const cnaesValidos = (lista) => (Array.isArray(lista) ? lista : [])
-  .map((c) => String(c || '').replace(/[^0-9]/g, ''))
-  .filter((c) => c.length === 7);
+// Tambem deduplica: em 24/10 um perfil do Radar veio com "0111301,0111301", o mesmo
+// codigo repetido. Nao quebra a busca, mas polui a query e o log.
+const cnaesValidos = (lista) => [...new Set(
+  (Array.isArray(lista) ? lista : [])
+    .map((c) => String(c || '').replace(/[^0-9]/g, ''))
+    .filter((c) => c.length === 7)
+)];
 
 // Monta a query da busca RFB a partir do perfil sugerido.
 const paramsDaBusca = (filtros, { pageSize }) => {
@@ -337,6 +341,21 @@ const runProspeccaoTick = async (pool, {
         const contexto = contextoComercial
           ? await contextoComercial({ empresa, perfil: perfil.titulo })
           : { blocoIcp: '', blocoCatalogo: '' };
+
+        // Sem ICP nao se aborda. Medido em 24/10, em dry run: o Radar sugeriu um
+        // perfil de agronegocio (vertical DESCONTINUADA no ICP), a empresa sorteada
+        // foi uma produtora de arroz, e a IA escreveu uma abordagem convincente sobre
+        // monitorar lavoura e pasto — assunto que a Aerion nao vende. Quando nao se
+        // sabe a dor do perfil, o modelo inventa uma. Melhor nao falar.
+        if (contextoComercial && (!contexto.icp || contexto.icp === 'desconhecido')) {
+          await registrarProspeccao(pool, {
+            ...base, status: 'descartado',
+            motivo: 'fora dos ICPs da Aerion — não dá para saber a dor dessa empresa',
+            perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou,
+          });
+          r.descartados += 1;
+          continue;
+        }
         const prompt = montarPromptAbordagem({
           empresa, perfil: perfil.titulo, confirmouEmpresa: confirmou,
           blocoIcp: contexto.blocoIcp, blocoCatalogo: contexto.blocoCatalogo,

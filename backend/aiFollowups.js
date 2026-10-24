@@ -265,6 +265,10 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            c.phone_number,
            c.custom_attributes->>'Funil_Vendas' AS funil,
            c.additional_attributes->>'company_name' AS empresa,
+           -- Para o ICP: o que a empresa faz decide o assunto da mensagem.
+           c.custom_attributes->>'CNAE_Codigo' AS cnae_codigo,
+           c.custom_attributes->>'CNAE_Principal' AS cnae_principal,
+           c.custom_attributes AS custom_attributes,
            um.conversation_id,
            um.created_at AS ultima_em,
            COALESCE(ja.total, 0) AS followups_anteriores,

@@ -104,3 +104,32 @@ test('cada perfil tem dor, motivacao, objecao e proximo passo preenchidos', () =
     assert.ok(p.produtos, `${p.nome} sem produto`);
   }
 });
+
+test('a conversa classifica quem nao tem CNAE no cadastro', () => {
+  // Medido em 24/10: os tres candidatos de follow-up davam "desconhecido" porque
+  // CNAE so existe para quem veio da importacao da Receita (672 de 3772 contatos).
+  // A conversa e a unica pista para o resto da base.
+  const pm = classificarIcp({ razaoSocial: 'PMESP' });
+  assert.equal(pm.icp, SEGURANCA, 'o cadastro guarda a sigla, nao "Policia Militar"');
+
+  const foto = classificarIcp({ razaoSocial: 'FOTODRONES PULVERIZACAO E MAPEAMENTOS LTDA' });
+  assert.equal(foto.icp, CONSTRUCAO);
+
+  const semNome = classificarIcp({
+    razaoSocial: 'MEGAVIG',
+    historico: 'a gente faz inspecao de rede de distribuicao e precisa de camera termica',
+  });
+  assert.equal(semNome.icp, ENERGIA);
+  assert.match(semNome.evidencias[0].porque, /no que a pessoa falou/);
+  // Pista de conversa pesa menos que cadastro: pode ser mencao de passagem.
+  assert.ok(semNome.confianca < 0.6);
+});
+
+test('cadastro ganha de mencao de passagem na conversa', () => {
+  // CNAE de topografia + ele comentando do cliente de energia: vale o cadastro.
+  const c = classificarIcp({
+    cnae: '7119702',
+    historico: 'meu cliente e uma concessionaria de energia',
+  });
+  assert.equal(c.icp, CONSTRUCAO);
+});
