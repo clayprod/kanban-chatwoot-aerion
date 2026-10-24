@@ -90,6 +90,7 @@ const {
   carregarConfigStage,
   createStageLogTable,
   runStageClassificationTick,
+  aplicarEtapa,
 } = require('./leadStage');
 const {
   createCallTranscriptsTable,
@@ -23438,8 +23439,11 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
   try {
     const [decisoes, agregado] = await Promise.all([
       pool.query(
-        `SELECT id, cnpj, razao_social, telefone, perfil, status, motivo,
-                perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, created_at
+        `SELECT id, cnpj, razao_social, telefone, perfil, icp, status, motivo,
+                perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, created_at,
+                -- A tela mostra contact_name; na prospeccao o lead descartado nao vira
+                -- contato nenhum, entao o cartao aparecia como "Contato #null".
+                razao_social AS contact_name
            FROM ${PROSPECCAO_LOG_TABLE}
           WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
         [CHATWOOT_ACCOUNT_ID, limite]
@@ -23493,6 +23497,55 @@ app.post('/api/ai-settings', requireAdmin, async (req, res) => {
 });
 
 // Observabilidade da classificação de etapa: o que a IA moveu, sugeriu e por quê.
+// Acatar uma sugestao da IA: move o card de verdade.
+//
+// A IA SUGERE em vez de mover quando o alvo e marco comercial (demo, proposta,
+// negociacao) ou quando a confianca nao chega na regua do descarte. Ate aqui a
+// sugestao morria no painel e alguem tinha que mover na mao no kanban — na pratica,
+// ninguem movia. Este endpoint e o "concordo": aplica o movimento que a IA propos,
+// com o mesmo `aplicarEtapa` do worker, que aborta se o vendedor ja tiver mexido
+// no card nesse meio tempo.
+app.post('/api/ai-stages/:id/aplicar', requireAdmin, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, contact_id, from_stage, to_stage, status
+         FROM ${STAGE_LOG_TABLE} WHERE id = $1 AND account_id = $2`,
+      [id, CHATWOOT_ACCOUNT_ID]
+    );
+    const decisao = rows[0];
+    if (!decisao) return res.status(404).json({ error: 'sugestão não encontrada' });
+    if (decisao.status !== 'suggested') {
+      return res.status(409).json({ error: `esta decisão está como "${decisao.status}", não há o que acatar` });
+    }
+    if (!decisao.to_stage) return res.status(409).json({ error: 'sugestão sem etapa de destino' });
+
+    const resultado = await aplicarEtapa(pool, {
+      accountId: CHATWOOT_ACCOUNT_ID,
+      contactId: decisao.contact_id,
+      fromStage: decisao.from_stage,
+      toStage: decisao.to_stage,
+      historyTable: HISTORY_TABLE,
+    });
+    if (!resultado.aplicado) {
+      // O caso comum: o vendedor ja moveu o card. Nao e erro, e informacao.
+      return res.status(409).json({ error: resultado.motivo, aplicado: false });
+    }
+    await pool.query(
+      `UPDATE ${STAGE_LOG_TABLE}
+          SET status = 'applied',
+              skip_reason = COALESCE(skip_reason || ' | ', '') || $2
+        WHERE id = $1`,
+      [id, `acatado por ${req.auth?.sub || 'admin'}`]
+    );
+    res.json({ aplicado: true, de: decisao.from_stage, para: decisao.to_stage });
+  } catch (error) {
+    console.error('[ia-stage] acatar falhou:', error.message);
+    res.status(500).json({ error: 'Não foi possível aplicar a sugestão.' });
+  }
+});
+
 app.get('/api/ai-stages', requireAdmin, async (req, res) => {
   const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
   try {

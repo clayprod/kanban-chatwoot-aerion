@@ -35,7 +35,7 @@ const fakePool = ({ jaNaBase = [], jaTentados = [], hoje = 0 } = {}) => {
         gravados.push({ status: params[5], motivo: params[6], confirmou: params[8], msg: params[10] });
         return { rows: [] };
       }
-      if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: hoje }] };
+      if (sql.includes('AS total')) return { rows: [{ total: hoje }] };
       if (sql.includes('FROM contacts')) return { rows: jaNaBase.map((c) => ({ cnpj: c })) };
       if (sql.includes('FROM prospeccao_log')) return { rows: jaTentados.map((c) => ({ cnpj: c })) };
       throw new Error(`query inesperada: ${sql.slice(0, 50)}`);
@@ -238,7 +238,9 @@ test('aborda, importa o lead e enfileira por telefone', async () => {
   assert.equal(enfileirados[0].telefone, '5519987654321');
   assert.equal(enfileirados[0].contactId, 999);
   assert.match(enfileirados[0].dedupeKey, /^prospeccao:11222333000181$/);
-  assert.equal(pool.gravados.at(-1).status, 'abordado');
+  // 'enfileirado', nao 'abordado': a abordagem entrou na fila e quem entrega e o
+  // despachante. O painel precisa dizer a verdade.
+  assert.equal(pool.gravados.at(-1).status, 'enfileirado');
   assert.equal(pool.gravados.at(-1).confirmou, true);
 });
 
@@ -287,7 +289,7 @@ test('empresa fora dos ICPs nao e abordada', async () => {
         return { rows: [] };
       }
       if (sql.includes('FROM prospeccao_log')) return { rows: [] };
-      if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: 0 }] };
+      if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
       if (sql.includes('FROM contacts')) return { rows: [] };
       return { rows: [] };
     },
@@ -310,4 +312,30 @@ test('empresa fora dos ICPs nao e abordada', async () => {
   assert.equal(r.descartados, 1);
   assert.match(registros[0].motivo, /fora dos ICPs/);
   assert.equal(registros[0].status, 'descartado');
+});
+
+test('o teto diario conta mensagem ENTREGUE, nao tentativa', async () => {
+  // Regra do Clayton (24/10). Em 23/10 o despachante estava quebrado: contar por
+  // "abordado" (que e so enfileirado) queimaria os 10 do dia sem um unico envio.
+  let sqlVisto = '';
+  const pool = {
+    async query(sql) {
+      if (sql.includes('AS total')) { sqlVisto = sql; return { rows: [{ total: 10 }] }; }
+      return { rows: [] };
+    },
+  };
+  const r = await runProspeccaoTick(pool, {
+    accountId: 2,
+    config: { enabled: true, dryRun: false, maxPorDia: 10, maxPorTick: 3 },
+    carregarPerfis: async () => { throw new Error('nao devia chegar aqui'); },
+  });
+  assert.match(r.skipped, /teto di[áa]rio/);
+  // Quem diz que saiu e a fila, nao o log de tentativa.
+  assert.match(sqlVisto, /outbound_queue/);
+  assert.match(sqlVisto, /status = 'sent'/);
+  assert.match(sqlVisto, /origem = 'prospeccao'/);
+  // Dry run ainda conta, porque gasta token.
+  assert.match(sqlVisto, /status = 'dry_run'/);
+  // E o que apenas entrou na fila NAO conta.
+  assert.doesNotMatch(sqlVisto, /'abordado'/);
 });

@@ -7,6 +7,7 @@ import {
   MagnifyingGlassCircleIcon,
   PauseCircleIcon,
   ChevronDownIcon,
+  CheckIcon,
 } from '@heroicons/react/24/outline';
 import { btnGhostXs, card, cardAlt, iconBtn, input, subtle } from './ui';
 
@@ -125,7 +126,8 @@ function Item({ it, children }) {
           <span className="flex min-w-0 items-center gap-1.5">
             <ChevronDownIcon className={`h-3.5 w-3.5 shrink-0 text-muted2 transition ${aberto ? '' : '-rotate-90'}`} />
             <span className="truncate text-[13px] font-semibold text-ink">
-              {it.contact_name || `Contato #${it.contact_id}`}
+              {it.contact_name || it.razao_social
+                || (it.contact_id ? `Contato #${it.contact_id}` : 'Sem contato associado')}
             </span>
           </span>
           <span className="mt-0.5 block pl-5 text-[11px] text-muted2">
@@ -268,6 +270,23 @@ export default function AutomationView() {
     }
   }, [carregar]);
 
+  // Acatar a sugestao da IA. Ela sugere em vez de mover quando o alvo e marco
+  // comercial ou quando a confianca nao chega na regua; sem este botao a sugestao
+  // morria no painel e alguem tinha que mover na mao no kanban.
+  const [acatando, setAcatando] = useState(null);
+  const acatar = useCallback(async (id) => {
+    setAcatando(id);
+    setErro('');
+    try {
+      await axios.post(`/api/ai-stages/${id}/aplicar`);
+      await carregar();
+    } catch (e) {
+      setErro(e?.response?.data?.error || 'Não foi possível aplicar a sugestão.');
+    } finally {
+      setAcatando(null);
+    }
+  }, [carregar]);
+
   const abas = [
     { id: 'followup', nome: 'Follow-up', icone: ChatBubbleLeftRightIcon, n: followups?.hoje?.sent || 0 },
     { id: 'etapa', nome: 'Classificação de etapa', icone: ViewColumnsIcon, n: (stages?.hoje?.applied || 0) + (stages?.hoje?.dry_run || 0) },
@@ -358,6 +377,19 @@ export default function AutomationView() {
                 {it.motivo && <p className="text-[12px] text-muted">{it.motivo}</p>}
                 {(it.skip_reason || it.error) && (
                   <p className="text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
+                )}
+                {it.status === 'suggested' && it.to_stage && (
+                  <button
+                    type="button"
+                    onClick={() => acatar(it.id)}
+                    disabled={acatando === it.id}
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-accent/40
+                               bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent
+                               transition hover:bg-accent/20 disabled:opacity-50"
+                  >
+                    <CheckIcon className="h-3.5 w-3.5" />
+                    {acatando === it.id ? 'Movendo...' : `Acatar e mover para ${it.to_stage}`}
+                  </button>
                 )}
               </>
             )}

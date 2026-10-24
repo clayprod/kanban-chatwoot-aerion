@@ -50,7 +50,7 @@ const createProspeccaoTable = async (pool) => {
       telefone TEXT,
       perfil TEXT,
       status TEXT NOT NULL
-        CHECK (status IN ('abordado', 'dry_run', 'descartado', 'falhou')),
+        CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou')),
       motivo TEXT,
       perfil_whatsapp TEXT,
       confirmou_empresa BOOLEAN,
@@ -63,6 +63,15 @@ const createProspeccaoTable = async (pool) => {
   `);
   // Tabela ja existia em producao antes do ICP entrar.
   await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS icp TEXT`);
+  // 'enfileirado' nasceu depois da tabela: abordagem gerada e na fila, ainda nao
+  // entregue. Quem entrega e o despachante, e e ele que alimenta o teto diario.
+  await pool.query(`
+    ALTER TABLE ${PROSPECCAO_LOG_TABLE} DROP CONSTRAINT IF EXISTS ${PROSPECCAO_LOG_TABLE}_status_check
+  `);
+  await pool.query(`
+    ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD CONSTRAINT ${PROSPECCAO_LOG_TABLE}_status_check
+      CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou'))
+  `);
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prospeccao_cnpj
       ON ${PROSPECCAO_LOG_TABLE} (account_id, cnpj)
@@ -260,12 +269,28 @@ const registrarProspeccao = async (pool, d) => {
   );
 };
 
+// O teto diario conta MENSAGEM ENTREGUE, nao tentativa.
+//
+// Regra do Clayton (24/10): "o limite da prospeccao ativa so deve contar com mensagem
+// realmente enviada, nao tentativa". Faz diferenca de verdade: o status 'abordado'
+// significa que a abordagem entrou na fila, e em 23/10 o despachante estava quebrado
+// e nada saiu — contar por ali queimaria os 10 contatos do dia sem um unico envio.
+// Quem sabe se saiu e a fila (outbound_queue.status = 'sent').
+//
+// Dry run conta porque gasta token de IA: o teto existe tambem para isso.
 const contarHoje = async (pool, accountId) => {
+  const inicioDoDia = `date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+                       AT TIME ZONE 'America/Sao_Paulo'`;
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM ${PROSPECCAO_LOG_TABLE}
-      WHERE account_id = $1 AND status IN ('abordado', 'dry_run')
-        AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
-            AT TIME ZONE 'America/Sao_Paulo'`,
+    `SELECT (
+       (SELECT COUNT(*) FROM outbound_queue
+         WHERE account_id = $1 AND origem = 'prospeccao' AND status = 'sent'
+           AND enviado_em >= ${inicioDoDia})
+       +
+       (SELECT COUNT(*) FROM ${PROSPECCAO_LOG_TABLE}
+         WHERE account_id = $1 AND status = 'dry_run'
+           AND created_at >= ${inicioDoDia})
+     )::int AS total`,
     [accountId]
   );
   return rows[0]?.total || 0;
@@ -399,7 +424,7 @@ const runProspeccaoTick = async (pool, {
           dedupeKey: `prospeccao:${soDigitos(empresa.cnpj)}`,
         });
         await registrarProspeccao(pool, {
-          ...base, status: 'abordado', mensagem: texto, contactId,
+          ...base, status: 'enfileirado', mensagem: texto, contactId,
           perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou, icp: contexto.icp,
         });
         r.abordados += 1;
