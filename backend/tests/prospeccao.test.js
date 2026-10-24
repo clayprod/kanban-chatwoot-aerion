@@ -206,7 +206,39 @@ test('numero que nao existe no WhatsApp e descartado antes da IA', async () => {
   }));
   assert.equal(chamouIA, false);
   assert.equal(r.descartados, 1);
-  assert.match(pool.gravados.at(-1).motivo, /não existe no WhatsApp/);
+  assert.match(pool.gravados.at(-1).motivo, /Receita sem WhatsApp/);
+  assert.match(pool.gravados.at(-1).motivo, /na web: não procurei/, 'diz que nem tentou a web');
+});
+
+test('sem WhatsApp na Receita, procura o contato na web antes de desistir', async () => {
+  // Medido em 24/10: o telefone da Receita tem WhatsApp em 2 de ~360 empresas. Sem
+  // procurar fora, a prospeccao avalia dezenas e aborda zero.
+  const pool = fakePool();
+  const consultados = [];
+  const r = await runProspeccaoTick(pool, deps({
+    verificarNumerosWhatsapp: async (nums) => {
+      consultados.push(nums);
+      // O da Receita nao tem; o achado na web tem.
+      return { existentes: new Set(nums.filter((n) => n === '5519998887777')), perfis: new Map() };
+    },
+    buscarContatoWeb: async () => ({
+      numero: '5519998887777', fonte: 'instagram', origem: 'https://instagram.com/x', celular: true,
+    }),
+  }));
+  assert.equal(r.abordados, 1);
+  assert.equal(r.achadosNaWeb, 1);
+  assert.equal(pool.gravados.at(-1).status, 'enfileirado');
+  assert.match(pool.gravados.at(-1).motivo, /achado na web \(instagram\)/);
+});
+
+test('numero achado na web que nao tem WhatsApp nao e usado', async () => {
+  const pool = fakePool();
+  const r = await runProspeccaoTick(pool, deps({
+    verificarNumerosWhatsapp: async () => ({ existentes: new Set(), perfis: new Map() }),
+    buscarContatoWeb: async () => ({ numero: '5519998887777', fonte: 'site', origem: 'https://x.com' }),
+  }));
+  assert.equal(r.descartados, 1);
+  assert.match(pool.gravados.at(-1).motivo, /achado na web, mas sem WhatsApp/);
 });
 
 test('empresa que ja esta na base nao e prospectada de novo', async () => {

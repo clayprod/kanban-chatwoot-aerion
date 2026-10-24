@@ -302,6 +302,7 @@ const runProspeccaoTick = async (pool, {
   carregarPerfis,
   buscarEmpresas,
   verificarNumerosWhatsapp,
+  buscarContatoWeb,
   importarLead,
   enfileirarEnvio,
   validarMensagem,
@@ -349,16 +350,40 @@ const runProspeccaoTick = async (pool, {
       };
 
       try {
-        if (!tel || !existentes.has(tel)) {
+        // O telefone da Receita quase nunca tem WhatsApp: medido em 24/10, 2 em ~360.
+        // Antes de descartar a empresa, procura o contato real na web — site proprio,
+        // Instagram, ficha do Google. Roda por baixo; a tela so ve o resultado.
+        let telefone = tel;
+        let origemTelefone = tel ? 'receita' : null;
+        let achadoWeb = null;
+        if ((!telefone || !existentes.has(telefone)) && buscarContatoWeb) {
+          achadoWeb = await buscarContatoWeb(empresa);
+          if (achadoWeb?.numero) {
+            const { existentes: temWpp } = await verificarNumerosWhatsapp([achadoWeb.numero]);
+            if (temWpp.has(achadoWeb.numero)) {
+              telefone = achadoWeb.numero;
+              origemTelefone = achadoWeb.fonte || 'web';
+              existentes.add(telefone);
+              base.telefone = telefone;
+            } else {
+              achadoWeb = { ...achadoWeb, motivo: 'achado na web, mas sem WhatsApp' };
+            }
+          }
+        }
+
+        if (!telefone || !existentes.has(telefone)) {
           await registrarProspeccao(pool, {
             ...base, status: 'descartado',
-            motivo: tel ? 'número não existe no WhatsApp' : 'sem telefone no cadastro',
+            motivo: tel
+              ? `número da Receita sem WhatsApp; na web: ${achadoWeb?.motivo || 'não procurei'}`
+              : `sem telefone no cadastro; na web: ${achadoWeb?.motivo || 'não procurei'}`,
           });
           r.descartados += 1;
           continue;
         }
+        if (origemTelefone !== 'receita') r.achadosNaWeb = (r.achadosNaWeb || 0) + 1;
 
-        const nomePerfil = perfisWpp?.get?.(tel) || null;
+        const nomePerfil = perfisWpp?.get?.(telefone) || null;
         const confirmou = perfilConfirmaEmpresa(
           nomePerfil, empresa.razao_social, empresa.nome_fantasia
         );
@@ -420,12 +445,15 @@ const runProspeccaoTick = async (pool, {
         // Contato novo não tem conversa: o envio vai por telefone, e a conversa
         // nasce no Chatwoot quando a Evolution entrega.
         await enfileirarEnvio({
-          contactId, telefone: tel, texto,
+          contactId, telefone, texto,
           dedupeKey: `prospeccao:${soDigitos(empresa.cnpj)}`,
         });
         await registrarProspeccao(pool, {
           ...base, status: 'enfileirado', mensagem: texto, contactId,
           perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou, icp: contexto.icp,
+          motivo: origemTelefone === 'receita'
+            ? 'telefone do cadastro da Receita'
+            : `telefone achado na web (${origemTelefone}): ${achadoWeb?.origem || ''}`.slice(0, 500),
         });
         r.abordados += 1;
       } catch (error) {
