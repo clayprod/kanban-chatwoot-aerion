@@ -23648,7 +23648,7 @@ app.get('/api/ai-responder', requireAdmin, async (req, res) => {
         max_por_dia: configEnv.maxPorDia,
         min_confianca: configEnv.minConfianca,
         // Desde quando ele atua: conversa anterior a isto ele nao responde.
-        desde: settings?.responder_desde || null,
+        desde: settings?.get?.('responder_desde') || null,
       },
       hoje: Object.fromEntries(agregado.rows.map((r) => [r.status, r.total])),
       decisoes: decisoes.rows,
@@ -24151,7 +24151,11 @@ const registerBackgroundSchedules = () => {
     if (!config.enabled) return;
 
     // Marco zero: gravado uma vez, na primeira execucao ligada.
-    let desde = settings?.responder_desde ? new Date(settings.responder_desde) : null;
+    // carregarSettings devolve um Map, nao um objeto: ler com ponto dava undefined
+    // sempre, e o marco zero era regravado a cada tick — na pratica a janela ficava
+    // de zero segundo e ele nunca responderia nada.
+    const marcoGravado = settings?.get?.('responder_desde');
+    let desde = marcoGravado ? new Date(marcoGravado) : null;
     if (!desde || Number.isNaN(desde.getTime())) {
       desde = new Date();
       await gravarSetting(pool, 'responder_desde', desde.toISOString());
