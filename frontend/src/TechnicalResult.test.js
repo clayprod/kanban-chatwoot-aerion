@@ -6,6 +6,27 @@ import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,Item
 jest.mock('axios',()=>({get:jest.fn(),post:jest.fn()}));
 const match=(id,ok,price,status='uncertain')=>({product_id:id,product_name:`Produto ${id}`,sale_price:price,status,counts:{ok,total:10,verificar:10-ok,nao_ok:0},requirements:[]});
 
+test('automatic checklist uses green yellow red results and filters without changing the evidence',()=>{
+ const rows=['ok','verificar','nao_ok'].map((status,n)=>({status,requirement:{id:String(n),label:`Exigência ${n}`,section:'Segurança'},evidence:[]}));
+ render(<TechnicalItem item={{number:'1',in_scope:true,candidate_count:8,products:[{...match('A',1,100),counts:{ok:1,verificar:1,nao_ok:1,total:3},requirements:rows}]}}/>);
+ expect(screen.getByText('3 exigências · Melhor produto de 8 avaliados')).toBeVisible();
+ for(const [status,label] of [['success','1 Atende'],['warning','1 Sem comprovação'],['danger','1 Não atende']])expect(screen.getByRole('button',{name:new RegExp(label)})).toHaveClass(`text-status-${status}`);
+ fireEvent.click(screen.getByRole('button',{name:/1 Não atende/}));expect(screen.getByText('Exigência 2')).toBeVisible();expect(screen.queryByText('Exigência 0')).not.toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Mostrar todas'}));expect(screen.getByText('Exigência 0')).toBeVisible();
+});
+
+test('the pre-import checklist reports chosen product and manual changes without overwriting the automatic assessment',()=>{
+ const onChecklistChange=jest.fn(),req={id:'r',label:'RTH',section:'Segurança'};
+ const a={...match('A',0,100),requirements:[{requirement:req,status:'verificar',reason:'Conferir fonte',evidence:[]}]};
+ const b={...match('B',1,200),requirements:[{requirement:req,status:'ok',evidence:[]}]};
+ render(<TechnicalItem item={{number:'1',in_scope:true,products:[a,b]}} onChecklistChange={onChecklistChange}/>);
+ fireEvent.change(screen.getByRole('combobox',{name:'Produto comparado'}),{target:{value:'B'}});
+ expect(onChecklistChange.mock.calls.at(-1)[1].product_id).toBe('B');
+ fireEvent.click(screen.getByRole('button',{name:'Verificar'}));
+ expect(onChecklistChange.mock.calls.at(-1)[1].overrides).toEqual({r:'verificar'});
+ expect(screen.getByText('Revisão manual · automático: Atende')).toBeVisible();expect(b.requirements[0].status).toBe('ok');
+});
+
 test('incomplete coverage shows its actual pause without promising paid automatic recovery',()=>{
  render(<ExtractionCoverage analysis={{status:'queued',execution_status:'paused'}} result={{documents_complete:false,coverage:{read_complete:false,chunks:109,complete:96,blocks:120,audited_blocks:118,requirements:60,comparisons:180}}} />);
  expect(screen.getByText('96/109')).toBeVisible();expect(screen.getByText('118/120')).toBeVisible();

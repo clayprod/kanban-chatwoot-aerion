@@ -103,7 +103,7 @@ export function analysisLabel(analysis) {
   if (analysis.status === 'running') return analysis.stage_label || 'Análise em andamento';
   return analysis.stage_label || 'Sem comparação concluída';
 }
-export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
+export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, onChecklistChange, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [fetching, setFetching] = useState(true);
@@ -165,7 +165,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     await loadDetails();
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
-  if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
+  if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onChecklistChange={onChecklistChange?(number,choice)=>onChecklistChange(number,{...choice,analysis_id:analysis.id}):undefined} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
   if (overview) return <div role="status" className="space-y-1 text-sm text-muted"><p>{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : `${analysisLabel(analysis)}. Os resultados parciais disponíveis aparecem nos itens abaixo.`}</p>{result.review && result.notes?.[0] && <p className="text-xs">{result.notes[0]}</p>}</div>;
   if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>

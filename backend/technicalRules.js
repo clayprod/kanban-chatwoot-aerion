@@ -28,10 +28,15 @@ const unitInfo = value => {
   if (String(value).trim().endsWith('b') && bitScale[text(value)]) return ['storage', bitScale[text(value)]];
   return UNITS[text(value)] || [/^[a-z]+$/.test(text(value)) ? `literal:${text(value).replace(/s$/, '')}` : `unsupported:${text(value)}`, 1];
 };
+const normalizedSources=new WeakMap();
 function evidenceValid(fact, sources) {
   if (!fact || !fact.source_id || !fact.quote || !fact.location) return false;
   const source = sources.find(s => String(s.id) === String(fact.source_id));
-  return !!source && text(source.text).includes(text(fact.quote)) && text(fact.quote).length >= 3;
+  if(!source)return false;
+  let cached=normalizedSources.get(source);
+  if(!cached||cached.raw!==source.text){cached={raw:source.text,normalized:text(source.text)};normalizedSources.set(source,cached);}
+  const quote=text(fact.quote);
+  return quote.length>=3&&cached.normalized.includes(quote);
 }
 function quotedNumber(fact, value) {
   if (number(value) === null) return false;
@@ -135,6 +140,7 @@ function compareRequirement(req, specs, sources, mapping = {}) {
     return (source?.notes || []).some(note => /ocr.*(?:duvida|falha)|falha.*ocr/.test(text(note)) && (!page || !/pagina\s+(\d+)/.test(text(note)) || /pagina\s+(\d+)/.exec(text(note))?.[1] === page));
   };
   if (uncertainOcr(req)) return { ...base, reason: 'A leitura OCR desta exigência contém números incertos. Confira o documento original.' };
+  if(['professional_use','long_range'].includes(metricKey(req.key))&&!/^(?:uso )?profissional$|^professional(?: use)?$|^longo alcance$|^long[ -]range$/.test(text(req.value)))return {...base,reason:'A exigência acrescenta uma aplicação ou condição específica; a classificação geral do produto não comprova esse detalhe.'};
   const requiredComponent=require('./technicalMetrics').componentOf(req);
   const absent=requiredComponent&&specs.find(s=>s.key==='component_presence'&&require('./technicalMetrics').componentOf(s)===requiredComponent&&/^(nao|no|ausente|not present)$/.test(text(s.value))&&evidenceValid(s,sources));
   if(absent)return {...base,status:'nao_ok',reason:'A ficha informa explicitamente que este modelo não possui o componente exigido.',evidence:[absent]};
@@ -195,7 +201,7 @@ function compareRequirement(req, specs, sources, mapping = {}) {
     const categorical = categoricalValue;
     const values = new Set(selected.map(categorical));
     if (values.size === 1 && values.has(categorical(req)) && selected.every(s => text(s.quote).includes(text(s.value))) && text(req.quote).includes(text(req.value))) {
-      return { ...base, status: 'ok', reason: 'Característica explicitamente comprovada nas fontes.' };
+      return { ...base, status: 'ok', reason: ['long_range','professional_use'].includes(metricKey(req.key)) ? 'Descrição qualitativa atendida pela classificação documentada do produto. Limites numéricos e aplicações específicas são comparados separadamente.' : 'Característica explicitamente comprovada nas fontes.' };
     }
     // Different names/standards may be equivalent; a model assertion is insufficient.
   }

@@ -12,6 +12,7 @@ function categoryOf(fact) {
 // Only explicit, unambiguous aliases. No fuzzy comparison of technical metrics.
 const aliases = { flight_duration: 'flight_time', flight_time_minutes: 'flight_time', battery_flight_time: 'flight_time', motorization: 'motor_type', return_home: 'return_to_home', rth: 'return_to_home' };
 function normalizeFact(fact) {
+  if(metricKey(fact.key)==='long_range'&&/^(?:longo alcance|long[ -]range)$/.test(text(fact.value)))fact={...fact,kind:'categorical'};
   // K video formats cannot be compared to megapixels. Preserve the literal
   // source value as a compound format instead of inventing a pixel count.
   if(metricKey(fact.key)==='camera_resolution' && /^k$/i.test(fact.unit || ''))fact={...fact,key:'video_resolution',kind:'compound',value:`${fact.value}K`,unit:''};
@@ -19,7 +20,8 @@ function normalizeFact(fact) {
   const key = text(fact.key).replace(/[\s-]+/g, '_');
   const inferred=inferKey(fact.label,fact.section);
   const recognized=['return_to_home','gimbal_axes','video_resolution','thermal_resolution','flight_time','hover_time','ascent_speed','descent_speed','flight_speed','flight_ceiling','takeoff_altitude','wind_resistance','transmission_distance','photo_formats','video_formats','gnss_systems','gimbal_stabilization','camera_resolution','camera_sensor','optical_zoom','digital_zoom','hybrid_zoom','zoom_unspecified','battery_capacity','takeoff_weight','aircraft_weight'];
-  const canonical=metricKey(aliases[key] || key);
+  const canonical=inferred==='hover_time'&&metricKey(aliases[key] || key)==='flight_time'?'hover_time':metricKey(aliases[key] || key);
+  if(canonical==='gimbal_model')return {...fact,component:componentOf(fact),key:canonical,category:categoryOf(fact)};
   return { ...fact, component:componentOf(fact), key: recognized.includes(canonical)?canonical:recognized.includes(inferred)?inferred:canonical, category: categoryOf(fact) };
 }
 function uniqueFacts(facts) {

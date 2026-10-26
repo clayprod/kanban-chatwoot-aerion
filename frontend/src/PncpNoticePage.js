@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import OpportunityPreview from './OpportunityPreview';
 import {pncpInterestTotals} from './pncpPreview';
 
-export default function PncpNoticePage({ opportunity, jobName, items, otherItems, loading, error, onBack, onSearches, onImport, canImport }) {
+export default function PncpNoticePage({ opportunity, jobName, items, otherItems, loading, error, onBack, onSearches, onImport, canImport, onChecklistChange }) {
   const title = useRef(null);
   const totals=pncpInterestTotals(items);
   const partial=Boolean(loading || error || totals.missing);
@@ -29,6 +29,6 @@ export default function PncpNoticePage({ opportunity, jobName, items, otherItems
         <button type="button" onClick={onImport} disabled={!canImport || loading} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none">{opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline' ? 'Já está no pipeline' : 'Importar para o pipeline'}</button>
       </div>
     </header>
-    <OpportunityPreview opportunity={opportunity} items={items} otherItems={otherItems} loading={loading} error={error} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
+    <OpportunityPreview opportunity={opportunity} items={items} otherItems={otherItems} loading={loading} error={error} onChecklistChange={onChecklistChange} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
   </article>;
 }

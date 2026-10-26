@@ -3,7 +3,7 @@ import TechnicalResult from './TechnicalResult';
 import SearchEvidence from './SearchEvidence';
 import {pncpItemEstimatedTotal} from './pncpPreview';
 const money = value => value == null ? 'Não informado' : Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-export default function OpportunityPreview({ opportunity, items = [], otherItems = [], loading, error, sectionClass }) {
+export default function OpportunityPreview({ opportunity, items = [], otherItems = [], loading, error, sectionClass, onChecklistChange }) {
   const raw = opportunity.__preview;
   const [focus, setFocus] = useState(opportunity.__focus);
   const itemRefs = useRef({});
@@ -43,7 +43,7 @@ export default function OpportunityPreview({ opportunity, items = [], otherItems
           <summary className="cursor-pointer border-t border-line px-3 py-2 text-xs font-medium text-primary">Ver exigências e comparação</summary>
           <div className="space-y-3 border-t border-line p-3">
             {item.scope_pending && <p className="text-xs text-status-warning">O texto corresponde à busca; a classificação material/serviço ainda precisa ser confirmada.</p>}
-            <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />
+            <TechnicalResult item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} onChecklistChange={onChecklistChange} highlightProductId={String(focus?.number) === String(item.numero_item) ? focus?.productId : undefined} />
           </div>
         </details>
       </div>)}</div>

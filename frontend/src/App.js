@@ -14,6 +14,8 @@ import PncpSearchDialog from './PncpSearchDialog';
 import { readPncpPage, pncpPageUrl, readPipelinePage, pipelinePageUrl } from './pncpNavigation';
 import PipelineOpportunityPage from './PipelineOpportunityPage';
 import { createPncpOpportunityPreview, mergePncpItems } from './pncpPreview';
+import RequirementStatusControl from './RequirementStatusControl';
+import { applyTechnicalChecklistsToDraft } from './technicalChecklistBridge';
 import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
@@ -10870,60 +10872,22 @@ function App() {
           sei: newOpportunityForm.links_sei || null,
         },
         linked_contacts: linkedContacts,
+        items:newOpportunityItemsDraft.map(item=>({...item,quantidade:parseCurrency(item.quantidade),valor_referencia:parseCurrency(item.valor_referencia),custo_total_item:parseCurrency(item.custo_total_item),requirements:(item.requirements || []).map((req,index)=>({...req,valor_ofertado:parseCurrency(req.custo_subitem ?? req.valor_ofertado),ordem:req.ordem ?? index}))})),
       };
       const response = await axios.post('/api/licitacoes/opportunities', payload);
       const created = response.data;
 
-      for (const item of newOpportunityItemsDraft) {
-        if (!String(item?.descricao || '').trim()) {
-          continue;
-        }
-
-        let createdItem;
-        try {
-          const createdItemResponse = await axios.post(`/api/licitacoes/opportunities/${created.id}/items`, {
-            numero_item: item.numero_item,
-            descricao: item.descricao,
-            modelo_produto: item.modelo_produto,
-            quantidade: parseCurrency(item.quantidade),
-            unidade: item.unidade,
-            valor_referencia: parseCurrency(item.valor_referencia),
-            custo_total_item: parseCurrency(item.custo_total_item),
-          });
-          createdItem = createdItemResponse.data;
-        } catch (itemError) {
-          console.error('Error creating imported item:', itemError, item);
-          continue;
-        }
-
-        const requirements = Array.isArray(item.requirements) ? item.requirements : [];
-        for (const req of requirements) {
-          if (!String(req?.requisito || '').trim()) {
-            continue;
-          }
-          try {
-            await axios.post(`/api/licitacoes/opportunities/${created.id}/items/${createdItem.id}/requirements`, {
-              requisito: req.requisito,
-              status: req.status,
-              observacao: req.observacao,
-              valor_ofertado: req.custo_subitem,
-            });
-          } catch (reqError) {
-            console.error('Error creating imported item requirement:', reqError, req);
-          }
-        }
-      }
-
       if (String(newOpportunityForm.comentario_inicial || '').trim()) {
         await axios.post(`/api/licitacoes/opportunities/${created.id}/comments`, {
           content: newOpportunityForm.comentario_inicial,
-        });
+        }).catch(()=>alert('Oportunidade, itens e checklist salvos. O comentário inicial não pôde ser salvo; adicione-o na oportunidade.'));
       }
 
       setLicitacaoOpportunities(prev => [response.data, ...prev]);
       resetNewOpportunityFormState();
     } catch (error) {
       console.error('Error creating licitação opportunity:', error);
+      alert(error.response?.data?.error || 'Não foi possível salvar a oportunidade com seus itens e checklist. O rascunho foi mantido para tentar novamente.');
     }
   };
 
@@ -12942,7 +12906,9 @@ function App() {
         : 'ativo';
       const profile = options.profile || activePncpSearchJob?.filters?.search_profile || { terms: activePncpSearchJob?.terms || [pncpSearchFilters.q].filter(Boolean), excluded_terms: activePncpSearchJob?.negative_terms || [] };
       const scoped = options.items ? {relevant:options.items} : await resolvePncpFocusedItems(item,profile,{allItems:true});
-      const importedItemsDraft = mapPncpImportItemsToDraft(scoped.relevant);
+      const technicalResponse=await axios.post('/api/licitacoes/technical/notice',{item,profile,summary:false});
+      const technicalAnalysis=technicalResponse.data?.analysis;
+      const importedItemsDraft = applyTechnicalChecklistsToDraft(mapPncpImportItemsToDraft(scoped.relevant),technicalAnalysis,options.checklists || {});
       if (!importedItemsDraft.length) throw new Error('Nenhum item corresponde ao foco atual da busca. Confira os critérios na página do edital.');
       const estimatedValue = Number(item.valor_itens_pertinentes) > 0
         ? Number(item.valor_itens_pertinentes)
@@ -12972,7 +12938,7 @@ function App() {
         metadados: {
           pncp_id: item.id,
           pncp_numero_controle: item.numero_controle_pncp,
-          technical_analysis_id: item.technical_analysis_id || null,
+          technical_analysis_id: technicalAnalysis?.id || item.technical_analysis_id || null,
           pncp_situacao: item.situacao?.nome,
           pncp_tipo: item.tipo?.nome,
           pncp_esfera: item.esfera?.nome,
@@ -16652,9 +16618,10 @@ function App() {
               {pncpPageError && <div role="alert" className="my-4 rounded-xl border border-status-warning p-4 text-sm text-ink">{pncpPageError}<button type="button" className="ml-4 text-primary underline" onClick={() => navigatePncpPage({ job: activePncpSearchJobId })}>Voltar aos resultados</button></div>}
               {pncpPage.result && !selectedOpportunity?.__preview && !pncpPageError && <div role="status" className="my-5 rounded-xl border border-line bg-surf p-6 text-sm text-muted">Carregando o edital e suas análises…</div>}
               {selectedOpportunity?.__preview && <PncpNoticePage opportunity={selectedOpportunity} jobName={activePncpSearchJob?.nome || activePncpSearchJob?.filters?.q} items={selectedItems} otherItems={pncpPreviewOtherItems} loading={pncpPreviewLoading} error={pncpPreviewError}
+                onChecklistChange={(number,choice)=>setSelectedOpportunity(current=>current?.__preview!==selectedOpportunity.__preview || JSON.stringify(current.__technical_checklists?.[number])===JSON.stringify(choice)?current:{...current,__technical_checklists:{...current.__technical_checklists,[number]:choice}})}
                 onBack={backToPncpResults} onSearches={() => navigatePncpPage({})}
                 canImport={canEditPage('Licitações') && selectedOpportunity.__preview.__visibility !== 'pipeline' && selectedOpportunity.__preview.__visibility_db !== 'pipeline'}
-                onImport={() => { const item = selectedOpportunity.__preview; const options = {profile:selectedOpportunity.__profile, ...(!pncpPreviewLoading && !pncpPreviewError ? {items:selectedItems} : {})}; setSelectedOpportunity(null); pncpPreviewRequest.current++; navigatePncpPage({ job: activePncpSearchJobId }); importPncpLicitacao(item,options); }} />}
+                onImport={() => { const item = selectedOpportunity.__preview; const options = {profile:selectedOpportunity.__profile,checklists:selectedOpportunity.__technical_checklists, ...(!pncpPreviewLoading && !pncpPreviewError ? {items:selectedItems} : {})}; setSelectedOpportunity(null); pncpPreviewRequest.current++; navigatePncpPage({ job: activePncpSearchJobId }); importPncpLicitacao(item,options); }} />}
               {/* Criação em diálogo; listagem e resultados em páginas. */}
               <div className={pncpJobModalOpen || selectedOpportunity?.__preview ? 'hidden' : 'mt-6 space-y-5'}>
                 {(pncpNewSearchOpen || pncpGuideJob) && <PncpSearchDialog onClose={closePncpNewSearch} title={pncpGuideJob ? 'Revisar busca de editais' : 'Nova busca de editais'}>
@@ -18330,9 +18297,10 @@ function App() {
                                         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(7.5rem,9.5rem)]">
                                           <div className="min-w-0 overflow-hidden">
                                             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                                              <span className={`inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${item.technical_percent!=null ? item.technical_full ? 'border-status-success/30 text-status-success' : 'border-line text-muted' : getPncpScoreClass(item.score)}`}>
-                                                {item.technical_percent!=null ? `${item.technical_percent}% técnico${item.technical_full ? ' · Atende' : item.technical_complete ? '' : ' · Parcial'}` : `${Number(item.score || 0)} · ${item.score_label || 'Aderência'}`}
+                                              <span title="Aderência à busca, com os bônus técnicos e de preço comprovados" className={`inline-flex max-w-full items-center truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-bold ${getPncpScoreClass(item.score)}`}>
+                                                {`${Number(item.score || 0)} · ${item.score_label || 'Aderência'}`}
                                               </span>
+                                              {item.technical_percent!=null && <span title="Percentual das exigências técnicas comprovadas; não substitui a nota de aderência" className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] ${item.technical_full ? 'border-status-success/30 text-status-success' : 'border-line text-muted'}`}>{item.technical_percent}% técnico{item.technical_full ? ' · Atende' : item.technical_complete ? '' : ' · Parcial'}</span>}
                                               <span className={`inline-flex max-w-full items-center truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ${getPncpUrgencyClass(item.prazo_info?.urgency)}`}>
                                                 {item.prazo_info?.label || 'Prazo n/d'}
                                               </span>
@@ -19508,7 +19476,7 @@ function App() {
 
                                 {isExpanded && (
                                   <div className="border-t border-line bg-surf p-3 sm:p-3.5">
-                                    <TechnicalResult opportunityId={selectedOpportunity.id} itemNumber={item.numero_item} />
+                                    <details className="mb-3"><summary className="cursor-pointer text-xs text-primary">Comparação automática e fontes</summary><TechnicalResult opportunityId={selectedOpportunity.id} itemNumber={item.numero_item} /></details>
                                     <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-line bg-bg2/40 p-2.5 sm:grid-cols-3 lg:grid-cols-6">
                                       <div className="min-w-0 col-span-2">
                                         <label className="mb-1 block text-[10px] font-medium text-muted">Descrição</label>
@@ -19624,32 +19592,7 @@ function App() {
                                               }`}
                                             >
                                               <span className="w-5 shrink-0 text-center text-[10px] font-medium tabular-nums text-muted">{index + 1}</span>
-                                              <div className="flex h-7 shrink-0 items-center gap-0.5 rounded-md border border-line bg-bg2 p-0.5">
-                                                <button
-                                                  type="button"
-                                                  title="Atende"
-                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'ok' ? 'bg-status-success text-white shadow-sm' : 'text-muted hover:bg-status-success/15 hover:text-status-success'}`}
-                                                  onClick={() => onStatus('ok')}
-                                                >
-                                                  OK
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  title="Não atende"
-                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'nao_ok' ? 'bg-status-danger text-white shadow-sm' : 'text-muted hover:bg-status-danger/15 hover:text-status-danger'}`}
-                                                  onClick={() => onStatus('nao_ok')}
-                                                >
-                                                  X
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  title="Verificar"
-                                                  className={`h-6 min-w-[1.6rem] rounded px-1 text-[10px] font-bold transition ${req.status === 'verificar' || req.status === 'pendente' ? 'bg-status-warning text-white shadow-sm' : 'text-muted hover:bg-status-warning/15 hover:text-status-warning'}`}
-                                                  onClick={() => onStatus('verificar')}
-                                                >
-                                                  ?
-                                                </button>
-                                              </div>
+                                              <RequirementStatusControl status={req.status} onChange={onStatus} label={`Resultado de ${req.requisito || 'requisito'}`}/>
                                               <input
                                                 className={`${input} h-7 min-w-0 flex-1 text-[11px] leading-snug`}
                                                 value={req.requisito || ''}
@@ -19658,6 +19601,7 @@ function App() {
                                               <input
                                                 className={`${input} h-7 w-24 shrink-0 text-[10px] sm:w-28`}
                                                 placeholder="Obs"
+                                                title={req.observacao || ''}
                                                 value={req.observacao || ''}
                                                 onChange={(event) => onChange({ observacao: event.target.value })}
                                               />
@@ -19680,6 +19624,7 @@ function App() {
                                               >
                                                 ×
                                               </button>
+                                              {!isProposal&&String(req.observacao || '').startsWith('Produto:')&&<details className="basis-full border-t border-line pt-1.5 text-xs"><summary className="cursor-pointer text-primary">Comparação e evidências</summary><p className="max-h-72 overflow-auto whitespace-pre-wrap py-2 leading-relaxed text-muted">{req.observacao}</p></details>}
                                             </div>
                                           );
                                         };
@@ -19840,10 +19785,10 @@ function App() {
                                         ));
 
                                         return (
-                                          <details className="mt-4 border-t border-line pt-3"><summary className="cursor-pointer text-sm font-medium">Anotações e ajustes manuais</summary>
+                                          <details open className="mt-4 border-t border-line pt-3"><summary className="cursor-pointer text-sm font-medium">Checklist técnico</summary>
                                             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                                               <div>
-                                                <h5 className="text-xs font-semibold tracking-tight text-ink">Anotações do item</h5>
+                                                <h5 className="text-xs font-semibold tracking-tight text-ink">Exigências e comparação</h5>
                                                 <p className="mt-0.5 text-[10px] text-muted">
                                                   Organizado por seções do edital · custos opcionais por requisito
                                                 </p>

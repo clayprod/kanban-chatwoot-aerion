@@ -135,6 +135,7 @@ const { createSearchQualityTables, reviewSearchBatch, backfillPcaClassifications
 const { scanSearchTerm } = require('./searchScan');
 const { createTechnicalTables, createTechnicalAnalysis, technicalFilterClause } = require('./technicalAnalysis');
 const { guardLegacyRequirement } = require('./technicalRules');
+const { importOpportunityItems } = require('./opportunityItemImport');
 const { requestExceedsCapacity } = require('./technicalAiFormat');
 const { seedTechnicalCatalog } = require('./technicalCatalogSeed');
 
@@ -7880,6 +7881,7 @@ app.post('/api/licitacoes/opportunities', async (req, res) => {
         if (linked.rows[0]) created.technical_analysis_id = linked.rows[0].technical_analysis_id;
       }
     }
+    await importOpportunityItems(client, created.id, body.items || []);
     if (linkedContacts.length > 0) {
       let hasPrincipal = false;
       for (const item of linkedContacts) {

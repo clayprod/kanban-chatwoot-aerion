@@ -5,6 +5,8 @@ const groups = {
   flight_time: ['flight_duration','flight_time_minutes','battery_flight_time','battery_endurance','max_flight_time','maximum_flight_time','endurance'],
   motor_type: ['motorization','motor_technology'],
   return_to_home: ['return_home','rth','automatic_return_home'],
+  professional_use: ['professional','professional_grade','professional_application'],
+  long_range: ['long_distance','long_range_transmission'],
   gimbal_axes: ['gimbal_axis_count','gimbal_stabilization_axes','stabilization_axes'],
   gimbal_stabilization: ['stability_type','camera_stabilization','stabilization_type'],
   takeoff_altitude: ['max_takeoff_altitude','maximum_takeoff_altitude'],
@@ -49,13 +51,15 @@ function sameMetric(a,b) {
 }
 function categoricalValue(fact) {
   const value=clean(fact.value),key=metricKey(fact.key);
+  if(key==='professional_use'&&/^(?:uso )?profissional(?: — .*)?$|^professional(?: use)?$/.test(value))return 'professional_use';
+  if(key==='long_range'&&/^(?:longo alcance|long[ -]range)(?: — .*)?$/.test(value))return 'long_range';
   if(key==='motor_type' && /^(brushless|motores? eletricos? sem escova|motores? sem escova|sem escova)$/.test(value))return 'brushless';
   if(key==='gimbal_stabilization' && /^(mecanica triaxial|mecanica em 3 eixos|3.axis mechanical|3-axis|3 eixos)$/.test(value))return 'mechanical_3_axis';
   if(key==='gimbal_stabilization' && /mecanic/.test(value) && /triaxial|3[ -]axis|3 eixos/.test(value))return 'mechanical_3_axis';
   if(!/\b(?:nao|sem|nenhum[ao]?|ausente|none|no|opcional|optional|not supported|without)\b/.test(value)){
     if(key==='wifi'&&/\bwi[ -]?fi\b|\b802\.11/.test(value))return 'wifi_supported';
     if(key==='bluetooth'&&/\bbluetooth\b/.test(value))return 'bluetooth_supported';
-    if(key==='return_to_home'&&/\brth\b|return.to.home|retorno.*(?:automatic|origem|decolagem)/.test(value))return 'rth_supported';
+    if(key==='return_to_home'&&/\brth\b|return[ -]to[ -]home|auto[ -]?return|retorno.*(?:automatic|origem|decolagem|casa)/.test(value))return 'rth_supported';
     if(key==='controller_screen'&&/tela integrada|integrated screen|built.in/.test(value))return 'integrated_screen';
     if(key==='controller_screen'&&componentOf(fact)==='controller'&&/^(tela|controle remoto)$/.test(clean(fact.label))&&!/smartphone|celular|extern/.test(value)&&(/\d/.test(value)||/^(tela|sim|integrada)$/.test(value)))return 'integrated_screen';
     if(key==='memory_card_support'&&(/\bmicrosd\b/.test(value)||/^cartoes? microsd suportados/.test(clean(fact.label))))return 'microsd_supported';

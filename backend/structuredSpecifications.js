@@ -15,7 +15,9 @@ function flattenSpecifications(specs){
 function inferKey(label,section=''){
   const s=text(label),scope=text(section);
   if(/^possui camera (?:termica|zoom|teleobjetiva)/.test(s))return 'component_presence';
-  if(/\brth\b|retorno.*(?:automatic|origem|decolagem)|return.*home/.test(s))return 'return_to_home';
+  if(/\brth\b|retorno.*(?:automatic|origem|decolagem|casa)|return.*home/.test(s))return 'return_to_home';
+  if(/uso profissional|professional use/.test(s))return 'professional_use';
+  if(/^longo alcance$|^long.range$/.test(s))return 'long_range';
   if(/gimbal.*eixos|eixos.*gimbal|camera.*\d+ eixos/.test(s))return 'gimbal_axes';
   if(/camera.*\d+(?:[.,]\d+)?k\b/.test(s))return 'video_resolution';
   if(/tempo.*pairar|voo estacionario|hover(?:ing)?.*time/.test(s))return 'hover_time';
@@ -27,20 +29,23 @@ function inferKey(label,section=''){
   if(/altitude.*decolagem/.test(s))return 'takeoff_altitude';
   if(/resistencia.*vento|wind.*resistance/.test(s))return 'wind_resistance';
   if(/distancia.*transmissao|transmission.*distance/.test(s))return 'transmission_distance';
+  if(/distancia.*voo|flight.*distance|flight.*mileage/.test(s))return 'flight_distance';
+  if(/dimensoes.*(?:dobrad|folded)/.test(s)&&!/desdobrad|unfolded/.test(s))return 'folded_dimensions';
+  if(/dimensoes.*(?:desdobrad|aberta|unfolded)/.test(s))return 'unfolded_dimensions';
   if(/formato.*foto|photo.*format/.test(s))return 'photo_formats';
   if(/formato.*video|video.*format/.test(s))return 'video_formats';
   if(/resolucao.*termica|thermal.*resolution/.test(s))return 'thermal_resolution';
   if(/resolucao.*video|video.*resolution/.test(s))return 'video_resolution';
   if(s==='video'&&/camera/.test(scope))return 'video_resolution';
-  if(/gnss/.test(s))return 'gnss_systems';
+  if(/gnss/.test(s)||/^posicionamento$/.test(s))return 'gnss_systems';
   if(/tipo.*gimbal|estabilizacao|stable system/.test(s)&&/gimbal|camera/.test(scope))return 'gimbal_stabilization';
   if(/resolucao.*(?:fotograf|efetiva)|megapixel|effective.*pixel/.test(s))return 'camera_resolution';
-  if(/sensor.*imagem|image.*sensor/.test(s))return 'camera_sensor';
+  if(/sensor.*imagem|image.*sensor/.test(s)||s==='sensor'&&/camera/.test(scope))return 'camera_sensor';
   if(/peso.*decolagem|take.?off.*weight/.test(s))return 'takeoff_weight';
   if(/peso.*bateria|weight.*battery/.test(s))return 'aircraft_weight';
-  if(/tela|screen/.test(s)&&/controle|controller/.test(scope))return 'controller_screen';
-  if(/^frequencia (?:operacional|de operacao)$/.test(s)&&/controle|controller/.test(scope))return 'control_frequency';
-  if(/^autonomia$/.test(s)&&/controle|controller/.test(scope))return 'controller_battery_time';
+  if(/tela|screen/.test(s)&&/control/.test(scope))return /resolucao/.test(s)?'controller_screen_resolution':/brilho/.test(s)?'controller_screen_brightness':/tamanho/.test(s)?'controller_screen_size':'controller_screen';
+  if(/^frequencia(?: operacional| de operacao)?$/.test(s)&&/control/.test(scope))return 'control_frequency';
+  if(/^autonomia$/.test(s)&&/control/.test(scope))return 'controller_battery_time';
   if(/wi.?fi|802\.11/.test(s))return 'wifi';
   if(/^wi[ -]?fi$/.test(scope)&&s==='protocolo')return 'wifi';
   if(/bluetooth/.test(s))return 'bluetooth';
@@ -60,8 +65,8 @@ function structuredFacts(rows,source){
   return rows.filter(r=>!/^nota\b/i.test(r.label)&&!/^n[aã]o especificado$/i.test(r.value)).flatMap((row,index)=>{
     const quote=`${row.section}\n${row.label}: ${row.value}${row.note ? '\n'+row.note:''}`;
     const key=inferKey(row.label,row.section);
-    const component=['controller_screen','control_frequency','controller_battery_time'].includes(key)?'controller':componentOf({label:row.section,key});
-    const base={id:`structured:${source.id}:${hash(quote).slice(0,20)}`,item_number:'all',section:row.section,label:row.label,key,component,category:'equipment',kind:'categorical',value:row.value,upper:null,unit:'',operator:'eq',conditions:'',quote,source_id:String(source.id),location:'Ficha estruturada',structured:true};
+    const component=['controller_screen','control_frequency','controller_battery_time'].includes(key)||/control/.test(text(row.section))?'controller':componentOf({label:row.section,key});
+    const base={id:`structured:${source.id}:${hash(quote).slice(0,20)}`,item_number:'all',section:row.section,label:row.label,key,component,category:'equipment',kind:'categorical',value:row.value,upper:null,unit:'',operator:'eq',conditions:'',quote,source_id:String(source.id),location:'Ficha estruturada',structured:true,...(row.source_url?{source_url:row.source_url}:{}),...(row.review_note?{review_note:row.review_note}:{})};
     const simple=/^(?:at[eé]\s+|menos de\s+)?(-?\d+(?:[.,]\d+)?)\s*(minutos|min|m\/s|km\/h|km|m|g|kg|MP|mAh|Wh|V|W|GB|TB|rpm|eixos)\s*$/i.exec(row.value);
     if(simple){base.kind='numeric';base.value=Number(simple[1].replace(',','.'));base.unit=simple[2];
       const conditions=[];if(/sem vento/.test(text(quote)))conditions.push('sem vento');if(/sem carga/.test(text(quote)))conditions.push('sem carga');if(/\bfcc\b/i.test(quote))conditions.push('FCC');if(/\bce\b/i.test(quote))conditions.push('CE');base.conditions=conditions.join(';');
@@ -76,6 +81,8 @@ function structuredFacts(rows,source){
       }
     }
     const derived=[];
+    // A camera/gimbal model is not a stabilization technology.
+    if(key==='gimbal_stabilization'&&!/eixos|triaxial|mecanic|axis|stabili/i.test(row.value))base.key='gimbal_model';
     // A lens row names several independent properties. Split only explicitly
     // labelled measurements; retain the complete original row as evidence.
     if(/^lente$/i.test(row.label)){

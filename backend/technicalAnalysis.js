@@ -650,7 +650,9 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const allProductSources = (await pool.query(`SELECT ps.product_id,s.id,s.pages,s.notes FROM technical_sources s JOIN technical_product_sources ps ON ps.source_id=s.id
         WHERE ps.account_id=$1 AND ps.active=TRUE`, [job.account_id])).rows;
       for (const item of state.items.filter(i => i.in_scope)) {
-        const candidates = catalog.filter(p => cleanIds(profile.product_ids).length > 0 || itemInScope({ descricao: item.description }, { terms: [] }, [p]));
+        // Product names/keywords are not eligibility rules. Rank the complete
+        // selected (or active) catalog using the requirements themselves.
+        const candidates = catalog;
         const ranked = candidates.map(base => {
           const ids = [base.id, ...(base.compatible_ids || [])].map(String);
           const productSources = allProductSources.filter(s => ids.includes(String(s.product_id))).map(s => ({ id: String(s.id), text: (s.pages || []).map(p => p.text).join('\n'), notes: s.notes }));
@@ -968,7 +970,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     if(raw.length!==review.items.length||raw.some(i=>!review.items.some(r=>String(r.numeroItem)===String(i.numeroItem ?? i.numero_item))))return null;
     const items=raw.map(i=>({number:String(i.numeroItem ?? i.numero_item),description:i.descricao || '',quantity:i.quantidade,unit:i.unidadeMedida || '',reference_price:i.valorUnitarioEstimado,in_scope:itemInScope(i,job.context.profile,catalog,(job.context.payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem))}));
     return reviewedComparison({noticeKey:review.notice_key,sources:sourceRows.rows,catalog,accessories,productSources:productRows.rows.map(s=>({...s,id:String(s.id),text:(s.pages || []).map(p=>p.text).join('\n')})),items,baseScore:job.context.payload.base_score ?? job.context.payload.score,
-      candidateAllowed:(item,p)=>cleanIds(job.context.profile?.product_ids).length>0 || itemInScope({descricao:item.description},{terms:[]},[p]),manifestVerified:job.state.final_manifest_verified===true&&!job.state.needs_revalidation&&Date.now()-new Date(job.state.final_manifest_checked_at || job.updated_at).getTime()<24*60*60*1000&&job.state.source_ids?.length===job.state.files?.length&&job.state.items_complete===true});
+      manifestVerified:job.state.final_manifest_verified===true&&!job.state.needs_revalidation&&Date.now()-new Date(job.state.final_manifest_checked_at || job.updated_at).getTime()<24*60*60*1000&&job.state.source_ids?.length===job.state.files?.length&&job.state.items_complete===true});
   }
   async function finishReviewed(job,result){
     const status=result.documents_complete?'completed':'partial',error=result.notes.join(' ') || null,reviewSources=result.sources.map(s=>s.id);
