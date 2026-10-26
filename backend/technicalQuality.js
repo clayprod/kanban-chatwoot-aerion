@@ -18,8 +18,9 @@ function normalizeFact(fact) {
   if(['optical_zoom','digital_zoom','hybrid_zoom'].includes(metricKey(fact.key)) && !/optical|optico|digital|hybrid|hibrid/.test(text(fact.quote)))fact={...fact,key:'zoom_unspecified'};
   const key = text(fact.key).replace(/[\s-]+/g, '_');
   const inferred=inferKey(fact.label,fact.section);
-  const recognized=['return_to_home','gimbal_axes','video_resolution','thermal_resolution','flight_time','hover_time','ascent_speed','descent_speed','flight_speed','flight_ceiling','takeoff_altitude','wind_resistance','transmission_distance','photo_formats','video_formats','gnss_systems','gimbal_stabilization','camera_resolution','camera_sensor','optical_zoom','digital_zoom','hybrid_zoom','battery_capacity'];
-  return { ...fact, component:componentOf(fact), key: recognized.includes(inferred) ? inferred : metricKey(aliases[key] || key), category: categoryOf(fact) };
+  const recognized=['return_to_home','gimbal_axes','video_resolution','thermal_resolution','flight_time','hover_time','ascent_speed','descent_speed','flight_speed','flight_ceiling','takeoff_altitude','wind_resistance','transmission_distance','photo_formats','video_formats','gnss_systems','gimbal_stabilization','camera_resolution','camera_sensor','optical_zoom','digital_zoom','hybrid_zoom','zoom_unspecified','battery_capacity','takeoff_weight','aircraft_weight'];
+  const canonical=metricKey(aliases[key] || key);
+  return { ...fact, component:componentOf(fact), key: recognized.includes(canonical)?canonical:recognized.includes(inferred)?inferred:canonical, category: categoryOf(fact) };
 }
 function uniqueFacts(facts) {
   const unique = new Map();

@@ -2,7 +2,7 @@
 const catalog=require('./data/aerionTechnicalSpecifications.json');
 const {structuredFacts}=require('./structuredSpecifications');
 const {hash}=require('./technicalRules');
-const REVISION='structured-specifications-v1';
+const REVISION='structured-specifications-v2-numeric-evidence';
 async function reviseTechnicalCatalog(client,account){
   if((await client.query('SELECT 1 FROM technical_catalog_imports WHERE account_id=$1 AND version=$2',[account,REVISION])).rowCount)return;
   for(const row of catalog.products){

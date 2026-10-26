@@ -85,7 +85,7 @@ export function ExtractionCoverage({ analysis, result }) {
       {coverage.requirements != null && <div><dt>Exigências identificadas</dt><dd className="font-semibold text-ink">{coverage.requirements}</dd></div>}
       {coverage.comparisons != null && <div><dt>Comparações técnicas realizadas</dt><dd className="font-semibold text-ink">{coverage.comparisons}</dd></div>}
     </dl>
-    {coverage.read_complete===true ? <p className={result.documents_complete ? 'text-muted':'text-status-warning'}>{result.documents_complete ? 'Leitura e cobertura dos documentos conferidas. O atendimento depende das evidências de cada requisito.' : 'Leitura dos documentos conferida. Há divergências que precisam de revisão; veja os trechos de origem.'}</p>
+    {coverage.read_complete===true ? <p className={result.documents_complete ? 'text-muted':'text-status-warning'}>{result.documents_complete ? 'Leitura e cobertura dos documentos conferidas. O atendimento depende das evidências de cada requisito.' : result.document_coverage?.blockers?.[0]?.message || 'Leitura dos documentos conferida. Há divergências que precisam de revisão; veja os trechos de origem.'}</p>
         : <p role="status" className="text-status-warning">{analysisLabel(analysis)}. Há trechos sem cobertura confirmada; as comparações disponíveis são parciais.</p>}
   </div>;
 }
@@ -95,6 +95,8 @@ export function analysisLabel(analysis) {
   if (analysis.execution_status === 'paused') return 'Análise pausada';
   if (analysis.execution_status === 'blocked') return 'Análise bloqueada — provedor de IA indisponível';
   if (analysis.execution_status === 'waiting') return 'Análise aguardando retomada';
+  if (analysis.stage === 'review_stale') return 'Documentos alterados — revisão desatualizada';
+  if (analysis.stage === 'reviewed') return analysis.result?.documents_complete ? 'Exigências conferidas' : 'Exigências conferidas — pendências identificadas';
   if (analysis.status === 'failed') return 'Falha na análise';
   if (analysis.status === 'partial') return 'Leitura parcial — revisão necessária';
   if (analysis.status === 'queued') return 'Análise na fila';
@@ -164,7 +166,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
   if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
-  if (overview) return <p role="status" className="text-sm text-muted">{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : `${analysisLabel(analysis)}. Os resultados parciais disponíveis aparecem nos itens abaixo.`}</p>;
+  if (overview) return <div role="status" className="space-y-1 text-sm text-muted"><p>{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : `${analysisLabel(analysis)}. Os resultados parciais disponíveis aparecem nos itens abaixo.`}</p>{result.review && result.notes?.[0] && <p className="text-xs">{result.notes[0]}</p>}</div>;
   if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>
     <ProductMatchSummary items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />

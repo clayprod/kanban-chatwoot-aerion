@@ -9,6 +9,7 @@ const fact = (quote,extra={}) => ({item_number:'1',key:'flight_time',label:'Auto
 function fixture(content, handler, initialCache) {
   const cache = new Map(), calls = [];
   const dependencies = {
+    strategy:'legacy',
     read:async(_j,_s,_k,key,index)=>cache.get(`${key}:${index}`) || initialCache,
     write:async(_j,_s,_k,key,index,data)=>cache.set(`${key}:${index}`,data),
     ask:async(_j,_c,_system,user,_tokens,format)=>{const input=JSON.parse(user);calls.push({input,format});return handler(input,format?.json_schema?.name===COVERAGE_FORMAT.json_schema.name?COVERAGE_FORMAT:format);},

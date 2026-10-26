@@ -114,7 +114,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal((await pool.query('SELECT status FROM technical_jobs WHERE id=$1', [dailyCopy.id])).rows[0].status, 'superseded');
       assert.equal(calls, beforeReuse);
       // A daily freshness check reads the manifest, not the entire AI pipeline.
-      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours' WHERE id=$1", [jobId]);
+      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours',state=jsonb_set(state,'{final_manifest_checked_at}',to_jsonb((NOW()-INTERVAL '25 hours')::text)) WHERE id=$1", [jobId]);
       const validating = await service.observe(1, input, { terms: ['drone'] });
       assert.equal(validating.id, jobId); assert.equal(validating.state.needs_revalidation, true);
       assert.equal((await service.refreshedJob(validating)).result.documents_complete, false);
@@ -122,7 +122,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal((await pool.query('SELECT status FROM technical_jobs WHERE id=$1', [jobId])).rows[0].status, 'completed');
       assert.equal(calls, beforeReuse); assert.equal(downloads, 1);
       // A changed attachment invalidates the old comparison immediately.
-      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours' WHERE id=$1", [jobId]);
+      await pool.query("UPDATE technical_jobs SET updated_at=NOW()-INTERVAL '25 hours',state=jsonb_set(state,'{final_manifest_checked_at}',to_jsonb((NOW()-INTERVAL '25 hours')::text)) WHERE id=$1", [jobId]);
       filesRevision = 1;
       await service.observe(1, input, { terms: ['drone'] }); await service.tick();
       assert.equal((await request('GET', `${base}/technical/jobs/${jobId}`)).data.result, null);
@@ -223,15 +223,15 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
         return args.providerOffset === 0 ? { ok: false, error: 'openai:429 You have no credits remaining' } : dependencies.ai(args);
       } });
       for (let n = 0; n < 5; n++) await fallbackService.tick();
-      assert.deepEqual(offsets, [0, 1, 1]);
+      assert.deepEqual(offsets, [0, 1]);
       assert.equal((await pool.query('SELECT specs_complete FROM technical_products WHERE id=$1', [fallbackProduct.id])).rows[0].specs_complete, true);
-      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 3);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 2);
       assert.equal((await fallbackService.settings(89)).provider_error, null);
       const nextProduct = (await request('POST', `${base}/products`, { name: 'Fallback next product', sale_price: 10 }, 89)).data;
       await request('POST', `${base}/products/${nextProduct.id}/sources`, { text: 'Autonomia de 43 min. Outra ficha técnica.' }, 89);
       for (let n = 0; n < 5; n++) await fallbackService.tick();
-      assert.deepEqual(offsets, [0, 1, 1, 1, 1]);
-      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 5);
+      assert.deepEqual(offsets, [0, 1, 1]);
+      assert.equal((await pool.query('SELECT calls FROM technical_usage WHERE account_id=89')).rows[0].calls, 3);
       const limitedProduct = (await request('POST', `${base}/products`, { name: 'Limited fallback', sale_price: 10 }, 90)).data;
       await request('POST', `${base}/products/${limitedProduct.id}/sources`, { text: 'Autonomia de 44 min.' }, 90);
       const limitedService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args =>
@@ -309,7 +309,10 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const greens=[];
       for(const score of [68,80,90,95,85]) greens.push(await service.observe(92,{...input,sequencial:String(score),score},{terms:['drone']}));
       assert.equal(await service.observe(92,{...input,sequencial:'67',score:67},{terms:['drone']}),null);
-      for(let n=0;n<42;n++)await service.tick();
+      for(let n=0;n<42;n++){
+        await pool.query("UPDATE technical_jobs SET next_run_at=NOW() WHERE id=ANY($1::bigint[]) AND status='queued'",[greens.map(j=>j.id)]);
+        await service.tick();
+      }
       for(const green of greens) assert.equal((await request('GET',`${base}/technical/jobs/${green.id}`,null,92)).data.status,'completed');
       const firstGreenCall=(await pool.query("SELECT (j.context->'payload'->>'score')::int AS score FROM technical_ai_calls a JOIN technical_jobs j ON j.id=a.job_id WHERE a.account_id=92 AND j.kind='notice' ORDER BY a.id LIMIT 1")).rows[0];
       assert.ok([95,90].includes(firstGreenCall.score),'the two highest scores share the first concurrent batch');
@@ -327,7 +330,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       }});
       for(let n=0;n<8;n++)await adaptiveService.tick();
       const denseProduct=(await request('GET',`${base}/products`,null,93)).data[0];
-      assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,5);
+      assert.equal(denseProduct.specs_complete,true);assert.equal(denseProduct.specs.length,1);assert.equal(denseCalls,3);
       await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
       const larger=(await request('POST',`${base}/products`,{name:'Fallback com capacidade maior',sale_price:100},99)).data;
       await request('POST',`${base}/products/${larger.id}/sources`,{text:'Autonomia de 42 min.'},99);
@@ -338,7 +341,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       }});
       for(let n=0;n<4;n++)await capacityService.tick();
       assert.equal((await request('GET',`${base}/products`,null,99)).data[0].specs_complete,true);
-      assert.deepEqual(capacityOffsets,[0,1,0,1]);
+      assert.deepEqual(capacityOffsets,[0,1]);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

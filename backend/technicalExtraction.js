@@ -35,8 +35,7 @@ function mappedText(raw, joinWrappedWords) {
 }
 function literalEvidenceQuote(quote,source) {
   if(typeof quote!=='string' || text(quote).length<3)return null;
-  if(text(source).includes(text(quote)))return quote;
-  if(text(quote).length<12)return null;
+  if(String(source).includes(quote))return quote;
   // PDF line wrapping is formatting, not permission to fix numbers or wording.
   // Locate the contiguous original span and save THAT literal source quotation.
   for(const join of [false,true]){
@@ -83,6 +82,7 @@ function validateFacts(raw, source, chunk, kind, context, prefix) {
   for (const [index, row] of (Array.isArray(raw) ? raw : []).entries()) {
     const number=canonicalItemNumber(row.item_number,kind==='notice'?context.items:[]);
     const fact = normalizeFact({ ...row, item_number: number, id: `${prefix}:${index}`, source_id: String(source.id), location: chunk.location });
+    delete fact.quantity_verified;
     const literal=literalEvidenceQuote(fact.quote,chunk.text) || quoteFromLines(row.evidence_line_ids,chunk.text);
     if(literal && literal!==fact.quote){fact.original_quote=fact.quote;fact.quote=literal;fact.quote_recovered=true;}
     if (fact.replaces_quote || fact.replacement_statement) {
@@ -159,10 +159,15 @@ function validateAudit(value, source, chunk, kind, context, blocks, prefix) {
     audited_blocks:blocks.filter(b=>entries.some(c=>c.block_id===b.id)).length };
 }
 
-function createExtractionRunner({ read, write, ask, isTruncated }) {
+function extractionContext(context){
+ return {...context,section:undefined,items:context.items?.map(i=>({number:String(i.number),quantity:i.quantity,unit:i.unit})).sort((a,b)=>a.number.localeCompare(b.number,'en',{numeric:true}))};
+}
+const extractionKey=(kind,context,content)=>hash({audit:AUDIT_VERSION,kind,context:extractionContext(context),text:content});
+function createExtractionRunner({ read, write, ask, isTruncated, strategy='single', withLock }) {
   async function extract({job,config,source:s,chunk,kind,context,system,repair=false},work) {
-    const key = hash({audit:AUDIT_VERSION,kind,context,text:chunk.text});
-    const old = await read(job,s,kind,key,chunk.chunk);
+    const key = extractionKey(kind,context,chunk.text);
+    const legacyKey=hash({audit:AUDIT_VERSION,kind,context,text:chunk.text});
+    const old = await read(job,s,kind,key,chunk.chunk) || (legacyKey!==key?await read(job,s,kind,legacyKey,chunk.chunk):null);
     if (old?.audit_version === AUDIT_VERSION && (old.complete ||
       (!old.pending_subtasks && old.phase !== 'auditing' && (!repair || old.repair_request === repair)))) return {...old,cache_hit:true};
     // Incomplete evidence is a durable result, NOT permission to spend again.
@@ -175,6 +180,13 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
     if(!work.remaining)return{facts:[],complete:false,pending_subtasks:true,parts:{done:0,total:1},conflicts:[],issues:[],blocks:0,audited_blocks:0};
     work.remaining--;
     try {
+      if(strategy==='single' && old?.phase!=='auditing'){
+        const lines=sourceLines(chunk.text);
+        const response=await ask(job,config,`${system}\nFaça UMA leitura completa deste trecho e devolva facts e coverage juntos. context.scope_evidence contém tabelas originais de identificação dos itens; use-as SOMENTE para ligar o trecho atual a itens/lotes ou a um anexo comum explicitamente referido na tabela. Não extraia exigências dessas tabelas de contexto nesta chamada. Cada característica, componente e limite deve ser um fato atômico; não copie cláusulas jurídicas, preços de outras compras ou descrições de pesquisas de mercado como requisitos do produto. Para cada block.id, registre requirements, administrative, context ou unreadable, com justificativa. Em requirements, fact_indexes deve apontar os fatos que cobrem o bloco. Em administrative, cite uma linha literal que justifique a classificação. Use evidence_line_ids das linhas que contêm a exigência; a citação deve conter somente a cláusula necessária, sem juntar características vizinhas. Complete=true somente após conferir todos os blocos. Não invente fatos para satisfazer a cobertura.`,
+          JSON.stringify({context:extractionContext(context),document:{...chunk,text:lines.map(l=>`[${l.id}] ${l.text}`).join('\n'),source_id:String(s.id)},blocks}),7000,coverageFormatFor(blocks,lines));
+        data=validateAudit(response,s,chunk,kind,context,blocks,`${prefix}:audit`);
+        data.first_pass_rejections=[];
+      }else{
       first = old?.phase==='auditing' ? old.first_response : await ask(job,config,system,JSON.stringify({context,document:{...chunk,source_id:String(s.id)}}),7000,FACTS_FORMAT);
       if (!Array.isArray(first?.facts)) throw Object.assign(new Error('Extração fora do formato esperado.'),{code:'TECHNICAL_EXTRACTION_INVALID'});
       initial = validateFacts(first.facts,s,chunk,kind,context,`${prefix}:initial`);
@@ -188,6 +200,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       // supply literal evidence, rather than being forced to repeat a hallucination.
       data.first_pass_rejections=initial.rejected;
       data.facts = mergeFacts(initial.facts,data.facts);
+      }
     } catch (error) {
       if (!isTruncated(error)) throw error;
       truncated=true;
@@ -205,7 +218,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
     if(data.children?.length){
       const results = [];
       for (const [index,child] of data.children.entries()) {
-        const childKey=hash({audit:AUDIT_VERSION,kind,context,text:child.text});
+        const childKey=extractionKey(kind,context,child.text);
         const saved=data.child_done[index] ? await read(job,s,kind,childKey,child.chunk) : null;
         const result=saved && saved.audit_version===AUDIT_VERSION && !saved.pending_subtasks && saved.phase!=='auditing'
           ? {...saved,cache_hit:true} : await extract({job,config,source:s,chunk:child,kind,context,system,repair},work);
@@ -226,6 +239,6 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
   }
   // At most one extraction/audit unit per scheduler turn. Children and first
   // responses are durable, so another notice can run before the next unit.
-  return args=>extract(args,{remaining:1});
+  return args=>withLock?withLock(args,extractionKey(args.kind,args.context,args.chunk.text),()=>extract(args,{remaining:1})):extract(args,{remaining:1});
 }
-module.exports = { AUDIT_VERSION,sourceBlocks,sourceLines,quoteFromLines,literalEvidenceQuote,canonicalItemNumber,validateFacts,validateAudit,mergeFacts,createExtractionRunner };
+module.exports = { AUDIT_VERSION,sourceBlocks,sourceLines,quoteFromLines,literalEvidenceQuote,canonicalItemNumber,validateFacts,validateAudit,mergeFacts,extractionContext,extractionKey,createExtractionRunner };

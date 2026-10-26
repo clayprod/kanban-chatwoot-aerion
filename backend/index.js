@@ -24565,6 +24565,8 @@ const initializeDataLayer = async () => {
   await createTechnicalTables(pool);
   const catalogSeed = await seedTechnicalCatalog(pool, CHATWOOT_ACCOUNT_ID);
   if (catalogSeed.inserted) console.log(`[technical-catalog] ${catalogSeed.inserted} produtos importados com preço de distribuição.`);
+  const reviewedNotices=await technicalAnalysis.refreshReviewed(CHATWOOT_ACCOUNT_ID);
+  if(reviewedNotices.updated)console.log(`[technical-reviewed] ${reviewedNotices.updated} análises refeitas localmente com exigências conferidas; nenhuma chamada de IA.`);
   await initFeedback({ pool });
   await initEmbeddings({ pool });
   await initPcaVectorSupport();

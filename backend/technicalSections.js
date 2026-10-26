@@ -1,5 +1,5 @@
 'use strict';
-const {text}=require('./technicalRules');
+const {text,hash}=require('./technicalRules');
 const {literalEvidenceQuote}=require('./technicalExtraction');
 const section={type:'object',additionalProperties:false,required:['id','kind','title','quote'],properties:{id:{type:'string'},kind:{type:'string',enum:['technical','administrative','uncertain']},title:{type:'string'},quote:{type:'string'}}};
 const SECTION_FORMAT={type:'json_schema',json_schema:{name:'technical_sections',strict:true,schema:{type:'object',additionalProperties:false,required:['sections'],properties:{sections:{type:'array',items:section}}}}};
@@ -15,7 +15,17 @@ function validateSections(value,chunks){
     return {technical:!skip,title:entry?.title || 'Especificações técnicas',quote:quote || '',reason:skip?'Seção administrativa conferida':'Seção técnica ou conteúdo a conferir'};
   });
 }
-async function classifySections(ask,job,config,chunks){
+async function classifySections(ask,job,config,chunks,cache){
+  if(cache){
+    const keys=chunks.map(({c})=>hash({classifier:2,text:c.text}));
+    const saved=await Promise.all(chunks.map((part,i)=>cache.read(job,part.s,keys[i],part.c.chunk)));
+    const missing=chunks.map((part,i)=>({...part,index:i})).filter((_,i)=>!saved[i]);
+    if(missing.length){
+      const values=await classifySections(ask,job,config,missing);
+      for(const[i,part]of missing.entries()){saved[part.index]=values[i];await cache.write(job,part.s,keys[part.index],part.c.chunk,values[i]);}
+    }
+    return saved;
+  }
   const schema=JSON.parse(JSON.stringify(SECTION_FORMAT));
   const entry={...section,required:['kind','title','source_line'],properties:{kind:section.properties.kind,title:section.properties.title,source_line:{type:'string'}}};
   schema.json_schema.schema.properties.sections={type:'object',properties:Object.fromEntries(chunks.map(({c},i)=>[String(i),{...entry,properties:{...entry.properties,source_line:{type:'string',enum:c.text.split('\n').map((_,n)=>`l${n}`)}}}])),required:chunks.map((_,i)=>String(i)),additionalProperties:false};

@@ -3,9 +3,10 @@ const crypto = require('node:crypto');
 const VERSION = 4;
 const { metricKey, sameMetric, conditionsKey, conditionsCompatible, categoricalValue } = require('./technicalMetrics');
 const {fullAwardable}=require('./technicalAwarding');
+const {numberMentions,measurements}=require('./technicalNumbers');
 const text = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const hash = v => crypto.createHash('sha256').update(typeof v === 'string' || Buffer.isBuffer(v) ? v : JSON.stringify(v)).digest('hex');
-const commercialUnit = v => ({ un: 'unit', unidade: 'unit', unidades: 'unit', unit: 'unit', units: 'unit', und: 'unit', peca: 'unit', pecas: 'unit' }[text(v)] || text(v));
+const commercialUnit = v => /^(?:embalagem\s+)?1(?:[.,]0+)?\s*(?:unidades?|un)$/.test(text(v))?'unit':({ un: 'unit', unidade: 'unit', unidades: 'unit', unit: 'unit', units: 'unit', und: 'unit', peca: 'unit', pecas: 'unit' }[text(v)] || text(v));
 const number = v => typeof v === 'number' && Number.isFinite(v) ? v : null;
 const UNITS = {
   ms: ['time', .001], s: ['time', 1], seg: ['time', 1], segundos: ['time', 1], min: ['time', 60], minutos: ['time', 60], h: ['time', 3600], horas: ['time', 3600],
@@ -34,14 +35,14 @@ function evidenceValid(fact, sources) {
 }
 function quotedNumber(fact, value) {
   if (number(value) === null) return false;
-  return sourceNumbers(fact.quote).some(n => parseSourceNumber(n) === value);
+  return numberMentions(fact.quote).some(n=>n.value===value);
 }
 function numericFactValid(fact, requirement = false) {
   if (!fact || !text(fact.key) || !text(fact.unit) || !quotedNumber(fact, fact.value)) return false;
   const expected = unitInfo(fact.unit);
   const literal = String(fact.quote).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/(\d)\s*\([^)]*\)\s*(?=[a-z%°])/gi, '$1 ');
-  const measurements = [...literal.matchAll(/(-?\d+(?:[.,]\d+)*)\s*([a-z%°]+(?:[²³23])?(?:\/[a-z]+)?)/gi)];
-  if (!measurements.some(m => (parseSourceNumber(m[1]) === fact.value || (requirement && fact.operator === 'range' && parseSourceNumber(m[1]) === fact.upper)) && unitInfo(m[2])[0] === expected[0] && String(unitInfo(m[2])[1]) === String(expected[1]))) return false;
+  const measured = measurements(literal);
+  if (!(fact.quantity_verified===true&&['count','battery_count'].includes(expected[0])) && !measured.some(m => (m.value === fact.value || (requirement && fact.operator === 'range' && m.value === fact.upper)) && unitInfo(m.unit)[0] === expected[0] && String(unitInfo(m.unit)[1]) === String(expected[1]))) return false;
   if (fact.conditions && !text(fact.conditions).split(/[;|]/).every(c => text(fact.quote).includes(c.trim()))) return false;
   if (!fact.conditions && /\b(?:sem (?:vento|carga)|com carga|fcc|ce)\b/.test(text(fact.quote))) return false;
   if (!requirement) return true;
@@ -113,11 +114,25 @@ function compareRequirement(req, specs, sources, mapping = {}) {
     return (source?.notes || []).some(note => /ocr.*(?:duvida|falha)|falha.*ocr/.test(text(note)) && (!page || !/pagina\s+(\d+)/.test(text(note)) || /pagina\s+(\d+)/.exec(text(note))?.[1] === page));
   };
   if (uncertainOcr(req)) return { ...base, reason: 'A leitura OCR desta exigência contém números incertos. Confira o documento original.' };
+  const requiredComponent=require('./technicalMetrics').componentOf(req);
+  const absent=requiredComponent&&specs.find(s=>s.key==='component_presence'&&require('./technicalMetrics').componentOf(s)===requiredComponent&&/^(nao|no|ausente|not present)$/.test(text(s.value))&&evidenceValid(s,sources));
+  if(absent)return {...base,status:'nao_ok',reason:'A ficha informa explicitamente que este modelo não possui o componente exigido.',evidence:[absent]};
   // Model IDs and same_metric are suggestions, not evidence of equivalence.
   const selected = specs.filter(s => (mapping.spec_ids || []).includes(s.id) && sameMetric(req,s) && evidenceValid(s, sources));
   if (!selected.length) return base;
   base.evidence = selected;
   if (selected.some(uncertainOcr)) return { ...base, reason: 'A leitura OCR da ficha contém números incertos. Confira o documento original.' };
+  if(metricKey(req.key)==='camera_sensor'&&/cmos/.test(text(req.quote))&&selected.every(s=>/cmos/.test(text(s.quote)))){
+    const format=value=>{
+      const m=/(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+(?:[.,]\d+)?))?\s*(?:["″”]|polegadas?|inch(?:es)?)/i.exec(String(value));
+      return m?Number(m[1].replace(',','.'))/(m[2]?Number(m[2].replace(',','.')):1):null;
+    };
+    const required=format(req.value),offered=selected.map(s=>format(s.value));
+    if(required&&offered.every(v=>v!==null)&&new Set(offered).size===1){
+      if(offered[0]<required)return {...base,status:'nao_ok',reason:'A ficha informa formato de sensor CMOS inferior ao formato exigido.'};
+      if(offered[0]===required || req.operator==='min'&&/minim|ou superior|pelo menos/.test(text(req.quote)))return {...base,status:'ok',reason:'O formato do sensor CMOS está explicitamente comprovado na ficha.'};
+    }
+  }
   // Explicit lists are capabilities, not contradictory alternatives: a source
   // may list JPEG and another JPEG/RAW. Every requested token must be evidenced.
   if (['photo_formats','video_formats','gnss_systems'].includes(metricKey(req.key)) && req.value!=null && text(req.quote).includes(text(req.value))) {

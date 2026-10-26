@@ -13,6 +13,9 @@ const {classifySections}=require('./technicalSections');
 const {sameMetric}=require('./technicalMetrics');
 const {awardingMode}=require('./technicalAwarding');
 const {isCreditError,isAuthError,measuredTokens,executionState}=require('./technicalExecutionPolicy');
+const {documentRole,documentCoverage,itemScopeEvidence}=require('./technicalProvenance');
+const {reviewedComparison}=require('./technicalReviewedNotices');
+const reviewedBundle=require('./data/aerionReviewedNotices.json');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -21,6 +24,7 @@ class ProviderWait extends BudgetWait {}
 class EvidenceWait extends BudgetWait {}
 class EvidenceReview extends EvidenceWait {}
 class TechnicalChunkTooLarge extends Error {}
+class SharedExtractionWait extends BudgetWait {}
 const isPncpDeferred = error => error?.code === 'PNCP_BULK_DEFERRED' || /PNCP bulk (budget deferred|gate wait)/i.test(String(error?.message || ''));
 const isPncpTransportError = error => /^(terminated|fetch failed)$/i.test(String(error?.message || '')) ||
   [error?.code, error?.cause?.code].some(code => ['ECONNRESET', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code));
@@ -326,6 +330,15 @@ function createTechnicalAnalysis(deps) {
     return result.data;
   }
   const runExtraction = createExtractionRunner({ ask,
+    withLock:async(jobArgs,key,run)=>{
+      const client=await pool.connect(),lock=`technical-chunk:${jobArgs.job.account_id}:${jobArgs.source.id}:${key}:${jobArgs.chunk.chunk}`;
+      let acquired=false;
+      try{
+        acquired=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS locked',[lock])).rows[0].locked;
+        if(!acquired)throw new SharedExtractionWait('Este trecho já está sendo processado; aguardando a extração compartilhada.');
+        return await run();
+      }finally{if(acquired)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lock]);client.release();}
+    },
     isTruncated:error=>error instanceof TechnicalChunkTooLarge,
     read:async(job,s,kind,key,index)=>(await pool.query('SELECT data FROM technical_extractions WHERE account_id=$1 AND source_id=$2 AND kind=$3 AND context_hash=$4 AND chunk_index=$5',[job.account_id,s.id,kind,key,index])).rows[0]?.data,
     write:async(job,s,kind,key,index,data)=>pool.query(`INSERT INTO technical_extractions(account_id,source_id,kind,context_hash,chunk_index,data) VALUES($1,$2,$3,$4,$5,$6::jsonb)
@@ -417,7 +430,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         await pool.query("UPDATE technical_jobs SET status='superseded',error=NULL WHERE account_id=$1 AND id=ANY($2::bigint[]) AND status IN ('queued','running')", [account, obsolete]);
         await pool.query('UPDATE technical_candidates SET job_id=$3,updated_at=NOW() WHERE account_id=$1 AND job_id=ANY($2::bigint[])', [account, obsolete, job.id]);
       }
-      if (Array.isArray(job.result?.items) && Date.now() - new Date(job.updated_at).getTime() > 24 * 60 * 60 * 1000 && !job.state.needs_revalidation) {
+      if (Array.isArray(job.result?.items) && Date.now() - new Date(job.state.final_manifest_checked_at || job.updated_at).getTime() > 24 * 60 * 60 * 1000 && !job.state.needs_revalidation) {
         job.state.needs_revalidation = true; job.state.final_manifest_verified = false;
         job.status = 'queued'; job.stage = 'validating';
         await pool.query("UPDATE technical_jobs SET status='queued',stage='validating',state=$2::jsonb,next_run_at=NOW() WHERE id=$1", [job.id, JSON.stringify(job.state)]);
@@ -542,14 +555,32 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     }
     const sources = [];
     for (const id of state.source_ids) { const s = await parsedSource(job.account_id, id, {retryIncomplete:state.repair_pending || state.extraction_format!==EXTRACTION_VERSION}); state.complete &&= s.complete; sources.push(s); }
-    const allChunks = sources.flatMap(s => documents.chunksForSource(s).map(c => ({ s, c })));
+    let reviewed=await reviewedResult(job);
+    if(reviewed){
+      if(!state.final_manifest_verified||state.needs_revalidation||Date.now()-new Date(state.final_manifest_checked_at || job.updated_at).getTime()>=24*60*60*1000){
+        const latest=await heavy('technical-reviewed-final-check',async()=>({notice:await getNotice(ids),files:fileList(await getFiles(ids))}));
+        if(!isEligible(latest.notice))return finish(job,'partial',reviewed,'Licitação deixou de estar aberta.');
+        if(manifest(state.files)!==manifest(latest.files)){
+          await pool.query('UPDATE technical_jobs SET result=NULL WHERE id=$1',[job.id]);job.state={};job.stage='documents';await checkpoint(job);return;
+        }
+        state.final_manifest_verified=true;state.final_manifest_checked_at=new Date().toISOString();delete state.needs_revalidation;await checkpoint(job);
+        reviewed=await reviewedResult(job);
+      }
+      await finishReviewed(job,reviewed);return;
+    }
+    state.document_coverage=documentCoverage(sources);
+    state.complete &&= state.document_coverage.complete;
+    const allChunks = sources.filter(s=>documentRole(s).binding).flatMap(s => documents.chunksForSource(s).map(c => ({ s, c })));
     const planKey=hash({version:NOTICE_CONTEXT_VERSION,sources:sources.map(s=>s.sha256 || s.id)});
     if(state.section_plan_key!==planKey){state.section_plan=[];state.section_plan_key=planKey;}
     if(state.section_plan.length<allChunks.length){
       job.stage='locating_sections';
       const batch=[];let size=0;
       for(const part of allChunks.slice(state.section_plan.length)){if(batch.length && size+part.c.text.length>22000)break;batch.push(part);size+=part.c.text.length;if(batch.length===8)break;}
-      state.section_plan.push(...await classifySections(ask,job,config,batch));
+      state.section_plan.push(...await classifySections(ask,job,config,batch,{
+        read:async(job,s,key,index)=>(await pool.query("SELECT data FROM technical_extractions WHERE account_id=$1 AND source_id=$2 AND kind='sections' AND context_hash=$3 AND chunk_index=$4",[job.account_id,s.id,key,index])).rows[0]?.data,
+        write:async(job,s,key,index,data)=>pool.query("INSERT INTO technical_extractions(account_id,source_id,kind,context_hash,chunk_index,data) VALUES($1,$2,'sections',$3,$4,$5::jsonb) ON CONFLICT DO NOTHING",[job.account_id,s.id,key,index,JSON.stringify(data)]),
+      }));
       await checkpoint(job);return;
     }
     const chunks = allChunks.map((part,index)=>({...part,section:state.section_plan[index]})).filter(part=>part.section.technical);
@@ -562,7 +593,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       state.blocked_items = []; state.global_conflicts = false; state.chunk_coverage = [];
       state.repair_pending = false; state.final_manifest_verified = false;
       for (const item of state.items) item.products = [];
-      state.complete = state.source_ids.length === state.files.length && sources.every(s => s.complete) && state.items_complete;
+      state.complete = state.source_ids.length === state.files.length && sources.every(s => s.complete) && state.items_complete && state.document_coverage.complete;
       state.extraction_format = EXTRACTION_VERSION;
       state.notice_context_version = NOTICE_CONTEXT_VERSION;
     }
@@ -573,7 +604,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       // Listing descriptions can be truncated or contain typos. Sending them on
       // every page made the model invent the same conflict on unrelated pages.
       // Only the current source text is evidence; metadata supplies identifiers.
-      const data = await extractChunk(job, config, s, c, 'notice', { section:section.title, items: state.items.filter(i => i.in_scope).map(i => ({ number: i.number, quantity:i.quantity, unit:i.unit })) });
+      const data = await extractChunk(job, config, s, c, 'notice', { items: state.items.map(i => ({ number: i.number, quantity:i.quantity, unit:i.unit })),scope_evidence:itemScopeEvidence([s]) });
       data.facts=data.facts.map(f=>({...f,section:f.section || section.title}));
       if(data.pending_subtasks){state.extraction_parts=data.parts;await checkpoint(job);return;}
       delete state.extraction_parts;
@@ -654,6 +685,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         job.state = {}; job.stage = 'documents'; await checkpoint(job); return;
       }
       state.final_manifest_verified = true;
+      state.final_manifest_checked_at=new Date().toISOString();
       delete state.needs_revalidation;
     }
     result.documents_complete = state.complete && state.items_complete && !state.global_conflicts && !state.blocked_items.length;
@@ -662,7 +694,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       requirements:result.items.filter(i=>i.in_scope).reduce((n,i)=>n+i.requirements.length+(i.obligations || []).length,0),
       comparisons:result.items.filter(i=>i.in_scope).reduce((n,i)=>n+i.products.reduce((sum,p)=>sum+p.requirements.length,0),0) };
     result.conflicts = state.chunk_coverage.flatMap(c=>c.conflicts || []);
-    result.sources = sources.map(s => ({ id: s.id, name: s.name, url: s.url, pages: s.pages?.length || 0, complete: s.complete, notes: s.notes })); result.notes = [...new Set(state.notes)];
+    result.document_coverage=state.document_coverage;
+    result.sources = sources.map(s => ({ id: s.id, name: s.name, url: s.url, pages: s.pages?.length || 0, complete: s.complete, notes: s.notes,...documentRole(s) })); result.notes = [...new Set([...state.notes,...state.document_coverage.blockers.map(b=>b.message)])];
     const partial = !result.documents_complete || result.items.some(i => i.in_scope && (!i.requirements.length || !i.products.length || i.products.every(p => p.status === 'uncertain')));
     await finish(job, partial ? 'partial' : 'completed', result);
     // Keep base_score immutable and persist the new score for server-side sorting.
@@ -713,6 +746,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           // Release the heavy slot and retry the same checkpoint. Deferrals do
           // not exhaust the failure budget or silently skip a document.
           await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id]);
+        } else if (e instanceof SharedExtractionWait) {
+          await pool.query("UPDATE technical_jobs SET status='queued',error=$2,next_run_at=NOW()+INTERVAL '1 second' WHERE id=$1 AND status<>'superseded'",[job.id,e.message]);
         } else if (e instanceof EvidenceReview) {
           await pool.query("UPDATE technical_jobs SET status='partial',stage='review_required',error=$2,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id,e.message]);
         } else if (e instanceof BudgetWait) {
@@ -885,16 +920,19 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     });
   }
   async function refreshedJob(job) {
-    const visible = { ...publicJob(job), ...executionState(job,await settings(job.account_id)) };
+    const reviewed=await reviewedResult(job);
+    if(reviewed)return {...publicJob(job),status:reviewed.documents_complete?'completed':'partial',stage:'reviewed',stage_label:'Leitura conferida',error:reviewed.notes.join(' '),result:reviewed};
+    const invalidReview=!!job.result?.review;
+    const visible = { ...publicJob(job), ...executionState(job,await settings(job.account_id)),...(invalidReview?{status:'partial',stage:'review_stale',stage_label:'Documentos alterados — revisão desatualizada',error:'Os arquivos ou os itens mudaram após a revisão; percentuais anteriores não são válidos.'}:{}) };
     if (!job.result) return visible;
     const catalog = await productsFor(job.account_id, cleanIds(job.context.profile?.product_ids), false);
     const current = new Map(catalog.map(p => [String(p.id), p]));
     const accessories = new Map((await accessoriesFor(job.account_id)).map(p => [String(p.id), p]));
-    const items = job.result.items.map(i => ({ ...i, products: (i.products || []).filter(p => current.has(String(p.product_id))).map(p => {
+    const items = job.result.items.map(i => ({ ...i,...(invalidReview?{documents_complete:false,reviewed:false,review_invalidated:true}:{}), products: (i.products || []).filter(p => current.has(String(p.product_id))).map(p => {
       const product = current.get(String(p.product_id));
       const additions = (p.configuration?.additions || []).map(a => ({ ...a, unit_price: accessories.get(String(a.product_id))?.sale_price ?? a.unit_price }));
       const accessoryStale = additions.some(a => { const now = accessories.get(String(a.product_id)); return !now || now.specs_version !== a.specs_version || !(product.compatible_ids || []).map(String).includes(String(a.product_id)); });
-      const stale = job.result.version !== VERSION || job.state.notice_context_version !== NOTICE_CONTEXT_VERSION || job.state.item_scope_policy !== 2 || job.state.needs_revalidation || accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
+      const stale = invalidReview || job.result.version !== VERSION || job.state.notice_context_version !== NOTICE_CONTEXT_VERSION || job.state.item_scope_policy !== 2 || job.state.needs_revalidation || accessoryStale || product.specs_version !== (job.state?.catalog_versions?.[String(product.id)] ?? product.specs_version);
       const comparable = commercialUnit(product.unit) === commercialUnit(i.unit) && Number(i.reference_price) > 0 && product.package_confirmed;
       const extraPrice = additions.reduce((sum, a) => sum + Math.round(a.unit_price * 100) * a.quantity, 0) / 100;
       const price = (Math.round(Number(product.sale_price) * 100) + Math.round(extraPrice * 100)) / 100, ref = Number(i.reference_price);
@@ -905,7 +943,35 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         commercial_bonus: !stale && p.status === 'full' && comparable ? relation === 'below' ? 5 : relation === 'equal' ? 3 : 1 : 0,
         price_comparison: comparable ? { reference: ref, offered: price, difference: price - ref, relation } : null };
     }) }));
-    return { ...visible, result: { ...job.result, ...(job.state.needs_revalidation || job.result.version !== VERSION ? { documents_complete: false } : {}), ...summarize(items, job.result.base_score) } };
+    return { ...visible, result: { ...job.result, ...(invalidReview?{review:{...job.result.review,current:false}}:{}),...(invalidReview || job.state.needs_revalidation || job.result.version !== VERSION ? { documents_complete: false } : {}), ...summarize(items, job.result.base_score) } };
+  }
+  async function reviewedResult(job,memo){
+    const review=reviewedBundle.reviews.find(r=>r.notice_key===job.context?.notice_key);if(!review)return null;
+    const inputsKey=JSON.stringify([job.account_id,review.notice_key,cleanIds(job.context.profile?.product_ids)]);
+    const load=()=>Promise.all([
+      productsFor(job.account_id,cleanIds(job.context.profile?.product_ids)),accessoriesFor(job.account_id),
+      pool.query(`SELECT DISTINCT s.id,s.name,s.url,s.pages,s.complete,s.notes FROM technical_sources s JOIN technical_jobs j ON j.account_id=s.account_id AND COALESCE(j.state->'source_ids','[]'::jsonb) ? s.id::text
+        WHERE j.account_id=$1 AND j.kind='notice' AND j.context->>'notice_key'=$2 AND jsonb_typeof(s.pages)='array'`,[job.account_id,review.notice_key]),
+      pool.query('SELECT s.id,s.pages,s.notes FROM technical_sources s JOIN technical_product_sources ps ON ps.source_id=s.id WHERE ps.account_id=$1 AND ps.active=TRUE',[job.account_id]),
+    ]);
+    if(memo&&!memo.has(inputsKey))memo.set(inputsKey,load());
+    const [catalog,accessories,sourceRows,productRows]=await(memo?memo.get(inputsKey):load());
+    const raw=job.state.items_raw?.length?job.state.items_raw:review.items;
+    if(raw.length!==review.items.length||raw.some(i=>!review.items.some(r=>String(r.numeroItem)===String(i.numeroItem ?? i.numero_item))))return null;
+    const items=raw.map(i=>({number:String(i.numeroItem ?? i.numero_item),description:i.descricao || '',quantity:i.quantidade,unit:i.unidadeMedida || '',reference_price:i.valorUnitarioEstimado,in_scope:itemInScope(i,job.context.profile,catalog,(job.context.payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem))}));
+    return reviewedComparison({noticeKey:review.notice_key,sources:sourceRows.rows,catalog,accessories,productSources:productRows.rows.map(s=>({...s,id:String(s.id),text:(s.pages || []).map(p=>p.text).join('\n')})),items,baseScore:job.context.payload.base_score ?? job.context.payload.score,
+      candidateAllowed:(item,p)=>cleanIds(job.context.profile?.product_ids).length>0 || itemInScope({descricao:item.description},{terms:[]},[p]),manifestVerified:job.state.final_manifest_verified===true&&!job.state.needs_revalidation&&Date.now()-new Date(job.state.final_manifest_checked_at || job.updated_at).getTime()<24*60*60*1000&&job.state.source_ids?.length===job.state.files?.length&&job.state.items_complete===true});
+  }
+  async function finishReviewed(job,result){
+    await pool.query(`UPDATE technical_jobs SET result=$2::jsonb,status=$3,stage='reviewed',error=$4,updated_at=NOW(),state=state || jsonb_build_object('review_revision',$5::text,'final_manifest_checked_at',COALESCE(state->>'final_manifest_checked_at',$6::text)) WHERE id=$1 AND status<>'superseded'`,
+      [job.id,JSON.stringify(result),result.documents_complete?'completed':'partial',result.notes.join(' ') || null,result.review.revision,job.updated_at?.toISOString?.() || String(job.updated_at)]);
+    await persistScore(job,result);
+  }
+  async function refreshReviewed(account){
+    const jobs=(await pool.query("SELECT * FROM technical_jobs WHERE account_id=$1 AND kind='notice' AND status<>'superseded' AND context->>'notice_key'=ANY($2::text[]) ORDER BY id DESC",[account,reviewedBundle.reviews.map(r=>r.notice_key)])).rows;
+    let updated=0;const memo=new Map();
+    for(const job of jobs){const result=await reviewedResult(job,memo);if(result){await finishReviewed(job,result);updated++;}}
+    return {updated};
   }
   async function refreshCatalog(account) {
     // Reuse extracted requirements, compare afresh locally; no new AI calls for prices.
@@ -922,6 +988,6 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     await refreshCatalog(account);
     return publicJob(await enqueue(account, 'product', p.id, String(p.specs_version), { version: p.specs_version }));
   }
-  return { register, tick, observe, source, reextract, settings, refreshedJob, refreshCatalog };
+  return { register, tick, observe, source, reextract, settings, refreshedJob, refreshCatalog,refreshReviewed };
 }
 module.exports = { createTechnicalTables, createTechnicalAnalysis, DEFAULTS, GREEN_SCORE_THRESHOLD, minScore, cleanIds, profileKey, technicalFilterClause, itemInScope };

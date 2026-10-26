@@ -20,6 +20,12 @@ test('pending, blocked and partial analyses have distinct honest labels',()=>{
  expect(analysisLabel({status:'running',stage_label:'Extraindo exigências'})).toBe('Extraindo exigências');
 });
 
+test('a reviewed item shows the concrete document issue without pretending extraction is still running',()=>{
+ render(<TechnicalItem item={{number:'1',in_scope:true,reviewed:true,documents_complete:false,document_issues:['TR separado não localizado.'],products:[match('A',2,100)],requirements:[],obligations:[]}} />);
+ expect(screen.getByText(/TR separado não localizado/)).toBeVisible();
+ expect(screen.queryByText(/conferindo as exigências restantes/)).not.toBeInTheDocument();
+});
+
 test('complete reading with a documentary contradiction is distinguished from missing extraction',()=>{
  render(<ExtractionCoverage analysis={{status:'partial'}} result={{documents_complete:false,coverage:{read_complete:true,chunks:10,complete:10}}} />);
  expect(screen.getByText(/Há divergências que precisam de revisão/)).toBeVisible();
