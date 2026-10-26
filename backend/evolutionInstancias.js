@@ -125,13 +125,18 @@ const criarEnvioEvolution = ({
   baseUrl = process.env.EVOLUTION_API_URL,
   apiKey = null,
   env = process.env,
+  // Resolve o token fora do env (ver segredos.js): o EasyPanel apaga env posta por
+  // CLI a cada deploy, e em 26/10 isso deixou 6 prospeccoes presas na fila.
+  resolverToken = null,
   fetchImpl = fetch,
   timeoutMs = 20000,
 } = {}) => async ({ numero, texto, instancia }) => {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   if (!base) throw new Error('Evolution API não configurada (EVOLUTION_API_URL).');
   if (!instancia) throw new Error('instância não informada: envio sem número de origem definido');
-  const chave = apiKey || tokenDaInstancia(instancia, env);
+  const chave = apiKey
+    || (resolverToken ? await resolverToken(instancia) : null)
+    || tokenDaInstancia(instancia, env);
   if (!chave) {
     throw new Error(
       `sem token para a instância "${instancia}": defina EVOLUTION_TOKEN_${SLUG_DA_INSTANCIA(instancia)}`

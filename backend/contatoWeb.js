@@ -344,7 +344,10 @@ const buscarContatoWeb = async (empresa, {
   const nomeFantasia = empresa?.nome_fantasia || '';
   const nome = nomeFantasia || razaoSocial;
   if (!nome) return { numero: null, motivo: 'empresa sem nome', rejeitados: [] };
-  if (!apiKey && !buscar) return { numero: null, motivo: 'TAVILY_API_KEY não configurada', rejeitados: [] };
+  // A chave pode vir como funcao: o cofre a busca no banco, porque env nao sobrevive
+  // a deploy nesta stack (ver segredos.js).
+  const chave = typeof apiKey === 'function' ? await apiKey() : apiKey;
+  if (!chave && !buscar) return { numero: null, motivo: 'TAVILY_API_KEY não configurada', rejeitados: [] };
 
   const curto = nomeCurto(razaoSocial, nomeFantasia);
   const alvo = { curto, nome, municipio: empresa?.municipio_nome || '', uf: empresa?.uf || '' };
@@ -364,7 +367,7 @@ const buscarContatoWeb = async (empresa, {
     try {
       const achados = buscar
         ? await buscar(consulta, c.fonte)
-        : await buscarNoTavily({ query: consulta, apiKey, fetchImpl, timeoutMs });
+        : await buscarNoTavily({ query: consulta, apiKey: chave, fetchImpl, timeoutMs });
       for (const r of achados) paginas.push({ ...r, fonte: c.fonte });
     } catch (error) {
       falhas.push(`${c.fonte}: ${String(error.message || error)}`);

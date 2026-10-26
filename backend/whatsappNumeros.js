@@ -75,7 +75,9 @@ const verificarNumerosWhatsapp = async (telefones, {
   if (!numeros.length) return { existentes: new Set(), perfis, indisponivel: false };
 
   const base = String(baseUrl || '').replace(/\/+$/, '');
-  const chave = apiKey || tokenDaInstancia(instancia) || process.env.EVOLUTION_API_KEY;
+  const chave = (typeof apiKey === 'function' ? await apiKey(instancia) : apiKey)
+    || tokenDaInstancia(instancia)
+    || process.env.EVOLUTION_API_KEY;
   if (!base || !instancia || !chave) {
     return { existentes: new Set(numeros), perfis, indisponivel: true };
   }

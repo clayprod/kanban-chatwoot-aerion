@@ -78,6 +78,7 @@ const {
   instanciaPermitida,
   escolherInstancia,
   criarEnvioEvolution,
+  SLUG_DA_INSTANCIA,
 } = require('./evolutionInstancias');
 const {
   createAiSettingsTable,
@@ -782,6 +783,7 @@ const {
 } = require('./icp');
 const { criarCatalogoAerion } = require('./aerionCatalogo');
 const { buscarContatoWeb } = require('./contatoWeb');
+const { criarCofre } = require('./segredos');
 const {
   carregarConfigResponder, createResponderTable, runAiResponderTick,
   RESPONDER_LOG_TABLE,
@@ -833,7 +835,16 @@ const cnaesQueExistem = async (lista) => {
 
 // Numeros da operacao comercial: o par inbox<->instancia sai do proprio Chatwoot.
 const mapaInstancias = criarMapaDeInstancias({ pool });
-const enviarPelaEvolution = criarEnvioEvolution();
+
+// Credenciais de integracao vem do banco, cifradas. Env continua valendo de piso,
+// mas nesta stack ela nao sobrevive a deploy: em 26/10 os tokens das instancias e a
+// chave do Tavily sumiram e 6 prospeccoes ficaram presas na fila.
+const cofre = criarCofre({ pool });
+const tokenDaInstanciaNoCofre = (instancia) => cofre.ler(
+  `EVOLUTION_TOKEN_${SLUG_DA_INSTANCIA(instancia)}`
+);
+const chaveTavily = () => cofre.ler('TAVILY_API_KEY');
+const enviarPelaEvolution = criarEnvioEvolution({ resolverToken: tokenDaInstanciaNoCofre });
 // Quais numeros a automacao pode usar. Default no codigo porque env de servico nesta
 // stack ja se perdeu em deploy, e perder env nunca pode liberar um numero errado.
 // Sao os tres do comercial; thelga_lins e inbox de pessoa e fica de fora, e numero
@@ -23987,11 +23998,16 @@ const registerBackgroundSchedules = () => {
         chatCompletionJson,
         config,
         validarMensagem,
-        verificarNumerosWhatsapp,
+        // A chave da verificacao tambem sai do cofre: a instancia e da Aerion e o
+        // token dela nao vive mais em env.
+        verificarNumerosWhatsapp: (numeros) => verificarNumerosWhatsapp(numeros, {
+          apiKey: tokenDaInstanciaNoCofre,
+        }),
         // O telefone da Receita quase nunca tem WhatsApp (2 em ~360, medido em
         // 24/10). Antes de descartar, procura o contato real na web. A IA entra
         // quando os indicios nao bastam para decidir sozinho.
         buscarContatoWeb: (empresa) => buscarContatoWeb(empresa, {
+          apiKey: chaveTavily,
           decidirComIa: ({ system, user }) => chatCompletionJson({
             system, user, maxTokens: 400, temperature: 0.2,
           }),
