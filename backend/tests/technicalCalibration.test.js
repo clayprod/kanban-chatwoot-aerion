@@ -144,3 +144,11 @@ test('controller display and radio frequencies retain their controller component
  const f=facts.find(f=>f.key==='control_frequency'),r={id:'r',key:'control_frequency',component:'controller',kind:'numeric',value:5.8,unit:'GHz',operator:'eq',quote:'5.8 GHz',source_id:'r',location:'p1',conditions:''};
  assert.equal(compareRequirement(r,[f],[{id:'r',text:r.quote},{id:'s',text:f.quote}],{spec_ids:[f.id]}).status,'ok');
 });
+test('declared video formats compare independently of product names and never approve unverified frame rates',()=>{
+ const r={id:'r',key:'video_resolution',component:'wide_camera',kind:'compound',value:'5.1K',quote:'Câmera 5.1K ou superior',operator:'min',source_id:'r',location:'p1',conditions:''};
+ const s={...r,id:'s',source_id:'s',value:'6K a 30fps',quote:'Resolução de vídeo: 6K a 30fps'};
+ const compare=(req,spec)=>compareRequirement(req,[spec],[{id:'r',text:req.quote},{id:'s',text:spec.quote}],{spec_ids:['s']}).status;
+ assert.equal(compare(r,s),'ok');
+ assert.equal(compare(r,{...s,value:'Até 4K a 30fps',quote:'Resolução de vídeo: Até 4K a 30fps'}),'nao_ok');
+ assert.equal(compare({...r,quote:'Câmera 5.1K ou superior a 60 fps'},s),'verificar');
+});

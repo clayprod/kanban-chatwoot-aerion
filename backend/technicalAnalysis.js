@@ -437,6 +437,14 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       }
     }
     job ||= existing[0];
+    // A new search/profile can reuse a source-checked notice while paid analysis
+    // is paused. Build a separate local result so its item scope never leaks
+    // into another search's checklist or ranking.
+    if(!job&&reviewedBundle.reviews.some(r=>r.notice_key===noticeKey)&&catalog.length&&Number(payload.base_score ?? payload.score)>=minScore(cfg)){
+      const context={notice_key:noticeKey,ids,payload,profile,semantic_revision:revision,rules_version:VERSION};
+      const checked=await reviewedResult({account_id:account,context,state:{},updated_at:new Date()});
+      if(checked){job=await enqueue(account,'notice',target,revision,context);await finishReviewed(job,checked);}
+    }
     if (sourceContext !== 'live') await pool.query(`INSERT INTO technical_candidates(account_id,source_context,result_key,notice_key,profile_hash,source_updated_at,job_id)
       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_context,result_key) DO UPDATE SET notice_key=EXCLUDED.notice_key,profile_hash=EXCLUDED.profile_hash,source_updated_at=EXCLUDED.source_updated_at,job_id=EXCLUDED.job_id,updated_at=NOW()`,
     [account, sourceContext, String(resultKey), noticeKey, pKey, sourceUpdated, job?.id || null]);
@@ -950,7 +958,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     const inputsKey=JSON.stringify([job.account_id,review.notice_key,cleanIds(job.context.profile?.product_ids)]);
     const load=()=>Promise.all([
       productsFor(job.account_id,cleanIds(job.context.profile?.product_ids)),accessoriesFor(job.account_id),
-      pool.query(`SELECT DISTINCT s.id,s.name,s.url,s.pages,s.complete,s.notes FROM technical_sources s JOIN technical_jobs j ON j.account_id=s.account_id AND COALESCE(j.state->'source_ids','[]'::jsonb) ? s.id::text
+      pool.query(`SELECT DISTINCT s.id,s.name,s.url,s.pages,s.complete,s.notes FROM technical_sources s JOIN technical_jobs j ON j.account_id=s.account_id AND (COALESCE(j.state->'source_ids','[]'::jsonb) ? s.id::text OR COALESCE(j.state->'review_source_ids','[]'::jsonb) ? s.id::text)
         WHERE j.account_id=$1 AND j.kind='notice' AND j.context->>'notice_key'=$2 AND jsonb_typeof(s.pages)='array'`,[job.account_id,review.notice_key]),
       pool.query('SELECT s.id,s.pages,s.notes FROM technical_sources s JOIN technical_product_sources ps ON ps.source_id=s.id WHERE ps.account_id=$1 AND ps.active=TRUE',[job.account_id]),
     ]);
@@ -963,8 +971,10 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       candidateAllowed:(item,p)=>cleanIds(job.context.profile?.product_ids).length>0 || itemInScope({descricao:item.description},{terms:[]},[p]),manifestVerified:job.state.final_manifest_verified===true&&!job.state.needs_revalidation&&Date.now()-new Date(job.state.final_manifest_checked_at || job.updated_at).getTime()<24*60*60*1000&&job.state.source_ids?.length===job.state.files?.length&&job.state.items_complete===true});
   }
   async function finishReviewed(job,result){
-    await pool.query(`UPDATE technical_jobs SET result=$2::jsonb,status=$3,stage='reviewed',error=$4,updated_at=NOW(),state=state || jsonb_build_object('review_revision',$5::text,'final_manifest_checked_at',COALESCE(state->>'final_manifest_checked_at',$6::text)) WHERE id=$1 AND status<>'superseded'`,
-      [job.id,JSON.stringify(result),result.documents_complete?'completed':'partial',result.notes.join(' ') || null,result.review.revision,job.updated_at?.toISOString?.() || String(job.updated_at)]);
+    const status=result.documents_complete?'completed':'partial',error=result.notes.join(' ') || null,reviewSources=result.sources.map(s=>s.id);
+    await pool.query(`UPDATE technical_jobs SET result=$2::jsonb,status=$3,stage='reviewed',error=$4,updated_at=NOW(),state=state || jsonb_build_object('review_revision',$5::text,'final_manifest_checked_at',COALESCE(state->>'final_manifest_checked_at',$6::text),'review_source_ids',$7::jsonb) WHERE id=$1 AND status<>'superseded'`,
+      [job.id,JSON.stringify(result),status,error,result.review.revision,job.updated_at?.toISOString?.() || String(job.updated_at),JSON.stringify(reviewSources)]);
+    Object.assign(job,{result,status,stage:'reviewed',error});job.state.review_source_ids=reviewSources;
     await persistScore(job,result);
   }
   async function refreshReviewed(account){

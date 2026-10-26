@@ -87,6 +87,15 @@ function compareCompound(req, spec) {
   if (!sameMetric(req,spec) || conditionsKey(req.conditions) !== conditionsKey(spec.conditions)) return null;
   const a = String(req.value || '').toUpperCase(), b = String(spec.value || '').toUpperCase();
   if (!text(req.quote).includes(text(a)) || !text(spec.quote).includes(text(b))) return null;
+  if(metricKey(req.key)==='video_resolution'&&/^\d+(?:[.,]\d+)?K$/.test(a)&&!/\d\s*(?:fps|quadros)/i.test(req.quote)){
+    const requested=Number(a.slice(0,-1).replace(',','.')),formats=[...b.matchAll(/\b(\d+(?:[.,]\d+)?)\s*K\b/g)].map(m=>Number(m[1].replace(',','.')));
+    if(formats.length){
+      if(req.operator==='min'&&/minim|ou superior|pelo menos|nao inferior/.test(text(req.quote))&&formats.some(n=>n>=requested))return {status:'ok',reason:'A ficha declara formato nominal de vídeo igual ou superior ao mínimo exigido.'};
+      if(req.operator==='eq'&&formats.includes(requested))return {status:'ok',reason:'O formato nominal de vídeo exigido consta explicitamente na ficha.'};
+      if(/\bate\b|maxim|maximum/.test(text(spec.quote))&&formats.every(n=>n<requested))return {status:'nao_ok',reason:'O formato máximo de vídeo declarado é inferior ao exigido.'};
+    }
+    return null;
+  }
   if(metricKey(req.key)==='operating_temperature'){
     const ranges=value=>[...String(value).replace(/−/g,'-').replace(/℃/g,'°C').matchAll(/([+-]?\d+(?:[.,]\d+)?)\s*(?:°\s*C)?\s*(?:a|to|~|–|\.\.)\s*([+-]?\d+(?:[.,]\d+)?)\s*°\s*C/gi)].map(m=>[Number(m[1].replace(',','.')),Number(m[2].replace(',','.'))]);
     const required=ranges(req.value),offered=ranges(spec.value);

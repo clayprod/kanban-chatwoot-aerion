@@ -22,11 +22,14 @@ test('reviewed source requirements become persisted item checklists with the pai
    await pool.query('INSERT INTO technical_product_sources(account_id,product_id,source_id) VALUES(1,$1,$2)',[product.id,specSource.id]);
    const context={notice_key:fixture.key,profile:{terms:['drone']},payload:{score:80,titulo:fixture.title}},state={source_ids:[String(source.id)],items_raw:fixture.items,items_complete:true,files:[{name:s.name,url:s.url}],file_cursor:1,initialized:true,final_manifest_verified:true,final_manifest_checked_at:new Date().toISOString()};
    const job=(await pool.query("INSERT INTO technical_jobs(account_id,kind,target,revision,context,state) VALUES(1,'notice','review-fixture','1',$1::jsonb,$2::jsonb) RETURNING *",[JSON.stringify(context),JSON.stringify(state)])).rows[0];
-   let calls=0;const service=createTechnicalAnalysis({pool,ai:async()=>{calls++;throw Error('Paid AI must not run');}});
+   let calls=0;const [cnpj,ano,sequencial]=fixture.key.split('/');const service=createTechnicalAnalysis({pool,getIds:()=>({cnpj,ano,sequencial}),isEligible:()=>true,ai:async()=>{calls++;throw Error('Paid AI must not run');}});
    assert.equal((await service.refreshReviewed(1)).updated,1);
    const saved=(await pool.query('SELECT * FROM technical_jobs WHERE id=$1',[job.id])).rows[0];
    assert.equal(saved.stage,'reviewed');assert.equal(saved.status,'partial');assert.equal(saved.result.items[0].requirements.length,18);assert.equal(saved.result.items[0].products[0].requirements.length,18);assert.equal(calls,0);
    const read=await service.refreshedJob(saved);assert.equal(read.result.items[0].reviewed,true);assert.match(read.result.notes[0],/Termo de Referência/);
+   const reused=await service.observe(1,{score:80,titulo:fixture.title},{terms:['drone'],product_ids:[String(product.id)]});
+   assert.notEqual(reused.id,job.id);assert.ok(reused.result?.review);assert.equal(reused.result.items[0].requirements.length,18);assert.equal(calls,0);
+   assert.deepEqual(reused.state.review_source_ids,[String(source.id)]);
    const changed=structuredClone(s.pages);changed[0].text+=' Nova exigência publicada.';
    await pool.query('UPDATE technical_sources SET pages=$2::jsonb WHERE id=$1',[source.id,JSON.stringify(changed)]);
    const stale=await service.refreshedJob(saved);assert.equal(stale.stage,'review_stale');assert.equal(stale.result.review.current,false);assert.equal(stale.result.items[0].products[0].evidence_current,false);assert.equal(stale.result.technical_percent,null);assert.equal(calls,0);
