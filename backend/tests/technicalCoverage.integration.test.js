@@ -63,7 +63,14 @@ test('full document coverage: failed download, omitted evidence recovery, three 
   assert.equal(current.state.extract_cursor,3,'all notice sources are read even while catalogue extraction is pending');
   assert.equal(current.state.requirements_ready,true);
   await pool.query("UPDATE technical_jobs SET next_run_at=NOW() WHERE kind='product' OR id=$1",[job.id]);
-  for(let n=0;n<16;n++)await service.tick();
+  for(let n=0;n<16;n++){
+   // The notice and catalogue share a concurrent scheduler turn. On a fast
+   // local PostgreSQL the notice may check before the product commits and
+   // correctly defer for two minutes. Advance only that simulated dependency
+   // wait instead of depending on the database/network execution speed.
+   await pool.query("UPDATE technical_jobs SET next_run_at=NOW() WHERE id=$1 AND status='queued' AND error='Aguardando processamento das fichas técnicas.'",[job.id]);
+   await service.tick();
+  }
   current=(await pool.query('SELECT * FROM technical_jobs WHERE id=$1',[job.id])).rows[0];
   assert.equal(current.status,'partial');assert.equal(current.stage,'review_required');assert.equal(current.result.coverage.read_complete,false);
   assert.equal(current.result.sources.length,3);
