@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  ehVeiculoDeObra,
   perfilConfirmaEmpresa,
   extrairPerfis,
   paramsDaBusca,
@@ -370,4 +371,44 @@ test('o teto diario conta mensagem ENTREGUE, nao tentativa', async () => {
   assert.match(sqlVisto, /status = 'dry_run'/);
   // E o que apenas entrou na fila NAO conta.
   assert.doesNotMatch(sqlVisto, /'abordado'/);
+});
+
+test('SPE e SCP nao sao abordadas: sao CNPJ de uma obra', () => {
+  // Em 26/10 a prospeccao automatica enfileirou 9 abordagens e 7 eram SPE/SCP.
+  // Nao tem operacao, nao compra equipamento e nao tem ninguem atendendo.
+  for (const nome of [
+    'BATEL SPOT EMPREENDIMENTO SPE LTDA',
+    'NEO LIFE PENHA II LTDA SCP',
+    'YT5 MGA INCORPORACOES SPE LTDA',
+    'IMSW SPE 03 LTDA',
+    'RT 47 EMPREENDIMENTOS IMOBILIARIOS SPE S.A.',
+  ]) {
+    assert.equal(ehVeiculoDeObra({ razao_social: nome }), true, nome);
+  }
+  // Empresa de verdade continua passando.
+  for (const nome of [
+    'GEOMINAS TOPOGRAFIA LTDA',
+    'CONSTRUTORA SAGA LTDA',
+    'ESPECTRO ENGENHARIA LTDA',
+    'SPEED FARAH IMOVEIS LTDA',
+  ]) {
+    assert.equal(ehVeiculoDeObra({ razao_social: nome }), false, nome);
+  }
+});
+
+test('verificacao indisponivel NAO vira abordagem', async () => {
+  // A verificacao e fail-OPEN (devolve todos como existentes quando nao consegue
+  // consultar), o que serve para campanha mas nao para contato frio: em 26/10 o
+  // token sumiu num deploy e a prospeccao aceitou PABX sem conferir nada.
+  const pool = fakePool();
+  let chamouIA = false;
+  const r = await runProspeccaoTick(pool, deps({
+    verificarNumerosWhatsapp: async (nums) => ({
+      existentes: new Set(nums), perfis: new Map(), indisponivel: true,
+    }),
+    chatCompletionJson: async () => { chamouIA = true; return { ok: true, data: {} }; },
+  }));
+  assert.equal(chamouIA, false);
+  assert.equal(r.abordados, 0);
+  assert.match(r.errosBusca.join(' '), /verificação de WhatsApp indisponível/);
 });

@@ -85,6 +85,17 @@ const createProspeccaoTable = async (pool) => {
 
 const soDigitos = (v) => String(v || '').replace(/[^0-9]/g, '');
 
+// SPE e SCP sao CNPJ de UMA obra: "BATEL SPOT EMPREENDIMENTO SPE LTDA",
+// "NEO LIFE PENHA II LTDA SCP". Nao tem operacao, nao compra equipamento e nao tem
+// ninguem atendendo — quem decide e a incorporadora-mae. Em 26/10 a prospeccao
+// automatica enfileirou 9 abordagens e 7 eram SPE/SCP, duas delas com o MESMO
+// telefone (a mae), o que faria dois "falo com alguem da X?" caírem no mesmo numero.
+const VEICULO_DE_OBRA = /(^|[\s.-])(spe|scp)([\s.-]|$)|spe\s*\d|empreendimento[s]?\s+spe/i;
+
+const ehVeiculoDeObra = (empresa) => VEICULO_DE_OBRA.test(
+  `${empresa?.razao_social || ''} ${empresa?.nome_fantasia || ''}`
+);
+
 // A busca RFB devolve ddd e numero em colunas separadas (ddd1/telefone1). Ler
 // `ddd_telefone_1` — que so existe no formato de importacao — dava undefined em
 // todo candidato, e cada empresa era registrada como "sem telefone no cadastro".
@@ -338,11 +349,36 @@ const runProspeccaoTick = async (pool, {
 
     // Uma consulta à Evolution para o lote: existe? qual o nome do perfil?
     const telefones = novas.map(telefoneDaEmpresa).filter(Boolean);
-    const { existentes, perfis: perfisWpp } = await verificarNumerosWhatsapp(telefones);
+    const { existentes, perfis: perfisWpp, indisponivel } = await verificarNumerosWhatsapp(telefones);
 
+    // Fail-CLOSED aqui, ao contrário da campanha. A verificação devolve todos os
+    // números como existentes quando não consegue consultar, o que é aceitável para
+    // um disparo que não pode cair por um piscar da Evolution — mas não para contato
+    // FRIO, onde mandar para número inexistente é o padrão de quem comprou lista e é
+    // o sinal mais forte de spam. Em 26/10 o token sumiu num deploy, a verificação
+    // ficou indisponível e a prospecção aceitou PABX sem conferir nada.
+    if (indisponivel) {
+      r.falhas += 1;
+      r.errosBusca = [...(r.errosBusca || []),
+        `${perfil.titulo}: verificação de WhatsApp indisponível — não abordo sem conferir`];
+      continue;
+    }
+
+    const telefonesUsados = new Set();
     for (const empresa of novas) {
       if (r.abordados >= limite) break;
       r.avaliados += 1;
+
+      if (ehVeiculoDeObra(empresa)) {
+        await registrarProspeccao(pool, {
+          accountId, cnpj: empresa.cnpj, razaoSocial: empresa.razao_social,
+          telefone: telefoneDaEmpresa(empresa), perfil: perfil.titulo,
+          status: 'descartado',
+          motivo: 'SPE/SCP: CNPJ de uma obra, não é empresa com operação',
+        });
+        r.descartados += 1;
+        continue;
+      }
       const tel = telefoneDaEmpresa(empresa);
       const base = {
         accountId, cnpj: empresa.cnpj, razaoSocial: empresa.razao_social,
@@ -371,6 +407,17 @@ const runProspeccaoTick = async (pool, {
           }
         }
 
+        // Duas SPE da mesma incorporadora compartilham o telefone da mãe: duas
+        // mensagens para o mesmo número, com nomes diferentes, é cara de robô.
+        if (telefone && telefonesUsados.has(telefone)) {
+          await registrarProspeccao(pool, {
+            ...base, status: 'descartado',
+            motivo: 'outra empresa deste mesmo lote já recebe neste número',
+          });
+          r.descartados += 1;
+          continue;
+        }
+
         if (!telefone || !existentes.has(telefone)) {
           await registrarProspeccao(pool, {
             ...base, status: 'descartado',
@@ -382,6 +429,7 @@ const runProspeccaoTick = async (pool, {
           continue;
         }
         if (origemTelefone !== 'receita') r.achadosNaWeb = (r.achadosNaWeb || 0) + 1;
+        telefonesUsados.add(telefone);
 
         const nomePerfil = perfisWpp?.get?.(telefone) || null;
         const confirmou = perfilConfirmaEmpresa(
@@ -468,6 +516,7 @@ const runProspeccaoTick = async (pool, {
 };
 
 module.exports = {
+  ehVeiculoDeObra,
   cnaesValidos,
   telefoneDaEmpresa,
   PROSPECCAO_LOG_TABLE,
