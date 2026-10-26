@@ -7,7 +7,7 @@ const arce=[
  row('PROFISSIONAL','professional_use','PROFISSIONAL'),row('LONGO ALCANCE','long_range','LONGO ALCANCE'),
  row('CAMERA 5.1K OU SUPERIOR','video_resolution','5.1K','','min','wide_camera'),row('5.8 GHZ','control_frequency',5.8,'GHz','eq','controller'),
  row('03 BATERIAS RESERVAS','battery_quantity_reserve',3,'baterias','eq','battery','kit'),row('GPS','gnss_systems','GPS'),row('WI FI','wifi','WI FI'),row('BLUETOOTH','bluetooth','BLUETOOTH'),
- row('Câmera visual 3 eixos','gimbal_axes',3,'eixos','eq','wide_camera'),row('zoom =30x','zoom_unspecified',30,'x','eq','wide_camera'),
+ row('Câmera visual 3 eixos','gimbal_axes',3,'eixos'),row('zoom =30x','zoom_unspecified',30,'x','eq','wide_camera'),
  row('térmica 640x512 radiométrica','thermal_resolution','640x512','','eq','thermal_camera'),row('térmica 640x512 radiométrica','thermal_camera_type','radiométrica','','eq','thermal_camera'),
  row('GNSS','gnss_systems','GNSS'),row('RTH','return_to_home','RTH'),row('autonomia =40 min','flight_time',40,'min'),row('vento =12 m/s','wind_resistance',12,'m/s'),
  row('hub de carga','battery_charging_hub','hub de carga','','eq','charger','kit'),

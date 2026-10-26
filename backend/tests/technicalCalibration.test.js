@@ -138,3 +138,9 @@ test('a controller screen marked none or not applicable cannot become positive e
   assert.notEqual(compareRequirement(r,[s],[{id:'r',text:r.quote},{id:'s',text:s.quote}],{spec_ids:['s']}).status,'ok');
  }
 });
+test('controller display and radio frequencies retain their controller component and distinct meanings',()=>{
+ const facts=structuredFacts([{section:'CONTROLE HT55',label:'Tela',value:'5,5 polegadas Full HD'},{section:'COMUNICAÇÃO E CONTROLE',label:'Frequência operacional',value:'900MHz / 2.4 / 5.2 / 5.8 GHz'}],{id:'s'});
+ assert.ok(facts.every(f=>f.component==='controller'));
+ const f=facts.find(f=>f.key==='control_frequency'),r={id:'r',key:'control_frequency',component:'controller',kind:'numeric',value:5.8,unit:'GHz',operator:'eq',quote:'5.8 GHz',source_id:'r',location:'p1',conditions:''};
+ assert.equal(compareRequirement(r,[f],[{id:'r',text:r.quote},{id:'s',text:f.quote}],{spec_ids:[f.id]}).status,'ok');
+});

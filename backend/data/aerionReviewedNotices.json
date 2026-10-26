@@ -2,7 +2,7 @@
   "reviews": [
     {
       "notice_key": "07954480000179/2026/26588",
-      "revision": "document-review-2026-10-26-v1",
+      "revision": "document-review-2026-10-26-v2",
       "reviewed_by": "Codex — revisão das fontes, sem OpenRouter",
       "reviewed_at": "2026-10-26",
       "items": [
@@ -172,7 +172,7 @@
           "value": 3,
           "unit": "eixos",
           "operator": "eq",
-          "component": "wide_camera",
+          "component": "",
           "category": "equipment",
           "id": "golden:222:1:8",
           "item_number": "1",
@@ -183,7 +183,7 @@
           "kind": "numeric",
           "upper": null,
           "conditions": "",
-          "section": "Sistema de câmeras"
+          "section": "Características técnicas"
         },
         {
           "key": "zoom_unspecified",
@@ -406,7 +406,7 @@
     },
     {
       "notice_key": "08079402000135/2026/63",
-      "revision": "document-review-2026-10-26-v1",
+      "revision": "document-review-2026-10-26-v2",
       "reviewed_by": "Codex — revisão das fontes, sem OpenRouter",
       "reviewed_at": "2026-10-26",
       "items": [
@@ -564,7 +564,7 @@
     },
     {
       "notice_key": "18715565000110/2026/30",
-      "revision": "document-review-2026-10-26-v1",
+      "revision": "document-review-2026-10-26-v2",
       "reviewed_by": "Codex — revisão das fontes, sem OpenRouter",
       "reviewed_at": "2026-10-26",
       "items": [

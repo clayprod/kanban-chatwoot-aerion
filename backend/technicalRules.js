@@ -134,6 +134,10 @@ function compareRequirement(req, specs, sources, mapping = {}) {
   if (!selected.length) return base;
   base.evidence = selected;
   if (selected.some(uncertainOcr)) return { ...base, reason: 'A leitura OCR da ficha contém números incertos. Confira o documento original.' };
+  if(metricKey(req.key)==='control_frequency'&&req.kind==='numeric'&&req.operator==='eq'&&numericFactValid(req,true)){
+    const supported=selected.some(s=>conditionsCompatible(req,s)&&(typeof s.value==='number'?[s]:measurements(s.value).map(m=>({...s,kind:'numeric',value:m.value,unit:m.unit}))).some(option=>compareNumeric(req,option).status==='ok'));
+    if(supported)return {...base,status:'ok',reason:'A frequência exigida consta explicitamente entre as bandas de operação do controle.'};
+  }
   if(metricKey(req.key)==='camera_sensor'&&/cmos/.test(text(req.quote))&&selected.every(s=>/cmos/.test(text(s.quote)))){
     const format=value=>{
       const m=/(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+(?:[.,]\d+)?))?\s*(?:["″”]|polegadas?|inch(?:es)?)/i.exec(String(value));

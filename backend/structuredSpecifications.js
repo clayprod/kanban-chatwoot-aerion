@@ -39,6 +39,8 @@ function inferKey(label,section=''){
   if(/peso.*decolagem|take.?off.*weight/.test(s))return 'takeoff_weight';
   if(/peso.*bateria|weight.*battery/.test(s))return 'aircraft_weight';
   if(/tela|screen/.test(s)&&/controle|controller/.test(scope))return 'controller_screen';
+  if(/^frequencia (?:operacional|de operacao)$/.test(s)&&/controle|controller/.test(scope))return 'control_frequency';
+  if(/^autonomia$/.test(s)&&/controle|controller/.test(scope))return 'controller_battery_time';
   if(/wi.?fi|802\.11/.test(s))return 'wifi';
   if(/^wi[ -]?fi$/.test(scope)&&s==='protocolo')return 'wifi';
   if(/bluetooth/.test(s))return 'bluetooth';
@@ -58,7 +60,7 @@ function structuredFacts(rows,source){
   return rows.filter(r=>!/^nota\b/i.test(r.label)&&!/^n[aã]o especificado$/i.test(r.value)).flatMap((row,index)=>{
     const quote=`${row.section}\n${row.label}: ${row.value}${row.note ? '\n'+row.note:''}`;
     const key=inferKey(row.label,row.section);
-    const component=componentOf({label:row.section,key});
+    const component=['controller_screen','control_frequency','controller_battery_time'].includes(key)?'controller':componentOf({label:row.section,key});
     const base={id:`structured:${source.id}:${hash(quote).slice(0,20)}`,item_number:'all',section:row.section,label:row.label,key,component,category:'equipment',kind:'categorical',value:row.value,upper:null,unit:'',operator:'eq',conditions:'',quote,source_id:String(source.id),location:'Ficha estruturada',structured:true};
     const simple=/^(?:at[eé]\s+|menos de\s+)?(-?\d+(?:[.,]\d+)?)\s*(minutos|min|m\/s|km\/h|km|m|g|kg|MP|mAh|Wh|V|W|GB|TB|rpm|eixos)\s*$/i.exec(row.value);
     if(simple){base.kind='numeric';base.value=Number(simple[1].replace(',','.'));base.unit=simple[2];
