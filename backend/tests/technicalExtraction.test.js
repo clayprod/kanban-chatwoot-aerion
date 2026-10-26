@@ -37,7 +37,7 @@ test('complete=true without an entry for every source block never certifies cove
   const result=validateAudit({complete:true,facts:[],conflicts:[],coverage:[{block_id:'0',classification:'context',fact_indexes:[],reason:'Capa.'}]},{id:'s'},chunk,'notice',{items:[{number:'1'}]},blocks,'id');
   assert.equal(result.complete,false);assert.ok(result.issues.some(i=>i.reason.includes('Bloco sem')));
 });
-test('unverifiable citations remain explicit diagnostics and partial cache is repaired on the next pass',async()=>{
+test('unverifiable citations stop paid rereads until an explicit new repair request',async()=>{
   let repaired=false;
   const f=fixture('Autonomia mínima de 41 min.',data=>{
     const facts=[fact(repaired?'Autonomia mínima de 41 min':'Autonomia mínima de 99 min')];
@@ -46,9 +46,21 @@ test('unverifiable citations remain explicit diagnostics and partial cache is re
   const first=await f.extract(f.args);
   assert.equal(first.complete,false);assert.equal(first.facts.length,0);assert.ok(first.issues.length);
   repaired=true;
+  f.restart();
+  const calls=f.calls.length;
+  const cached=await f.extract(f.args);assert.equal(cached.complete,false);assert.equal(f.calls.length,calls);
+  f.args.repair='manual-repair-1';
   const second=await f.extract(f.args);assert.equal(second.complete,true);assert.equal(second.facts.length,1);
   const before=f.calls.length;const third=await f.extract(f.args);
   assert.equal(third.cache_hit,true);assert.equal(f.calls.length,before);
+});
+
+test('validation failures do not create a paid subdivision tree or repeat on ordinary visits',async()=>{
+ const f=fixture('O equipamento deverá atender às especificações. '.repeat(150),data=>({complete:false,facts:[],conflicts:[],...(data.blocks?{coverage:coverage(data,[])}:{})}));
+ const first=await f.extract(f.args);
+ assert.equal(first.complete,false);assert.equal(f.calls.length,2);assert.equal(first.children,undefined);
+ for(let n=0;n<20;n++){f.restart();const cached=await f.extract(f.args);assert.equal(cached.complete,false);}
+ assert.equal(f.calls.length,2);
 });
 test('false administrative conflicts are rechecked instead of poisoning all other documents',async()=>{
   const f=fixture('Página de assinatura e identificação.',(data,format)=>format===COVERAGE_FORMAT

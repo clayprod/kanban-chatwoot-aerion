@@ -2,15 +2,22 @@ import React from 'react';
 import {render,screen,fireEvent} from '@testing-library/react';
 import '@testing-library/jest-dom';
 import axios from 'axios';
-import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,ItemCompatibilitySummary,ExtractionCoverage} from './TechnicalResult';
+import TechnicalResult,{ProductMatchSummary,ProductMatchChips,TechnicalItem,ItemCompatibilitySummary,ExtractionCoverage,analysisLabel} from './TechnicalResult';
 jest.mock('axios',()=>({get:jest.fn(),post:jest.fn()}));
 const match=(id,ok,price,status='uncertain')=>({product_id:id,product_name:`Produto ${id}`,sale_price:price,status,counts:{ok,total:10,verificar:10-ok,nao_ok:0},requirements:[]});
 
-test('incomplete coverage visibly schedules recovery instead of appearing concluded',()=>{
- render(<ExtractionCoverage analysis={{status:'queued',stage:'recovering',next_run_at:'2026-10-23T18:30:00Z'}} result={{documents_complete:false,coverage:{read_complete:false,chunks:109,complete:96,blocks:120,audited_blocks:118,requirements:60,comparisons:180}}} />);
+test('incomplete coverage shows its actual pause without promising paid automatic recovery',()=>{
+ render(<ExtractionCoverage analysis={{status:'queued',execution_status:'paused'}} result={{documents_complete:false,coverage:{read_complete:false,chunks:109,complete:96,blocks:120,audited_blocks:118,requirements:60,comparisons:180}}} />);
  expect(screen.getByText('96/109')).toBeVisible();expect(screen.getByText('118/120')).toBeVisible();
- expect(screen.getByRole('status')).toHaveTextContent(/reler os trechos pendentes/);
- expect(screen.getByRole('status')).toHaveTextContent(/Retomada prevista/);
+ expect(screen.getByRole('status')).toHaveTextContent(/Análise pausada/);
+ expect(screen.getByRole('status')).not.toHaveTextContent(/Retomada prevista|em andamento/);
+});
+
+test('pending, blocked and partial analyses have distinct honest labels',()=>{
+ expect(analysisLabel({status:'queued'})).toBe('Análise na fila');
+ expect(analysisLabel({status:'queued',execution_status:'blocked'})).toMatch(/bloqueada/);
+ expect(analysisLabel({status:'partial'})).toMatch(/revisão necessária/);
+ expect(analysisLabel({status:'running',stage_label:'Extraindo exigências'})).toBe('Extraindo exigências');
 });
 
 test('complete reading with a documentary contradiction is distinguished from missing extraction',()=>{

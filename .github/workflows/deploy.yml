@@ -117,7 +117,7 @@ jobs:
 
       - name: Validate technical analysis and catalogue isolation
         working-directory: backend
-        run: node --test tests/searchQuality.test.js tests/technicalRules.test.js tests/technicalEvidence.test.js tests/technicalQuality.test.js tests/technicalExtraction.test.js tests/technicalMapping.test.js tests/productPackages.test.js tests/deepSearchRegression.test.js tests/technicalAnalysisRetry.test.js tests/technicalAnalysis.integration.test.js tests/technicalCoverage.integration.test.js
+        run: node --test tests/searchQuality.test.js tests/technicalRules.test.js tests/technicalEvidence.test.js tests/technicalExecutionPolicy.test.js tests/technicalQuality.test.js tests/technicalExtraction.test.js tests/technicalMapping.test.js tests/productPackages.test.js tests/deepSearchRegression.test.js tests/technicalAnalysisRetry.test.js tests/technicalAnalysis.integration.test.js tests/technicalCoverage.integration.test.js
         env:
           QUALITY_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
 

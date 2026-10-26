@@ -20417,8 +20417,9 @@ const chatCompletionJson = async ({
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         if (technical && maxProviderAttempts === 1 && requestExceedsCapacity(res.status,errText))
-          return { ok:false,error:`${provider.name}:${res.status} Pedido excedeu a capacidade do provedor.`,requestTooLarge:true };
+          return { ok:false,error:`${provider.name}:${res.status} Pedido excedeu a capacidade do provedor.`,requestTooLarge:true,provider:provider.name,model:provider.model,http_status:res.status };
         errors.push(`${provider.name}:${res.status} ${errText.slice(0, 160)}`);
+        if (technical && maxProviderAttempts === 1) return {ok:false,error:errors.join(' | '),provider:provider.name,model:provider.model,http_status:res.status};
         continue;
       }
       const data = await res.json();
@@ -20426,7 +20427,7 @@ const chatCompletionJson = async ({
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         errors.push(`${provider.name}:JSON inválido`);
-        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length' };
+        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length',provider:provider.name,model:provider.model,http_status:res.status,request_id:data.id || null };
         continue;
       }
       try {
@@ -20435,17 +20436,20 @@ const chatCompletionJson = async ({
           data: JSON.parse(jsonMatch[0]),
           provider: provider.name,
           model: provider.model,
+          http_status: res.status,
+          request_id: data.id || null,
           raw: content,
           usage: data.usage || null,
           truncated: data.choices?.[0]?.finish_reason === 'length',
         };
       } catch (parseErr) {
         errors.push(`${provider.name}:JSON parse fail`);
-        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length' };
+        if (technical && maxProviderAttempts === 1) return { ok: false, error: errors.join(' | '), usage: data.usage || null, truncated: data.choices?.[0]?.finish_reason === 'length',provider:provider.name,model:provider.model,http_status:res.status,request_id:data.id || null };
         continue;
       }
     } catch (err) {
       errors.push(`${provider.name}:${err.name === 'AbortError' ? 'timeout' : err.message}`);
+      if (technical && maxProviderAttempts === 1) return {ok:false,error:errors.join(' | '),provider:provider.name,model:provider.model};
     } finally {
       clearTimeout(timeout);
     }

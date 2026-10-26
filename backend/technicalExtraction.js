@@ -163,10 +163,12 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
   async function extract({job,config,source:s,chunk,kind,context,system,repair=false},work) {
     const key = hash({audit:AUDIT_VERSION,kind,context,text:chunk.text});
     const old = await read(job,s,kind,key,chunk.chunk);
-    if (old?.audit_version === AUDIT_VERSION && old.complete) return {...old,cache_hit:true};
-    // A partial cache is evidence for repair, never a permanent successful cache.
+    if (old?.audit_version === AUDIT_VERSION && (old.complete ||
+      (!old.pending_subtasks && old.phase !== 'auditing' && (!repair || old.repair_request === repair)))) return {...old,cache_hit:true};
+    // Incomplete evidence is a durable result, NOT permission to spend again.
+    // Only an explicit new repair request may reread a finished partial chunk.
     const prefix = `${s.id}:${key.slice(0,12)}:${chunk.chunk}`;
-    let first,initial;
+    let first,initial,truncated=false;
     const blocks = sourceBlocks(chunk.text);
     let data=old?.children?.length ? {...old,child_done:old.pending_subtasks ? (old.child_done || old.children.map(()=>false)) : old.children.map(()=>false)} : null;
     if(!data){
@@ -188,9 +190,10 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
       data.facts = mergeFacts(initial.facts,data.facts);
     } catch (error) {
       if (!isTruncated(error)) throw error;
+      truncated=true;
       data = {facts:initial?.facts || [],complete:false,conflicts:[],issues:[{reason:'Resposta excedeu a capacidade do trecho; subdivisão necessária.'}],blocks:blocks.length,audited_blocks:0};
     }
-    if (!data.complete && chunk.text.length > MIN_SPLIT) {
+    if (truncated && chunk.text.length > MIN_SPLIT) {
       const middle = Math.floor(chunk.text.length / 2), overlap = 150;
       data = {...data,base_facts:data.facts,base_conflicts:data.conflicts,base_rejections:data.first_pass_rejections || [],child_done:[false,false],children:[
         {...chunk,text:chunk.text.slice(0,middle+overlap)},
@@ -205,7 +208,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
         const childKey=hash({audit:AUDIT_VERSION,kind,context,text:child.text});
         const saved=data.child_done[index] ? await read(job,s,kind,childKey,child.chunk) : null;
         const result=saved && saved.audit_version===AUDIT_VERSION && !saved.pending_subtasks && saved.phase!=='auditing'
-          ? {...saved,cache_hit:true} : await extract({job,config,source:s,chunk:child,kind,context,system,repair:true},work);
+          ? {...saved,cache_hit:true} : await extract({job,config,source:s,chunk:child,kind,context,system,repair},work);
         results.push(result);data.child_done[index]=!result.pending_subtasks;
       }
       const childFacts = mergeFacts(...results.map(r=>r.facts));
@@ -216,7 +219,7 @@ function createExtractionRunner({ read, write, ask, isTruncated }) {
         block_reviews:results.flatMap(r=>r.block_reviews || []),
         parts:{done:results.reduce((n,r)=>n+(r.parts?.done ?? (r.pending_subtasks?0:1)),0),total:results.reduce((n,r)=>n+(r.parts?.total || 1),0)} };
     }
-    data = {...data,audit_version:AUDIT_VERSION,global_incomplete:!data.complete,repair,
+    data = {...data,audit_version:AUDIT_VERSION,global_incomplete:!data.complete,repair,repair_request:repair || null,
       attempted_at:new Date().toISOString()};
     await write(job,s,kind,key,chunk.chunk,data);
     return data;

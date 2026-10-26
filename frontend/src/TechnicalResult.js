@@ -77,7 +77,6 @@ export function ItemCompatibilitySummary({ item, documentsComplete }) {
 export function ExtractionCoverage({ analysis, result }) {
   const coverage=result?.coverage;
   if(!coverage)return null;
-  const recovering=['queued','running'].includes(analysis?.status) && coverage.read_complete===false;
   return <div className="space-y-2 border-b border-line pb-3">
     <p className="font-semibold text-ink">Cobertura das exigências</p>
     <dl className="flex flex-wrap gap-x-6 gap-y-2 text-muted">
@@ -86,12 +85,22 @@ export function ExtractionCoverage({ analysis, result }) {
       {coverage.requirements != null && <div><dt>Exigências identificadas</dt><dd className="font-semibold text-ink">{coverage.requirements}</dd></div>}
       {coverage.comparisons != null && <div><dt>Comparações técnicas realizadas</dt><dd className="font-semibold text-ink">{coverage.comparisons}</dd></div>}
     </dl>
-    {recovering ? <p role="status" className="text-status-warning">Cobertura incompleta. O sistema vai reler os trechos pendentes; as comparações abaixo são parciais.{analysis.stage==='recovering' && analysis.next_run_at ? ` Retomada prevista: ${new Date(analysis.next_run_at).toLocaleString('pt-BR')}.` : ''}</p>
-      : coverage.read_complete===true ? <p className={result.documents_complete ? 'text-muted':'text-status-warning'}>{result.documents_complete ? 'Leitura e cobertura dos documentos conferidas. O atendimento depende das evidências de cada requisito.' : 'Leitura dos documentos conferida. Há divergências que precisam de revisão; veja os trechos de origem.'}</p>
-        : <p className="text-status-warning">Há trechos sem cobertura confirmada. A leitura ainda precisa de recuperação.</p>}
+    {coverage.read_complete===true ? <p className={result.documents_complete ? 'text-muted':'text-status-warning'}>{result.documents_complete ? 'Leitura e cobertura dos documentos conferidas. O atendimento depende das evidências de cada requisito.' : 'Leitura dos documentos conferida. Há divergências que precisam de revisão; veja os trechos de origem.'}</p>
+        : <p role="status" className="text-status-warning">{analysisLabel(analysis)}. Há trechos sem cobertura confirmada; as comparações disponíveis são parciais.</p>}
   </div>;
 }
 export function TechnicalItem(props) { return <TechnicalChecklist {...props} />; }
+export function analysisLabel(analysis) {
+  if (!analysis) return 'Compatibilidade ainda não analisada';
+  if (analysis.execution_status === 'paused') return 'Análise pausada';
+  if (analysis.execution_status === 'blocked') return 'Análise bloqueada — provedor de IA indisponível';
+  if (analysis.execution_status === 'waiting') return 'Análise aguardando retomada';
+  if (analysis.status === 'failed') return 'Falha na análise';
+  if (analysis.status === 'partial') return 'Leitura parcial — revisão necessária';
+  if (analysis.status === 'queued') return 'Análise na fila';
+  if (analysis.status === 'running') return analysis.stage_label || 'Análise em andamento';
+  return analysis.stage_label || 'Sem comparação concluída';
+}
 export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
@@ -116,10 +125,10 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
   }, [key]);
   if (error) return compact ? null : itemSummary ? <span className="mt-1 block text-xs font-normal text-muted">Comparação temporariamente indisponível</span> : <p className="mt-2 text-xs text-muted">{error}</p>;
   if (fetching && !analysis) return compact ? null : itemSummary ? <span className="mt-1 block text-xs font-normal text-muted">Consultando compatibilidade…</span> : <p role="status" className="mt-2 text-xs text-muted">Carregando análise técnica…</p>;
-  if (itemSummary && !analysis?.result) return <span className="mt-1 block text-xs font-normal text-muted">{['queued','running'].includes(analysis?.status) ? 'Compatibilidade: análise em andamento' : 'Compatibilidade ainda não analisada'}</span>;
+  if (itemSummary && !analysis?.result) return <span className="mt-1 block text-xs font-normal text-muted">{analysisLabel(analysis)}</span>;
   if (!analysis) return opportunityId || compact ? null : <p className="mt-2 text-xs text-muted">{enabled ? 'Análise automática: aguardando elegibilidade e catálogo.' : 'Análise automática configurável em Licitações → Produtos.'}</p>;
-  if (compact && !analysis.result) return <span className="mt-2 inline-flex rounded-full border border-line px-2.5 py-1 text-[11px] text-muted">{['queued','running'].includes(analysis.status) ? 'Análise em andamento' : 'Sem comparação concluída'}</span>;
-  if (!analysis.result) return <div className="mt-3 space-y-1 rounded-lg border border-line bg-bg2/40 px-3 py-2 text-xs"><p className="font-semibold text-ink">Compatibilidade com seus produtos</p><p className="text-muted">Análise técnica · {analysis.stage_label}{analysis.error ? ` · ${analysis.error}` : ''}</p><p className="text-[11px] text-muted">Produtos e percentuais aparecerão após a comparação das fichas com o edital.</p></div>;
+  if (compact && !analysis.result) return <span className="mt-2 inline-flex rounded-full border border-line px-2.5 py-1 text-[11px] text-muted">{analysisLabel(analysis)}</span>;
+  if (!analysis.result) return <div className="mt-3 space-y-1 text-xs" role="status"><p className="font-semibold text-ink">{analysisLabel(analysis)}</p>{analysis.error && <p className="text-muted">{analysis.error}</p>}<p className="text-muted">A comparação deste item ainda não está disponível.</p></div>;
   const visibleItems = allowedItemNumbers ? analysis.result.items.filter(i => allowedItemNumbers.map(String).includes(String(i.number))) : analysis.result.items;
   const result = { ...analysis.result, items: visibleItems,
     ...(allowedItemNumbers ? { relevant_items: visibleItems.filter(i=>i.in_scope).length, full_items: visibleItems.filter(i=>i.in_scope && (i.recommended_product || i.products?.some(p=>p.status==='full'))).length } : {}) };
@@ -155,7 +164,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
   if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
-  if (overview) return <p role="status" className="text-sm text-muted">{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : 'Análise em andamento. Os resultados disponíveis aparecem nos itens abaixo.'}</p>;
+  if (overview) return <p role="status" className="text-sm text-muted">{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : `${analysisLabel(analysis)}. Os resultados parciais disponíveis aparecem nos itens abaixo.`}</p>;
   if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>
     <ProductMatchSummary items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />

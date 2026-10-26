@@ -12,14 +12,15 @@ const NOTICE_CONTEXT_VERSION = 6;
 const {classifySections}=require('./technicalSections');
 const {sameMetric}=require('./technicalMetrics');
 const {awardingMode}=require('./technicalAwarding');
+const {isCreditError,isAuthError,measuredTokens,executionState}=require('./technicalExecutionPolicy');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
 class BudgetWait extends Error {}
 class ProviderWait extends BudgetWait {}
 class EvidenceWait extends BudgetWait {}
+class EvidenceReview extends EvidenceWait {}
 class TechnicalChunkTooLarge extends Error {}
-const isCreditError = message => /no credits|insufficient_quota|billing|credit balance|sem cr[eé]dit/i.test(message);
 const isPncpDeferred = error => error?.code === 'PNCP_BULK_DEFERRED' || /PNCP bulk (budget deferred|gate wait)/i.test(String(error?.message || ''));
 const isPncpTransportError = error => /^(terminated|fetch failed)$/i.test(String(error?.message || '')) ||
   [error?.code, error?.cause?.code].some(code => ['ECONNRESET', 'ETIMEDOUT', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code));
@@ -47,6 +48,7 @@ function itemInScope(item, profile, products, knownNumbers = []) {
 }
 const labelStatus = { queued: 'Na fila', metadata: 'Consultando dados e anexos do edital', validating: 'Conferindo atualização dos documentos', waiting_pncp: 'Aguardando liberação do PNCP; retomada automática', documents: 'Lendo documentos', extracting: 'Extraindo exigências', comparing: 'Comparando', completed: 'Concluída', partial: 'Parcial', failed: 'Falhou', paused: 'Pausada', superseded: 'Substituída por análise atual' };
 labelStatus.locating_sections = 'Localizando especificações técnicas';
+labelStatus.review_required = 'Leitura parcial — revisão necessária';
 labelStatus.recovering = 'Recuperando trechos pendentes; retomada automática';
 labelStatus.recovering_documents = 'Documento pendente; nova tentativa agendada';
 function technicalFilterClause(mode) {
@@ -123,6 +125,11 @@ async function createTechnicalTables(pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS technical_ai_calls (
     id BIGSERIAL PRIMARY KEY, account_id INTEGER NOT NULL, job_id BIGINT REFERENCES technical_jobs(id),
     day DATE NOT NULL, reserved_tokens BIGINT NOT NULL, actual_tokens BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await pool.query(`ALTER TABLE technical_ai_calls ADD COLUMN IF NOT EXISTS provider TEXT,
+    ADD COLUMN IF NOT EXISTS model TEXT, ADD COLUMN IF NOT EXISTS http_status INTEGER,
+    ADD COLUMN IF NOT EXISTS request_id TEXT, ADD COLUMN IF NOT EXISTS request_hash TEXT,
+    ADD COLUMN IF NOT EXISTS operation TEXT, ADD COLUMN IF NOT EXISTS usage JSONB,
+    ADD COLUMN IF NOT EXISTS outcome TEXT`);
   await pool.query(`CREATE TABLE IF NOT EXISTS technical_candidates (
     account_id INTEGER NOT NULL, source_context TEXT NOT NULL, result_key TEXT NOT NULL,
     notice_key TEXT NOT NULL, profile_hash TEXT NOT NULL, source_updated_at TIMESTAMPTZ,
@@ -247,7 +254,7 @@ function createTechnicalAnalysis(deps) {
     s.text = (s.pages || []).map(p => p.text).join('\n');
     return s;
   }
-  async function reserve(job, config, tokens) {
+  async function reserve(job, config, tokens, requestHash, operation) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -258,13 +265,15 @@ function createTechnicalAnalysis(deps) {
       if (config.limit_mode !== 'score' && (Number(usage.tokens) + tokens > config.daily_tokens || (needsNotice && usage.notices >= config.daily_limit))) throw new BudgetWait('Limite diário atingido. Retomada no próximo dia.');
       await client.query(`UPDATE technical_usage SET tokens=tokens+$2,calls=calls+1,notices=notices+$3 WHERE account_id=$1 AND day=${DAY_SQL}`, [job.account_id, tokens, needsNotice ? 1 : 0]);
       if (needsNotice) { await client.query(`UPDATE technical_jobs SET started_day=${DAY_SQL} WHERE id=$1`, [job.id]); job.started_day = usage.day_key; }
-      const call = (await client.query('INSERT INTO technical_ai_calls(account_id,job_id,day,reserved_tokens) VALUES($1,$2,$3,$4) RETURNING id', [job.account_id, job.id, usage.day_key, tokens])).rows[0];
+      const call = (await client.query('INSERT INTO technical_ai_calls(account_id,job_id,day,reserved_tokens,request_hash,operation) VALUES($1,$2,$3,$4,$5,$6) RETURNING id', [job.account_id, job.id, usage.day_key, tokens,requestHash,operation])).rows[0];
       await client.query('COMMIT');
       return { day: usage.day_key, id: call.id };
     } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
   }
   async function ask(job, config, system, user, maxTokens = 4000, responseFormat = null) {
-    // UTF-8 bytes bound input tokens conservatively, plus output cap; failed calls retain reservation.
+    if (job.kind === 'notice' && !(await settings(job.account_id)).enabled) throw new ProviderWait('Análise pausada. O progresso foi preservado.');
+    // Reservations are estimates, never billing. Only measured usage or an
+    // explicit non-generating HTTP rejection can settle them.
     const reserved = Buffer.byteLength(system + user, 'utf8') + maxTokens + 1000;
     let result, day;
     let oversized = false;
@@ -276,9 +285,11 @@ function createTechnicalAnalysis(deps) {
       if (cooldown?.until > Date.now()) {
         failures.push(cooldown.error); continue;
       }
-      day = await reserve(job, config, reserved);
+      day = await reserve(job, config, reserved,hash({system,user,responseFormat,maxTokens}),responseFormat?.json_schema?.name || 'json');
       result = await ai({ system, user, maxTokens, responseFormat, temperature: 0, timeoutMs: 120000, maxProviderAttempts: 1, providerOffset: offset });
-      const actual = result.usage?.total_tokens == null ? NaN : Number(result.usage.total_tokens);
+      await pool.query(`UPDATE technical_ai_calls SET provider=$2,model=$3,http_status=$4,request_id=$5,usage=$6::jsonb,outcome=$7 WHERE id=$1`,
+        [day.id,result.provider || null,result.model || null,result.http_status || null,result.request_id || null,JSON.stringify(result.usage || null),result.ok ? result.truncated ? 'truncated' : 'received' : 'failed']);
+      const actual = measuredTokens(result);
       if (Number.isSafeInteger(actual) && actual >= 0) await pool.query(`WITH settled AS (
         UPDATE technical_ai_calls SET actual_tokens=$2 WHERE id=$1 AND actual_tokens IS NULL RETURNING account_id,day,reserved_tokens
       ) UPDATE technical_usage u SET tokens=GREATEST(0,u.tokens-s.reserved_tokens+$2),actual_tokens=u.actual_tokens+$2
@@ -290,7 +301,7 @@ function createTechnicalAnalysis(deps) {
       }
       if (result.ok && !result.truncated) break;
       failures.push(result.error || 'Resposta de IA incompleta.');
-      if (isCreditError(result.error || '') || /invalid.api.key|incorrect.api.key|:401\b/i.test(result.error || ''))
+      if (isCreditError(result.error) || isAuthError(result.error))
         providerCooldowns.set(providerKey, { until: Date.now() + 60 * 60 * 1000, error: result.error });
       else if (/429|rate.?limit|too many/i.test(result.error || ''))
         providerCooldowns.set(providerKey, { until: Date.now() + 2 * 60 * 1000, error: result.error });
@@ -303,11 +314,13 @@ function createTechnicalAnalysis(deps) {
         throw new BudgetWait('A API de IA está sem créditos. Regularize o saldo e retome as análises.');
       }
       if (/429|rate.?limit|too many|timeout|timed out|fetch failed|temporar|:5\d\d/i.test(message)) {
-        const reason = `IA temporariamente indisponível; retomada automática. ${message}`;
+        const reason = failures.some(isCreditError)
+          ? 'Provedores de IA sem saldo suficiente; alternativa temporariamente indisponível. O progresso foi preservado.'
+          : 'Provedor de IA temporariamente indisponível. O progresso foi preservado.';
         await pool.query("UPDATE technical_config SET provider_error=$2,provider_retry_at=NOW()+INTERVAL '2 minutes' WHERE account_id=$1", [job.account_id, reason]);
         throw new ProviderWait(reason);
       }
-      throw new EvidenceWait(`Resposta de IA não validada; nova tentativa agendada. ${message}`);
+      throw new EvidenceReview('Resposta de IA não validada. Revisão necessária antes de uma nova tentativa.');
     }
     await pool.query('UPDATE technical_config SET provider_error=NULL,provider_retry_at=NULL WHERE account_id=$1 AND provider_error IS NOT NULL', [job.account_id]);
     return result.data;
@@ -335,8 +348,8 @@ value categórico deve ser um trecho literal da característica, não "sim" ou "
 Certificações do equipamento, como homologação ANATEL, são equipment; a obrigação de apresentar o certificado pode ser uma obrigação administrative separada. Não descarte a necessidade técnica da certificação.
 Cada fact também possui replaces_quote e replacement_statement, ambas strings vazias normalmente. Em retificação EXPLÍCITA ("onde se lê ... leia-se ..."), replaces_quote é a citação literal anterior e replacement_statement é o trecho literal que contém a substituição, o texto antigo e o novo. Nunca presuma substituição só pelo nome ou data de um arquivo.
 Não arredonde nem altere números. Nunca conclua atendimento. Não converta resolução/IP em um número escalar. Separe óptico de híbrido. Não invente requisitos nem omita os que não podem ser quantificados.`;
-    try { return await runExtraction({job,config,source:s,chunk,kind,context,system}); }
-    catch(error) { if(error.code==='TECHNICAL_EXTRACTION_INVALID') throw new EvidenceWait(error.message); throw error; }
+    try { return await runExtraction({job,config,source:s,chunk,kind,context,system,repair:job.state.manual_repair_id || false}); }
+    catch(error) { if(error.code==='TECHNICAL_EXTRACTION_INVALID') throw new EvidenceReview(error.message); throw error; }
   }
   const checkpoint = async job => pool.query("UPDATE technical_jobs SET state=$2::jsonb,stage=$3,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id, JSON.stringify(job.state), job.stage]);
   async function observe(account, payload, profile = {}, sourceContext = 'live', resultKey = '', sourceUpdated = null) {
@@ -410,6 +423,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         await pool.query("UPDATE technical_jobs SET status='queued',stage='validating',state=$2::jsonb,next_run_at=NOW() WHERE id=$1", [job.id, JSON.stringify(job.state)]);
       }
     }
+    job ||= existing[0];
     if (sourceContext !== 'live') await pool.query(`INSERT INTO technical_candidates(account_id,source_context,result_key,notice_key,profile_hash,source_updated_at,job_id)
       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_context,result_key) DO UPDATE SET notice_key=EXCLUDED.notice_key,profile_hash=EXCLUDED.profile_hash,source_updated_at=EXCLUDED.source_updated_at,job_id=EXCLUDED.job_id,updated_at=NOW()`,
     [account, sourceContext, String(resultKey), noticeKey, pKey, sourceUpdated, job?.id || null]);
@@ -657,11 +671,9 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       AND (technical_analysis_id IS NULL OR technical_analysis_id IN (SELECT id FROM technical_jobs WHERE account_id=$1 AND target=$5))
       AND (metadados->>'pncp_numero_controle'=$3 OR numero_compra=$3 OR links->>'edital'=$4 OR links->>'pncp'=$4)`, [job.account_id, job.id, payload.numero_controle_pncp || null, payload.url || null, job.target]);
     if (!result.coverage.read_complete) {
-      // Keep known comparisons visible, but never abandon failed extraction in a
-      // terminal partial state. Only unresolved cache entries call IA again.
-      state.repair_pending = true;
-      await pool.query(`UPDATE technical_jobs SET status='queued',stage='recovering',state=$2::jsonb,
-        error='Cobertura incompleta; recuperação automática dos trechos pendentes.',next_run_at=NOW()+INTERVAL '20 minutes',updated_at=NOW() WHERE id=$1 AND status<>'superseded'`,[job.id,JSON.stringify(state)]);
+      // Preserve usable comparisons without an unbounded paid recovery loop.
+      await pool.query(`UPDATE technical_jobs SET status='partial',stage='review_required',
+        error='Leitura parcial: há trechos que precisam de revisão. Nenhuma releitura automática será cobrada.',updated_at=NOW() WHERE id=$1 AND status<>'superseded'`,[job.id]);
     }
   }
   async function persistScore(job, result) {
@@ -701,6 +713,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           // Release the heavy slot and retry the same checkpoint. Deferrals do
           // not exhaust the failure budget or silently skip a document.
           await pool.query("UPDATE technical_jobs SET status='queued',stage='waiting_pncp',attempts=0,error=NULL,next_run_at=NOW()+INTERVAL '2 minutes',updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id]);
+        } else if (e instanceof EvidenceReview) {
+          await pool.query("UPDATE technical_jobs SET status='partial',stage='review_required',error=$2,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id,e.message]);
         } else if (e instanceof BudgetWait) {
           const delay = e instanceof EvidenceWait ? "NOW()+INTERVAL '20 minutes'" : e instanceof ProviderWait ? "NOW()+INTERVAL '2 minutes'" : /cr[eé]dit/i.test(e.message) ? "NOW()+INTERVAL '1 hour'" : /fichas/.test(e.message) ? "NOW()+INTERVAL '2 minutes'" : "((NOW() AT TIME ZONE 'America/Sao_Paulo')::date+1)::timestamp AT TIME ZONE 'America/Sao_Paulo'";
           await pool.query(`UPDATE technical_jobs SET status='queued',error=$2,next_run_at=${delay} WHERE id=$1 AND status<>'superseded'`, [job.id, e.message]);
@@ -829,7 +843,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       res.json({ analysis, enabled: (await settings(account)).enabled });
     });
     route('post', '/api/licitacoes/technical/jobs/:id/retry', async (req, res, account) => {
-      const changed = await pool.query("UPDATE technical_jobs SET state=CASE WHEN status='partial' THEN '{}'::jsonb ELSE state END,result=NULL,status='queued',attempts=0,error=NULL,next_run_at=NOW() WHERE account_id=$1 AND id=$2 AND status IN ('failed','partial') RETURNING id", [account, req.params.id]);
+      const changed = await pool.query("UPDATE technical_jobs SET state=state || jsonb_build_object('repair_pending',status='partial','manual_repair_id',clock_timestamp()::text),status='queued',attempts=0,error=NULL,next_run_at=NOW() WHERE account_id=$1 AND id=$2 AND status IN ('failed','partial') RETURNING id", [account, req.params.id]);
       res.json({ queued: changed.rowCount > 0 });
     });
     route('post', '/api/licitacoes/technical/jobs/:id/more', async (req, res, account) => {
@@ -871,7 +885,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     });
   }
   async function refreshedJob(job) {
-    if (!job.result) return publicJob(job);
+    const visible = { ...publicJob(job), ...executionState(job,await settings(job.account_id)) };
+    if (!job.result) return visible;
     const catalog = await productsFor(job.account_id, cleanIds(job.context.profile?.product_ids), false);
     const current = new Map(catalog.map(p => [String(p.id), p]));
     const accessories = new Map((await accessoriesFor(job.account_id)).map(p => [String(p.id), p]));
@@ -890,7 +905,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         commercial_bonus: !stale && p.status === 'full' && comparable ? relation === 'below' ? 5 : relation === 'equal' ? 3 : 1 : 0,
         price_comparison: comparable ? { reference: ref, offered: price, difference: price - ref, relation } : null };
     }) }));
-    return { ...publicJob(job), result: { ...job.result, ...(job.state.needs_revalidation || job.result.version !== VERSION ? { documents_complete: false } : {}), ...summarize(items, job.result.base_score) } };
+    return { ...visible, result: { ...job.result, ...(job.state.needs_revalidation || job.result.version !== VERSION ? { documents_complete: false } : {}), ...summarize(items, job.result.base_score) } };
   }
   async function refreshCatalog(account) {
     // Reuse extracted requirements, compare afresh locally; no new AI calls for prices.

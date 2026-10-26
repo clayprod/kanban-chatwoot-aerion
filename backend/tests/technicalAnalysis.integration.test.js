@@ -203,9 +203,13 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const blockedProduct = (await request('POST', `${base}/products`, { name: 'Blocked product', sale_price: 10 }, 88)).data;
       await request('POST', `${base}/products/${blockedProduct.id}/sources`, { text: 'Autonomia de 40 min.' }, 88);
       let exhaustedCalls = 0;
-      const blockedService = createTechnicalAnalysis({ ...dependencies, ai: async () => { exhaustedCalls++; return { ok: false, error: 'openai:429 You have no credits remaining' }; } });
+      const blockedService = createTechnicalAnalysis({ ...dependencies, ai: async () => { exhaustedCalls++; return { ok: false, error: 'openai:429 You have no credits remaining',http_status:429,provider:'openai',model:'test-model' }; } });
       for (let n = 0; n < 6; n++) await blockedService.tick();
       assert.equal(exhaustedCalls, 1);
+      const rejectedUsage=(await pool.query('SELECT tokens,actual_tokens FROM technical_usage WHERE account_id=88')).rows[0];
+      assert.equal(Number(rejectedUsage.tokens),0);assert.equal(Number(rejectedUsage.actual_tokens),0);
+      const rejectedCall=(await pool.query('SELECT provider,model,http_status,request_hash,operation FROM technical_ai_calls WHERE account_id=88')).rows[0];
+      assert.equal(rejectedCall.http_status,429);assert.equal(rejectedCall.provider,'openai');assert.equal(rejectedCall.model,'test-model');assert.ok(rejectedCall.request_hash);assert.ok(rejectedCall.operation);
       assert.match((await blockedService.settings(88)).provider_error, /sem créditos/);
       assert.equal((await request('GET', `${base}/technical/config`, null, 88)).data.health.provider_blocked, true);
       assert.equal((await request('POST', `${base}/technical/resume`, {}, 88)).status, 200);
@@ -235,7 +239,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       await limitedService.tick();
       const limited = await limitedService.settings(90);
       assert.match(limited.provider_error, /temporariamente indisponível/);
-      assert.match(limited.provider_error, /groq:429/);
+      assert.match(limited.provider_error, /sem saldo suficiente/);
       assert.ok(new Date(limited.provider_retry_at).getTime() - Date.now() < 3 * 60 * 1000);
       assert.equal((await pool.query("SELECT attempts FROM technical_jobs WHERE account_id=90 AND kind='product'")).rows[0].attempts, 0);
       const revised = await service.observe(1, { ...input, dataAtualizacao: '2026-10-20T10:00:00Z' }, { terms: ['drone'] });
