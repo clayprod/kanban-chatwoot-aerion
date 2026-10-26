@@ -47,12 +47,14 @@ function numericFactValid(fact, requirement = false) {
   if (!fact.conditions && /\b(?:sem (?:vento|carga)|com carga|fcc|ce)\b/.test(text(fact.quote))) return false;
   if (!requirement) return true;
   const q = text(fact.quote);
+  if(/aproximad|cerca de/.test(q))return false;
   if (fact.operator === 'min') return /minim|pelo menos|no minimo|nao inferior|ou superior|≥|>=/.test(q);
   if (fact.operator === 'max') return /maxim|no maximo|nao superior|ate\b|≤|<=/.test(q);
   if (fact.operator === 'range') return quotedNumber(fact, fact.upper) && fact.upper >= fact.value && /entre|faixa|intervalo|\ba\b/.test(q);
   return fact.operator === 'eq' && !/minim|maxim|pelo menos|ate\b|superior|inferior/.test(q);
 }
 function compareNumeric(req, spec) {
+  if(/aproximad|cerca de/.test(text(req.quote)))return {status:'verificar',reason:'O edital usa um valor aproximado sem informar a tolerância permitida.'};
   if (!numericFactValid(req, true) || !numericFactValid(spec)) return { status: 'verificar', reason: 'Número ou operador sem comprovação no trecho citado.' };
   if (!sameMetric(req,spec) || !conditionsCompatible(req,spec)) return { status: 'verificar', reason: 'Grandeza, componente ou condições de medição diferentes.' };
   // A performance capability described as "até" is not an upper limit on the
@@ -85,6 +87,16 @@ function compareCompound(req, spec) {
   if (!sameMetric(req,spec) || conditionsKey(req.conditions) !== conditionsKey(spec.conditions)) return null;
   const a = String(req.value || '').toUpperCase(), b = String(spec.value || '').toUpperCase();
   if (!text(req.quote).includes(text(a)) || !text(spec.quote).includes(text(b))) return null;
+  if(metricKey(req.key)==='operating_temperature'){
+    const ranges=value=>[...String(value).replace(/−/g,'-').replace(/℃/g,'°C').matchAll(/([+-]?\d+(?:[.,]\d+)?)\s*(?:°\s*C)?\s*(?:a|to|~|–|\.\.)\s*([+-]?\d+(?:[.,]\d+)?)\s*°\s*C/gi)].map(m=>[Number(m[1].replace(',','.')),Number(m[2].replace(',','.'))]);
+    const required=ranges(req.value),offered=ranges(spec.value);
+    if(required.length===1&&offered.length){
+      const statuses=offered.map(([low,high])=>low<=required[0][0]&&high>=required[0][1]);
+      if(statuses.every(Boolean))return {status:'ok',reason:'Todas as faixas de temperatura declaradas cobrem o intervalo exigido.'};
+      if(statuses.every(v=>!v))return {status:'nao_ok',reason:'As faixas de temperatura declaradas não cobrem o intervalo exigido.'};
+    }
+    return null;
+  }
   const ipA = /^IP([0-6])([0-8])$/.exec(a), ipB = /^IP([0-6])([0-8])$/.exec(b);
   if (ipA && ipB) {
     if (req.operator === 'eq') return { status: a === b ? 'ok' : 'nao_ok', reason: `Proteção ${b}; exigido ${a}.` };
@@ -146,7 +158,15 @@ function compareRequirement(req, specs, sources, mapping = {}) {
     if (new Set(fingerprints).size > 1) return { ...base, reason: 'Fontes apresentam valores ou condições diferentes; confirme a especificação correta.' };
   }
   if (req.kind === 'numeric') {
-    const results = selected.map(s => compareNumeric(req, s));
+    // Several modes/capacities in one published field are not permission to
+    // pick the first number. A verdict is possible only if ALL alternatives
+    // produce the same result, with the same property, component and units.
+    const expanded=selected.flatMap(s=>{
+      if(typeof s.value==='number')return[s];
+      const values=measurements(s.value).filter(m=>unitInfo(m.unit)[0]===unitInfo(req.unit)[0]);
+      return values.length?values.map(m=>({...s,kind:'numeric',value:m.value,unit:m.unit})): [s];
+    });
+    const results = expanded.map(s => compareNumeric(req, s));
     const statuses = new Set(results.map(r => r.status));
     if (statuses.size !== 1) return { ...base, reason: 'Fontes ou condições conflitantes; confira a variante e a composição.' };
     return { ...base, ...results[0] };

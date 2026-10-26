@@ -62,7 +62,7 @@ function assembleProduct(product, requirements, accessories, sources) {
       // Replace the count only; autonomy, battery chemistry and other metrics stay untouched.
       for (let index = specs.length - 1; index >= 0; index--) if (text(specs[index].key) === text(req.key)) specs.splice(index, 1);
       const offered=c.quantity-(reserve?c.operating_quantity:0);
-      const quote = `${c.label}: ${offered} ${req.unit}${reserve?` reservas (${c.operating_quantity} em operação; ${c.quantity} no conjunto)`:''}`;
+      const quote = `Baterias de voo ${reserve?'reservas':'no pacote proposto'}: ${offered} ${req.unit}${reserve?` (${c.operating_quantity} em operação; ${c.quantity} no conjunto)`:''}`;
       syntheticLines.push(quote);
       specs.push({ id: `package-${req.id}`, key: req.key,component:componentOf(req), label: req.label, kind: 'numeric', value: offered, unit: req.unit, conditions: '', source_id: syntheticId, location: 'Composição conferida do pacote', quote });
     } else if (key) {

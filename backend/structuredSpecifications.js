@@ -31,6 +31,7 @@ function inferKey(label,section=''){
   if(/formato.*video|video.*format/.test(s))return 'video_formats';
   if(/resolucao.*termica|thermal.*resolution/.test(s))return 'thermal_resolution';
   if(/resolucao.*video|video.*resolution/.test(s))return 'video_resolution';
+  if(s==='video'&&/camera/.test(scope))return 'video_resolution';
   if(/gnss/.test(s))return 'gnss_systems';
   if(/tipo.*gimbal|estabilizacao|stable system/.test(s)&&/gimbal|camera/.test(scope))return 'gimbal_stabilization';
   if(/resolucao.*(?:fotograf|efetiva)|megapixel|effective.*pixel/.test(s))return 'camera_resolution';
@@ -39,7 +40,13 @@ function inferKey(label,section=''){
   if(/peso.*bateria|weight.*battery/.test(s))return 'aircraft_weight';
   if(/tela|screen/.test(s)&&/controle|controller/.test(scope))return 'controller_screen';
   if(/wi.?fi|802\.11/.test(s))return 'wifi';
+  if(/^wi[ -]?fi$/.test(scope)&&s==='protocolo')return 'wifi';
   if(/bluetooth/.test(s))return 'bluetooth';
+  if(/temperatura.*(?:operacao|funcionamento)|operating.*temperature/.test(s))return 'operating_temperature';
+  if(/armazenamento interno|internal storage/.test(s))return 'internal_storage';
+  if(/cartoes?.*microsd|compativel.*microsd/.test(s))return 'memory_card_support';
+  if(/distancia focal|focal length/.test(s))return 'focal_length';
+  if(/\bfov\b|campo.*visao/.test(s))return 'lens_fov';
   if(/resolucao/.test(s)&&/termic/.test(scope))return 'thermal_resolution';
   if(/zoom.*optico/.test(s))return 'optical_zoom';
   if(/zoom.*digital/.test(s))return 'digital_zoom';
@@ -67,6 +74,26 @@ function structuredFacts(rows,source){
       }
     }
     const derived=[];
+    // A lens row names several independent properties. Split only explicitly
+    // labelled measurements; retain the complete original row as evidence.
+    if(/^lente$/i.test(row.label)){
+      for(const [property,label,pattern,unit]of [
+        ['focal_length','Distância focal',/(?:dist[aâ]ncia focal(?: equivalente)?|focal length)\s*:?\s*(\d+(?:[.,]\d+)?)\s*mm/i,'mm'],
+        ['lens_fov','Campo de visão',/(?:D?FOV|campo de vis[aã]o)\s*:?\s*(\d+(?:[.,]\d+)?)\s*°/i,'°'],
+      ]){
+        const m=pattern.exec(row.value);
+        // A zoom range is not a single fixed focal length/FOV.
+        if(m&&!/^\s*[-–~]/.test(row.value.slice(m.index+m[0].length)))derived.push({...base,id:base.id+':'+property,key:property,label,kind:'numeric',value:Number(m[1].replace(',','.')),unit});
+      }
+    }
+    if(/conectividade/.test(text(row.label))&&!/\b(?:nao|sem|opcional)\b/.test(text(row.value))){
+      for(const [key,pattern]of [['wifi',/Wi[ -]?Fi/i],['bluetooth',/Bluetooth/i]]){
+        const m=pattern.exec(row.value);if(m)derived.push({...base,id:base.id+':'+key,key,component:'',value:m[0]});
+      }
+    }
+    if(/^controle remoto$/i.test(row.label)&&/tela\s+\d/i.test(row.value)&&!/smartphone|celular|extern/i.test(row.value)){
+      derived.push({...base,id:base.id+':screen',key:'controller_screen',component:'controller',value:/tela/i.exec(row.value)[0]});
+    }
     const axes=/(\d+)\s*eixos/i.exec(row.value);
     if(key==='gimbal_stabilization' && axes)derived.push({...base,id:base.id+':axes',label:'Eixos do gimbal',key:'gimbal_axes',kind:'numeric',value:Number(axes[1]),unit:'eixos'});
     if(key==='gimbal_stabilization'&&!axes&&/tr[eê]s eixos/i.test(row.value))derived.push({...base,id:base.id+':axes',label:'Eixos do gimbal',key:'gimbal_axes',kind:'numeric',value:3,unit:'eixos'});

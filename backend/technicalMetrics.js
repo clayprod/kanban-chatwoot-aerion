@@ -52,11 +52,13 @@ function categoricalValue(fact) {
   if(key==='motor_type' && /^(brushless|motores? eletricos? sem escova|motores? sem escova|sem escova)$/.test(value))return 'brushless';
   if(key==='gimbal_stabilization' && /^(mecanica triaxial|mecanica em 3 eixos|3.axis mechanical|3-axis|3 eixos)$/.test(value))return 'mechanical_3_axis';
   if(key==='gimbal_stabilization' && /mecanic/.test(value) && /triaxial|3[ -]axis|3 eixos/.test(value))return 'mechanical_3_axis';
-  if(!/\b(?:nao|sem|opcional|optional|not supported|without)\b/.test(value)){
+  if(!/\b(?:nao|sem|nenhum[ao]?|ausente|none|no|opcional|optional|not supported|without)\b/.test(value)){
     if(key==='wifi'&&/\bwi[ -]?fi\b|\b802\.11/.test(value))return 'wifi_supported';
     if(key==='bluetooth'&&/\bbluetooth\b/.test(value))return 'bluetooth_supported';
     if(key==='return_to_home'&&/\brth\b|return.to.home|retorno.*(?:automatic|origem|decolagem)/.test(value))return 'rth_supported';
     if(key==='controller_screen'&&/tela integrada|integrated screen|built.in/.test(value))return 'integrated_screen';
+    if(key==='controller_screen'&&componentOf(fact)==='controller'&&/^(tela|controle remoto)$/.test(clean(fact.label))&&!/smartphone|celular|extern/.test(value)&&(/\d/.test(value)||/^(tela|sim|integrada)$/.test(value)))return 'integrated_screen';
+    if(key==='memory_card_support'&&(/\bmicrosd\b/.test(value)||/^cartoes? microsd suportados/.test(clean(fact.label))))return 'microsd_supported';
   }
   return value;
 }

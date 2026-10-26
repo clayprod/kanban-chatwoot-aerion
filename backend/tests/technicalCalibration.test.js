@@ -112,3 +112,29 @@ test('a half-inch CMOS does not satisfy a one-inch CMOS requirement, independent
  const s={...r,id:'s',value:'1/2" CMOS, 48MP efetivos',quote:'Sensor de imagem: 1/2" CMOS, 48MP efetivos',source_id:'s'};
  assert.equal(compareRequirement(r,[s],[{id:'r',text:r.quote},{id:'s',text:s.quote}],{spec_ids:['s']}).status,'nao_ok');
 });
+test('lens properties are split only at their explicit labels; a zoom range is never its first focal length',()=>{
+ const facts=structuredFacts([{section:'Câmera grande angular',label:'Lente',value:'DFOV: 83.4°, Distância focal equivalente: 24 mm, Abertura: f/2.8'}],{id:'s'});
+ assert.equal(facts.find(f=>f.key==='focal_length').value,24);
+ const variable=structuredFacts([{section:'Câmera tele',label:'Lente',value:'DFOV: 40°-10.3°, Distância focal equivalente: 64-234 mm'}],{id:'s'});
+ assert.equal(variable.some(f=>f.key==='focal_length'||f.key==='lens_fov'),false);
+});
+test('all alternative capacities must agree, without picking gross storage over usable storage',()=>{
+ const r={id:'r',key:'internal_storage',component:'',kind:'numeric',value:42,unit:'GB',operator:'min',quote:'Capacidade mínima de 42 GB',source_id:'r',location:'p1'};
+ const s={id:'s',key:r.key,component:'',kind:'categorical',value:'128GB interno, 64GB disponível',quote:'Armazenamento interno: 128GB interno, 64GB disponível',source_id:'s',location:'Ficha',conditions:''};
+ const proof=[{id:'r',text:r.quote},{id:'s',text:s.quote}];
+ assert.equal(compareRequirement(r,[s],proof,{spec_ids:['s']}).status,'ok');
+ const harder={...r,value:100,quote:'Capacidade mínima de 100 GB'};proof[0].text=harder.quote;
+ assert.equal(compareRequirement(harder,[s],proof,{spec_ids:['s']}).status,'verificar');
+});
+test('temperature capabilities must cover the required interval in every declared load condition',()=>{
+ const r={id:'r',key:'operating_temperature',component:'',kind:'compound',value:'-10 °C a 40 °C',operator:'eq',quote:'Temperatura de funcionamento: -10 °C a 40 °C',source_id:'r',location:'p1',conditions:''};
+ const s={...r,id:'s',source_id:'s',value:'-20℃ a +50℃ (sem carga) / -20℃ a +40℃ (carga completa)',quote:'Temperatura: -20℃ a +50℃ (sem carga) / -20℃ a +40℃ (carga completa)'};
+ assert.equal(compareRequirement(r,[s],[{id:'r',text:r.quote},{id:'s',text:s.quote}],{spec_ids:['s']}).status,'ok');
+});
+test('a controller screen marked none or not applicable cannot become positive evidence from its field name',()=>{
+ const r={id:'r',key:'controller_screen',component:'controller',kind:'categorical',value:'tela integrada',quote:'Controle remoto com tela integrada',source_id:'r',location:'p1',conditions:''};
+ for(const value of ['Nenhuma','N/A','Não','Sem tela']){
+  const s={...r,id:'s',source_id:'s',label:'Tela',value,quote:`Tela: ${value}`};
+  assert.notEqual(compareRequirement(r,[s],[{id:'r',text:r.quote},{id:'s',text:s.quote}],{spec_ids:['s']}).status,'ok');
+ }
+});
