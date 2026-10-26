@@ -19,6 +19,12 @@ test('cached source normalization is invalidated when a source text changes',()=
  const source={id:'s',text:'Retorno automático RTH'},fact={source_id:'s',location:'Página 1',quote:'Retorno automático RTH'};
  assert.equal(evidenceValid(fact,[source]),true);source.text='Função removida';assert.equal(evidenceValid(fact,[source]),false);
 });
+test('5.8 GHz is supported inside an explicit 5725–5850 MHz band, never by an unrelated or narrower band',()=>{
+ const req={key:'control_frequency',kind:'numeric',value:5.8,unit:'GHz',quote:'Frequência: 5.8 GHz',component:'controller'};
+ for(const [value,expected]of [['5725–5850 MHz','ok'],['5.725-5.850GHz','ok'],['2.4–2.4835 GHz','nao_ok'],['5.725-5.799 GHz','nao_ok']]){
+  const data=pack([{section:'Transmissão do controlador',label:'Frequência',value}]);assert.equal(compare(req,data).status,expected,value);
+ }
+});
 test('reviewed professional/long-range descriptions match generic criteria, never numeric or specific application requirements',()=>{
  const data=pack(capabilityRows('102002996'));
  assert.equal(compare({key:'professional_use',value:'PROFISSIONAL'},data).status,'ok');

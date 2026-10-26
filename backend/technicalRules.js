@@ -152,6 +152,14 @@ function compareRequirement(req, specs, sources, mapping = {}) {
   if(metricKey(req.key)==='control_frequency'&&req.kind==='numeric'&&req.operator==='eq'&&numericFactValid(req,true)){
     const supported=selected.some(s=>conditionsCompatible(req,s)&&(typeof s.value==='number'?[s]:measurements(s.value).map(m=>({...s,kind:'numeric',value:m.value,unit:m.unit}))).some(option=>compareNumeric(req,option).status==='ok'));
     if(supported)return {...base,status:'ok',reason:'A frequência exigida consta explicitamente entre as bandas de operação do controle.'};
+    // A selectable frequency inside an explicitly supported radio band is not
+    // required to equal either endpoint. Keep ranges and their units paired.
+    const target=req.value*unitInfo(req.unit)[1];
+    const inBand=selected.some(s=>conditionsCompatible(req,s)&&!/nao suport|nao dispon|not support|unsupported|sem suporte/.test(text(s.value))&&[...String(s.value).matchAll(/(\d+(?:[.,]\d+)?)\s*(GHz|MHz|kHz|Hz)?\s*[-–—~]\s*(\d+(?:[.,]\d+)?)\s*(GHz|MHz|kHz|Hz)\b/gi)].some(m=>{
+      const lower=Number(m[1].replace(',','.'))*unitInfo(m[2] || m[4])[1],upper=Number(m[3].replace(',','.'))*unitInfo(m[4])[1];
+      return unitInfo(req.unit)[0]==='frequency'&&lower<=target&&target<=upper;
+    }));
+    if(inBand)return {...base,status:'ok',reason:'A frequência exigida está dentro de uma faixa de operação explicitamente suportada pelo controle.'};
   }
   if(metricKey(req.key)==='camera_sensor'&&/cmos/.test(text(req.quote))&&selected.every(s=>/cmos/.test(text(s.quote)))){
     const format=value=>{
