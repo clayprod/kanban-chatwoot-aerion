@@ -3,7 +3,7 @@ import axios from 'axios';
 import TechnicalChecklist from './TechnicalChecklist';
 import {useObjection,adjustedCompatibility} from './ObjectionContext';
 import {useRequirementReviews} from './RequirementReviews';
-import {technicalResultCache as cache,loadTechnicalResult as load} from './technicalResultCache';
+import {technicalResultCache as cache,loadTechnicalResult as load,subscribeTechnicalResults,technicalNoticeIdentity} from './technicalResultCache';
 
 const money = value => Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const labels = { full: 'Atende plenamente', uncertain: '? — Verificar', failed: 'Não atende' };
@@ -119,15 +119,17 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
   const key = opportunityId ? `opportunity:${opportunityId}` : JSON.stringify([item?.numero_controle_pncp || item?.id || item?.url, item?.technical_analysis_id, item?.score, item?.data_atualizacao_pncp, profile, itemNumber == null && !overview ? 'summary' : 'full']);
   const currentKey = useRef(key);
   useEffect(() => {
-    let ignore = false; let timer;
+    let ignore = false; let timer;let requestNumber=0;
     currentKey.current = key;
     setAnalysis(null); setError(''); setDetailError(''); setSelection(null); setFetching(true);
     const refresh = () => {
+      const request=++requestNumber;
       load(key, () => opportunityId ? axios.get(`/api/licitacoes/opportunities/${opportunityId}/technical`) : axios.post('/api/licitacoes/technical/notice', { item, profile, summary: itemNumber == null && !overview }))
-        .then(data => { if (ignore) return; setFetching(false); setAnalysis(data.analysis); setEnabled(data.enabled); if (data.analysis) timer = setTimeout(refresh, ['queued', 'running'].includes(data.analysis.status) ? 20000 : 60000); })
-        .catch(e => { if (!ignore) { setFetching(false); setError(e.response?.data?.error || 'Análise técnica indisponível.'); } });
+        .then(data => { if (ignore||request!==requestNumber) return;setError(''); setFetching(false); setAnalysis(data.analysis); setEnabled(data.enabled); if (data.analysis) timer = setTimeout(refresh, ['queued', 'running'].includes(data.analysis.status) ? 20000 : 60000); })
+        .catch(e => { if (!ignore&&request===requestNumber) { setFetching(false); setError(e.response?.data?.error || 'Análise técnica indisponível.'); } });
     };
-    refresh(); return () => { ignore = true; currentKey.current = null; clearTimeout(timer); };
+    const unsubscribe=subscribeTechnicalResults(change=>{if(opportunityId?String(change.opportunityId)===String(opportunityId):!change.opportunityId&&change.noticeIdentity&&change.noticeIdentity===technicalNoticeIdentity(item)){clearTimeout(timer);refresh();}});
+    refresh(); return () => { ignore = true; currentKey.current = null; clearTimeout(timer);unsubscribe(); };
     // key includes the procurement identity and reviewed search profile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);

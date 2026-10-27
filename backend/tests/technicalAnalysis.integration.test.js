@@ -363,6 +363,26 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       for(let n=0;n<4;n++)await capacityService.tick();
       assert.equal((await request('GET',`${base}/products`,null,99)).data[0].specs_complete,true);
       assert.deepEqual(capacityOffsets,[0,1]);
+      // Manual selection bypasses the score threshold only. Ordinary reads do
+      // not enqueue it, repeated clicks reuse it, and the token cap still holds.
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const manualProduct=(await request('POST',`${base}/products`,{name:'Manual-interest product',keywords:['drone'],sale_price:90,unit:'un',package_confirmed:true},96)).data;
+      await request('POST',`${base}/products/${manualProduct.id}/sources`,{text:'Autonomia de 42 min.'},96);for(let n=0;n<3;n++)await service.tick();
+      await request('PUT',`${base}/technical/config`,{enabled:true,limit_mode:'score',min_score:68,daily_tokens:500000},96);
+      const low={...input,score:45,sequencial:'96',numero_controle_pncp:'12345678000195-1-000096/2026'},profile={terms:['drone']};
+      assert.equal(await service.observe(96,low,profile),null);
+      const manual=await request('POST',`${base}/technical/notice/analyze`,{item:low,profile},96);assert.equal(manual.status,202);const manualId=manual.data.analysis.id;
+      const manualJob=(await pool.query('SELECT * FROM technical_jobs WHERE id=$1',[manualId])).rows[0];assert.equal(manualJob.context.manual_requested,true);assert.equal(manualJob.context.payload.score,45);
+      assert.equal((await request('POST',`${base}/technical/notice/analyze`,{item:low,profile},96)).data.analysis.id,manualId);
+      await pool.query('UPDATE technical_usage SET tokens=500000 WHERE account_id=96');const beforeManualBudget=calls;
+      for(let n=0;n<12;n++)await service.tick();assert.equal(calls,beforeManualBudget);assert.equal((await request('GET',`${base}/technical/jobs/${manualId}`,null,96)).data.status,'queued');
+      await pool.query('UPDATE technical_usage SET tokens=0 WHERE account_id=96');await pool.query('UPDATE technical_jobs SET next_run_at=NOW() WHERE id=$1',[manualId]);for(let n=0;n<15;n++)await service.tick();
+      assert.equal((await request('GET',`${base}/technical/jobs/${manualId}`,null,96)).data.status,'completed');const beforeManualReuse=calls;
+      assert.equal((await request('POST',`${base}/technical/notice/analyze`,{item:low,profile},96)).data.analysis.id,manualId);await service.tick();assert.equal(calls,beforeManualReuse);
+      const savedOpportunity=(await pool.query('INSERT INTO licitacao_opportunities(account_id,technical_analysis_id) VALUES(96,$1) RETURNING id',[manualId])).rows[0];
+      assert.equal((await request('POST',`${base}/opportunities/${savedOpportunity.id}/technical/analyze`,{},97)).status,404);
+      assert.equal((await request('POST',`${base}/opportunities/${savedOpportunity.id}/technical/analyze`,{},96)).data.analysis.id,manualId);assert.equal(calls,beforeManualReuse);
+      await request('PUT',`${base}/technical/config`,{enabled:false},96);const pausedManual=await request('POST',`${base}/technical/notice/analyze`,{item:low,profile},96);assert.equal(pausedManual.status,409);assert.match(pausedManual.data.error,/pausada/);
     } finally {
       if (server) await new Promise(resolve => server.close(resolve));
       if (pool) await pool.end();

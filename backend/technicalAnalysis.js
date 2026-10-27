@@ -385,7 +385,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     catch(error) { if(error.code==='TECHNICAL_EXTRACTION_INVALID') throw new EvidenceReview(error.message); throw error; }
   }
   const checkpoint = async job => pool.query("UPDATE technical_jobs SET state=$2::jsonb,stage=$3,updated_at=NOW() WHERE id=$1 AND status<>'superseded'", [job.id, JSON.stringify(job.state), job.stage]);
-  async function observe(account, payload, profile = {}, sourceContext = 'live', resultKey = '', sourceUpdated = null) {
+  async function observe(account, payload, profile = {}, sourceContext = 'live', resultKey = '', sourceUpdated = null, {manual=false,requestedBy=null}={}) {
     const cfg = await settings(account), ids = getIds(payload);
     if (!/^[A-Z0-9]{12}\d{2}$/i.test(String(ids.cnpj)) || !/^\d{4}$/.test(String(ids.ano)) || !/^\d{1,10}$/.test(String(ids.sequencial)) || Number(ids.sequencial) <= 0) {
       if (sourceContext !== 'live') await pool.query(`INSERT INTO technical_candidates(account_id,source_context,result_key,notice_key,profile_hash,source_updated_at)
@@ -403,7 +403,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
     if (noticeUpdated(latest?.context.payload) && (!noticeUpdated(payload) || new Date(noticeUpdated(latest.context.payload)) > new Date(noticeUpdated(payload)))) payload = { ...payload, data_atualizacao_pncp: noticeUpdated(latest.context.payload) };
     const revision = noticeRevision(payload, catalog, accessories, pKey);
     let job;
-    if (cfg.enabled && Number(payload.base_score ?? payload.score) >= minScore(cfg) && isEligible(payload) && catalog.length) {
+    if (cfg.enabled && (manual || Number(payload.base_score ?? payload.score) >= minScore(cfg)) && (manual || isEligible(payload)) && catalog.length) {
       const versions = values => Object.fromEntries(values.map(p => [String(p.id), p.specs_version]));
       const compatibleEvidence = candidate => (!candidate.context.rules_version || candidate.context.rules_version === VERSION) && noticeUpdated(candidate.context.payload) === noticeUpdated(payload) &&
         candidate.state.extraction_format === EXTRACTION_VERSION && candidate.state.notice_context_version === NOTICE_CONTEXT_VERSION && candidate.state.item_scope_policy === 2 && hash(candidate.state.catalog_versions || {}) === hash(versions(catalog)) &&
@@ -423,7 +423,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           const assessed = candidate.result.items.find(i => String(i.number) === String(raw.numeroItem ?? raw.numero_item));
           return assessed && assessed.in_scope === itemInScope(raw, profile, catalog, (payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem));
         }));
-      const context = { notice_key: noticeKey, ids, payload, profile, semantic_revision: revision, rules_version: VERSION };
+      const context = { notice_key: noticeKey, ids, payload, profile, semantic_revision: revision, rules_version: VERSION,...(manual?{manual_requested:true,manual_requested_at:new Date().toISOString(),manual_requested_by:requestedBy}:{}) };
       if (job) {
         job.context = { ...job.context, ...context };
         await pool.query('UPDATE technical_jobs SET context=$2::jsonb WHERE id=$1', [job.id, JSON.stringify(job.context)]);
@@ -757,8 +757,9 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const rows = await pool.query(`SELECT j.* FROM technical_jobs j LEFT JOIN technical_config c ON c.account_id=j.account_id
         WHERE j.status IN ('queued','running') AND j.next_run_at<=NOW() AND (c.provider_retry_at IS NULL OR c.provider_retry_at<=NOW() OR
           (j.kind='notice' AND (NOT COALESCE((j.state->>'initialized')::boolean,FALSE) OR COALESCE((j.state->>'file_cursor')::int,0)<jsonb_array_length(COALESCE(j.state->'files','[]'::jsonb))))) AND (j.kind='product' OR (c.enabled=TRUE AND
-          COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) >= CASE WHEN c.limit_mode='score' THEN GREATEST(68,c.min_score) ELSE c.min_score END))
-        ORDER BY CASE WHEN j.updated_at<NOW()-INTERVAL '2 minutes' THEN 0 ELSE 1 END,
+          (j.context->>'manual_requested'='true' OR COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) >= CASE WHEN c.limit_mode='score' THEN GREATEST(68,c.min_score) ELSE c.min_score END)))
+        ORDER BY CASE WHEN j.context->>'manual_requested'='true' THEN 0 ELSE 1 END,
+          CASE WHEN j.updated_at<NOW()-INTERVAL '2 minutes' THEN 0 ELSE 1 END,
           CASE WHEN j.kind=$1 THEN 0 ELSE 1 END,
           COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) DESC,
           CASE WHEN j.state->>'notice_checked'='true' OR j.state->>'initialized'='true' THEN 0 ELSE 1 END,
@@ -908,6 +909,26 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         })) } };
       }
       res.json({ analysis, enabled: (await settings(account)).enabled });
+    });
+    const requestManualAnalysis=async(account,payload,profile,actor)=>{
+      if(!(await settings(account)).enabled)throw Object.assign(Error('A análise técnica está pausada. Retome em Licitações → Produtos para solicitar a análise.'),{status:409});
+      const job=await observe(account,payload,profile,'live','',null,{manual:true,requestedBy:actor});
+      if(!job)throw Object.assign(Error('Não foi possível iniciar. Confira a identificação PNCP e cadastre ao menos um produto ativo para comparar.'),{status:422});
+      if(job.status==='failed'&&!job.result){await pool.query("UPDATE technical_jobs SET status='queued',attempts=0,error=NULL,next_run_at=NOW() WHERE account_id=$1 AND id=$2 AND status='failed'",[account,job.id]);job.status='queued';job.error=null;}
+      await pool.query('UPDATE technical_candidates SET job_id=$4,updated_at=NOW() WHERE account_id=$1 AND notice_key=$2 AND profile_hash=$3',[account,job.context.notice_key,profileKey(profile),job.id]);
+      return {analysis:await refreshedJob(job),enabled:true};
+    };
+    route('post','/api/licitacoes/technical/notice/analyze',async(req,res,account)=>{
+      res.status(202).json(await requestManualAnalysis(account,req.body?.item || {},req.body?.profile || {},req.auth?.uid));
+    });
+    route('post','/api/licitacoes/opportunities/:id/technical/analyze',async(req,res,account)=>{
+      const opportunity=(await pool.query('SELECT * FROM licitacao_opportunities WHERE account_id=$1 AND id=$2',[account,req.params.id])).rows[0];
+      if(!opportunity)return res.status(404).json({error:'Oportunidade não encontrada.'});
+      const prior=opportunity.technical_analysis_id?(await pool.query('SELECT * FROM technical_jobs WHERE account_id=$1 AND id=$2',[account,opportunity.technical_analysis_id])).rows[0]:null;
+      const payload=prior?.context?.payload || {...opportunity,url:opportunity.links?.edital || opportunity.links?.pncp,numero_controle_pncp:opportunity.metadados?.pncp_numero_controle || opportunity.metadados?.numero_controle_pncp || opportunity.numero_compra};
+      const result=await requestManualAnalysis(account,payload,prior?.context?.profile || {},req.auth?.uid);
+      await pool.query('UPDATE licitacao_opportunities SET technical_analysis_id=$3 WHERE account_id=$1 AND id=$2',[account,opportunity.id,result.analysis.id]);
+      res.status(202).json(result);
     });
     route('post', '/api/licitacoes/technical/jobs/:id/retry', async (req, res, account) => {
       const changed = await pool.query("UPDATE technical_jobs SET state=state || jsonb_build_object('repair_pending',status='partial','manual_repair_id',clock_timestamp()::text),status='queued',attempts=0,error=NULL,next_run_at=NOW() WHERE account_id=$1 AND id=$2 AND status IN ('failed','partial') RETURNING id", [account, req.params.id]);

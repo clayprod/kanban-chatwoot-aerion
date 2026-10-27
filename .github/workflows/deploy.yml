@@ -126,7 +126,7 @@ jobs:
 
       - name: Validate notice navigation and technical preview
         working-directory: frontend
-        run: npm test -- --watchAll=false --runInBand --runTestsByPath src/TechnicalResult.test.js src/technicalChecklistBridge.test.js src/PncpSearchDialog.test.js src/PncpNoticePage.test.js src/OpportunityPreview.test.js src/pncpNavigation.test.js src/SearchGuide.test.js src/PipelineOpportunityPage.test.js src/ProductCatalog.test.js src/ObjectionWorkflow.test.js src/RequirementReviews.test.js src/TechnicalPriceSummary.test.js src/checklistPresentation.test.js
+        run: npm test -- --watchAll=false --runInBand --runTestsByPath src/TechnicalResult.test.js src/technicalChecklistBridge.test.js src/PncpSearchDialog.test.js src/PncpNoticePage.test.js src/OpportunityPreview.test.js src/pncpNavigation.test.js src/SearchGuide.test.js src/PipelineOpportunityPage.test.js src/ProductCatalog.test.js src/ObjectionWorkflow.test.js src/RequirementReviews.test.js src/TechnicalPriceSummary.test.js src/checklistPresentation.test.js src/ManualTechnicalAnalysis.test.js
         env:
           CI: true
 

@@ -4,6 +4,7 @@ import {pncpInterestTotals} from './pncpPreview';
 import {ObjectionProvider,ObjectionPanel} from './ObjectionWorkflow';
 import {RequirementReviewProvider,useRequirementReviews} from './RequirementReviews';
 import {useObjection} from './ObjectionContext';
+import ManualTechnicalAnalysis from './ManualTechnicalAnalysis';
 function ImportButton({onClick,disabled,alreadyImported}){
  const reviews=useRequirementReviews(),objection=useObjection(),saving=(reviews?.saving || 0)+(objection?.saving || 0)>0;
  return <button type="button" onClick={onClick} disabled={disabled||saving||!!reviews?.error||!!objection?.error} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none">{saving?'Salvando ajustes…':alreadyImported?'Já está no pipeline':'Importar para o pipeline'}</button>;
@@ -36,6 +37,7 @@ export default function PncpNoticePage({ opportunity, jobName, items, otherItems
         <ImportButton onClick={onImport} disabled={!canImport || loading} alreadyImported={opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline'}/>
       </div>
     </header>
+    <ManualTechnicalAnalysis item={opportunity.__preview} profile={opportunity.__profile}/>
     <OpportunityPreview opportunity={opportunity} items={items} otherItems={otherItems} loading={loading} error={error} onChecklistChange={onChecklistChange} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
     <ObjectionPanel/>
   </article></ObjectionProvider></RequirementReviewProvider>;
