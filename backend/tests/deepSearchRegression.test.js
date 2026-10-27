@@ -98,7 +98,9 @@ test('technical providers request strict facts from an available model without c
   // para tras e deixou a main vermelha, bloqueando deploy de todo mundo.
   assert.equal(requests[0].body.max_tokens, 7000);
   assert.deepEqual(requests[0].body.response_format, FACTS_FORMAT);
-  await context.ask({ ...request, technical: true, providerOffset: 2 });
+  await context.ask({ ...request, technical: true, providerOffset: 0 });
+  assert.match(requests[1].url,/openrouter/);
+  assert.equal(requests[1].body.model,'openai/gpt-4.1-mini');
   assert.equal(requests[1].body.provider.require_parameters, true);
   await context.ask({ ...request, providerOffset: 1 });
   assert.equal(requests[2].body.model, 'llama-3.3-70b-versatile');
