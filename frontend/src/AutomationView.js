@@ -316,7 +316,7 @@ export default function AutomationView() {
   return (
     <div className={`${card} p-4`}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-        <nav className="flex items-center gap-1" role="tablist">
+        <nav className="flex flex-wrap items-center gap-1" role="tablist">
           {abas.map((a) => {
             const ativa = aba === a.id;
             return (
