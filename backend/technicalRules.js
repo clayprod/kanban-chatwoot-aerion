@@ -142,7 +142,7 @@ function compareRequirement(req, specs, sources, mapping = {}) {
   if (uncertainOcr(req)) return { ...base, reason: 'A leitura OCR desta exigência contém números incertos. Confira o documento original.' };
   if(['professional_use','long_range'].includes(metricKey(req.key))&&!/^(?:uso )?profissional$|^professional(?: use)?$|^longo alcance$|^long[ -]range$/.test(text(req.value)))return {...base,reason:'A exigência acrescenta uma aplicação ou condição específica; a classificação geral do produto não comprova esse detalhe.'};
   const requiredComponent=require('./technicalMetrics').componentOf(req);
-  const absent=requiredComponent&&specs.find(s=>s.key==='component_presence'&&require('./technicalMetrics').componentOf(s)===requiredComponent&&/^(nao|no|ausente|not present)$/.test(text(s.value))&&evidenceValid(s,sources));
+  const absent=requiredComponent&&specs.find(s=>s.key==='component_presence'&&require('./technicalMetrics').componentOf(s)===requiredComponent&&/^(nao(?: possui| disponivel| suportad[oa])?|no|ausente|not present|none|not available)$/.test(text(s.value))&&evidenceValid(s,sources));
   if(absent)return {...base,status:'nao_ok',reason:'A ficha informa explicitamente que este modelo não possui o componente exigido.',evidence:[absent]};
   // Model IDs and same_metric are suggestions, not evidence of equivalence.
   const selected = specs.filter(s => (mapping.spec_ids || []).includes(s.id) && sameMetric(req,s) && evidenceValid(s, sources));
@@ -231,7 +231,7 @@ function assessProduct(product, requirements, sources, mappings = [], complete =
   const comparable = sameUnit && reference > 0 && price > 0 && product.package_confirmed === true;
   const technical = !complete ? 0 : full ? 20 : counts.nao_ok ? 0 : counts.total ? 8 * counts.ok / counts.total : 0;
   const commercial = full && comparable ? price < reference ? 5 : price === reference ? 3 : 1 : 0;
-  return { product_id: product.id, product_name: product.name, sale_price: price, product_version: product.version, specs_complete: product.specs_complete === true,
+  return { product_id: product.id, product_name: product.name, sale_price: price, product_version: product.version,product_specs_version:product.specs_version, specs_complete: product.specs_complete === true,
     price_rankable: sameUnit && product.package_confirmed === true && price > 0,
     status, counts, technical_percent: counts.total ? Math.floor(100*counts.ok/counts.total) : null, assessment_complete: complete && product.specs_complete===true, requirements: rows, technical_bonus: technical, commercial_bonus: commercial,
     price_comparison: comparable ? { reference, offered: price, difference: price - reference, relation: price < reference ? 'below' : price === reference ? 'equal' : 'above' } : null };

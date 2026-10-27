@@ -16,6 +16,8 @@ const {isCreditError,isAuthError,measuredTokens,executionState}=require('./techn
 const {documentRole,documentCoverage,itemScopeEvidence}=require('./technicalProvenance');
 const {reviewedComparison}=require('./technicalReviewedNotices');
 const reviewedBundle=require('./data/aerionReviewedNotices.json');
+const {createObjectionTables,createObjectionService}=require('./objectionService');
+const {createReviewTables,applyReviews,registerReviewRoutes}=require('./technicalReviews');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -200,6 +202,8 @@ async function createTechnicalTables(pool) {
     WHERE provider_health_version=0 AND provider_error='A API de IA está sem créditos. Regularize o saldo e retome as análises.' RETURNING account_id
   ) UPDATE technical_jobs j SET next_run_at=NOW(),error=NULL FROM accounts a WHERE j.account_id=a.account_id
     AND j.status='queued' AND j.error='A API de IA está sem créditos. Regularize o saldo e retome as análises.'`);
+  await createObjectionTables(pool);
+  await createReviewTables(pool);
 }
 
 function createTechnicalAnalysis(deps) {
@@ -787,6 +791,8 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
         await fn(req, res, getAccountId(req));
       } catch (e) { console.error('[technical]', e.message); res.status(e.status || 400).json({ error: e.message }); }
     });
+    createObjectionService({pool,ai,loadJob:refreshedJob}).register(route);
+    registerReviewRoutes({route,pool,loadJob:refreshedJob,onChange:async job=>{const current=await refreshedJob(job);if(current.result)await persistScore(job,current.result);}});
     route('get', '/api/licitacoes/products', async (_req, res, account) => {
       const { rows } = await pool.query(`SELECT p.*,COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id,'name',s.name,'url',s.url,'complete',s.complete,'error',s.error)) FROM technical_product_sources ps JOIN technical_sources s ON s.id=ps.source_id WHERE ps.product_id=p.id AND ps.active=TRUE),'[]') AS sources,
         (SELECT jsonb_build_object('status',j.status,'error',j.error,'stage',j.stage) FROM technical_jobs j WHERE j.account_id=p.account_id AND j.kind='product' AND j.target=p.id::text ORDER BY j.id DESC LIMIT 1) AS processing
@@ -929,7 +935,12 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       res.json({ analysis: job ? await refreshedJob(job) : null });
     });
   }
-  async function refreshedJob(job) {
+  async function refreshedJob(job){
+    const current=await refreshedJobBase(job);if(!current.result||!job.context?.notice_key)return current;
+    const reviews=(await pool.query('SELECT * FROM technical_requirement_reviews WHERE account_id=$1 AND notice_key=$2',[job.account_id,job.context.notice_key])).rows;
+    return {...current,result:applyReviews(current.result,reviews)};
+  }
+  async function refreshedJobBase(job) {
     const reviewed=await reviewedResult(job);
     if(reviewed)return {...publicJob(job),status:reviewed.documents_complete?'completed':'partial',stage:'reviewed',stage_label:'Leitura conferida',error:reviewed.notes.join(' '),result:reviewed};
     const invalidReview=!!job.result?.review;
@@ -947,7 +958,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const extraPrice = additions.reduce((sum, a) => sum + Math.round(a.unit_price * 100) * a.quantity, 0) / 100;
       const price = (Math.round(Number(product.sale_price) * 100) + Math.round(extraPrice * 100)) / 100, ref = Number(i.reference_price);
       const relation = price < ref ? 'below' : price === ref ? 'equal' : 'above';
-      return { ...p, product_name: product.name, sale_price: price, evidence_current: !stale, technical_percent:stale ? null:p.technical_percent, assessment_complete:!stale && p.assessment_complete, specs_complete: !stale && p.specs_complete, status: stale ? 'uncertain' : p.status, technical_bonus: stale ? 0 : p.technical_bonus,
+      return { ...p, product_name: product.name,product_version:product.version,product_specs_version:product.specs_version, sale_price: price, evidence_current: !stale, technical_percent:stale ? null:p.technical_percent, assessment_complete:!stale && p.assessment_complete, specs_complete: !stale && p.specs_complete, status: stale ? 'uncertain' : p.status, technical_bonus: stale ? 0 : p.technical_bonus,
         ...(p.configuration ? { configuration: { ...p.configuration, additions, base_price: Number(product.sale_price), extra_price: extraPrice } } : {}),
         price_rankable: commercialUnit(product.unit) === commercialUnit(i.unit) && !!text(i.unit) && product.package_confirmed,
         commercial_bonus: !stale && p.status === 'full' && comparable ? relation === 'below' ? 5 : relation === 'equal' ? 3 : 1 : 0,
@@ -963,13 +974,14 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       pool.query(`SELECT DISTINCT s.id,s.name,s.url,s.pages,s.complete,s.notes FROM technical_sources s JOIN technical_jobs j ON j.account_id=s.account_id AND (COALESCE(j.state->'source_ids','[]'::jsonb) ? s.id::text OR COALESCE(j.state->'review_source_ids','[]'::jsonb) ? s.id::text)
         WHERE j.account_id=$1 AND j.kind='notice' AND j.context->>'notice_key'=$2 AND jsonb_typeof(s.pages)='array'`,[job.account_id,review.notice_key]),
       pool.query('SELECT s.id,s.pages,s.notes FROM technical_sources s JOIN technical_product_sources ps ON ps.source_id=s.id WHERE ps.account_id=$1 AND ps.active=TRUE',[job.account_id]),
+      pool.query('SELECT * FROM technical_requirement_reviews WHERE account_id=$1 AND notice_key=$2',[job.account_id,review.notice_key]),
     ]);
     if(memo&&!memo.has(inputsKey))memo.set(inputsKey,load());
-    const [catalog,accessories,sourceRows,productRows]=await(memo?memo.get(inputsKey):load());
+    const [catalog,accessories,sourceRows,productRows,manualReviews]=await(memo?memo.get(inputsKey):load());
     const raw=job.state.items_raw?.length?job.state.items_raw:review.items;
     if(raw.length!==review.items.length||raw.some(i=>!review.items.some(r=>String(r.numeroItem)===String(i.numeroItem ?? i.numero_item))))return null;
     const items=raw.map(i=>({number:String(i.numeroItem ?? i.numero_item),description:i.descricao || '',quantity:i.quantidade,unit:i.unidadeMedida || '',reference_price:i.valorUnitarioEstimado,in_scope:itemInScope(i,job.context.profile,catalog,(job.context.payload.itens_pertinentes || []).map(i=>i.numero_item ?? i.numeroItem))}));
-    return reviewedComparison({noticeKey:review.notice_key,sources:sourceRows.rows,catalog,accessories,productSources:productRows.rows.map(s=>({...s,id:String(s.id),text:(s.pages || []).map(p=>p.text).join('\n')})),items,baseScore:job.context.payload.base_score ?? job.context.payload.score,
+    return reviewedComparison({noticeKey:review.notice_key,sources:sourceRows.rows,catalog,accessories,productSources:productRows.rows.map(s=>({...s,id:String(s.id),text:(s.pages || []).map(p=>p.text).join('\n')})),items,baseScore:job.context.payload.base_score ?? job.context.payload.score,reviews:manualReviews.rows,
       manifestVerified:job.state.final_manifest_verified===true&&!job.state.needs_revalidation&&Date.now()-new Date(job.state.final_manifest_checked_at || job.updated_at).getTime()<24*60*60*1000&&job.state.source_ids?.length===job.state.files?.length&&job.state.items_complete===true});
   }
   async function finishReviewed(job,result){

@@ -32,7 +32,7 @@ export default function OpportunityPreview({ opportunity, items = [], otherItems
       {error && <p role="alert" className="mb-3 text-xs text-status-warning">{error}</p>}
       <div className="space-y-2">{items.map(item => <div key={item.numero_item || item.id} ref={node => { itemRefs.current[String(item.numero_item)] = node; }} className="rounded-xl border border-line bg-bg2/30">
         <div className="px-3 py-3"><h5 className="text-sm font-semibold"><span className="mr-2 text-primary">Item {item.numero_item || '—'}</span>{item.descricao}</h5>
-          <TechnicalResult itemSummary item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} />
+          <TechnicalResult itemSummary item={raw} profile={opportunity.__profile} itemNumber={item.numero_item} highlightProductId={opportunity.__technical_checklists?.[String(item.numero_item)]?.product_id || (String(focus?.number)===String(item.numero_item)?focus.productId:undefined)} />
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
             <p>Quantidade: <span className="font-medium text-ink">{item.quantidade ?? 'Não informada'} {item.unidade || ''}</span></p>
             <p>Referência unitária: <span className="font-medium text-ink">{money(item.valor_referencia)}</span></p>

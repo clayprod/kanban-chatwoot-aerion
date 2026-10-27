@@ -1,13 +1,20 @@
 import React, { useEffect, useRef } from 'react';
 import OpportunityPreview from './OpportunityPreview';
 import {pncpInterestTotals} from './pncpPreview';
+import {ObjectionProvider,ObjectionPanel} from './ObjectionWorkflow';
+import {RequirementReviewProvider,useRequirementReviews} from './RequirementReviews';
+import {useObjection} from './ObjectionContext';
+function ImportButton({onClick,disabled,alreadyImported}){
+ const reviews=useRequirementReviews(),objection=useObjection(),saving=(reviews?.saving || 0)+(objection?.saving || 0)>0;
+ return <button type="button" onClick={onClick} disabled={disabled||saving||!!reviews?.error||!!objection?.error} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none">{saving?'Salvando ajustes…':alreadyImported?'Já está no pipeline':'Importar para o pipeline'}</button>;
+}
 
 export default function PncpNoticePage({ opportunity, jobName, items, otherItems, loading, error, onBack, onSearches, onImport, canImport, onChecklistChange }) {
   const title = useRef(null);
   const totals=pncpInterestTotals(items);
   const partial=Boolean(loading || error || totals.missing);
   useEffect(() => { title.current?.focus({ preventScroll: true }); }, [opportunity.__preview?.__result_key, opportunity.titulo]);
-  return <article className="mx-auto w-full max-w-7xl space-y-5 py-5" aria-label="Detalhes do edital">
+  return <RequirementReviewProvider key={opportunity.numero_compra || opportunity.__preview?.id || opportunity.titulo}><ObjectionProvider><article className="mx-auto w-full max-w-7xl space-y-5 py-5" aria-label="Detalhes do edital">
     <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-2 text-xs text-muted">
       <span>Licitações</span><span aria-hidden="true">/</span>
       <button type="button" onClick={onSearches} className="text-primary hover:underline">Buscas</button><span aria-hidden="true">/</span>
@@ -26,9 +33,10 @@ export default function PncpNoticePage({ opportunity, jobName, items, otherItems
       </div>
       <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
         {opportunity.__preview?.url && <a href={opportunity.__preview.url} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-ink hover:bg-bg2">PNCP ↗</a>}
-        <button type="button" onClick={onImport} disabled={!canImport || loading} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none">{opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline' ? 'Já está no pipeline' : 'Importar para o pipeline'}</button>
+        <ImportButton onClick={onImport} disabled={!canImport || loading} alreadyImported={opportunity.__preview?.__visibility === 'pipeline' || opportunity.__preview?.__visibility_db === 'pipeline'}/>
       </div>
     </header>
     <OpportunityPreview opportunity={opportunity} items={items} otherItems={otherItems} loading={loading} error={error} onChecklistChange={onChecklistChange} sectionClass="rounded-xl border border-line bg-surf p-4 sm:p-5" />
-  </article>;
+    <ObjectionPanel/>
+  </article></ObjectionProvider></RequirementReviewProvider>;
 }

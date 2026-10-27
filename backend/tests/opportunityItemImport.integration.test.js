@@ -5,7 +5,7 @@ test('import saves model, item, all checklist verdicts/sections/evidence atomica
  try{
   await admin.query(`CREATE SCHEMA ${schema}`);db=new Pool({connectionString:process.env.QUALITY_TEST_DATABASE_URL,options:`-c search_path=${schema},public`});
   await db.query(`CREATE TABLE licitacao_items(id BIGSERIAL PRIMARY KEY,opportunity_id BIGINT,numero_item TEXT,descricao TEXT,modelo_produto TEXT,quantidade NUMERIC,unidade TEXT,custo_total_item NUMERIC,valor_referencia NUMERIC,valor_proposta NUMERIC,prazo_entrega_dias INTEGER,status_participacao TEXT);
-   CREATE TABLE licitacao_item_requirements(item_id BIGINT REFERENCES licitacao_items(id),requisito TEXT CHECK(requisito<>'FAIL'),status TEXT,observacao TEXT,valor_referencia NUMERIC,valor_ofertado NUMERIC,ordem INTEGER,secao TEXT);`);
+   CREATE TABLE licitacao_item_requirements(item_id BIGINT REFERENCES licitacao_items(id),requisito TEXT CHECK(requisito<>'FAIL'),status TEXT,observacao TEXT,valor_referencia NUMERIC,valor_ofertado NUMERIC,ordem INTEGER,secao TEXT,impugnar BOOLEAN DEFAULT FALSE,impugnacao_tema TEXT,impugnacao_motivo TEXT,technical_reference JSONB);`);
   const client=await db.connect();
   try{
    await client.query('BEGIN');await importOpportunityItems(client,1,[{numero_item:'17',descricao:'Equipamento',modelo_produto:'Modelo escolhido',quantidade:3,unidade:'un',requirements:['ok','nao_ok','verificar'].map((status,i)=>({requisito:`Exigência ${i}`,status,secao:'Segurança',observacao:'Produto oferece 40 min; mínimo 41. Fonte edital: pág. 2; ficha: pág. 4.',ordem:i}))}]);await client.query('COMMIT');

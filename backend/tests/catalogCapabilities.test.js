@@ -43,6 +43,12 @@ test('controller fields, sensor shorthand and gimbal model are not lost or confl
  }
  const req=normalizeFact({key:'flight_time',label:'Tempo máximo de voo estacionário',value:41});assert.equal(req.key,'hover_time');
 });
+test('the real 640T proves thermal resolution and radiometry, while the 6K explicitly fails both requirements',()=>{
+ const resolution={key:'thermal_resolution',component:'thermal_camera',kind:'compound',value:'640x512'},radiometry={key:'thermal_camera_type',component:'thermal_camera',value:'radiométrica'};
+ for(const [sku,expected]of [['102002930','ok'],['102002996','nao_ok']]){
+  const data=pack(catalog.products.find(p=>p.sku===sku).rows);assert.equal(compare(resolution,data).status,expected);assert.equal(compare(radiometry,data).status,expected);
+ }
+});
 test('all catalog entries compete and only the best three are returned, with compatibility before price',()=>{
  const req=fixture.sources.flatMap(s=>s.pages).map(p=>p.text).join('\n');assert.ok(req.includes('RTH'));
  const data=pack(capabilityRows('102002996'));

@@ -2822,6 +2822,7 @@ const createLicitacaoTables = async () => {
     );
   `);
   await pool.query(`ALTER TABLE ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ADD COLUMN IF NOT EXISTS secao TEXT;`);
+  await pool.query(`ALTER TABLE ${LICITACAO_ITEM_REQUIREMENTS_TABLE} ADD COLUMN IF NOT EXISTS impugnar BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN IF NOT EXISTS impugnacao_tema TEXT NOT NULL DEFAULT 'restricao', ADD COLUMN IF NOT EXISTS impugnacao_motivo TEXT, ADD COLUMN IF NOT EXISTS technical_reference JSONB;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${LICITACAO_CONTACTS_TABLE} (
@@ -8488,17 +8489,19 @@ app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements/bulk', as
 
     let requirements = [];
     if (mode === 'replace') {
+      const prior=(await client.query(`SELECT * FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id=$1`,[itemId])).rows;
       await client.query(`DELETE FROM ${LICITACAO_ITEM_REQUIREMENTS_TABLE} WHERE item_id = $1`, [itemId]);
       for (let i = 0; i < list.length; i += 1) {
         const raw = list[i] || {};
         const requisito = toNullableText(raw.requisito);
+        const same=prior.filter(r=>r.requisito===requisito),metadata=same.find(r=>String(r.id)===String(raw.id)) || (same.length===1?same[0]:{});
         if (!requisito) continue;
         const status = LICITACAO_REQUIREMENT_STATUS.includes(raw.status) ? raw.status : 'verificar';
         const { rows } = await client.query(
           `
             INSERT INTO ${LICITACAO_ITEM_REQUIREMENTS_TABLE}
-            (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem, secao)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (item_id, requisito, status, observacao, valor_referencia, valor_ofertado, ordem, secao, impugnar, impugnacao_tema, impugnacao_motivo, technical_reference)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
             RETURNING *
           `,
           [
@@ -8510,6 +8513,10 @@ app.post('/api/licitacoes/opportunities/:id/items/:itemId/requirements/bulk', as
             toNullableNumber(raw.valor_ofertado),
             toNullableNumber(raw.ordem) ?? i,
             toNullableText(raw.secao),
+            raw.impugnar ?? metadata.impugnar ?? false,
+            toNullableText(raw.impugnacao_tema ?? metadata.impugnacao_tema) || 'restricao',
+            toNullableText(raw.impugnacao_motivo ?? metadata.impugnacao_motivo),
+            JSON.stringify(raw.technical_reference || metadata.technical_reference || null),
           ]
         );
         requirements.push(rows[0]);

@@ -14,6 +14,8 @@ function flattenSpecifications(specs){
 }
 function inferKey(label,section=''){
   const s=text(label),scope=text(section);
+  if(/termic|thermal/.test(scope)&&/^disponibilidade$/.test(s))return 'component_presence';
+  if(/radiometric/.test(s)&&/termic|thermal/.test(scope))return 'thermal_camera_type';
   if(/^possui camera (?:termica|zoom|teleobjetiva)/.test(s))return 'component_presence';
   if(/\brth\b|retorno.*(?:automatic|origem|decolagem|casa)|return.*home/.test(s))return 'return_to_home';
   if(/uso profissional|professional use/.test(s))return 'professional_use';
@@ -81,6 +83,10 @@ function structuredFacts(rows,source){
       }
     }
     const derived=[];
+    if(component==='thermal_camera'&&/tamanho de foto|resolucao de video/.test(text(row.label))){
+      const dims=[...String(row.value).matchAll(/\b(\d+)\s*[x×]\s*(\d+)\b/gi)].map(m=>`${m[1]}×${m[2]}`);
+      if(dims.length&&new Set(dims).size===1)derived.push({...base,id:base.id+':thermal-resolution',key:'thermal_resolution',label:'Resolução térmica',kind:'compound',value:dims[0],unit:''});
+    }
     // A camera/gimbal model is not a stabilization technology.
     if(key==='gimbal_stabilization'&&!/eixos|triaxial|mecanic|axis|stabili/i.test(row.value))base.key='gimbal_model';
     // A lens row names several independent properties. Split only explicitly

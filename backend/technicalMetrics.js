@@ -57,6 +57,7 @@ function categoricalValue(fact) {
   if(key==='gimbal_stabilization' && /^(mecanica triaxial|mecanica em 3 eixos|3.axis mechanical|3-axis|3 eixos)$/.test(value))return 'mechanical_3_axis';
   if(key==='gimbal_stabilization' && /mecanic/.test(value) && /triaxial|3[ -]axis|3 eixos/.test(value))return 'mechanical_3_axis';
   if(!/\b(?:nao|sem|nenhum[ao]?|ausente|none|no|opcional|optional|not supported|without)\b/.test(value)){
+    if(key==='thermal_camera_type'&&(/^radiometric[ao]?$/.test(value)||/medicao radiometric/.test(clean(fact.label))))return 'radiometric';
     if(key==='wifi'&&/\bwi[ -]?fi\b|\b802\.11/.test(value))return 'wifi_supported';
     if(key==='bluetooth'&&/\bbluetooth\b/.test(value))return 'bluetooth_supported';
     if(key==='return_to_home'&&/\brth\b|return[ -]to[ -]home|auto[ -]?return|retorno.*(?:automatic|origem|decolagem|casa)/.test(value))return 'rth_supported';

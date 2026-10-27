@@ -1,17 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import TechnicalChecklist from './TechnicalChecklist';
+import {useObjection,adjustedCompatibility} from './ObjectionContext';
+import {useRequirementReviews} from './RequirementReviews';
+import {technicalResultCache as cache,loadTechnicalResult as load} from './technicalResultCache';
 
 const money = value => Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const labels = { full: 'Atende plenamente', uncertain: '? — Verificar', failed: 'Não atende' };
 const rowLabels = { ok: 'Atende', nao_ok: 'Não atende', verificar: '?' };
-const cache = new Map();
-function load(key, request) {
-  const entry = cache.get(key);
-  if (entry && Date.now() - entry.at < 15000) return entry.promise;
-  const promise = request().then(r => r.data).catch(e => { cache.delete(key); throw e; });
-  cache.set(key, { at: Date.now(), promise }); return promise;
-}
+
 function Evidence({ fact }) {
   return <div className="mt-1 text-xs text-muted"><blockquote className="whitespace-pre-wrap border-l-2 border-line pl-2">{fact.quote}</blockquote>
     {String(fact.source_id).startsWith('package:') ? <span>Composição do pacote e complementos listados nesta análise.</span> : <a href={`/api/licitacoes/technical/sources/${encodeURIComponent(fact.source_id)}`} target="_blank" rel="noreferrer" className="text-primary underline">Fonte · {fact.location}</a>}</div>;
@@ -63,15 +60,20 @@ export function ProductMatchChips({ items = [], onSelect, documentsComplete }) {
     })}
   </div>;
 }
-export function ItemCompatibilitySummary({ item, documentsComplete }) {
-  const product = item?.recommended_product || item?.potential_product || item?.products?.[0] || item?.product_matches?.[0];
+export function ItemCompatibilitySummary({ item, documentsComplete,highlightProductId }) {
+  const objection=useObjection();
+  const manual=useRequirementReviews();
+  const product = item?.products?.find(p=>String(p.product_id)===String(highlightProductId)) || item?.recommended_product || item?.potential_product || item?.products?.[0] || item?.product_matches?.[0];
   if (!product) return <span className="mt-1 block text-xs font-normal text-muted">Compatibilidade: aguardando análise</span>;
   const current = product.evidence_current !== false;
-  const full = current && product.status === 'full' && (item.documents_complete ?? documentsComplete) !== false;
-  const status = full ? 'full' : current && product.status === 'failed' ? 'failed' : 'uncertain';
-  const percent = current && product.counts?.total > 0 ? Math.floor(product.counts.ok / product.counts.total * 100) : null;
+  const overrides=manual?.forProduct(item.number,product.product_id) || {},rows=(product.requirements || []).map(r=>({...r,status:overrides[r.requirement.id] || r.status}));
+  const scenario=adjustedCompatibility(rows,id=>objection?.isSelected(item.number,id));
+  const full = current && !scenario.excluded && (product.status === 'full'||product.specs_complete===true&&rows.length>0&&rows.every(r=>r.status==='ok')) && (item.documents_complete ?? documentsComplete) !== false;
+  const status = full ? 'full' : current && (rows.length?rows.some(r=>r.status==='nao_ok'):product.status==='failed') ? 'failed' : 'uncertain';
+  const percent = current && rows.length ? Math.floor(100*rows.filter(r=>r.status==='ok').length/rows.length) : current && product.counts?.total > 0 ? Math.floor(product.counts.ok / product.counts.total * 100) : null;
+  const manuallyReviewed=Object.keys(overrides).length>0||product.manual_reviews>0;
   return <span className={`mt-1 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2 py-1 text-xs ${full ? 'border-status-success/40 bg-status-success/5 text-status-success font-semibold' : 'border-line text-muted font-normal'}`}>
-    <span>{product.product_name}</span><span className="font-semibold tabular-nums">{percent == null ? '?' : `${percent}% comprovado`}</span><span>{labels[status]}</span>
+    <span>{product.product_name}</span><span className="font-semibold tabular-nums">{scenario.excluded?(scenario.percent==null?'Sem requisitos restantes':`${scenario.percent}% no cenário ajustado`):percent == null ? '?' : `${percent}% ${manuallyReviewed?'após revisão manual':'comprovado'}`}</span><span>{scenario.excluded?`${scenario.excluded} impugnado(s)`:labels[status]}</span>
   </span>;
 }
 export function ExtractionCoverage({ analysis, result }) {
@@ -104,7 +106,11 @@ export function analysisLabel(analysis) {
   return analysis.stage_label || 'Sem comparação concluída';
 }
 export default function TechnicalResult({ item, profile = {}, opportunityId, itemNumber, highlightProductId, expanded = false, onOpenMatch, onChecklistChange, compact = false, overview = false, allowedItemNumbers, itemSummary = false }) {
+  const objection=useObjection(),registerObjectionAnalysis=objection?.registerAnalysis;
+  const manualReviews=useRequirementReviews(),registerManualAnalysis=manualReviews?.registerAnalysis;
   const [analysis, setAnalysis] = useState(null), [enabled, setEnabled] = useState(false), [error, setError] = useState('');
+  useEffect(()=>{if(analysis)registerObjectionAnalysis?.(analysis);},[analysis,registerObjectionAnalysis]);
+  useEffect(()=>{if(analysis)registerManualAnalysis?.(analysis);},[analysis,registerManualAnalysis]);
   const [detailError, setDetailError] = useState('');
   const [fetching, setFetching] = useState(true);
   const [selection, setSelection] = useState(null);
@@ -134,7 +140,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
   const visibleItems = allowedItemNumbers ? analysis.result.items.filter(i => allowedItemNumbers.map(String).includes(String(i.number))) : analysis.result.items;
   const result = { ...analysis.result, items: visibleItems,
     ...(allowedItemNumbers ? { relevant_items: visibleItems.filter(i=>i.in_scope).length, full_items: visibleItems.filter(i=>i.in_scope && (i.recommended_product || i.products?.some(p=>p.status==='full'))).length } : {}) };
-  if (itemSummary) return <ItemCompatibilitySummary item={result.items.find(i=>String(i.number)===String(itemNumber))} documentsComplete={result.documents_complete} />;
+  if (itemSummary) return <ItemCompatibilitySummary item={result.items.find(i=>String(i.number)===String(itemNumber))} documentsComplete={result.documents_complete} highlightProductId={highlightProductId} />;
   const compareMore = async number => {
     setDetailError('');
     try {
@@ -165,7 +171,7 @@ export default function TechnicalResult({ item, profile = {}, opportunityId, ite
     await loadDetails();
     if (currentKey.current === expectedKey) detailsRef.current?.scrollIntoView?.({ block: 'nearest' });
   };
-  if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onChecklistChange={onChecklistChange?(number,choice)=>onChecklistChange(number,{...choice,analysis_id:analysis.id}):undefined} onCompareMore={compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
+  if (itemNumber != null) return <div className="my-2">{detailError && <p role="alert" className="text-xs text-status-warning">{detailError}</p>}<TechnicalItem item={result.items.find(i => String(i.number) === String(itemNumber))} highlightProductId={highlightProductId} onChecklistChange={onChecklistChange?(number,choice)=>onChecklistChange(number,{...choice,analysis_id:analysis.id}):undefined} onCompareMore={result.review?undefined:compareMore} pending={['queued','running'].includes(analysis.status)} /></div>;
   if (overview) return <div role="status" className="space-y-1 text-sm text-muted"><p>{result.documents_complete ? 'Comparação disponível nos itens abaixo.' : `${analysisLabel(analysis)}. Os resultados parciais disponíveis aparecem nos itens abaixo.`}</p>{result.review && result.notes?.[0] && <p className="text-xs">{result.notes[0]}</p>}</div>;
   if (compact) return <ProductMatchChips items={result.items} onSelect={selectMatch} documentsComplete={result.documents_complete} />;
   return <div className="mt-3 space-y-3 text-xs text-ink" onClick={e => e.stopPropagation()}>

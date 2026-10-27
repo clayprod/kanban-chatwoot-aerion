@@ -2,6 +2,7 @@ import React from 'react';
 import {render,screen,fireEvent} from '@testing-library/react';
 import '@testing-library/jest-dom';
 import PipelineOpportunityPage from './PipelineOpportunityPage';
+jest.mock('axios',()=>({get:jest.fn().mockResolvedValue({data:{selected:[]}}),put:jest.fn(),post:jest.fn()}));
 test('pipeline detail is a page with a return action and retains editable content',()=>{
   const onBack=jest.fn();
   render(<PipelineOpportunityPage title="Edital 351" onBack={onBack}><label>Título<input defaultValue="Compra de aeronaves" /></label></PipelineOpportunityPage>);

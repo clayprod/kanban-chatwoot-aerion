@@ -15,7 +15,8 @@ import { readPncpPage, pncpPageUrl, readPipelinePage, pipelinePageUrl } from './
 import PipelineOpportunityPage from './PipelineOpportunityPage';
 import { createPncpOpportunityPreview, mergePncpItems } from './pncpPreview';
 import RequirementStatusControl from './RequirementStatusControl';
-import { applyTechnicalChecklistsToDraft } from './technicalChecklistBridge';
+import ChecklistScenarioSummary from './ChecklistScenarioSummary';
+import { applyTechnicalChecklistsToDraft,prepareReviewImportChoices } from './technicalChecklistBridge';
 import { fetchRfbSearchPage } from './rfbSearch';
 
 import {
@@ -12908,7 +12909,9 @@ function App() {
       const scoped = options.items ? {relevant:options.items} : await resolvePncpFocusedItems(item,profile,{allItems:true});
       const technicalResponse=await axios.post('/api/licitacoes/technical/notice',{item,profile,summary:false});
       const technicalAnalysis=technicalResponse.data?.analysis;
-      const importedItemsDraft = applyTechnicalChecklistsToDraft(mapPncpImportItemsToDraft(scoped.relevant),technicalAnalysis,options.checklists || {});
+      const objectionResponse=technicalAnalysis?.id?await axios.get(`/api/licitacoes/technical/jobs/${technicalAnalysis.id}/objection`):null;
+      const importChoices=prepareReviewImportChoices(technicalAnalysis,options.checklists || {},objectionResponse?.data?.selected || []);
+      const importedItemsDraft = applyTechnicalChecklistsToDraft(mapPncpImportItemsToDraft(scoped.relevant),technicalAnalysis,importChoices);
       if (!importedItemsDraft.length) throw new Error('Nenhum item corresponde ao foco atual da busca. Confira os critérios na página do edital.');
       const estimatedValue = Number(item.valor_itens_pertinentes) > 0
         ? Number(item.valor_itens_pertinentes)
@@ -19038,7 +19041,7 @@ function App() {
               </div>
               {pipelinePageId && !selectedOpportunity && <div className="my-5 rounded-xl border border-line p-5"><p role={pipelinePageError ? 'alert' : 'status'} className="text-sm text-muted">{pipelinePageError || 'Carregando oportunidade…'}</p><button type="button" onClick={closePipelineOpportunity} className="mt-3 text-sm text-primary">← Voltar ao pipeline</button></div>}
               {selectedOpportunity && !selectedOpportunity.__preview && (
-                <PipelineOpportunityPage title={selectedOpportunity.titulo} onBack={closePipelineOpportunity}>
+                <PipelineOpportunityPage title={selectedOpportunity.titulo} opportunityId={selectedOpportunity.id} requirementsRevision={Object.values(itemRequirementsMap).flat().map(r=>`${r.id}:${r.updated_at}:${r.status}`).join('|')} onBack={closePipelineOpportunity}>
                   {(() => {
                     const oppReqAll = selectedItems.flatMap((it) => itemRequirementsMap[it.id] || []);
                     const oppReqCounts = countRequirementStatuses(oppReqAll);
@@ -19592,7 +19595,7 @@ function App() {
                                               }`}
                                             >
                                               <span className="w-5 shrink-0 text-center text-[10px] font-medium tabular-nums text-muted">{index + 1}</span>
-                                              <RequirementStatusControl status={req.status} onChange={onStatus} label={`Resultado de ${req.requisito || 'requisito'}`}/>
+                                              <RequirementStatusControl status={req.status} onChange={onStatus} label={`Resultado de ${req.requisito || 'requisito'}`} objectionRef={!isProposal?{item_number:String(item.numero_item || item.id),requirement_id:`manual:${req.id}`,label:req.requisito}:undefined}/>
                                               <input
                                                 className={`${input} h-7 min-w-0 flex-1 text-[11px] leading-snug`}
                                                 value={req.requisito || ''}
@@ -19786,6 +19789,7 @@ function App() {
 
                                         return (
                                           <details open className="mt-4 border-t border-line pt-3"><summary className="cursor-pointer text-sm font-medium">Checklist técnico</summary>
+                                            <ChecklistScenarioSummary itemNumber={item.numero_item || item.id} requirements={itemRequirements}/>
                                             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                                               <div>
                                                 <h5 className="text-xs font-semibold tracking-tight text-ink">Exigências e comparação</h5>

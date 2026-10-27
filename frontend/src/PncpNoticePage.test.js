@@ -2,6 +2,7 @@ import React from 'react';
 import { render,screen,fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import PncpNoticePage from './PncpNoticePage';
+jest.mock('axios',()=>({get:jest.fn().mockResolvedValue({data:{selected:[],reviews:[]}}),put:jest.fn(),post:jest.fn()}));
 import {createPncpOpportunityPreview} from './pncpPreview';
 import {pncpInterestTotals} from './pncpPreview';
 jest.mock('./OpportunityPreview',()=>()=> <p>Exigências e evidências por item</p>);

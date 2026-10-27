@@ -5,6 +5,7 @@ const {sameMetric}=require('./technicalMetrics');
 const {assembleProduct}=require('./productPackages');
 const {documentCoverage,documentRole}=require('./technicalProvenance');
 const {awardingMode}=require('./technicalAwarding');
+const {applyReviews}=require('./technicalReviews');
 function reviewedRequirements(noticeKey,sources,bundle=require('./data/aerionReviewedNotices.json')){
  const review=bundle.reviews.find(r=>r.notice_key===noticeKey);if(!review)return null;
  const binding=new Map();
@@ -20,19 +21,20 @@ function reviewedRequirements(noticeKey,sources,bundle=require('./data/aerionRev
  const unreviewed=sources.some(s=>!review.sources.some(e=>e.text_hash===hash((s.pages || []).map(p=>p.text).join('\n'))));
  return {review,facts,conflicts,unreviewed,proof};
 }
-function reviewedComparison({noticeKey,sources,catalog,accessories,productSources,items,baseScore,candidateAllowed=()=>true,manifestVerified=false}){
+function reviewedComparison({noticeKey,sources,catalog,accessories,productSources,items,baseScore,candidateAllowed=()=>true,manifestVerified=false,reviews=[]}){
  const checked=reviewedRequirements(noticeKey,sources);if(!checked)return null;
  const docs=documentCoverage(sources),readComplete=!checked.unreviewed,parsedComplete=sources.every(s=>s.complete===true);
  const mode=awardingMode(sources,items),compared=items.map(item=>{
   const scoped=requirementsForItem(checked.facts,String(item.number));
   const conflicts=checked.conflicts.filter(c=>c.item_numbers.includes('all')||c.item_numbers.includes(String(item.number)));
   const complete=readComplete&&parsedComplete&&manifestVerified&&docs.complete&&!conflicts.length;
-  const assessed=catalog.filter(p=>candidateAllowed(item,p)).map(base=>{
+  let assessed=catalog.filter(p=>candidateAllowed(item,p)).map(base=>{
    const assembly=assembleProduct(base,scoped.requirements,accessories,[...checked.proof,...productSources]);
    const product={...assembly.product,specs:assembly.product.specs.map(normalizeFact)};
    const mappings=scoped.requirements.map(r=>({requirement_id:r.id,spec_ids:product.specs.filter(s=>sameMetric(r,s)).map(s=>s.id)}));
    return {...assessProduct(product,scoped.requirements,[...checked.proof,...productSources,...assembly.sources],mappings,complete,item),configuration:assembly.configuration};
   }).sort(rankMatches);
+  if(reviews.length)assessed=applyReviews({base_score:baseScore,documents_complete:complete,items:[{...item,...scoped,documents_complete:complete,products:assessed}]},reviews).items[0].products;
   return {...item,...scoped,reviewed:true,document_issues:[...docs.blockers.map(b=>b.message),...conflicts.map(c=>c.message)],awarding_mode:mode,documents_complete:complete,candidate_count:assessed.length,products:assessed.slice(0,3),obligation_checks:scoped.obligations.map(requirement=>({requirement,status:'verificar',reason:'Obrigação da proposta/fornecimento: exige confirmação da empresa.'}))};
  });
  const summary=summarize(compared,baseScore),complete=readComplete&&parsedComplete&&manifestVerified&&docs.complete&&!checked.conflicts.length;
