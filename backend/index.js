@@ -11039,7 +11039,7 @@ const withPncpGate = async (fn, { priority = 'sync' } = {}) => {
           if (lane.proxy) reportPncpProxyOk(PNCP_PROXY_POOL, lane.proxy.id);
           return result;
         } catch (error) {
-          if (isPncpThrottleError(error)) {
+          if (!(lane.proxy && isPncpProxyTransportError(error)) && isPncpThrottleError(error)) {
             notePncpThrottle(error.message || 'error');
           }
           throw error;

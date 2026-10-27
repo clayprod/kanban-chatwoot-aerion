@@ -163,11 +163,20 @@ test('isPncpProxyTransportError separa falha de túnel de resposta HTTP do PNCP'
   // Falhas de transporte (banda esgotada / proxy morto): retry direto.
   assert.equal(isPncpProxyTransportError(new Error('fetch failed')), true);
   assert.equal(isPncpProxyTransportError('curl exit 56: Received HTTP code 402 from proxy after CONNECT'), true);
+  assert.equal(isPncpProxyTransportError('curl exit 22: curl: (22) The requested URL returned error: 402\n'), true);
   assert.equal(isPncpProxyTransportError({ message: 'fetch failed', cause: { code: 'ECONNREFUSED' } }), true);
   assert.equal(isPncpProxyTransportError('curl JSON parse error: Unexpected token <'), true);
   // Respostas HTTP reais do PNCP: o túnel funcionou — não é culpa do proxy.
   assert.equal(isPncpProxyTransportError(new Error('PNCP error 429: too many requests')), false);
   assert.equal(isPncpProxyTransportError(new Error('PNCP Consulta error 404: not found')), false);
+});
+
+test('proxy HTTP 402 falls back inside the gate without triggering the global PNCP throttle',async()=>{
+ const source=require('node:fs').readFileSync(require.resolve('../index.js'),'utf8'),start=source.indexOf('const withPncpGate = async'),end=source.indexOf('// Serializa os varredores pesados',start),context=new(require('node:async_hooks').AsyncLocalStorage)();let calls=0,throttles=0,down=0,success=0;
+ const state={active:0,gapMs:0,last:0,pausedUntil:0,budget:{tokens:10},queues:{interactive:[],sync:[],bulk:[]}},sandbox={Date,Math,PNCP_GATE:state,PNCP_CALL_CONTEXT:context,waitForPncpGateSlot:async()=>({id:'proxy',proxy:{id:'proxy',lastAt:0}}),sleep:async()=>{},refillPncpBudget:()=>{},notePncpSuccess:()=>success++,notePncpThrottle:()=>throttles++,isPncpThrottleError:()=>true,isPncpProxyTransportError,reportPncpProxyOk:()=>{},reportPncpProxyDown:()=>down++,PNCP_PROXY_POOL:{},releasePncpLane:()=>{},console:{warn:()=>{}}};
+ require('node:vm').runInNewContext(source.slice(start,end)+';globalThis.gate=withPncpGate;',sandbox);
+ const result=await sandbox.gate(async()=>{calls++;if(context.getStore()?.proxy)throw Error('curl exit 22: curl: (22) The requested URL returned error: 402');return 'direct result';},{priority:'sync'});
+ assert.equal(result,'direct result');assert.equal(calls,2);assert.equal(throttles,0);assert.equal(down,1);assert.equal(success,1);assert.equal(state.active,0);
 });
 
 test('proxy down: quarentena longa imediata, escalonada, sem poluir a janela de 90s', () => {

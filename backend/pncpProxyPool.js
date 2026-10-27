@@ -156,6 +156,7 @@ const isPncpProxyTransportError = (errorOrText) => {
   ].filter(Boolean).join(' ').toLowerCase();
   // Resposta HTTP do PNCP (429/404/500...): o túnel funcionou — não é o proxy.
   if (/pncp[^:]*error \d{3}/.test(text)) return false;
+  if(/curl exit 22:[\s\S]*returned error:\s*402\b/.test(text))return true;
   return /fetch failed|und_err|econnrefused|econnreset|etimedout|timed out|socket|tunnel|proxy|connect|tls|ssl|json parse error|curl exit (5|7|28|35|52|56|97)\b/.test(text);
 };
 
