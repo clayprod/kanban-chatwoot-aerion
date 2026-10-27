@@ -339,6 +339,8 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
            NOT IN ('true', '1', 'yes', 'sim')
        AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'nao_contatar')), ''), 'false')
            NOT IN ('true', '1', 'yes', 'sim')
+       AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'bloqueado')), ''), 'false')
+           NOT IN ('true', '1', 'yes', 'sim')
        -- Opt-out so da AUTOMACAO: vendedor e campanha continuam valendo. Serve para
        -- quem ja disse o que tinha que dizer e nao deve ser cutucado por robo.
        AND COALESCE(NULLIF(TRIM(LOWER(c.custom_attributes->>'ia_followup_opt_out')), ''), 'false')

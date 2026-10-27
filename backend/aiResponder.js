@@ -171,6 +171,7 @@ const buscarPendentes = async (pool, { accountId, config, desde = null }) => {
        AND COALESCE((ct.custom_attributes->>'whatsapp_opt_out')::text, 'false') NOT IN ('true', 'sim', '1')
        AND COALESCE((ct.custom_attributes->>'opt_out')::text, 'false') NOT IN ('true', 'sim', '1')
        AND COALESCE((ct.custom_attributes->>'nao_contatar')::text, 'false') NOT IN ('true', 'sim', '1')
+       AND COALESCE(NULLIF(TRIM(LOWER(ct.custom_attributes->>'bloqueado')),''),'false') NOT IN ('true','sim','1','yes')
      ORDER BY ue.created_at ASC
      LIMIT $4
     `,
