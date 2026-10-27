@@ -9,7 +9,7 @@
 - Uma chamada com consumo incerto bloqueia a repetição automática. Rejeições HTTP sem geração permitem a alternativa configurada; a medição não trata timeout como custo zero.
 - A comparação numérica, o ranking, os preços e as revisões manuais são locais. Apenas os três melhores produtos são apresentados depois da avaliação do catálogo pertinente.
 - No modo por nota, todos os editais verdes são elegíveis; não há teto de quantidade. O teto diário de tokens é independente e sempre se aplica ao trabalhador técnico, incluindo fichas. Ao atingir o teto, o progresso é preservado até o próximo dia.
-- OpenRouter é a primeira opção da análise técnica. A sequência de alternativas é Groq e OpenAI, respeitando os bloqueios e os orçamentos.
+- OpenRouter é a primeira opção dos assistentes e da análise técnica. A sequência de alternativas é Groq e OpenAI, respeitando os bloqueios e os orçamentos.
 
 ## Outras funções
 
@@ -21,6 +21,10 @@
 | Assistentes e busca guiada | Solicitação explícita do usuário. Não são varredores automáticos de editais. |
 | Resposta comercial / classificação | Automações com estado no banco, limites diários e regras de elegibilidade. A reativação da análise técnica não altera esses estados. |
 | Follow-up / prospecção | Tetos diários e deduplicação; as regras de carga, intervalo, opt-out e atendimento do número continuam aplicáveis. |
+
+Rejeições confirmadas do provedor antes da geração ficam como “aguardando provedor” e podem ser retomadas após 15 minutos. Timeout, JSON gerado inválido e falha de envio não recebem essa liberação automática. O respondedor mantém o histórico de suas retentativas e não sobrescreve entregas anteriores. A prospecção pode reutilizar perfis setoriais recentes e saneados sem depender de alguém abrir o Radar do dia e sem gerar uma nova chamada paga do Radar.
+
+Follow-ups na fila reservam espaço no teto diário. O registro é atualizado para enviado somente após a confirmação da fila de saída; falha e cancelamento continuam distintos de entrega.
 
 O teto técnico não é um teto financeiro global do OpenRouter: outras funções podem consumir a mesma chave. Tokens medidos, reservas e valores cobrados pelo provedor são medidas diferentes. A auditoria antiga, anterior aos campos de provedor/modelo/hash, não permite atribuir cada cobrança a uma operação.
 

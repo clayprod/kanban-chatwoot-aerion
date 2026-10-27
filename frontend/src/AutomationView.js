@@ -42,6 +42,9 @@ const STATUS = {
   dry_run:   { cor: 'text-status-warning', rotulo: 'simulado', ruido: false },
   suggested: { cor: 'text-primary',        rotulo: 'sugerido', ruido: false },
   failed:    { cor: 'text-status-danger',  rotulo: 'falhou',   ruido: false },
+  provider_unavailable: { cor: 'text-status-warning', rotulo: 'aguardando provedor', ruido: false },
+  retrying:  { cor: 'text-primary', rotulo: 'retomando', ruido: false },
+  queued:    { cor: 'text-primary', rotulo: 'na fila de envio', ruido: false },
   skipped:   { cor: 'text-muted2',         rotulo: 'pulado',   ruido: true },
 };
 const meta = (s) => STATUS[s] || { cor: 'text-muted2', rotulo: s, ruido: false };

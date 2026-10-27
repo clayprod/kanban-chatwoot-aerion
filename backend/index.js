@@ -20378,7 +20378,7 @@ const getAiChatProviders = ({ technical = false } = {}) => {
       },
     });
   }
-  if(technical)providers.sort((a,b)=>['openrouter','groq','openai'].indexOf(a.name)-['openrouter','groq','openai'].indexOf(b.name));
+  providers.sort((a,b)=>['openrouter','groq','openai'].indexOf(a.name)-['openrouter','groq','openai'].indexOf(b.name));
   return providers;
 };
 
@@ -24029,7 +24029,7 @@ const registerBackgroundSchedules = () => {
           cnaeDescricao: empresa?.cnae_descricao,
           cnpj: String(empresa?.cnpj || '').replace(/[^0-9A-Za-z]/g, '') || null,
         }),
-        carregarPerfis: async () => extrairPerfis(await loadTrendsIntelCacheOnly()),
+        carregarPerfis: () => require('./prospectingProfiles').loadProspectingProfiles({pool,readToday:loadTrendsIntelCacheOnly,sanitize:reSanitizeCachedIntel,sourceAllowed:isSectorTrendsSource}),
         buscarEmpresas: async (filtros, tamanho) => {
           // CNAE que a IA inventou tem o formato certo e nao existe. Medido em
           // 24/10: "7520-0/00" e "3511-2/00" nao estao em rfb_cnaes, e o 7520 era o
@@ -24152,6 +24152,7 @@ const registerBackgroundSchedules = () => {
       if (resultado.despachados || resultado.falhas) {
         console.log('[fila] tick:', resultado);
       }
+      await require('./aiQueueReceipts').syncFollowupQueue(pool,CHATWOOT_ACCOUNT_ID);
     } catch (error) {
       console.error('[fila] tick falhou:', error.message);
     } finally {

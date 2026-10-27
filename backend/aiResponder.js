@@ -50,6 +50,7 @@ const carregarConfigResponder = () => ({
   historicoMax: inteiro('AI_RESPONDER_HISTORY_MAX', 24),
 });
 
+const {rejectedBeforeGeneration,restoreProviderFailures}=require('./aiProviderAvailability');
 const createResponderTable = async (pool) => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${RESPONDER_LOG_TABLE} (
@@ -74,6 +75,10 @@ const createResponderTable = async (pool) => {
     )
   `);
   // Uma decisão por mensagem recebida: o tick pode rodar de novo sem responder duas vezes.
+  await pool.query(`ALTER TABLE ${RESPONDER_LOG_TABLE} ADD COLUMN IF NOT EXISTS retry_history JSONB NOT NULL DEFAULT '[]';
+    ALTER TABLE ${RESPONDER_LOG_TABLE} DROP CONSTRAINT IF EXISTS ai_responder_log_status_check;
+    ALTER TABLE ${RESPONDER_LOG_TABLE} ADD CONSTRAINT ai_responder_log_status_check CHECK(status IN ('sent','dry_run','escalated','skipped','failed','provider_unavailable','retrying'));`);
+  await restoreProviderFailures(pool,RESPONDER_LOG_TABLE,'mensagem');
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_responder_incoming
       ON ${RESPONDER_LOG_TABLE} (account_id, last_incoming_id)
@@ -153,7 +158,7 @@ const buscarPendentes = async (pool, { accountId, config, desde = null }) => {
            ct.name AS contato_nome,
            ct.phone_number,
            ct.custom_attributes,
-           ct.additional_attributes
+           ct.additional_attributes,l.id AS retry_record_id
       FROM ultima_entrada ue
       JOIN conversations c ON c.id = ue.conversation_id AND c.account_id = $1
       JOIN contacts ct ON ct.id = c.contact_id
@@ -161,7 +166,7 @@ const buscarPendentes = async (pool, { accountId, config, desde = null }) => {
       LEFT JOIN ${RESPONDER_LOG_TABLE} l
              ON l.account_id = $1 AND l.last_incoming_id = ue.message_id
      WHERE r.conversation_id IS NULL
-       AND l.id IS NULL
+       AND (l.id IS NULL OR (l.status='provider_unavailable' AND l.created_at<=NOW()-INTERVAL '15 minutes'))
        AND EXTRACT(EPOCH FROM (NOW() - ue.created_at)) >= $2
        AND COALESCE((ct.custom_attributes->>'whatsapp_opt_out')::text, 'false') NOT IN ('true', 'sim', '1')
        AND COALESCE((ct.custom_attributes->>'opt_out')::text, 'false') NOT IN ('true', 'sim', '1')
@@ -320,7 +325,8 @@ const registrarDecisao = async (pool, d) => {
         provider, model, error)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (account_id, last_incoming_id) WHERE last_incoming_id IS NOT NULL
-     DO NOTHING`,
+     DO UPDATE SET status=EXCLUDED.status,icp=EXCLUDED.icp,icp_confianca=EXCLUDED.icp_confianca,revenda_confirmada=EXCLUDED.revenda_confirmada,pergunta=EXCLUDED.pergunta,mensagem=EXCLUDED.mensagem,motivo=EXCLUDED.motivo,confianca=EXCLUDED.confianca,provider=EXCLUDED.provider,model=EXCLUDED.model,error=EXCLUDED.error,created_at=NOW()
+     WHERE ai_responder_log.status='retrying'`,
     [
       d.accountId, d.contactId ?? null, d.conversationId ?? null, d.lastIncomingId ?? null,
       d.status, d.icp ?? null, d.icpConfianca ?? null, d.revendaConfirmada ?? null,
@@ -375,6 +381,10 @@ const runAiResponderTick = async (pool, {
     };
 
     try {
+      if(p.retry_record_id){
+        const claimed=await pool.query(`UPDATE ${RESPONDER_LOG_TABLE} SET retry_history=retry_history || jsonb_build_array(jsonb_build_object('status',status,'error',error,'created_at',created_at)),status='retrying',created_at=NOW() WHERE id=$1 AND account_id=$2 AND status='provider_unavailable' AND created_at<=NOW()-INTERVAL '15 minutes' RETURNING id`,[p.retry_record_id,accountId]);
+        if(!claimed.rowCount)continue;
+      }
       // 1) Assunto proibido nem gasta token de IA.
       const proibido = motivoDeEscalar(p.pergunta);
       if (proibido) {
@@ -404,7 +414,7 @@ const runAiResponderTick = async (pool, {
       });
       const ia = await chatCompletionJson({ ...prompt, maxTokens: 600, temperature: 0.4 });
       if (!ia.ok) {
-        await registrarDecisao(pool, { ...base, status: 'failed', error: ia.error });
+        await registrarDecisao(pool, { ...base, status: rejectedBeforeGeneration(ia.error)?'provider_unavailable':'failed', error: ia.error });
         r.falhas += 1;
         continue;
       }

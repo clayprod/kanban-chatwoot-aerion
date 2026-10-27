@@ -177,6 +177,7 @@ const carregarConfig = () => {
   };
 };
 
+const {rejectedBeforeGeneration,restoreProviderFailures}=require('./aiProviderAvailability');
 const createAiFollowupTable = async (pool) => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${AI_FOLLOWUP_LOG_TABLE} (
@@ -197,6 +198,10 @@ const createAiFollowupTable = async (pool) => {
       sent_at TIMESTAMPTZ
     )
   `);
+  await pool.query(`ALTER TABLE ${AI_FOLLOWUP_LOG_TABLE} DROP CONSTRAINT IF EXISTS ai_followup_log_status_check;
+    ALTER TABLE ${AI_FOLLOWUP_LOG_TABLE} ADD CONSTRAINT ai_followup_log_status_check CHECK(status IN ('pending','queued','sent','skipped','failed','dry_run','provider_unavailable'));
+    ALTER TABLE ${AI_FOLLOWUP_LOG_TABLE} ADD COLUMN IF NOT EXISTS outbound_queue_id BIGINT;`);
+  await restoreProviderFailures(pool,AI_FOLLOWUP_LOG_TABLE,'message');
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ai_followup_contact
       ON ${AI_FOLLOWUP_LOG_TABLE} (account_id, contact_id, created_at DESC)
@@ -287,7 +292,7 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
           FROM ${AI_FOLLOWUP_LOG_TABLE} l
          WHERE l.account_id = c.account_id
            AND l.contact_id = c.id
-           AND l.status IN ('sent', 'dry_run')
+           AND l.status IN ('sent', 'queued', 'dry_run')
       ) ja ON true
       -- Retorno que a classificacao de etapa agendou ("me chama em marco").
       LEFT JOIN LATERAL (
@@ -313,6 +318,7 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
        AND NOT EXISTS (
          SELECT 1 FROM ${AI_FOLLOWUP_LOG_TABLE} r
           WHERE r.account_id = c.account_id AND r.contact_id = c.id
+            AND (r.status<>'provider_unavailable' OR r.created_at>NOW()-INTERVAL '15 minutes')
             AND r.created_at >= NOW() - make_interval(days => $5 * (COALESCE(ja.total, 0) + 1))
        )
        -- não colide com campanha de disparo: se saiu mensagem nossa depois da
@@ -366,7 +372,7 @@ const contarEnviadosHoje = async (pool, accountId) => {
     `SELECT COUNT(*)::int AS total
        FROM ${AI_FOLLOWUP_LOG_TABLE}
       WHERE account_id = $1
-        AND status IN ('sent', 'dry_run')
+        AND status IN ('sent', 'queued', 'dry_run')
         AND created_at >= date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2`,
     [accountId, TZ]
   );
@@ -661,8 +667,8 @@ const registrarDecisao = async (pool, dados) => {
   const { rows } = await pool.query(
     `INSERT INTO ${AI_FOLLOWUP_LOG_TABLE}
        (account_id, contact_id, conversation_id, attempt, status, skip_reason,
-        provider, model, confidence, message, error, sent_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        provider, model, confidence, message, error, sent_at,outbound_queue_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING id`,
     [
       dados.accountId,
@@ -677,6 +683,7 @@ const registrarDecisao = async (pool, dados) => {
       dados.message ?? null,
       dados.error ?? null,
       dados.status === 'sent' ? new Date() : null,
+      dados.outboundQueueId ?? null,
     ]
   );
   return rows[0]?.id ?? null;
@@ -754,7 +761,7 @@ const runAiFollowupTick = async (pool, {
       });
       const ia = await chatCompletionJson({ system, user, maxTokens: 500, temperature: 0.4 });
       if (!ia.ok) {
-        await registrarDecisao(pool, { ...base, status: 'failed', error: ia.error });
+        await registrarDecisao(pool, { ...base, status: rejectedBeforeGeneration(ia.error)?'provider_unavailable':'failed', error: ia.error });
         resultado.falhas += 1;
         continue;
       }
@@ -839,9 +846,9 @@ const runAiFollowupTick = async (pool, {
       // Enfileirar NAO e entregar. O registro distingue os dois porque chamar a fila
       // de "sent" escondeu uma fila travada: o despachante estourava ReferenceError a
       // cada tick e 5 follow-ups ficaram "sent" no painel sem nunca sair (23/10/2026).
-      let entregue = false;
+      let entregue = false,outboundQueueId=null;
       if (enfileirarEnvio) {
-        await enfileirarEnvio({
+        outboundQueueId=await enfileirarEnvio({
           contactId: candidato.contact_id,
           conversationId: candidato.conversation_id,
           inboxId: candidato.inbox_id,
@@ -862,6 +869,7 @@ const runAiFollowupTick = async (pool, {
       await registrarDecisao(pool, {
         ...base,
         status: entregue ? 'sent' : 'queued',
+        outboundQueueId,
         provider: ia.provider,
         model: ia.model,
         confidence: confianca,

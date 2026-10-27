@@ -124,6 +124,12 @@ jobs:
       - name: Validate complete PDF and OCR coverage
         run: python3 backend/tests/test_technical_extract.py
 
+      - name: Validate commercial AI recovery and delivery protections
+        working-directory: backend
+        run: node --test tests/aiProviderAvailability.test.js tests/aiProviderAvailability.integration.test.js tests/aiFollowups.test.js tests/aiResponder.test.js tests/prospeccao.test.js tests/outboundQueue.test.js
+        env:
+          QUALITY_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
+
       - name: Validate notice navigation and technical preview
         working-directory: frontend
         run: npm test -- --watchAll=false --runInBand --runTestsByPath src/TechnicalResult.test.js src/technicalChecklistBridge.test.js src/PncpSearchDialog.test.js src/PncpNoticePage.test.js src/OpportunityPreview.test.js src/pncpNavigation.test.js src/SearchGuide.test.js src/PipelineOpportunityPage.test.js src/ProductCatalog.test.js src/ObjectionWorkflow.test.js src/RequirementReviews.test.js src/TechnicalPriceSummary.test.js src/checklistPresentation.test.js src/ManualTechnicalAnalysis.test.js

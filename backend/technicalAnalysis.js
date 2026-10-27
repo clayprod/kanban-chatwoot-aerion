@@ -759,6 +759,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           (j.kind='notice' AND (NOT COALESCE((j.state->>'initialized')::boolean,FALSE) OR COALESCE((j.state->>'file_cursor')::int,0)<jsonb_array_length(COALESCE(j.state->'files','[]'::jsonb))))) AND (j.kind='product' OR (c.enabled=TRUE AND
           (j.context->>'manual_requested'='true' OR COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) >= CASE WHEN c.limit_mode='score' THEN GREATEST(68,c.min_score) ELSE c.min_score END)))
         ORDER BY CASE WHEN j.context->>'manual_requested'='true' THEN 0 ELSE 1 END,
+          CASE WHEN j.stage IN ('extracting','locating_sections','comparing') AND COALESCE((j.state->>'file_cursor')::int,0)>=jsonb_array_length(COALESCE(j.state->'files','[]'::jsonb)) THEN 0 ELSE 1 END,
           CASE WHEN j.updated_at<NOW()-INTERVAL '2 minutes' THEN 0 ELSE 1 END,
           CASE WHEN j.kind=$1 THEN 0 ELSE 1 END,
           COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) DESC,

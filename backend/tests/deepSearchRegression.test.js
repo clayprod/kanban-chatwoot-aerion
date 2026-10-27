@@ -106,4 +106,6 @@ test('technical providers request strict facts from an available model without c
   assert.equal(requests[2].body.model, 'llama-3.3-70b-versatile');
   assert.equal(requests[2].body.max_tokens, 7000);
   assert.equal(requests[2].body.response_format, undefined);
+  await context.ask({ ...request });
+  assert.match(requests[3].url,/openrouter/);assert.equal(requests[3].body.model,'openai/gpt-4o-mini');
 });

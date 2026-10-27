@@ -85,6 +85,13 @@ const classificador = (over = {}) => async () => ({
   ...over,
 });
 
+test('only one worker can claim a provider-rejected retry; the retry does not duplicate a customer delivery',async()=>{
+ const pool=fakePool({pendentes:[{...PENDENTE,retry_record_id:9}],historico:[{message_type:0,content:'Quero inspecionar uma linha de transmissão'}]});const query=pool.query.bind(pool);let claimed=false,calls=0,sends=0;
+ pool.query=async(sql,params)=>{if(sql.startsWith('UPDATE ai_responder_log SET retry_history')){const accepted=!claimed;claimed=true;return{rows:accepted?[{id:9}]:[],rowCount:accepted?1:0};}return query(sql,params);};
+ const dependencies={accountId:2,config:{...CONFIG,dryRun:true},classificarContato:classificador(),catalogo:catalogoFake(),chatCompletionJson:async()=>{calls++;return{ok:true,data:{acao:'responder',mensagem:'O equipamento pode apoiar essa inspeção. Qual distância precisa cobrir?',confianca:0.95}};},enviar:async()=>{sends++;}};
+ await Promise.all([runAiResponderTick(pool,dependencies),runAiResponderTick(pool,dependencies)]);assert.equal(calls,1);assert.equal(sends,0);assert.equal(pool.gravados.length,1);
+});
+
 const iaQue = (data, extra = {}) => async () => ({ ok: true, data, provider: 'openrouter', model: 'x', ...extra });
 
 test('defaults sao seguros: desligado e em dry run', () => {
