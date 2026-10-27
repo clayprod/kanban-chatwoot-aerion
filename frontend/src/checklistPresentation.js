@@ -4,3 +4,5 @@ export function clausePresentation(rows){
  const result=new Map();for(const group of groups.values())if(group.length>1&&new Set(group.map(r=>r.requirement.label)).size===1){for(const [index,row]of group.entries())result.set(row.requirement.id,{clause:group[0].requirement.label,first:index===0,label:properties[row.requirement.key] || String(row.requirement.value ?? `Critério ${index+1}`)});}
  return result;
 }
+export function referenceFor(row,item,index=0){return row.document_reference || item?.requirement_references?.[row.requirement.id] || {number:String(index+1).padStart(2,'0'),automatic:true,ordinal:index+1};}
+export function consecutiveSections(rows,sectionOf){const groups=[];for(const row of rows){const section=sectionOf(row),last=groups.at(-1);if(last?.[0]===section)last[1].push(row);else groups.push([section,[row]]);}return groups;}

@@ -2068,23 +2068,13 @@ const formatCurrency = (value) => {
 /** Agrupa requisitos por seção (ordem = primeira aparição). */
 const CHECKLIST_UNSECTIONED_KEY = '__sem_secao__';
 const groupRequirementsBySection = (requirements = []) => {
-  const groups = [];
-  const indexByKey = new Map();
-  (Array.isArray(requirements) ? requirements : []).forEach((req) => {
-    const secao = String(req?.secao || '').trim();
-    const key = secao || CHECKLIST_UNSECTIONED_KEY;
-    if (!indexByKey.has(key)) {
-      indexByKey.set(key, groups.length);
-      groups.push({
-        key,
-        secao: secao || null,
-        title: secao || 'Geral',
-        items: [],
-      });
-    }
-    groups[indexByKey.get(key)].items.push(req);
-  });
-  return groups;
+  const groups=[];
+  for(const req of Array.isArray(requirements)?requirements:[]){
+    const secao=String(req?.secao || '').trim(),last=groups[groups.length-1];
+    if(last&&last.secao===(secao || null))last.items.push(req);
+    else groups.push({key:secao || CHECKLIST_UNSECTIONED_KEY,secao:secao || null,title:secao || 'Geral',items:[req]});
+  }
+  return groups.map((g,index)=>({...g,key:g.key+':'+index}));
 };
 
 const countRequirementStatuses = (requirements = []) => {
@@ -19594,7 +19584,7 @@ function App() {
                                                     : 'border-line/80 bg-surf hover:border-line'
                                               }`}
                                             >
-                                              <span className="w-5 shrink-0 text-center text-[10px] font-medium tabular-nums text-muted">{index + 1}</span>
+                                              <span className="min-w-[2rem] max-w-[6rem] shrink-0 break-words text-center text-[10px] font-medium tabular-nums text-muted" title={req.technical_reference?.document_reference?.automatic?'Numeração automática':'Referência do requisito'}>{req.technical_reference?.document_reference?.automatic?'Auto ':''}{req.technical_reference?.document_reference?.number || index+1}</span>
                                               <RequirementStatusControl status={req.status} onChange={onStatus} label={`Resultado de ${req.requisito || 'requisito'}`} objectionRef={!isProposal?{item_number:String(item.numero_item || item.id),requirement_id:`manual:${req.id}`,label:req.requisito}:undefined}/>
                                               <input
                                                 className={`${input} h-7 min-w-0 flex-1 text-[11px] leading-snug`}

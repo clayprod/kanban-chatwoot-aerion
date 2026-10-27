@@ -222,7 +222,8 @@ function guardLegacyRequirement(row) {
   return row;
 }
 function assessProduct(product, requirements, sources, mappings = [], complete = false, item = {}) {
-  const rows = requirements.map(r => compareRequirement(r, product.specs || [], sources, mappings.find(m => m.requirement_id === r.id) || {}));
+  const {newAircraftEvidence}=require('./technicalSupplyPolicy');
+  const rows = requirements.map(r => {const policy=newAircraftEvidence(product,r);return policy&&evidenceValid(r,sources)?{requirement:r,status:'ok',reason:'Condição confirmada pela política de fornecimento da Aerion: drones novos, sem uso.',evidence:[policy]}:compareRequirement(r, product.specs || [], sources, mappings.find(m => m.requirement_id === r.id) || {});});
   const counts = { ok: rows.filter(r => r.status === 'ok').length, nao_ok: rows.filter(r => r.status === 'nao_ok').length, verificar: rows.filter(r => r.status === 'verificar').length, total: rows.length };
   const full = complete && product.specs_complete === true && counts.total > 0 && counts.ok === counts.total;
   const status = full ? 'full' : counts.nao_ok ? 'failed' : 'uncertain';

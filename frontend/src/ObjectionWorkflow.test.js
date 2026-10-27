@@ -1,5 +1,15 @@
-import React from 'react';import {render,screen,fireEvent,waitFor} from '@testing-library/react';import '@testing-library/jest-dom';import axios from 'axios';import RequirementStatusControl from './RequirementStatusControl';import {ObjectionContext,adjustedCompatibility} from './ObjectionContext';import {ObjectionProvider,ObjectionPanel} from './ObjectionWorkflow';import TechnicalChecklist from './TechnicalChecklist';import {ItemCompatibilitySummary} from './TechnicalResult';
+import React from 'react';import {render,screen,fireEvent,waitFor} from '@testing-library/react';import '@testing-library/jest-dom';import axios from 'axios';import RequirementStatusControl from './RequirementStatusControl';import {ObjectionContext,adjustedCompatibility} from './ObjectionContext';import {ObjectionProvider,ObjectionPanel,generationBlockers} from './ObjectionWorkflow';import TechnicalChecklist from './TechnicalChecklist';import {ItemCompatibilitySummary} from './TechnicalResult';
 jest.mock('axios',()=>({get:jest.fn(),put:jest.fn(),post:jest.fn()}));
+beforeEach(()=>jest.clearAllMocks());
+test('a disabled generation button explains the missing legal confirmation, marks the field required, and enables after confirmation',async()=>{
+ axios.get.mockResolvedValue({data:{selected:[{item_number:'1',requirement_id:'r',label:'Câmera',topic:'restricao'}],notice:{regime:null}}});
+ render(<ObjectionProvider opportunityId="9"><ObjectionPanel/></ObjectionProvider>);fireEvent.click(await screen.findByRole('button',{name:'Preparar impugnação (1)'}));
+ const button=screen.getByRole('button',{name:'Gerar minuta com IA'}),law=screen.getByRole('combobox',{name:'Lei aplicável conforme o edital'});expect(button).toBeDisabled();expect(button).toHaveAccessibleDescription(/Confirme a Lei 14.133/);expect(law).toHaveAttribute('aria-required','true');expect(screen.getByText('Para habilitar a geração:')).toBeVisible();
+ fireEvent.change(law,{target:{value:'14133'}});expect(button).toBeEnabled();expect(screen.queryByText('Para habilitar a geração:')).not.toBeInTheDocument();expect(axios.post).not.toHaveBeenCalled();
+});
+test('every blocking condition has an actionable explanation instead of a silent disabled control',()=>{
+ const base={base:'/x',selected:[{stale:true}],saving:1,error:'Sem conexão',notice:{regime:'other'}};const reasons=generationBlockers(base,'14133');expect(reasons.join(' ')).toMatch(/salvamento/);expect(reasons.join(' ')).toMatch(/Sem conexão/);expect(reasons.join(' ')).toMatch(/desatualizada/);expect(reasons.join(' ')).toMatch(/outro regime/);
+});
 test('excludes contested criteria, retains original statuses, and never reports 100% after excluding all',()=>{
  const rows=[{requirement:{id:'a'},status:'ok'},{requirement:{id:'b'},status:'nao_ok'}];expect(adjustedCompatibility(rows,id=>id==='b')).toEqual({excluded:1,total:1,percent:100});expect(adjustedCompatibility(rows,()=>true)).toEqual({excluded:2,total:0,percent:null});expect(rows[1].status).toBe('nao_ok');
 });

@@ -18,6 +18,7 @@ const {reviewedComparison}=require('./technicalReviewedNotices');
 const reviewedBundle=require('./data/aerionReviewedNotices.json');
 const {createObjectionTables,createObjectionService}=require('./objectionService');
 const {createReviewTables,applyReviews,registerReviewRoutes}=require('./technicalReviews');
+const {annotateRequirementOrder}=require('./technicalRequirementOrder');
 const DEFAULTS = Object.freeze({ enabled: false, min_score: GREEN_SCORE_THRESHOLD, limit_mode: 'score', daily_limit: 30, daily_tokens: 2000000 });
 const minScore = config => config.limit_mode === 'score' ? Math.max(GREEN_SCORE_THRESHOLD, Number(config.min_score) || GREEN_SCORE_THRESHOLD) : Number(config.min_score);
 const DAY_SQL = "(NOW() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -938,7 +939,10 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
   async function refreshedJob(job){
     const current=await refreshedJobBase(job);if(!current.result||!job.context?.notice_key)return current;
     const reviews=(await pool.query('SELECT * FROM technical_requirement_reviews WHERE account_id=$1 AND notice_key=$2',[job.account_id,job.context.notice_key])).rows;
-    return {...current,result:applyReviews(current.result,reviews)};
+    const ids=(current.result.sources || []).map(s=>String(s.id)).filter(id=>/^\d+$/.test(id));
+    const sources=ids.length?(await pool.query('SELECT id,name,pages FROM technical_sources WHERE account_id=$1 AND id=ANY($2::bigint[])',[job.account_id,ids])).rows:[];
+    sources.sort((a,b)=>ids.indexOf(String(a.id))-ids.indexOf(String(b.id)));
+    return {...current,result:annotateRequirementOrder(applyReviews(current.result,reviews),sources)};
   }
   async function refreshedJobBase(job) {
     const reviewed=await reviewedResult(job);
