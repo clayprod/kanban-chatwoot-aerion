@@ -136,7 +136,8 @@ async function createTechnicalTables(pool) {
     ADD COLUMN IF NOT EXISTS model TEXT, ADD COLUMN IF NOT EXISTS http_status INTEGER,
     ADD COLUMN IF NOT EXISTS request_id TEXT, ADD COLUMN IF NOT EXISTS request_hash TEXT,
     ADD COLUMN IF NOT EXISTS operation TEXT, ADD COLUMN IF NOT EXISTS usage JSONB,
-    ADD COLUMN IF NOT EXISTS outcome TEXT`);
+    ADD COLUMN IF NOT EXISTS outcome TEXT, ADD COLUMN IF NOT EXISTS response_data JSONB`);
+  await pool.query('CREATE INDEX IF NOT EXISTS technical_ai_calls_request ON technical_ai_calls(account_id,request_hash,id DESC) WHERE request_hash IS NOT NULL');
   await pool.query(`CREATE TABLE IF NOT EXISTS technical_candidates (
     account_id INTEGER NOT NULL, source_context TEXT NOT NULL, result_key TEXT NOT NULL,
     notice_key TEXT NOT NULL, profile_hash TEXT NOT NULL, source_updated_at TIMESTAMPTZ,
@@ -270,8 +271,8 @@ function createTechnicalAnalysis(deps) {
       await client.query(`INSERT INTO technical_usage(account_id,day) VALUES($1,${DAY_SQL}) ON CONFLICT DO NOTHING`, [job.account_id]);
       const usage = (await client.query(`SELECT *,day::text AS day_key FROM technical_usage WHERE account_id=$1 AND day=${DAY_SQL} FOR UPDATE`, [job.account_id])).rows[0];
       const needsNotice = job.kind === 'notice' && !job.started_day;
-      if (config.limit_mode !== 'score' && tokens > config.daily_tokens) throw new BudgetWait('Teto diário insuficiente para um trecho. Aumente o teto de tokens nas configurações.');
-      if (config.limit_mode !== 'score' && (Number(usage.tokens) + tokens > config.daily_tokens || (needsNotice && usage.notices >= config.daily_limit))) throw new BudgetWait('Limite diário atingido. Retomada no próximo dia.');
+      if (tokens > config.daily_tokens) throw new BudgetWait('Teto diário insuficiente para um trecho. Aumente o teto de tokens nas configurações.');
+      if (Number(usage.tokens) + tokens > config.daily_tokens || (config.limit_mode !== 'score' && needsNotice && usage.notices >= config.daily_limit)) throw new BudgetWait('Limite diário de consumo atingido. O progresso foi salvo; retomada no próximo dia.');
       await client.query(`UPDATE technical_usage SET tokens=tokens+$2,calls=calls+1,notices=notices+$3 WHERE account_id=$1 AND day=${DAY_SQL}`, [job.account_id, tokens, needsNotice ? 1 : 0]);
       if (needsNotice) { await client.query(`UPDATE technical_jobs SET started_day=${DAY_SQL} WHERE id=$1`, [job.id]); job.started_day = usage.day_key; }
       const call = (await client.query('INSERT INTO technical_ai_calls(account_id,job_id,day,reserved_tokens,request_hash,operation) VALUES($1,$2,$3,$4,$5,$6) RETURNING id', [job.account_id, job.id, usage.day_key, tokens,requestHash,operation])).rows[0];
@@ -279,8 +280,21 @@ function createTechnicalAnalysis(deps) {
       return { day: usage.day_key, id: call.id };
     } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
   }
+  const requestFingerprint=(job,system,user,maxTokens,responseFormat)=>hash({system,user,responseFormat,maxTokens,...(job.state?.manual_repair_id?{repair:job.state.manual_repair_id}:{})});
   async function ask(job, config, system, user, maxTokens = 4000, responseFormat = null) {
+    const client=await pool.connect(),lock=`technical-request:${job.account_id}:${requestFingerprint(job,system,user,maxTokens,responseFormat)}`;let locked=false;
+    try{
+      locked=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS locked',[lock])).rows[0].locked;
+      if(!locked)throw new SharedExtractionWait('Uma chamada idêntica já está em andamento. Aguardando o resultado salvo, sem nova cobrança.');
+      return await askLocked(job,config,system,user,maxTokens,responseFormat);
+    }finally{try{if(locked)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lock]);}finally{client.release();}}
+  }
+  async function askLocked(job, config, system, user, maxTokens = 4000, responseFormat = null) {
     if (job.kind === 'notice' && !(await settings(job.account_id)).enabled) throw new ProviderWait('Análise pausada. O progresso foi preservado.');
+    const requestHash=requestFingerprint(job,system,user,maxTokens,responseFormat);
+    const previous=(await pool.query('SELECT response_data,outcome,http_status,actual_tokens FROM technical_ai_calls WHERE account_id=$1 AND request_hash=$2 ORDER BY id DESC LIMIT 1',[job.account_id,requestHash])).rows[0];
+    if(previous?.outcome==='received'&&previous.response_data)return previous.response_data;
+    if(previous&&previous.actual_tokens==null&&![400,401,402,403,404,413,422,429].includes(previous.http_status))throw new EvidenceReview('Há uma chamada anterior com cobrança incerta. Nenhuma repetição automática foi feita; confira o provedor antes de solicitar nova tentativa.');
     // Reservations are estimates, never billing. Only measured usage or an
     // explicit non-generating HTTP rejection can settle them.
     const reserved = Buffer.byteLength(system + user, 'utf8') + maxTokens + 1000;
@@ -294,15 +308,16 @@ function createTechnicalAnalysis(deps) {
       if (cooldown?.until > Date.now()) {
         failures.push(cooldown.error); continue;
       }
-      day = await reserve(job, config, reserved,hash({system,user,responseFormat,maxTokens}),responseFormat?.json_schema?.name || 'json');
+      day = await reserve(job, config, reserved,requestHash,responseFormat?.json_schema?.name || 'json');
       result = await ai({ system, user, maxTokens, responseFormat, temperature: 0, timeoutMs: 120000, maxProviderAttempts: 1, providerOffset: offset });
-      await pool.query(`UPDATE technical_ai_calls SET provider=$2,model=$3,http_status=$4,request_id=$5,usage=$6::jsonb,outcome=$7 WHERE id=$1`,
-        [day.id,result.provider || null,result.model || null,result.http_status || null,result.request_id || null,JSON.stringify(result.usage || null),result.ok ? result.truncated ? 'truncated' : 'received' : 'failed']);
+      await pool.query(`UPDATE technical_ai_calls SET provider=$2,model=$3,http_status=$4,request_id=$5,usage=$6::jsonb,outcome=$7,response_data=$8::jsonb WHERE id=$1`,
+        [day.id,result.provider || null,result.model || null,result.http_status || null,result.request_id || null,JSON.stringify(result.usage || null),result.ok ? result.truncated ? 'truncated' : 'received' : 'failed',JSON.stringify(result.ok&&!result.truncated?result.data:null)]);
       const actual = measuredTokens(result);
       if (Number.isSafeInteger(actual) && actual >= 0) await pool.query(`WITH settled AS (
         UPDATE technical_ai_calls SET actual_tokens=$2 WHERE id=$1 AND actual_tokens IS NULL RETURNING account_id,day,reserved_tokens
       ) UPDATE technical_usage u SET tokens=GREATEST(0,u.tokens-s.reserved_tokens+$2),actual_tokens=u.actual_tokens+$2
         FROM settled s WHERE u.account_id=s.account_id AND u.day=s.day`, [day.id, actual]);
+      if(!result.ok&&actual==null&&!result.truncated&&!result.requestTooLarge)throw new EvidenceReview('A chamada de IA terminou sem confirmação de consumo. A repetição automática foi bloqueada para evitar cobrança duplicada. Confira o provedor antes de tentar novamente.');
       if ((result.truncated || result.requestTooLarge) && [FACTS_FORMAT,COVERAGE_FORMAT,MAPPING_FORMAT].some(format=>format.json_schema.name===responseFormat?.json_schema?.name)) {
         // Capacities differ. Try the configured fallback before splitting the
         // request; only split when none can return a complete response.

@@ -54,6 +54,11 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       assert.equal(attached.status, 202);
       for (let n = 0; n < 4; n++) await service.tick();
       const p = (await request('GET', `${base}/products`)).data[0]; assert.equal(p.specs.length, 1, JSON.stringify(p.processing)); assert.equal(p.specs_complete, true);
+      const beforeCheckpointRecovery=calls;
+      await pool.query("DELETE FROM technical_extractions WHERE account_id=1 AND kind='product'");
+      await pool.query("UPDATE technical_jobs SET state='{}',result=NULL,status='queued',next_run_at=NOW() WHERE account_id=1 AND kind='product' AND target=$1",[String(product.id)]);
+      service=createTechnicalAnalysis(dependencies);for(let n=0;n<3;n++)await service.tick();
+      assert.equal(calls,beforeCheckpointRecovery,'a lost extraction checkpoint recovers the durable provider response without charging again');
       assert.equal((await request('GET', `${base}/products`, null, 2)).data.length, 0);
       assert.equal((await request('GET', `${base}/technical/sources/${attached.data.source.id}`, null, 2)).status, 404);
       await request('PUT', `${base}/technical/config`, { enabled: true, min_score: 68, daily_limit: 30, daily_tokens: 2000000 });
@@ -220,7 +225,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const offsets = [];
       const fallbackService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args => {
         offsets.push(args.providerOffset);
-        return args.providerOffset === 0 ? { ok: false, error: 'openai:429 You have no credits remaining' } : dependencies.ai(args);
+        return args.providerOffset === 0 ? { ok: false,http_status:429, error: 'openai:429 You have no credits remaining' } : dependencies.ai(args);
       } });
       for (let n = 0; n < 5; n++) await fallbackService.tick();
       assert.deepEqual(offsets, [0, 1]);
@@ -235,7 +240,7 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const limitedProduct = (await request('POST', `${base}/products`, { name: 'Limited fallback', sale_price: 10 }, 90)).data;
       await request('POST', `${base}/products/${limitedProduct.id}/sources`, { text: 'Autonomia de 44 min.' }, 90);
       const limitedService = createTechnicalAnalysis({ ...dependencies, getProviderCount: () => 2, ai: async args =>
-        ({ ok: false, error: args.providerOffset === 0 ? 'openai:429 You have no credits remaining' : 'groq:429 Rate limit reached; retry in 60 seconds' }) });
+        ({ ok: false,http_status:429, error: args.providerOffset === 0 ? 'openai:429 You have no credits remaining' : 'groq:429 Rate limit reached; retry in 60 seconds' }) });
       await limitedService.tick();
       const limited = await limitedService.settings(90);
       assert.match(limited.provider_error, /temporariamente indisponível/);
@@ -292,23 +297,29 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       await pool.query("DELETE FROM technical_extractions WHERE account_id=91 AND kind='notice'");
       await pool.query("UPDATE technical_jobs SET context=jsonb_set(context,'{rules_version}','2'),state=jsonb_set(state,'{extraction_format}','2') WHERE id=$1",[selected.id]);
       const scopedJob=await shortlistService.observe(91,input,{terms:['drone','rpa']});
+      // A fresh paid reading is explicit. Without a repair identity, identical
+      // prompts recover their durable response even after a checkpoint is lost.
+      await pool.query("UPDATE technical_jobs SET state=state || '{\"manual_repair_id\":\"test-scoped-conflict\"}'::jsonb WHERE id=$1",[scopedJob.id]);
       for(let n=0;n<20;n++) await shortlistService.tick();
       const scopedResult=(await request('GET',`${base}/technical/jobs/${scopedJob.id}`,null,91)).data.result;
       assert.equal(downloads,downloadsBeforeRevision);
       assert.equal(scopedResult.documents_complete,false);assert.equal(scopedResult.full_items,0,'without proof of independent awards, an unresolved item prevents full-lot approval');
       assert.equal(scopedResult.items[0].documents_complete,false);
       assert.equal(scopedResult.items[1].documents_complete,true);
-      // Score mode is deliberately independent of fixed notice/token budgets.
-      // More than three green notices proceed even after legacy counters filled.
+      // Score mode has no notice-count ceiling, but always respects the daily
+      // consumption budget. All green notices stay queued when it is exhausted.
       await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
-      await request('PUT',`${base}/technical/config`,{enabled:true,limit_mode:'score',min_score:68,daily_limit:1,daily_tokens:10000},92);
-      await pool.query(`INSERT INTO technical_usage(account_id,day,notices,tokens) VALUES(92,(NOW() AT TIME ZONE 'America/Sao_Paulo')::date,100,9000000)`);
+      await request('PUT',`${base}/technical/config`,{enabled:true,limit_mode:'score',min_score:68,daily_limit:1,daily_tokens:2000000},92);
+      await pool.query(`INSERT INTO technical_usage(account_id,day,notices,tokens) VALUES(92,(NOW() AT TIME ZONE 'America/Sao_Paulo')::date,100,0)`);
       const scoreProduct=(await request('POST',`${base}/products`,{name:'Drone por aderência',keywords:['drone'],sale_price:90,unit:'un',package_confirmed:true},92)).data;
       await request('POST',`${base}/products/${scoreProduct.id}/sources`,{text:'Autonomia de 42 min.'},92);
       for(let n=0;n<3;n++)await service.tick();
       const greens=[];
       for(const score of [68,80,90,95,85]) greens.push(await service.observe(92,{...input,sequencial:String(score),score},{terms:['drone']}));
       assert.equal(await service.observe(92,{...input,sequencial:'67',score:67},{terms:['drone']}),null);
+      await pool.query('UPDATE technical_usage SET tokens=2000000 WHERE account_id=92');
+      const beforeBudget=calls;for(let n=0;n<8;n++)await service.tick();assert.equal(calls,beforeBudget);
+      await pool.query('UPDATE technical_usage SET tokens=0 WHERE account_id=92');
       for(let n=0;n<42;n++){
         await pool.query("UPDATE technical_jobs SET next_run_at=NOW() WHERE id=ANY($1::bigint[]) AND status='queued'",[greens.map(j=>j.id)]);
         await service.tick();
@@ -317,6 +328,16 @@ test('PostgreSQL + HTTP: catalogue, durable analysis, strict comparison, budget,
       const firstGreenCall=(await pool.query("SELECT (j.context->'payload'->>'score')::int AS score FROM technical_ai_calls a JOIN technical_jobs j ON j.id=a.job_id WHERE a.account_id=92 AND j.kind='notice' ORDER BY a.id LIMIT 1")).rows[0];
       assert.ok([95,90].includes(firstGreenCall.score),'the two highest scores share the first concurrent batch');
       assert.equal((await request('GET',`${base}/technical/config`,null,92)).data.config.limit_mode,'score');
+      await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
+      const uncertainProduct=(await request('POST',`${base}/products`,{name:'Unknown transport outcome',sale_price:10},94)).data;
+      await request('POST',`${base}/products/${uncertainProduct.id}/sources`,{text:'Autonomia de 48 min.'},94);
+      let uncertainCalls=0;const uncertainService=createTechnicalAnalysis({...dependencies,ai:async()=>{uncertainCalls++;return{ok:false,error:'openrouter:timeout'};}});
+      for(let n=0;n<3;n++)await uncertainService.tick();assert.equal(uncertainCalls,1);
+      assert.equal((await pool.query("SELECT stage FROM technical_jobs WHERE account_id=94 AND kind='product'")).rows[0].stage,'review_required');
+      // Even a new process with an accidentally requeued job cannot repeat an
+      // uncertain paid request: the audit record is checked before calling IA.
+      await pool.query("UPDATE technical_jobs SET status='queued',next_run_at=NOW() WHERE account_id=94");
+      await createTechnicalAnalysis({...dependencies,ai:async()=>{uncertainCalls++;throw Error('must not be called');}}).tick();assert.equal(uncertainCalls,1);
       await pool.query("UPDATE technical_jobs SET next_run_at=NOW()+INTERVAL '1 day'");
       const dense=(await request('POST',`${base}/products`,{name:'Ficha densa',sale_price:100},93)).data;
       await request('POST',`${base}/products/${dense.id}/sources`,{text:'Autonomia de 42 min. '+ 'Detalhe técnico. '.repeat(200)},93);

@@ -20378,6 +20378,7 @@ const getAiChatProviders = ({ technical = false } = {}) => {
       },
     });
   }
+  if(technical)providers.sort((a,b)=>['openrouter','groq','openai'].indexOf(a.name)-['openrouter','groq','openai'].indexOf(b.name));
   return providers;
 };
 
