@@ -102,7 +102,7 @@ const verificarNumerosWhatsapp = async (telefones, {
     try {
       const resp = await fetchImpl(`${base}/chat/whatsappNumbers/${instancia}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: apiKey },
+        headers: { 'Content-Type': 'application/json', apikey: chave },
         body: JSON.stringify({ numbers: lote }),
         signal: controller.signal,
       });

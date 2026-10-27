@@ -74,6 +74,18 @@ test('erro da Evolution não derruba a campanha (fail-open) mas se declara', asy
   assert.equal(existentes.size, 2, 'sem veredito, ninguém é descartado');
 });
 
+test('resolve o token assíncrono do cofre antes de autenticar a verificação', async () => {
+  let chamadas=0;
+  const r=await verificarNumerosWhatsapp(['551138978000'],{
+    ...CFG,apiKey:async instancia=>{assert.equal(instancia,'inst');return 'resolved-vault-token';},
+    fetchImpl:async(url,opts)=>{
+      chamadas++;assert.equal(opts.headers.apikey,'resolved-vault-token');
+      return {ok:true,json:async()=>[{number:'551138978000',exists:true}]};
+    },
+  });
+  assert.equal(chamadas,1);assert.equal(r.indisponivel,false);assert.ok(r.existentes.has('551138978000'));
+});
+
 test('sem Evolution configurada, não filtra e marca indisponível', async () => {
   const { existentes, indisponivel } = await verificarNumerosWhatsapp(
     ['5511991316458'],

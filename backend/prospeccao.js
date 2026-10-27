@@ -109,7 +109,10 @@ const telefoneDaEmpresa = (e) => {
     soDigitos(e?.telefone),
   ];
   // 10 digitos = fixo com DDD, 11 = celular. Menos que isso nao da para discar.
-  return candidatos.find((t) => t.length >= 10) || '';
+  const numero = candidatos.find((t) => t.length === 10 || t.length === 11 || (/^55/.test(t) && [12,13].includes(t.length))) || '';
+  // A Receita separa DDD/telefone e omite o país. A Evolution exige 55+DDD:
+  // consultar o formato nacional devolve exists:false mesmo para WhatsApp ativo.
+  return numero && numero.length <= 11 ? `55${numero}` : numero;
 };
 
 // Normaliza para comparar nome de perfil com razão social: sem acento, sem caixa,

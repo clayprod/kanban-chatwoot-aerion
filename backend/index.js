@@ -23533,19 +23533,12 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
   try {
     const [decisoes, agregado] = await Promise.all([
       pool.query(
-        `SELECT id, cnpj, razao_social, telefone, perfil, icp, status, motivo,
-                perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, created_at,
-                -- A tela mostra contact_name; na prospeccao o lead descartado nao vira
-                -- contato nenhum, entao o cartao aparecia como "Contato #null".
-                razao_social AS contact_name
-           FROM ${PROSPECCAO_LOG_TABLE}
-          WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        `${require('./prospectingRuntime').prospectingDecisionSql} ORDER BY p.created_at DESC LIMIT $2`,
         [CHATWOOT_ACCOUNT_ID, limite]
       ),
       pool.query(
-        `SELECT status, COUNT(*)::int AS total FROM ${PROSPECCAO_LOG_TABLE}
-          WHERE account_id = $1
-            AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
+        `SELECT status,COUNT(*)::int AS total FROM (${require('./prospectingRuntime').prospectingDecisionSql}) decisions
+          WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo')
                 AT TIME ZONE 'America/Sao_Paulo'
           GROUP BY status`,
         [CHATWOOT_ACCOUNT_ID]
@@ -23561,6 +23554,7 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
       },
       hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
       decisoes: decisoes.rows,
+      runtime: (await pool.query('SELECT started_at,finished_at,summary,error FROM prospecting_runtime WHERE account_id=$1',[CHATWOOT_ACCOUNT_ID])).rows[0] || null,
     });
   } catch (error) {
     console.error('[prospeccao] listagem falhou:', error.message);
@@ -24003,6 +23997,7 @@ const registerBackgroundSchedules = () => {
     if (!dentroDaJanela(cfgJanela, new Date())) return;
     prospeccaoRodando = true;
     try {
+      await require('./prospectingRuntime').startProspectingRun(pool,CHATWOOT_ACCOUNT_ID);
       const resultado = await runProspeccaoTick(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
@@ -24090,10 +24085,10 @@ const registerBackgroundSchedules = () => {
           origem: 'prospeccao', texto, dedupeKey,
         }),
       });
-      if (resultado.abordados || resultado.falhas || resultado.descartados) {
-        console.log('[prospeccao] tick:', resultado);
-      }
+      await require('./prospectingRuntime').finishProspectingRun(pool,CHATWOOT_ACCOUNT_ID,resultado);
+      console.log('[prospeccao] tick:', resultado);
     } catch (error) {
+      await require('./prospectingRuntime').finishProspectingRun(pool,CHATWOOT_ACCOUNT_ID,null,String(error.message || error)).catch(()=>{});
       console.error('[prospeccao] tick falhou:', error.message);
     } finally {
       prospeccaoRodando = false;
@@ -24548,6 +24543,7 @@ const initializeDataLayer = async () => {
   await createAiSettingsTable(pool);
   await createOutboundQueueTable(pool);
   await createProspeccaoTable(pool);
+  await require('./prospectingRuntime').createProspectingRuntime(pool);
   await createResponderTable(pool);
   await createCallTranscriptsTable(pool);
   await createCNPJCacheTable();

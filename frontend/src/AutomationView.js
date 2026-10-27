@@ -45,6 +45,11 @@ const STATUS = {
   provider_unavailable: { cor: 'text-status-warning', rotulo: 'aguardando provedor', ruido: false },
   retrying:  { cor: 'text-primary', rotulo: 'retomando', ruido: false },
   queued:    { cor: 'text-primary', rotulo: 'na fila de envio', ruido: false },
+  enfileirado: { cor: 'text-primary', rotulo: 'na fila de envio', ruido: false },
+  abordado: { cor: 'text-status-success', rotulo: 'enviado', ruido: false },
+  falhou: { cor: 'text-status-danger', rotulo: 'falhou', ruido: false },
+  descartado: { cor: 'text-muted2', rotulo: 'descartado', ruido: false },
+  escalated: { cor: 'text-status-warning', rotulo: 'encaminhado ao atendimento', ruido: false },
   skipped:   { cor: 'text-muted2',         rotulo: 'pulado',   ruido: true },
 };
 const meta = (s) => STATUS[s] || { cor: 'text-muted2', rotulo: s, ruido: false };
@@ -169,6 +174,14 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
   return (
     <div className="space-y-2.5">
       <Saude config={dados?.config} ultima={todos[0]?.created_at} />
+      {dados?.runtime && (
+        <div role="status" className={`rounded-[10px] border border-line p-3 text-[12px] ${dados.runtime.error || dados.runtime.summary?.falhas ? 'text-status-warning' : 'text-muted'}`}>
+          <p className="font-medium text-ink">Último ciclo: {fmtDataHora(dados.runtime.started_at)} · {dados.runtime.finished_at ? 'Concluído' : 'Em execução'}</p>
+          {dados.runtime.finished_at && <p className="mt-1">{dados.runtime.error || dados.runtime.summary?.skipped || `${dados.runtime.summary?.avaliados || 0} empresas avaliadas · ${dados.runtime.summary?.abordados || 0} abordagens preparadas · ${dados.runtime.summary?.falhas || 0} falhas`}</p>}
+          {(dados.runtime.summary?.errosBusca || []).map((reason,i)=><p className="mt-1 break-words" key={i}>{reason}</p>)}
+          <p className="mt-1">Ciclos aos 20 minutos de cada hora, no horário comercial. Envio depende da verificação do WhatsApp e da disponibilidade do número.</p>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] tabular-nums">
         {Object.entries(dados?.hoje || {}).map(([s, n]) => (
@@ -428,7 +441,7 @@ export default function AutomationView() {
                 )}
                 {it.mensagem && <p className="whitespace-pre-wrap text-[12px] text-muted">{it.mensagem}</p>}
                 {(it.motivo || it.error) && (
-                  <p className="text-[11px] text-muted2">{it.motivo || it.error}</p>
+                  <p className="text-[11px] text-muted2">{it.error || it.motivo}</p>
                 )}
                 {it.perfil && <p className="text-[10px] text-muted2">perfil: {it.perfil}</p>}
               </>

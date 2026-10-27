@@ -149,14 +149,15 @@ test('a faixa de idade da empresa NAO vai para a busca', () => {
 test('telefone sai de ddd1/telefone1, como a busca RFB devolve', () => {
   // Ler ddd_telefone_1 (formato de importacao) dava undefined em todo candidato e
   // cada empresa era registrada como "sem telefone no cadastro".
-  assert.equal(telefoneDaEmpresa({ ddd1: '61', telefone1: '39644043' }), '6139644043');
-  assert.equal(telefoneDaEmpresa({ ddd1: '11', telefone1: '987654321' }), '11987654321');
+  assert.equal(telefoneDaEmpresa({ ddd1: '61', telefone1: '39644043' }), '556139644043');
+  assert.equal(telefoneDaEmpresa({ ddd1: '11', telefone1: '987654321' }), '5511987654321');
   assert.equal(
     telefoneDaEmpresa({ ddd1: '', telefone1: '', ddd2: '85', telefone2: '98745632' }),
-    '8598745632',
+    '558598745632',
     'cai para o segundo telefone do cadastro'
   );
-  assert.equal(telefoneDaEmpresa({ ddd_telefone_1: '(19) 98765-4321' }), '19987654321');
+  assert.equal(telefoneDaEmpresa({ ddd_telefone_1: '(19) 98765-4321' }), '5519987654321');
+  assert.equal(telefoneDaEmpresa({ telefone: '+55 (19) 98765-4321' }), '5519987654321', 'não duplica o código do país');
   assert.equal(telefoneDaEmpresa({ ddd1: '61', telefone1: '3964' }), '', 'curto demais para discar');
   assert.equal(telefoneDaEmpresa({}), '');
 });
@@ -337,7 +338,7 @@ test('empresa fora dos ICPs nao e abordada', async () => {
       ddd1: '11', telefone1: '47943786', cnae_fiscal_principal: '0111301',
       cnae_descricao: 'Cultivo de arroz',
     }]),
-    verificarNumerosWhatsapp: async () => ({ existentes: new Set(['1147943786']), perfis: new Map() }),
+    verificarNumerosWhatsapp: async () => ({ existentes: new Set(['551147943786']), perfis: new Map() }),
     chatCompletionJson: async () => { chamouIa = true; return { ok: false }; },
     contextoComercial: async () => ({ icp: 'desconhecido', blocoIcp: '', blocoCatalogo: '' }),
   });
