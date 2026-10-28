@@ -2,6 +2,7 @@ import importlib.util
 import unittest
 import tempfile
 import zipfile
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,35 @@ spec.loader.exec_module(module)
 
 
 class FullDocumentCoverage(unittest.TestCase):
+    def test_legacy_word_with_embedded_theme_zip_is_read_as_word(self):
+        data = io.BytesIO()
+        data.write(bytes.fromhex('d0cf11e0a1b11ae1'))
+        with zipfile.ZipFile(data, 'w') as package:
+            package.writestr('[Content_Types].xml', '<Types/>')
+            package.writestr('theme/theme/theme1.xml', '<theme/>')
+        calls = []
+
+        def command(args, timeout=90):
+            calls.append(args)
+            if args[0] == 'libreoffice':
+                Path(args[args.index('--outdir') + 1], 'document.pdf').write_bytes(b'%PDF-1.4')
+                return ''
+            if args[0] == 'pdfinfo':
+                return 'Pages: 1'
+            if args[0] == 'pdftotext':
+                return 'Exigência técnica: autonomia mínima de 41 minutos e câmera radiométrica.'
+            self.fail('Unexpected command')
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp, 'document.doc')
+            source.write_bytes(data.getvalue())
+            self.assertTrue(zipfile.is_zipfile(source), 'fixture reproduces embedded ZIP detection')
+            with patch.object(module, 'command', command):
+                result = module.main(str(source))
+        self.assertEqual(calls[0][0], 'libreoffice')
+        self.assertTrue(result['complete'])
+        self.assertIn('41 minutos', result['pages'][0]['text'])
+
     def test_zip_preserves_each_document_and_its_requirements(self):
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp, 'edital.zip')

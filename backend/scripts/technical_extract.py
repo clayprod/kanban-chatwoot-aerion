@@ -63,7 +63,13 @@ def main(filename, depth=0, budget=None):
     source = pathlib.Path(filename)
     if budget is None:
         budget = {'files': 0, 'bytes': 0}
-    if zipfile.is_zipfile(source):
+    # Legacy DOC files may contain an embedded ZIP with Office themes. Python's
+    # ZIP detector accepts that trailing archive, but the enclosing file is DOC.
+    zip_header = False
+    if source.is_file():
+        with source.open('rb') as content:
+            zip_header = content.read(4).startswith(b'PK')
+    if zip_header and zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as package:
             is_word = 'word/document.xml' in package.namelist() and '[Content_Types].xml' in package.namelist()
         if not is_word:
