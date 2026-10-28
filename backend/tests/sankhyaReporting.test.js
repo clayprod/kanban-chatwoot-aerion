@@ -25,9 +25,9 @@ test('Sankhya page parsing respects textual booleans, scope and minimizes stored
 test('confirmed orders never count as invoiced revenue, including non-pending orders', async () => {
   const invoice = {id:'1',resource:'invoices',date:'2026-10-22',authorized:true,invoiceStatus:'1',currency:'BRL',productValue:50};
   const pool = {query: async sql => {
-    if (sql.includes('connections')) return {rows:[{feed_realizado:true}]};
+    if (sql.includes('connections')) return {rows:[{company_id:102,feed_realizado:true}]};
     assert(sql.includes("resource='invoices'"), 'fiscal revenue must read invoices rather than orders');
-    if (sql.includes('SELECT *')) return {rows:[{last_success_at:'2026-10-23'}]};
+    if (sql.includes('SELECT *')) return {rows:[{company_id:102,last_success_at:'2026-10-23'}]};
     return {rows:[invoice,
       {...invoice,id:'2',resource:'orders',confirmed:true,pending:false,productValue:999},
       {...invoice,id:'3',authorized:false,invoiceStatus:'2',productValue:999},
@@ -49,6 +49,18 @@ test('Sankhya synchronization publishes only completed snapshots and isolates in
     calls.push({ url, method: options.method });
     assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error');
     assert.equal(options.headers['X-Partner-Key'], 'test-private-key');
+    const company = Number(new URL(url).searchParams.get('codigoEmpresa'));
+    assert([100,102].includes(company), 'every page must select its company explicitly');
+    if (mode === 'company100' || mode === 'wrong-company') return Response.json({
+      nota: [{ ...row(1), codigoEmpresa: mode === 'wrong-company' ? '102' : '100' }], pagination: { hasMore: false },
+    });
+    if (mode === 'invoice-details' || mode === 'detail-failure') {
+      if (new URL(url).pathname.endsWith('/nfe/1')) {
+        if (mode === 'detail-failure') return new Response('private-upstream', {status:502});
+        return Response.json({nota:{...row(1,'150'),codigoEmpresa:String(company)}});
+      }
+      return Response.json({nota:[{...row(1,'999'),codigoEmpresa:String(company),itens:undefined}],pagination:{hasMore:false}});
+    }
     if (mode === 'transport-error') throw new Error('upstream test-private-key private-address');
     if (url.includes('/nfe')) return new Response(JSON.stringify({ erro: 'test-private-key' }), { status: 502 });
     const n = new URL(url).searchParams.get('page');
@@ -69,10 +81,10 @@ test('Sankhya synchronization publishes only completed snapshots and isolates in
   };
   try {
     await erp.ensure();
-    await t.test('defaults stay disabled, access is admin-only and company 100 is refused', async () => {
+    await t.test('defaults stay disabled, access is admin-only and unapproved companies are refused', async () => {
       await erp.tick(); assert.equal(calls.length, 0);
       assert.equal((await request('/report', 'GET', null, false)).status, 403);
-      assert.equal((await request('/connections/100', 'PUT', { partner_key: 'test-private-key', enabled: true })).status, 400);
+      assert.equal((await request('/connections/3', 'PUT', { partner_key: 'test-private-key', enabled: true })).status, 400);
       assert.equal((await request('/connections/102', 'PUT', { origin: 'http://127.0.0.1', partner_key: 'test-private-key' })).status, 400);
       assert.equal((await request('/connections/102', 'PUT', { partner_key: 'test-private-key', enabled: true })).status, 200);
       const saved = (await pool.query('SELECT * FROM sankhya_reporting_connections')).rows[0];
@@ -136,6 +148,38 @@ test('Sankhya synchronization publishes only completed snapshots and isolates in
       assert.equal(seller.vendedores.length,1);assert.equal(seller.vendedores[0].receita,150);
       const month=await hybridRealizado({pool,legacyPool:pool,year:2026,month:10});
       assert.equal(month.receita,150);assert.equal(month.vendas_100,1);assert.equal(month.vendas_102,1);
+    });
+    await t.test('company 100 replaces only its legacy source and cannot publish company 102 documents', async () => {
+      assert.equal((await request('/connections/100','PUT',{partner_key:'test-private-key',enabled:true,feed_realizado:true,national_currency:'BRL'})).status,200);
+      mode='company100'; await erp.run(100,'invoices',{force:true});
+      let report=await hybridRealizado({pool,legacyPool:pool,year:2026});
+      assert.equal(report.source,'sankhya_100_102_invoices');
+      assert.equal(report.meses[9].receita_100,90,'legacy 100 must not be added');
+      assert.equal(report.meses[9].receita_102,50,'company 102 snapshot must stay intact');
+      assert.equal(report.meses[9].vendas,2,'same NUNOTA in different companies stays distinct');
+      const admin=(await request('/report?ano=2026')).body;
+      assert.equal(admin.currentRevenueSource,'sankhya_100_102_invoices');
+      assert.deepEqual(admin.revenueCompanies,[100,102].map(company=>({company,source:'sankhya_invoices'})));
+      mode='wrong-company'; await erp.run(100,'invoices',{force:true});
+      report=await hybridRealizado({pool,legacyPool:pool,year:2026});
+      assert.equal(report.meses[9].receita_100,90,'wrong-company response must preserve published snapshot');
+      const stream=(await pool.query("SELECT status,error FROM sankhya_reporting_streams WHERE company_id=100 AND resource='invoices'")).rows[0];
+      assert.equal(stream.status,'error'); assert.match(stream.error,/fora da empresa/);
+    });
+    await t.test('invoice details supply item values and failed enrichment preserves the last complete generation',async()=>{
+      mode='invoice-details'; const start=calls.length;
+      await erp.run(100,'invoices',{force:true});
+      assert(calls.slice(start).some(call=>call.url.endsWith('/nfe/1?codigoEmpresa=100')));
+      let report=(await request('/report?ano=2026')).body;
+      let stream=report.streams.find(s=>s.company_id===100&&s.resource==='invoices');
+      assert.equal(stream.gross_total,150,'detail response replaces list header');
+      const result=await hybridRealizado({pool,legacyPool:pool,year:2026});
+      assert.equal(result.meses[9].receita_100,90,'revenue still uses products, not either header');
+      mode='detail-failure'; await erp.run(100,'invoices',{force:true});
+      report=(await request('/report?ano=2026')).body;
+      stream=report.streams.find(s=>s.company_id===100&&s.resource==='invoices');
+      assert.equal(stream.status,'error'); assert.equal(stream.gross_total,150);
+      assert(!JSON.stringify(report).includes('private-upstream'));
     });
   } finally {
     await new Promise(resolve => server.close(resolve)); await pool.end();

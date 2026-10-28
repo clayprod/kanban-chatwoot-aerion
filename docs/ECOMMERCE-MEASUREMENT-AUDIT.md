@@ -1,5 +1,11 @@
 # Auditoria de medição — Aerion
 
+## Autorizações Google verificadas em 28/10/2026
+
+A conta técnica confirmada pelo usuário é `aerion-ecommerce-reader@cybernetic-post-481513-c2.iam.gserviceaccount.com`, a mesma identidade federada já usada pelo dashboard. GA4, propriedade `508163931`, estava habilitado, conectado e com sincronização bem-sucedida às 14:33 de Brasília em 28/10, sem erro registrado.
+
+Um token foi emitido no servidor para essa mesma identidade com o escopo `content`; a leitura `GET https://merchantapi.googleapis.com/accounts/v1/accounts` retornou **403 `SERVICE_DISABLED`**. O Google informou que a Merchant API ainda não foi usada ou está desativada no projeto `275930572314` (`cybernetic-post-481513-c2`). A autorização do usuário no Merchant Center não habilita automaticamente a API no projeto Cloud. Ativar [Merchant API no projeto](https://console.developers.google.com/apis/api/merchantapi.googleapis.com/overview?project=275930572314), aguardar a propagação e repetir a leitura antes de afirmar que contas, produtos ou fontes foram validados. Nenhum produto, feed ou permissão foi alterado nesse diagnóstico. Referência de leitura: [Merchant API accounts.list](https://developers.google.com/merchant/api/reference/rest/accounts_v1/accounts/list).
+
 Verificação em 21/10/2026 no WordPress em produção, configuração publicada do GTM e Graph API. Não foram criados pedidos, compras fictícias ou campanhas. Os resultados do navegador ficam em `.tmp/measurement/browser-audit.json` e não contêm identificadores de visitantes.
 
 ## Evidências da configuração inicial, antes das correções

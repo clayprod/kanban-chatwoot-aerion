@@ -1,5 +1,21 @@
 # Automação do faturamento Sankhya — diagnóstico em 22/10/2026
 
+## Atualização de 28/10/2026 — contrato v4.1, empresas 100 e 102
+
+O `Proxy-Sankhya-API-Reference-Parceiro-v4.1.pdf` (proxy 1.4.2), na raiz do projeto `aerion-elevate-hub` no drive compartilhado, autoriza a **leitura das duas empresas**. As seções iniciais e os endpoints de pedidos/notas exigem `codigoEmpresa=100` para a 100; a ausência desse parâmetro mantém o padrão 102. A antiga orientação na última página de não enviar empresa está desatualizada em relação ao contrato e às rotas descritas no próprio PDF.
+
+`backend/sankhyaReporting.js` aceita conexões administrativas 100 e 102 e envia `codigoEmpresa` explicitamente em todas as páginas e consultas individuais de NF-e. A listagem pode omitir os itens; nesse caso a sincronização consulta o detalhe da nota antes de publicar a geração. Resposta de outra empresa, outro NUNOTA ou falha no detalhe preserva a última carga completa. Não se usa `valorNota` para substituir valores ausentes de produtos. Permanecem os limites de lote, o isolamento por empresa/recurso e a minimização dos dados armazenados.
+
+`backend/salesRealizado.js` escolhe uma única origem por empresa através de `feed_realizado`: base anterior ou notas autorizadas do proxy. Isso permite a migração independente e evita somar importações antigas aos mesmos documentos automáticos. Se uma empresa automática ainda não tiver carga completa, o relatório sinaliza cobertura parcial sem retornar silenciosamente à importação antiga. O código de moeda nacional `0` só é BRL com configuração explícita `national_currency='BRL'`. A ativação dos gráficos deve considerar a conciliação do recorte de produtos autorizado ao parceiro.
+
+Diagnóstico de produção por consulta somente de leitura em 28/10: apenas a conexão 102 estava cadastrada, habilitada e com `feed_realizado=false`. Pedidos e notas tinham sucesso na sincronização. A geração de notas continha 30 documentos, todos sem valor de produtos e sem identificação BRL no cabeçalho normalizado; essa situação motivou a consulta individual de detalhes. Nenhuma origem financeira foi trocada durante esse diagnóstico.
+
+Teste autenticado no proxy com a chave existente: a primeira página de NF-e da 100 retornou 50 registros, todos da 100, com `hasMore="true"`; a 102 retornou 30, com `hasMore="false"`. A consulta individual funcionou nas duas empresas e trouxe `itens[].valorTotal`. A moeda veio como `<MOEDA CORRENTE>`, código `0`, sem confirmação automática de BRL. A listagem inicial da 100 não representa uma importação completa: é obrigatório continuar a paginação.
+
+Configuração: `PUT /api/sankhya/connections/100` ou `/102`, com a chave enviada por canal de servidor. `POST /api/sankhya/sync` agenda todas as empresas habilitadas. O relatório administrativo informa a fonte financeira de cada empresa em `revenueCompanies`, além dos estados separados dos recursos. A interface identifica empresa, origem e última atualização, inclusive quando uma falha conserva dados anteriores.
+
+Verificação: testes unitários de origem única, indisponibilidade e critérios fiscais; testes PostgreSQL com banco local temporário para as duas empresas, paginação, rejeição de empresa incorreta, consulta de itens e preservação de gerações; testes do status na interface. O CI executa os dois arquivos de testes do Sankhya/realizado. O histórico abaixo descreve contratos e decisões anteriores e não limita a autorização v4.1.
+
 ## Composição híbrida autorizada em 23/10/2026
 
 O usuário solicitou alimentar o gráfico existente mantendo a empresa **100 na base atual** e usando a empresa **102 automática**. `backend/salesRealizado.js` atende os quatro endpoints de realizado (mensal, anual, por vendedor mensal e anual) quando a conexão 102 tem `feed_realizado=true`.

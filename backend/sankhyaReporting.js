@@ -1,9 +1,11 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { encrypt, decrypt, encryptionKey } = require('./ecommerce/domain');
+const { revenueSource } = require('./salesRealizado');
 
 const ORIGIN = 'https://api-empresa100.gohobby.com.br';
 const RESOURCES = { orders: '/v1/vendas/pedidos', invoices: '/v1/vendas/nfe' };
+const COMPANIES = [100, 102];
 const fail = (message, status = 502) => Object.assign(new Error(message), { status, erpSafe: true });
 function erpDate(value) {
   const text = String(value || '');
@@ -91,9 +93,8 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
   });
   router.put('/connections/:companyId', async (req, res) => {
     const companyId = Number(req.params.companyId);
-    // This partner contract authorizes only 102. Adding another company requires
-    // an updated provider contract, not sending codigoEmpresa=100 to this proxy.
-    if (companyId !== 102) return res.status(400).json({ error: 'O contrato atual permite somente a empresa 102.' });
+    // Partner proxy contract v4.1 explicitly authorizes reads for 100 and 102.
+    if (!COMPANIES.includes(companyId)) return res.status(400).json({ error: 'O contrato permite somente as empresas 100 e 102.' });
     if (req.body.origin && req.body.origin !== ORIGIN) return res.status(400).json({ error: 'Origem ERP não autorizada.' });
     const old = (await pool.query('SELECT * FROM sankhya_reporting_connections WHERE company_id=$1', [companyId])).rows[0];
     const feedRealizado = typeof req.body.feed_realizado === 'boolean' ? req.body.feed_realizado : Boolean(old?.feed_realizado);
@@ -134,15 +135,16 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
         AND d.date >= make_date($1,1,1) AND d.date < make_date($1+1,1,1)
       GROUP BY c.company_id,c.enabled,s.resource,s.status,s.error,s.last_success_at,s.last_attempt_at,s.next_run_at
       ORDER BY c.company_id,s.resource`, [year]);
-    const config = (await pool.query('SELECT feed_realizado FROM sankhya_reporting_connections WHERE company_id=102 AND enabled')).rows[0];
-    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: config?.feed_realizado ? 'hybrid_100_database_102_invoices' : 'existing_reporting_database',
-      scope: 'Empresa 102 e documentos visíveis à chave de parceiro; não consolida a empresa 100.',
-      note: 'A parcela automática da 102 usa somente notas fiscais autorizadas; pedidos confirmados não comprovam faturamento.',
+    const configs = (await pool.query('SELECT company_id,feed_realizado FROM sankhya_reporting_connections WHERE company_id IN (100,102) AND enabled')).rows;
+    res.json({ year, source: 'sankhya_partner_proxy', currentRevenueSource: revenueSource(configs),
+      revenueCompanies: COMPANIES.map(company => ({ company, source: configs.some(c => c.company_id === company && c.feed_realizado) ? 'sankhya_invoices' : 'reporting_database' })),
+      scope: 'Empresas 100 e 102, somente documentos e produtos visíveis à chave de parceiro.',
+      note: 'As parcelas automáticas usam somente notas fiscais autorizadas; pedidos confirmados não comprovam faturamento.',
       streams: rows.map(row => ({ ...row, gross_total: row.last_success_at && !row.unknown_currency_documents ? row.gross_total : null,
         authorized_gross_total: row.last_success_at && !row.unknown_currency_documents ? row.authorized_gross_total : null })) });
   });
   async function run(companyId, resource, { force = false } = {}) {
-    if (companyId !== 102 || !RESOURCES[resource]) throw fail('Empresa ou recurso não autorizado.', 400);
+    if (!COMPANIES.includes(companyId) || !RESOURCES[resource]) throw fail('Empresa ou recurso não autorizado.', 400);
     await ensure();
     const client = await pool.connect();
     let locked = false;
@@ -154,19 +156,32 @@ function createSankhyaReporting({ pool, authorize, env = process.env, transport 
       if (!connection?.enabled || !state || (!force && new Date(state.next_run_at) > new Date())) return;
       if (connection.origin !== ORIGIN) throw fail('Origem ERP não autorizada.');
       const { partner_key: key } = decrypt(connection.secrets, encryptionKey(env));
+      const read = async path => {
+        const response = await transport(`${ORIGIN}${path}`, {
+          method: 'GET', headers: { 'X-Partner-Key': key, Accept: 'application/json' },
+          redirect: 'error', signal: AbortSignal.timeout(30000),
+        });
+        if (!response.ok) throw fail(`Consulta ${resource === 'orders' ? 'de pedidos' : 'de notas fiscais'} recusada pelo proxy (HTTP ${response.status}). Últimos dados preservados.`);
+        try { return await response.json(); } catch { throw fail('O proxy não retornou JSON válido. Últimos dados preservados.'); }
+      };
       let cursor = state.cursor || { page: 0, generation: crypto.randomUUID() };
       await client.query("UPDATE sankhya_reporting_streams SET status='syncing',last_attempt_at=now(),error=NULL WHERE company_id=$1 AND resource=$2", [companyId, resource]);
       // Small bounded batches. Persistent page checkpoints survive restarts and
       // independent invoice failures never stop the order stream.
       for (let batch = 0; batch < 3; batch++) {
-        const response = await transport(`${ORIGIN}${RESOURCES[resource]}?page=${cursor.page}`, {
-          method: 'GET', headers: { 'X-Partner-Key': key, Accept: 'application/json' },
-          redirect: 'error', signal: AbortSignal.timeout(30000),
-        });
-        if (!response.ok) throw fail(`Consulta ${resource === 'orders' ? 'de pedidos' : 'de notas fiscais'} recusada pelo proxy (HTTP ${response.status}). Últimos dados preservados.`);
-        let body; try { body = await response.json(); } catch { throw fail('O proxy não retornou JSON válido. Últimos dados preservados.'); }
+        const body = await read(`${RESOURCES[resource]}?codigoEmpresa=${companyId}&page=${cursor.page}`);
         const page = parsePage(body, resource, companyId);
         if (cursor.page > 10000) throw fail('Limite de paginação atingido; importação não considerada completa.');
+        // The list may omit items. Only the individual fiscal document can
+        // provide product revenue; never substitute its tax/freight header total.
+        if (resource === 'invoices') for (let index = 0; index < page.rows.length; index++) {
+          const listed = page.rows[index];
+          if (listed.productValue != null) continue;
+          const detail = await read(`${RESOURCES.invoices}/${listed.id}?codigoEmpresa=${companyId}`);
+          const invoice = normalizeHeader(detail?.nota, companyId, resource);
+          if (invoice.id !== listed.id) throw fail('O detalhe fiscal retornou outro documento. Últimos dados preservados.');
+          page.rows[index] = invoice;
+        }
         await client.query('BEGIN');
         try {
           for (const row of page.rows) await client.query(`INSERT INTO sankhya_reporting_documents(company_id,resource,document_id,date,data,generation)
