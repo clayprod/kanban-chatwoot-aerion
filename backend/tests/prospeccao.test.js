@@ -9,6 +9,7 @@ const {
   cnaesValidos,
   telefoneDaEmpresa,
   montarPromptAbordagem,
+  comporAbordagem,
   carregarConfigProspeccao,
   runProspeccaoTick,
 } = require('../prospeccao');
@@ -169,9 +170,20 @@ test('quando o perfil NAO confirma, a abertura tem que perguntar', () => {
   assert.match(system, /NÃO temos certeza/);
   assert.match(system, /falo com alguém da/);
   assert.match(user, /CONFIRMANDO primeiro/);
-  // E a prova social, que responde 35% contra 19%, continua sendo a base.
-  assert.match(system, /prova social/);
-  assert.match(system, /35%/);
+  assert.match(system, /Não invente prova social/);
+  assert.match(system, /UMA aplicação concreta/);
+});
+
+test('apresentação e portfólio são obrigatórios mesmo quando a IA só escreve a aplicação',async()=>{
+ const enviadas=[];
+ const corpo='Drones permitem acompanhar a evolução das obras por imagens e comparar frentes de trabalho. Quem cuida desse acompanhamento na empresa?';
+ await runProspeccaoTick(fakePool(),deps({chatCompletionJson:async()=>({ok:true,data:{mensagem:corpo,confianca:0.9}}),enfileirarEnvio:async item=>enviadas.push(item)}));
+ assert.equal(enviadas.length,1);assert.equal(enviadas[0].texto,comporAbordagem(corpo));
+ assert.match(enviadas[0].texto,/^Olá! Somos da Aerion, distribuidora de drones profissionais e representante da Autel no Brasil\./);
+ assert.ok(enviadas[0].texto.endsWith('Portfólio: https://aerion.com.br/produtos'));
+ assert.ok(enviadas[0].texto.length<=600);
+ const prompt=montarPromptAbordagem({empresa:{...EMPRESA,cnae_descricao:'Serviços de engenharia'},confirmouEmpresa:true});
+ assert.match(prompt.user,/Atividade \(CNAE\): Serviços de engenharia/);
 });
 
 test('quando confirma, vai direto ao assunto', () => {

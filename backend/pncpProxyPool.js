@@ -24,7 +24,8 @@ const DOWN_MAX_MS = 2 * 60 * 60 * 1000;
 
 const createPncpProxyPool = (env = process.env) => {
   const token = String(env.WEBSHARE_TOKEN || '').trim();
-  const enabled = Boolean(token) && env.PNCP_PROXY_ENABLED !== '0';
+  // A stored API token must never turn paid bandwidth on after a deploy.
+  const enabled = Boolean(token) && env.PNCP_PROXY_ENABLED === '1';
   const priorities = new Set(
     String(env.PNCP_PROXY_PRIORITIES || 'interactive,sync')
       .split(',')

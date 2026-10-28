@@ -3,11 +3,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTechnicalAnalysis } = require('../technicalAnalysis');
 
-function worker(state = {}, overrides = {}, config = { enabled: true, daily_limit: 30 }) {
+function worker(state = {}, overrides = {}, config = { enabled: true, daily_limit: 30 }, resultFor=()=>null) {
   const job = { id: 1, account_id: 1, kind: 'notice', state, context: { ids: {}, profile: {}, payload: {} }, attempts: 2 };
   const queries = [];
   const query = async (sql, args) => {
     queries.push({ sql, args });
+    const custom=resultFor(sql,args);if(custom)return custom;
     if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
     if (sql.startsWith('SELECT j.*')) return { rows: [job] };
     if (sql.startsWith('SELECT * FROM technical_config')) return { rows: [config] };
@@ -30,6 +31,18 @@ test('PNCP deferrals never exhaust retries or reserve analyzed-notice quota', as
   assert.equal(queries.some(q => q.sql.includes('attempts=attempts+1')), false);
   assert.equal(queries.some(q => q.sql.includes('INSERT INTO technical_usage')), false);
   assert.deepEqual(job.state, {});
+});
+
+test('a parser retry resumes saved bytes instead of downloading the attachment twice',async()=>{
+ const state={initialized:true,items_complete:true,files:[{name:'Edital.zip',url:'https://example.org/edital.zip'}],file_cursor:0,source_ids:[],complete:true,notes:[]};
+ let downloads=0,reads=0;
+ const {service}=worker(state,{documentIO:{download:async()=>{downloads++;return{bytes:Buffer.from('saved archive'),content_type:'application/zip'};},extract:async()=>{if(++reads===1)throw Error('pdfinfo parsing failed');return{pages:[{location:'TR.pdf · Página 1',text:'Autonomia mínima de 41 minutos.'}],complete:true,notes:[]};}}},undefined,sql=>{
+  if(sql.includes('INSERT INTO technical_sources'))return{rows:[{id:'77'}]};
+  if(sql.startsWith('SELECT * FROM technical_sources'))return{rows:[{id:'77',bytes:Buffer.from('saved archive'),name:'Edital.zip',pages:null,content_type:'application/zip'}]};
+  return null;
+ });
+ await service.tick();assert.equal(state.file_cursor,0);assert.equal(Object.values(state.downloaded_files)[0].id,'77');
+ await service.tick();assert.equal(downloads,1);assert.equal(reads,2);assert.equal(state.file_cursor,1);assert.deepEqual(state.source_ids,['77']);
 });
 
 test('transient PNCP download wait preserves file cursor, evidence and completeness', async () => {

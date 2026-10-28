@@ -48,7 +48,9 @@ async function download(url, { gate, pncpRequest, maxBytes = MAX_BYTES } = {}) {
         }
         return { bytes: Buffer.concat(chunks), content_type: response.headers.get('content-type') || '', url: u.href };
       };
-      const result = pncp ? await gate(work) : await work();
+      // Large PDFs/ZIPs never consume the proxy plan, even if JSON proxy lanes
+      // have explicitly been enabled. The central gate still owns all pacing.
+      const result = pncp ? await gate(work,{transport:'direct'}) : await work();
       if (!result.redirect) return result;
       next = result.redirect;
     } finally { await dispatcher.close(); }
@@ -70,7 +72,7 @@ async function extract(bytes, filename, contentType = '') {
   if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_BYTES) throw new Error('Arquivo vazio ou acima de 20 MB.');
   let ext = path.extname(filename || '').toLowerCase();
   if (bytes.subarray(0, 5).toString() === '%PDF-') ext = '.pdf';
-  else if (bytes.subarray(0, 2).toString() === 'PK') ext = '.docx';
+  else if (bytes.subarray(0, 2).toString() === 'PK') ext = '.zip';
   else if (bytes.subarray(0, 8).toString('hex') === 'd0cf11e0a1b11ae1') ext = '.doc';
   else if (/html|text\//i.test(contentType) || ['.txt', '.html', '.htm', ''].includes(ext)) {
     const html = bytes.toString('utf8');
@@ -78,7 +80,7 @@ async function extract(bytes, filename, contentType = '') {
     const incomplete = /aria-expanded=["']false["']|id=["']root["']|id=["']__next["']/i.test(html);
     return { pages: [{ location: 'Página web / texto', text: value.trim() }], complete: !incomplete && value.trim().length > 10, notes: incomplete ? ['Conteúdo dinâmico pode estar incompleto. Anexe a ficha completa.'] : [] };
   }
-  if (!['.pdf', '.doc', '.docx'].includes(ext)) throw new Error('Formato não suportado. Use PDF, DOC, DOCX ou texto.');
+  if (!['.pdf', '.doc', '.docx', '.zip'].includes(ext)) throw new Error('Formato não suportado. Use PDF, DOC, DOCX, ZIP ou texto.');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'technical-'));
   try {
     const target = path.join(dir, `document${ext}`);

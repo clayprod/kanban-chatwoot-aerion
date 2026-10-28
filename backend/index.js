@@ -4119,8 +4119,8 @@ const getPncpMaxConcurrent = () => {
  * checagem e marcação). bulk só usa a direta; interactive/sync preferem proxy
  * e caem para a direta se não houver proxy livre.
  */
-const acquirePncpLane = (priority) => {
-  const proxy = pickPncpProxy(PNCP_PROXY_POOL, priority, Date.now(), PNCP_LANES_BUSY);
+const acquirePncpLane = (priority, transport = 'auto') => {
+  const proxy = transport === 'direct' ? null : pickPncpProxy(PNCP_PROXY_POOL, priority, Date.now(), PNCP_LANES_BUSY);
   if (proxy) {
     PNCP_LANES_BUSY.add(proxy.id);
     return { id: proxy.id, proxy };
@@ -4202,7 +4202,11 @@ const isPncpThrottleError = (errorOrText) => {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
-  return /429|rate.?limit|limite|too many|reset|recv failure|econnreset|etimedout|timed out|socket hang|curl exit (22|28|52|56)/.test(text);
+  // curl 22 only means HTTP >=400. A removed file (410), missing resource
+  // (404), or validation error must never pause every PNCP worker.
+  const status = Number(errorOrText?.status || errorOrText?.statusCode || (text.match(/(?:http\s*|returned error:\s*|pncp(?: consulta)? error\s+)([45]\d\d)\b/) || [])[1]);
+  if (status >= 400) return status === 429;
+  return /\b429\b|rate.?limit|limite|too many|reset|recv failure|econnreset|etimedout|timed out|socket hang|curl exit (28|52|56)\b/.test(text);
 };
 
 // notePncpThrottle / PNCP_GATE são definidos mais abaixo; stubs até o gate montar.
@@ -10973,7 +10977,7 @@ const isPncpBulkDeferredError = (error) => {
   return /PNCP bulk (budget deferred|gate wait)/i.test(String(error.message || ''));
 };
 
-const waitForPncpGateSlot = async (priority = 'sync') => {
+const waitForPncpGateSlot = async (priority = 'sync', transport = 'auto') => {
   const waitStarted = Date.now();
   for (;;) {
     // Espera pausa global (429/reset recente) sem spamar a API.
@@ -11000,7 +11004,7 @@ const waitForPncpGateSlot = async (priority = 'sync') => {
     }
     if (PNCP_GATE.active < getPncpMaxConcurrent() && !hasHigherPncpPriorityWaiter(priority)) {
       // Slot disponível: ainda precisa de uma lane livre (bulk exige a direta).
-      const lane = acquirePncpLane(priority);
+      const lane = acquirePncpLane(priority, transport);
       if (lane) return lane;
     }
     if (priority === 'bulk' && Date.now() - waitStarted > PNCP_BULK_GATE_WAIT_MAX_MS) {
@@ -11012,8 +11016,8 @@ const waitForPncpGateSlot = async (priority = 'sync') => {
   }
 };
 
-const withPncpGate = async (fn, { priority = 'sync' } = {}) => {
-  const lane = await waitForPncpGateSlot(priority);
+const withPncpGate = async (fn, { priority = 'sync', transport = 'auto' } = {}) => {
+  const lane = await waitForPncpGateSlot(priority, transport);
   PNCP_GATE.active += 1;
   try {
     // Pacing POR LANE: cada IP tem cadência própria (jitter — cadência fixa
@@ -20497,7 +20501,7 @@ const technicalAnalysis = createTechnicalAnalysis({
   getFiles: ids => withPncpGate(() => fetchPncpTechnicalJson(`/v1/orgaos/${ids.cnpj}/compras/${ids.ano}/${ids.sequencial}/arquivos`), { priority: 'sync' }),
   // One notice/file per durable step: like watchlist matching, this is bounded
   // sync work. Large discovery scanners remain bulk and keep the direct lane.
-  gate: work => withPncpGate(work, { priority: 'sync' }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
+  gate: (work,options={}) => withPncpGate(work, { priority: 'sync',transport:options.transport }), pncpRequest: pncpFetch, heavy: withPncpHeavyJobSlot,
   isPncpThrottleError,
   isEligible: item => getPncpReceivingProposalVerdict(item).verdict === 'open',
 });

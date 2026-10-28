@@ -21,7 +21,7 @@ Varredores grandes (deep job, PCA, sync de contratos/atas) são serializados por
 
 ### Proxies rotativos (lanes paralelas)
 
-Com `WEBSHARE_TOKEN` setado, o gate abre LANES paralelas: cada proxy vivo do webshare
+Com `WEBSHARE_TOKEN` setado **e `PNCP_PROXY_ENABLED=1` explícito**, o gate abre LANES paralelas: cada proxy vivo do webshare
 (`backend/pncpProxyPool.js`) é uma lane com pacing (gapMs) próprio, e o teto de concorrência é
 dinâmico (`getPncpMaxConcurrent` = proxies vivos limitados por `PNCP_PROXY_LANES`, default 6,
 + 1 lane direta; sem pool = 1, comportamento antigo). Requests `interactive`/`sync` usam as
@@ -36,7 +36,11 @@ Falha de TRANSPORTE do proxy (banda do webshare esgotada, CONNECT recusado — v
 janela de 90s, e o gate REFAZ a request pelo IP direto no mesmo slot — o caller não vê a falha.
 Com todos os proxies mortos o sistema degrada sozinho para o modo antigo (1 request, IP direto).
 Instrumentação em `proxy_pool` e `lanes_busy` no snapshot do gate. `PNCP_PROXY_ENABLED=0`
-desliga tudo. O PNCP NÃO geo-bloqueia a API de consulta (testado 2026-07-22, saídas
+ou ausente desliga os proxies (regra de economia de 28/10/2026). Downloads técnicos de
+PDF/ZIP usam sempre `transport:'direct'` dentro do mesmo gate, mesmo quando proxies
+estiverem explicitamente ligados; reservá-los para JSON evita consumir a franquia em anexos.
+HTTP 404/410 nunca é throttle global: arquivo inexistente/removido não pode frear a fila.
+O PNCP NÃO geo-bloqueia a API de consulta (testado 2026-07-22, saídas
 GB/US/ES/PT/JP, inclusive 5 requests paralelos por IPs distintos).
 
 Regra do usuário (2026-07-16): as buscas da aba Contratos/Resultados são imediatas

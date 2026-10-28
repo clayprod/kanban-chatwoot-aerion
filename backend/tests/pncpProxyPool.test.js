@@ -17,7 +17,7 @@ const {
 } = require('../pncpProxyPool');
 
 const makePool = (env = {}) =>
-  createPncpProxyPool({ WEBSHARE_TOKEN: 'tok', ...env });
+  createPncpProxyPool({ WEBSHARE_TOKEN: 'tok', PNCP_PROXY_ENABLED:'1', ...env });
 
 const seedProxies = (pool, n, now = 0) => {
   mergeProxyList(pool, Array.from({ length: n }, (_, i) => ({
@@ -34,6 +34,21 @@ test('desabilitado sem WEBSHARE_TOKEN ou com PNCP_PROXY_ENABLED=0', () => {
   assert.equal(createPncpProxyPool({}).enabled, false);
   assert.equal(makePool({ PNCP_PROXY_ENABLED: '0' }).enabled, false);
   assert.equal(makePool().enabled, true);
+  assert.equal(createPncpProxyPool({WEBSHARE_TOKEN:'tok'}).enabled,false,'token salvo não habilita consumo pago sozinho');
+});
+
+test('HTTP 404/410 não pausam a fila; 429 e resets continuam protegidos',()=>{
+ const source=require('node:fs').readFileSync(require.resolve('../index.js'),'utf8'),start=source.indexOf('const isPncpThrottleError ='),end=source.indexOf('// notePncpThrottle',start),sandbox={};
+ require('node:vm').runInNewContext(source.slice(start,end)+';globalThis.classify=isPncpThrottleError;',sandbox);
+ for(const status of [400,401,403,404,410,422,500,503])assert.equal(sandbox.classify(Error(`curl exit 22: curl: (22) The requested URL returned error: ${status}`)),false,String(status));
+ for(const error of ['curl exit 22: curl: (22) The requested URL returned error: 429','PNCP Consulta error 429: too many requests','ECONNRESET','curl exit 28: timed out'])assert.equal(sandbox.classify(Error(error)),true,error);
+});
+
+test('download direto adquire a lane direta mesmo com proxies disponíveis',()=>{
+ const source=require('node:fs').readFileSync(require.resolve('../index.js'),'utf8'),start=source.indexOf('const acquirePncpLane ='),end=source.indexOf('const releasePncpLane',start);let proxyPicks=0;
+ const sandbox={Date,PNCP_LANES_BUSY:new Set(),PNCP_PROXY_POOL:{},pickPncpProxy:()=>{proxyPicks++;return{id:'proxy'};}};
+ require('node:vm').runInNewContext(source.slice(start,end)+';globalThis.acquire=acquirePncpLane;',sandbox);
+ assert.equal(sandbox.acquire('sync','direct').id,'direct');assert.equal(sandbox.acquire('sync','direct'),null);assert.equal(proxyPicks,0);
 });
 
 test('parse do payload do webshare filtra inválidos e incompletos', () => {

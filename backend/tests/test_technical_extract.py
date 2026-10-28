@@ -1,5 +1,7 @@
 import importlib.util
 import unittest
+import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +11,41 @@ spec.loader.exec_module(module)
 
 
 class FullDocumentCoverage(unittest.TestCase):
+    def test_zip_preserves_each_document_and_its_requirements(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp, 'edital.zip')
+            with zipfile.ZipFile(source, 'w') as package:
+                package.writestr('Edital.txt', '4.1 Autonomia mínima de 41 minutos.')
+                package.writestr('anexos/TR.txt', '4.2 Câmera térmica radiométrica 640x512.')
+            result = module.main(str(source))
+        self.assertTrue(result['complete'])
+        self.assertEqual(len(result['pages']), 2)
+        self.assertEqual(result['pages'][1]['location'], 'anexos/TR.txt · Texto')
+        self.assertIn('640x512', result['pages'][1]['text'])
+
+    def test_zip_unsafe_or_unsupported_entries_never_claim_full_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp, 'edital.zip')
+            with zipfile.ZipFile(source, 'w') as package:
+                package.writestr('TR.txt', 'Requisito técnico: 41 minutos de voo.')
+                package.writestr('../escape.txt', 'Do not write outside temporary directory')
+                package.writestr('planilha.xlsx', 'unsupported content')
+            result = module.main(str(source))
+            self.assertFalse(Path(temp, 'escape.txt').exists())
+        self.assertFalse(result['complete'])
+        self.assertEqual(len(result['pages']), 1)
+        self.assertTrue(any('não lida' in note for note in result['notes']))
+        self.assertTrue(any('planilha.xlsx' in note for note in result['notes']))
+
+    def test_zip_entry_budget_is_not_silently_truncated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp, 'large.zip')
+            with zipfile.ZipFile(source, 'w') as package:
+                for i in range(201):
+                    package.writestr(str(i) + '.txt', 'Texto verificável do termo de referência.')
+            with self.assertRaisesRegex(ValueError, 'limites seguros'):
+                module.main(str(source))
+
     def test_pages_after_400_are_extracted(self):
         calls = []
 

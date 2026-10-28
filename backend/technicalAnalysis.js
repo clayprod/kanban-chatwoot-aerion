@@ -236,6 +236,14 @@ function createTechnicalAnalysis(deps) {
   }
   async function source(account, input) {
     let data, filename = String(input.name || 'document.txt').slice(0, 200);
+    if(input.url && input.reuseFailedDownload){
+      // A parser failure is not a failed download. Recover recent saved bytes
+      // (not unbounded URL caching) before consuming the network again.
+      const cached=(await pool.query(`SELECT id,name,url,sha256,pages,complete,notes FROM technical_sources
+        WHERE account_id=$1 AND url=$2 AND name=$3 AND pages IS NULL AND error IS NOT NULL
+        AND created_at>=NOW()-INTERVAL '24 hours' ORDER BY id DESC LIMIT 1`,[account,input.url,filename])).rows[0];
+      if(cached)return cached;
+    }
     if (input.url) {
       data = await documentIO.download(input.url, { gate, pncpRequest: deps.pncpRequest });
       filename = filename === 'document.txt' ? new URL(data.url).pathname.split('/').pop() || 'page.html' : filename;
@@ -556,7 +564,11 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
       const file = state.files[state.file_cursor];
       try {
         if (!file.url) throw new Error(`Sem link de download: ${file.name}`);
-        const s = await heavy('technical-download', () => source(job.account_id, { url: file.url, name: file.name }));
+        const key=hash({url:file.url,name:file.name}),saved=state.downloaded_files?.[key];
+        const s=saved && Date.now()-saved.cached_at<24*60*60*1000 ? {id:saved.id} : await heavy('technical-download', () => source(job.account_id, { url: file.url, name: file.name,reuseFailedDownload:Boolean(state.file_errors?.[String(state.file_cursor)]) }));
+        state.downloaded_files ||= {};
+        state.downloaded_files[key]={id:String(s.id),cached_at:Date.now()};
+        await checkpoint(job);
         await parsedSource(job.account_id, s.id); state.source_ids.push(String(s.id));
       } catch (e) {
         if (isPncpWait(e)) throw e;

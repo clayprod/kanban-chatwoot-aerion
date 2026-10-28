@@ -20,6 +20,9 @@
 const { nomeCurtoEmpresa } = require('./aiFollowups');
 
 const PROSPECCAO_LOG_TABLE = 'prospeccao_log';
+const APRESENTACAO_AERION = 'Olá! Somos da Aerion, distribuidora de drones profissionais e representante da Autel no Brasil.';
+const PORTFOLIO_AERION = 'https://aerion.com.br/produtos';
+const comporAbordagem = corpo => `${APRESENTACAO_AERION}\n\n${String(corpo || '').trim()}\n\nPortfólio: ${PORTFOLIO_AERION}`;
 
 const inteiro = (nome, padrao) => {
   const v = Number.parseInt(process.env[nome] ?? '', 10);
@@ -222,18 +225,22 @@ const montarPromptAbordagem = ({
     '',
     ...(blocoIcp ? [blocoIcp, ''] : []),
     ...(blocoCatalogo ? [blocoCatalogo, ''] : []),
-    'O que funciona na prática, medido em 870 aberturas reais desta base:',
-    '- prova social ("tenho conversado com empresas do setor dele sobre como resolver',
-    '  [a dor do perfil]") responde 35%',
-    '- pedir indicação ("poderia me indicar quem cuida disso?") responde 19%',
-    'Comece pela prova social, ancorada no SETOR REAL desta empresa e numa dor do',
-    'perfil dela — não em produtividade genérica.',
+    'Escreva SOMENTE o corpo personalizado da abordagem. O sistema já acrescenta,',
+    `antes dele: "${APRESENTACAO_AERION}" e, no final, o portfólio ${PORTFOLIO_AERION}.`,
+    'Não repita apresentação, saudação nem link no corpo.',
+    'Seja direto: cite UMA aplicação concreta de drones no setor REAL desta empresa',
+    'e o benefício operacional correspondente, com base no ICP e catálogo fornecidos.',
+    'Exemplos de aplicações (somente quando pertinentes): acompanhar obras por imagens,',
+    'inspecionar ativos com câmera térmica, mapear áreas para levantamentos.',
+    'Não invente prova social, clientes atendidos, resultados, economia percentual',
+    'nem afirmar que conhece a operação interna da empresa.',
     '',
     'Cada abordagem é única: ela tem que mostrar, na primeira frase, que você entendeu',
     'o negócio DESTA empresa. Abertura que serviria para qualquer empresa está errada.',
     '',
     'Regras que não se quebram:',
-    '- No máximo 3 frases curtas. Português do Brasil, tom de gente, não de folheto.',
+    '- Corpo com até 360 caracteres e no máximo 2 frases curtas. Português do Brasil.',
+    '- Evite "soluções inovadoras", "aumentar produtividade" e benefícios sem aplicação concreta.',
     '- Uma pergunta só, calibrada: comece por "Como" ou "O que". Nunca "tem interesse?".',
     '- Nunca cite preço, desconto ou condição comercial.',
     '- Nunca invente que já conversaram, que foi indicado por alguém, ou qualquer fato.',
@@ -254,7 +261,7 @@ const montarPromptAbordagem = ({
     empresa.nome_fantasia && empresa.nome_fantasia !== empresa.razao_social
       ? `Nome fantasia: ${empresa.nome_fantasia}` : null,
     `Como chamá-la na mensagem: ${curto}`,
-    `Atividade (CNAE): ${empresa.cnae_principal_desc || empresa.cnae_principal || '—'}`,
+    `Atividade (CNAE): ${empresa.cnae_descricao || empresa.cnae_principal_desc || empresa.cnae_fiscal_principal || empresa.cnae_principal || '—'}`,
     `Cidade/UF: ${[empresa.municipio_nome, empresa.uf].filter(Boolean).join('/') || '—'}`,
     perfil ? `Perfil de prospecção que trouxe esta empresa: ${perfil}` : null,
     contexto ? `Contexto encontrado sobre ela: ${contexto}` : null,
@@ -468,11 +475,11 @@ const runProspeccaoTick = async (pool, {
           continue;
         }
 
-        const texto = String(ia.data?.mensagem || '').trim();
+        const corpo = String(ia.data?.mensagem || '').trim();
+        const texto = comporAbordagem(corpo);
         const confianca = ia.data?.confianca;
-        const problema = validarMensagem
-          ? validarMensagem(texto, confianca, { minConfianca: config.minConfianca })
-          : null;
+        const problema = !corpo ? 'corpo da abordagem vazio' : corpo.length>360 ? 'corpo da abordagem longo demais' : /https?:\/\/|www\./i.test(corpo) ? 'link no corpo: o portfólio é acrescentado pelo sistema' : validarMensagem
+          ? validarMensagem(texto, confianca, { minConfianca: config.minConfianca }) : null;
         if (problema) {
           await registrarProspeccao(pool, {
             ...base, status: 'descartado', motivo: problema,
@@ -531,6 +538,7 @@ module.exports = {
   paramsDaBusca,
   filtrarNovos,
   montarPromptAbordagem,
+  comporAbordagem,
   registrarProspeccao,
   contarHoje,
   runProspeccaoTick,

@@ -5,7 +5,16 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { extract, run } = require('../technicalDocuments');
+const { extract, run, download } = require('../technicalDocuments');
+test('PNCP binary download explicitly uses the direct lane and keeps the gate around the body',async t=>{
+  t.mock.method(require('node:dns').promises,'lookup',async()=>[{address:'8.8.8.8',family:4}]);
+  let inside=false,reads=0;
+  const result=await download('https://pncp.gov.br/api/pncp/v1/test.pdf',{
+    gate:async(fn,options)=>{assert.equal(options.transport,'direct');inside=true;try{return await fn();}finally{inside=false;}},
+    pncpRequest:async()=>({ok:true,status:200,headers:new Headers({'content-type':'application/pdf'}),body:(async function*(){assert.equal(inside,true);reads++;yield Buffer.from('%PDF synthetic');})()}),
+  });
+  assert.equal(reads,1);assert.equal(result.bytes.toString(),'%PDF synthetic');assert.equal(inside,false);
+});
 function pdf(objects) {
   const chunks = [Buffer.from('%PDF-1.4\n')], offsets = [0]; let length = chunks[0].length;
   objects.forEach((object, i) => { offsets.push(length); const value = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), Buffer.isBuffer(object) ? object : Buffer.from(object), Buffer.from('\nendobj\n')]); chunks.push(value); length += value.length; });
@@ -45,6 +54,12 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
     await run('python3', ['-c', python, docx]);
     result = await extract(await fs.readFile(docx), 'ficha.docx');
     assert.equal(result.complete, true); assert.match(result.pages.map(p => p.text).join('\n'), /40\s*min/); assert.match(result.pages.map(p => p.text).join('\n'), /900\s*g/);
+    const archive = path.join(dir,'edital-anexos.zip');
+    await run('python3',['-c',"import zipfile,sys\nwith zipfile.ZipFile(sys.argv[1],'w') as z:\n z.write(sys.argv[2],'Edital.pdf')\n z.write(sys.argv[3],'anexos/Termo.docx')",archive,source,docx]);
+    result=await extract(await fs.readFile(archive),'edital-anexos.zip');
+    assert.equal(result.complete,true,JSON.stringify(result.notes));
+    assert.ok(result.pages.some(p=>p.location.startsWith('Edital.pdf · ')&&/41 min/.test(p.text)));
+    assert.ok(result.pages.some(p=>p.location.startsWith('anexos/Termo.docx · ')&&/40\s*min/.test(p.text)));
     await run('libreoffice', [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--convert-to', 'doc', '--outdir', dir, docx]);
     result = await extract(await fs.readFile(path.join(dir, 'ficha.doc')), 'ficha.doc');
     assert.equal(result.complete, true); assert.match(result.pages.map(p => p.text).join('\n'), /40\s*min/);

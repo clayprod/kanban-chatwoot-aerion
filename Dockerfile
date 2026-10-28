@@ -33,6 +33,10 @@ COPY integrations/wordpress/aerion-ecommerce-reports.php /opt/aerion-integration
 # Install Python dependencies for RFB import script
 RUN pip3 install --break-system-packages --no-cache-dir -r scripts/requirements.txt
 
+# Exercise the packaged readers with real PDF/OCR, DOC/DOCX and ZIP fixtures.
+# No external requests, paid providers or customer messages are used.
+RUN TECHNICAL_DOCUMENT_TEST=1 node --test tests/technicalDocuments.integration.test.js
+
 # Copy and setup supervisor
 COPY supervisord.conf /etc/supervisord.conf
 EXPOSE 80
