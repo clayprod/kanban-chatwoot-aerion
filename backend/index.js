@@ -19630,34 +19630,23 @@ app.post('/api/leads/import', async (req, res) => {
   }
   const results = { imported: 0, updated: 0, skipped: 0, errors: [] };
 
-  for (const lead of leads.slice(0, 100)) {
+  for (const rawLead of leads.slice(0, 100)) {
+    const lead = require('./rfbLead').normalizeLead(rawLead);
     try {
       const cnpj = normalizeCNPJ(lead.cnpj);
       if (!isCnpjFormat(cnpj)) throw new Error('CNPJ inválido: esperado 12 caracteres alfanuméricos e 2 dígitos verificadores.');
+      await require('./rfbLead').enrichLeadFromRfb(pool,lead,cnpj);
+      if(!lead.razao_social && !lead.nome_fantasia)throw new Error('Nome da empresa não informado nem encontrado na base RFB. Confira o CNPJ antes de importar.');
       // Nome do contato: sócio (se disponível) ou razão social
       const fullName = lead.primeiro_nome
         ? `${lead.primeiro_nome}${lead.sobrenome ? ' ' + lead.sobrenome : ''}`.trim()
         : (lead.razao_social || lead.nome_fantasia || 'Empresa');
       const name = fullName.slice(0, 255);
       const email = (lead.email || '').toLowerCase().trim().slice(0, 255) || null;
-      const rawPhone = lead.ddd_telefone_1 || lead.ddd_telefone_2 || '';
-      const phone = normalizeBRPhone(rawPhone);
+      const phone = normalizeBRPhone(lead.ddd_telefone_1) || normalizeBRPhone(lead.ddd_telefone_2);
       const location = [lead.municipio, lead.uf].filter(Boolean).join(', ');
 
-      const existByCNPJ = await pool.query(
-        `SELECT id FROM contacts
-         WHERE account_id = $1
-           AND UPPER(regexp_replace(COALESCE(custom_attributes->>'CNPJ_CPF', custom_attributes->>'CNPJ', custom_attributes->>'cnpj', ''), '[./[:space:]-]', '', 'g')) = $2
-         LIMIT 1`,
-        [accountId, cnpj]
-      );
-      const existByName = existByCNPJ.rows.length === 0
-        ? await pool.query(
-            `SELECT id FROM contacts WHERE account_id = $1 AND LOWER(name) = LOWER($2) LIMIT 1`,
-            [accountId, name]
-          )
-        : { rows: [] };
-      const existing = existByCNPJ.rows[0] || existByName.rows[0];
+      const existing = await require('./rfbLead').resolveImportContact(pool,{accountId,cnpj,phone});
 
       if (existing && !overwriteDuplicates) { results.skipped++; continue; }
 
@@ -19665,6 +19654,8 @@ app.post('/api/leads/import', async (req, res) => {
       const sociosStr = qsa.map(s => s.nome_socio || s.nome || '').filter(Boolean).join('; ');
 
       const customAttr = { Funil_Vendas: defaultStage, CNPJ_CPF: cnpj };
+      if(lead.razao_social)customAttr.Razao_Social=lead.razao_social;
+      if(lead.nome_fantasia)customAttr.Nome_Fantasia=lead.nome_fantasia;
       if (lead.cnae_fiscal_descricao) customAttr.CNAE_Principal = String(lead.cnae_fiscal_descricao).slice(0, 255);
       if (lead.cnae_fiscal) customAttr.CNAE_Codigo = String(lead.cnae_fiscal);
       const capVal = String(lead.capital_social || '').trim();
@@ -19676,7 +19667,7 @@ app.post('/api/leads/import', async (req, res) => {
       if (lead.opcao_pelo_simples != null) customAttr.Simples_Nacional = lead.opcao_pelo_simples ? 'Sim' : 'Não';
       if (lead.opcao_pelo_mei != null) customAttr.MEI = lead.opcao_pelo_mei ? 'Sim' : 'Não';
 
-      const addAttr = { company_name: (lead.nome_fantasia || lead.razao_social || '').slice(0, 255) };
+      const addAttr = require('./rfbLead').attributesFor(lead);
 
       let contactId;
       if (existing && overwriteDuplicates) {
@@ -19686,8 +19677,8 @@ app.post('/api/leads/import', async (req, res) => {
              email = COALESCE($2, email),
              phone_number = COALESCE($3, phone_number),
              location = COALESCE(NULLIF($4,''), location),
-             custom_attributes = custom_attributes || $5::jsonb,
-             additional_attributes = additional_attributes || $6::jsonb,
+             custom_attributes = COALESCE(custom_attributes,'{}'::jsonb) || $5::jsonb,
+             additional_attributes = COALESCE(additional_attributes,'{}'::jsonb) || $6::jsonb,
              updated_at = NOW()
            WHERE id = $7`,
           [name, email, phone, location, JSON.stringify(customAttr), JSON.stringify(addAttr), existing.id]
@@ -23963,14 +23954,14 @@ const registerBackgroundSchedules = () => {
   // crua da busca RFB (que traz municipio_nome, cnae_descricao, ddd1/telefone1).
   // Sem traduzir, o contato nascia sem telefone, sem cidade e sem CNAE.
   const leadDaEmpresaRfb = (empresa) => {
-    const ddd = empresa.ddd1 || empresa.ddd2 || '';
-    const numero = (empresa.ddd1 ? empresa.telefone1 : empresa.telefone2) || '';
-    return {
+    return require('./rfbLead').normalizeLead({
       cnpj: empresa.cnpj,
       razao_social: empresa.razao_social,
       nome_fantasia: empresa.nome_fantasia,
       email: empresa.correio_eletronico || null,
-      ddd_telefone_1: ddd && numero ? `(${ddd}) ${numero}` : null,
+      telefone_verificado:empresa.telefone_verificado,
+      telefone_origem:empresa.telefone_origem,
+      ddd1:empresa.ddd1,telefone1:empresa.telefone1,ddd2:empresa.ddd2,telefone2:empresa.telefone2,
       municipio: empresa.municipio_nome,
       uf: empresa.uf,
       cnae_fiscal: empresa.cnae_fiscal_principal,
@@ -23979,8 +23970,8 @@ const registerBackgroundSchedules = () => {
       descricao_situacao_cadastral: empresa.situacao_cadastral,
       data_inicio_atividade: empresa.data_de_inicio_da_atividade,
       descricao_porte: empresa.porte_da_empresa,
-      qsa: [],
-    };
+      qsa: empresa.qsa,socios_nomes:empresa.socios_nomes,primeiro_socio:empresa.primeiro_socio,
+    });
   };
 
   // Prospeccao ativa: busca empresas novas pelos perfis do Radar e faz o primeiro
@@ -24017,6 +24008,7 @@ const registerBackgroundSchedules = () => {
         // quando os indicios nao bastam para decidir sozinho.
         buscarContatoWeb: (empresa) => buscarContatoWeb(empresa, {
           apiKey: chaveTavily,
+          confirmarCadastro:true,
           decidirComIa: ({ system, user }) => chatCompletionJson({
             system, user, maxTokens: 400, temperature: 0.2,
           }),
@@ -24073,6 +24065,8 @@ const registerBackgroundSchedules = () => {
             }),
           });
           if (!resp.ok) throw new Error(`import HTTP ${resp.status}`);
+          const imported=await resp.json();
+          if(imported.errors?.length)throw new Error(`Importação rejeitada: ${imported.errors[0].error || 'dados não confirmados'}`);
           const novo = await pool.query(
             `SELECT id FROM contacts
               WHERE account_id = $1
@@ -24081,12 +24075,13 @@ const registerBackgroundSchedules = () => {
               LIMIT 1`,
             [CHATWOOT_ACCOUNT_ID, String(empresa.cnpj || '').replace(/[^0-9]/g, '')]
           );
-          return novo.rows[0]?.id ?? null;
+          if(!novo.rows[0]?.id)throw new Error('Contato importado não foi localizado pelo CNPJ. Envio bloqueado.');
+          return novo.rows[0].id;
         },
-        enfileirarEnvio: ({ contactId, telefone, texto, dedupeKey }) => enfileirar(pool, {
+        enfileirarEnvio: ({ contactId, telefone, texto, dedupeKey,phoneEvidence }) => enfileirar(pool, {
           accountId: CHATWOOT_ACCOUNT_ID,
           contactId, telefone,
-          origem: 'prospeccao', texto, dedupeKey,
+          origem: 'prospeccao', texto, dedupeKey,meta:{phone_evidence:phoneEvidence},
         }),
       });
       await require('./prospectingRuntime').finishProspectingRun(pool,CHATWOOT_ACCOUNT_ID,resultado);

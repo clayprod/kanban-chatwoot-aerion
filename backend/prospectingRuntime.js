@@ -15,7 +15,7 @@ const prospectingDecisionSql=`SELECT p.id,p.cnpj,p.razao_social,p.telefone,p.per
       WHEN p.status='enfileirado' AND q.status IN('failed','cancelled') THEN 'falhou'
       ELSE p.status END AS status,p.motivo,p.perfil_whatsapp,p.confirmou_empresa,p.contact_id,p.mensagem,
  COALESCE(p.error,CASE WHEN q.status IN('failed','cancelled') THEN COALESCE(q.last_error,'Envio cancelado na fila') END) AS error,
- p.created_at,q.enviado_em AS sent_at,p.razao_social AS contact_name
+ p.created_at,q.enviado_em AS sent_at,p.razao_social AS contact_name,p.phone_evidence
  FROM prospeccao_log p LEFT JOIN LATERAL(
  SELECT status,last_error,enviado_em FROM outbound_queue q WHERE q.account_id=p.account_id
  AND q.origem='prospeccao' AND q.dedupe_key='prospeccao:'||p.cnpj AND q.texto=p.mensagem

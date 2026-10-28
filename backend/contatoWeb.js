@@ -198,7 +198,12 @@ const pontuarPagina = ({ texto, url, empresa }) => {
   const uf = empresa?.uf || '';
   const corpo = semAcento(texto);
   const endereco = semAcento(url);
-  const dominio = endereco.replace(/[^a-z0-9]/g, '');
+  let parsed;
+  try { parsed = new URL(url); } catch { return {pontos:0,sinais:['URL inválida'],dominioDaEmpresa:false,identidadeComprovada:false}; }
+  const rede = REDES.find(r=>parsed.hostname===r||parsed.hostname.endsWith('.'+r));
+  // A search query or article slug mentioning the company does not own the host.
+  const identificador = rede ? parsed.pathname.split('/').filter(Boolean)[0] || '' : parsed.hostname;
+  const dominio = semAcento(identificador).replace(/[^a-z0-9]/g, '');
   const curto = nomeCurto(razaoSocial, nomeFantasia);
 
   const sinais = [];
@@ -228,7 +233,6 @@ const pontuarPagina = ({ texto, url, empresa }) => {
   if (ramoAchado.length >= 2) somar(PESOS.ramo, `ramo bate (${ramoAchado.slice(0, 3).join(', ')})`);
   else if (ramoAchado.length === 1) somar(Math.round(PESOS.ramo / 2), `ramo parcial (${ramoAchado[0]})`);
 
-  const rede = REDES.find((r) => endereco.includes(r));
   if (rede) {
     if (curto && dominio.includes(curto)) somar(PESOS.redeDaEmpresa, `perfil da empresa no ${rede.split('.')[0]}`);
   } else {
@@ -242,13 +246,17 @@ const pontuarPagina = ({ texto, url, empresa }) => {
   // "achei um telefone numa pagina que a cita". So isto autoriza decidir sem a IA.
   // Sem nome curto proprio, ou quando ele e o nome da cidade, nenhum dominio prova
   // ser da empresa — e sem isso nada e aceito sem a IA olhar.
-  const dominioDaEmpresa = Boolean(curto) && !nomeEhCidade && dominio.includes(curto);
-
-  return { pontos, sinais, dominioDaEmpresa };
+  const tokens = termosSignificativos(nomeFantasia || razaoSocial);
+  const nomeNoHost = tokens.length>0 && tokens.every(t=>dominio.includes(t));
+  const cidadeConfere = Boolean(municipio) && corpo.includes(semAcento(municipio));
+  const cnpjConfere = cnpj.length===14 && soDigitos(texto).includes(cnpj);
+  const dominioDaEmpresa = Boolean(curto) && !nomeEhCidade && nomeNoHost;
+  const identidadeComprovada = cnpjConfere || (dominioDaEmpresa && cidadeConfere && ramoAchado.length>0);
+  return { pontos, sinais, dominioDaEmpresa, identidadeComprovada };
 };
 
 const CONSULTAS = [
-  { fonte: 'site', monta: ({ curto, nome, municipio, uf }) => `"${curto || nome}" ${municipio} ${uf} whatsapp telefone contato` },
+  { fonte: 'site', monta: ({ nome, cnpj, municipio, uf }) => `("${nome}" OR "${cnpj}") ${municipio} ${uf} whatsapp telefone contato` },
   { fonte: 'instagram', monta: ({ curto, nome, municipio }) => `"${curto || nome}" ${municipio} site:instagram.com` },
   { fonte: 'places', monta: ({ curto, nome, municipio, uf }) => `"${curto || nome}" ${municipio} ${uf} endereço telefone google maps` },
   { fonte: 'razao', monta: ({ nome, municipio }) => `"${nome}" ${municipio} contato` },
@@ -339,6 +347,7 @@ const buscarContatoWeb = async (empresa, {
   decidirComIa = null,
   limiarAceita = LIMIAR_ACEITA,
   limiarDuvida = LIMIAR_DUVIDA,
+  confirmarCadastro = false,
 } = {}) => {
   const razaoSocial = empresa?.razao_social || '';
   const nomeFantasia = empresa?.nome_fantasia || '';
@@ -350,7 +359,7 @@ const buscarContatoWeb = async (empresa, {
   if (!chave && !buscar) return { numero: null, motivo: 'TAVILY_API_KEY não configurada', rejeitados: [] };
 
   const curto = nomeCurto(razaoSocial, nomeFantasia);
-  const alvo = { curto, nome, municipio: empresa?.municipio_nome || '', uf: empresa?.uf || '' };
+  const alvo = { curto, nome, cnpj:soDigitos(empresa?.cnpj),municipio: empresa?.municipio_nome || '', uf: empresa?.uf || '' };
   const telefoneCadastro = (() => {
     const juntar = (ddd, num) => (ddd && num ? `55${soDigitos(`${ddd}${num}`)}` : '');
     return juntar(empresa?.ddd1, empresa?.telefone1) || juntar(empresa?.ddd2, empresa?.telefone2) || '';
@@ -369,6 +378,14 @@ const buscarContatoWeb = async (empresa, {
         ? await buscar(consulta, c.fonte)
         : await buscarNoTavily({ query: consulta, apiKey: chave, fetchImpl, timeoutMs });
       for (const r of achados) paginas.push({ ...r, fonte: c.fonte });
+      // Stop paid discovery once a strong company source already supplies a
+      // nearby, geographically compatible phone. Do not buy four searches then.
+      const strong=achados.some(p=>{
+        if(ehAgregador(p.url))return false;
+        const texto=`${p.title || ''}\n${p.content || ''}\n${p.raw_content || ''}`,e=pontuarPagina({texto,url:p.url,empresa});
+        return e.identidadeComprovada&&e.dominioDaEmpresa&&e.pontos>=limiarAceita&&extrairTelefones(texto,{ancoras:[nomeFantasia,razaoSocial,curto]}).some(t=>t.distancia!==null&&t.distancia<=JANELA_PROXIMIDADE&&ufCompativel(t.ddd,empresa.uf)&&(confirmarCadastro||t.numero!==telefoneCadastro));
+      });
+      if(strong)break;
     } catch (error) {
       falhas.push(`${c.fonte}: ${String(error.message || error)}`);
     }
@@ -391,7 +408,7 @@ const buscarContatoWeb = async (empresa, {
       rejeitados.push({ url, fonte: p.fonte, motivo: 'agregador de CNPJ: republica o telefone da Receita' });
       continue;
     }
-    const { pontos, sinais, dominioDaEmpresa } = pontuarPagina({ texto, url, empresa });
+    const { pontos, sinais, dominioDaEmpresa, identidadeComprovada } = pontuarPagina({ texto, url, empresa });
     // Ancoras para medir proximidade: o nome curto e a razao social.
     const telefones = extrairTelefones(texto, {
       ancoras: [nomeCurto(razaoSocial, nomeFantasia), nomeFantasia, razaoSocial],
@@ -409,8 +426,12 @@ const buscarContatoWeb = async (empresa, {
         rejeitados.push({ url, fonte: p.fonte, numero: t.numero, motivo: `DDD ${t.ddd} não bate com ${empresa?.uf}` });
         continue;
       }
-      if (telefoneCadastro && t.numero === telefoneCadastro) {
+      if (!confirmarCadastro && telefoneCadastro && t.numero === telefoneCadastro) {
         rejeitados.push({ url, fonte: p.fonte, numero: t.numero, motivo: 'é o mesmo telefone da Receita' });
+        continue;
+      }
+      if(!identidadeComprovada || !dominioDaEmpresa || t.distancia===null || t.distancia>JANELA_PROXIMIDADE){
+        rejeitados.push({url,fonte:p.fonte,numero:t.numero,motivo:'Titularidade não comprovada: nome parecido, DDD e WhatsApp ativo não identificam a empresa.'});
         continue;
       }
       const chave = `${t.numero}|${url}`;
@@ -433,7 +454,8 @@ const buscarContatoWeb = async (empresa, {
         ...t, url, fonte: p.fonte, dominioDaEmpresa,
         pontos: pontosDoNumero,
         sinais: sinaisDoNumero,
-        trecho: String(p.content || '').slice(0, 400),
+        trecho: (()=>{const match=[...texto.matchAll(TELEFONE_RE)].find(m=>`55${m[1]}${m[2]}${m[3]}`===t.numero);const index=match?.index || 0;return texto.slice(Math.max(0,index-250),index+350);})(),
+        identidadeComprovada,
       });
     }
   }
@@ -451,6 +473,7 @@ const buscarContatoWeb = async (empresa, {
     celular: c.celular,
     pontos: c.pontos,
     sinais: c.sinais,
+    identidadeComprovada:c.identidadeComprovada===true,
     candidatos: candidatos.length,
     rejeitados,
     ...extra,
@@ -480,7 +503,7 @@ const buscarContatoWeb = async (empresa, {
     return { numero: null, motivo: `IA não decidiu: ${ia?.error || 'sem resposta'}`, candidatosAvaliados: candidatos, rejeitados };
   }
   const escolha = ia.data?.escolha;
-  if (escolha === null || escolha === undefined || !candidatos[escolha]) {
+  if (!Number.isInteger(escolha) || escolha<0 || escolha>=Math.min(5,candidatos.length) || !Number.isFinite(ia.data?.confianca) || ia.data.confianca<0.9 || ia.data.confianca>1) {
     return { numero: null, motivo: `IA recusou: ${ia.data?.motivo || 'sem motivo'}`, candidatosAvaliados: candidatos, rejeitados };
   }
   return devolver(candidatos[escolha], {

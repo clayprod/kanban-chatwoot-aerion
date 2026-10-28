@@ -66,6 +66,7 @@ const createProspeccaoTable = async (pool) => {
   `);
   // Tabela ja existia em producao antes do ICP entrar.
   await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS icp TEXT`);
+  await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS phone_evidence JSONB`);
   // 'enfileirado' nasceu depois da tabela: abordagem gerada e na fila, ainda nao
   // entregue. Quem entrega e o despachante, e e ele que alimenta o teto diario.
   await pool.query(`
@@ -127,19 +128,18 @@ const normalizar = (s) => String(s || '')
 // O nome do perfil do WhatsApp confirma que é a empresa? Exige palavra significativa
 // em comum — não basta "LTDA" ou "comercio" baterem.
 const GENERICAS = new Set(['ltda', 'me', 'epp', 'eireli', 'sa', 'comercio', 'servicos',
-  'industria', 'brasil', 'empresa', 'grupo', 'do', 'da', 'de', 'e']);
+  'industria', 'brasil', 'empresa', 'grupo', 'do', 'da', 'de', 'e','construtora','construcoes','engenharia','incorporadora','pavimentacao','obras','imoveis','aerolev','aerolevantamentos','informatica']);
 
 const perfilConfirmaEmpresa = (nomePerfil, razaoSocial, nomeFantasia) => {
   const perfil = normalizar(nomePerfil);
   if (!perfil) return false;
-  const alvos = [razaoSocial, nomeFantasia, nomeCurtoEmpresa(razaoSocial)]
+  const alvos = [razaoSocial, nomeFantasia]
     .filter(Boolean).map(normalizar);
   const tokensPerfil = new Set(perfil.split(' ').filter((t) => t.length >= 4 && !GENERICAS.has(t)));
   if (!tokensPerfil.size) return false;
   for (const alvo of alvos) {
-    for (const t of alvo.split(' ')) {
-      if (t.length >= 4 && !GENERICAS.has(t) && tokensPerfil.has(t)) return true;
-    }
+    const termos=alvo.split(' ').filter(t=>t.length>=4&&!GENERICAS.has(t));
+    if(termos.length && termos.every(t=>tokensPerfil.has(t)))return true;
   }
   return false;
 };
@@ -278,14 +278,15 @@ const registrarProspeccao = async (pool, d) => {
   await pool.query(
     `INSERT INTO ${PROSPECCAO_LOG_TABLE}
        (account_id, cnpj, razao_social, telefone, perfil, status, motivo,
-        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, icp)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, icp,phone_evidence)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
      ON CONFLICT (account_id, cnpj) WHERE cnpj IS NOT NULL DO NOTHING`,
     [
       d.accountId, soDigitos(d.cnpj) || null, d.razaoSocial ?? null, d.telefone ?? null,
       d.perfil ?? null, d.status, d.motivo ?? null, d.perfilWhatsapp ?? null,
       d.confirmouEmpresa ?? null, d.contactId ?? null, d.mensagem ?? null, d.error ?? null,
       d.icp ?? null,
+      JSON.stringify(d.phoneEvidence || null),
     ]
   );
 };
@@ -402,15 +403,19 @@ const runProspeccaoTick = async (pool, {
         let telefone = tel;
         let origemTelefone = tel ? 'receita' : null;
         let achadoWeb = null;
-        if ((!telefone || !existentes.has(telefone)) && buscarContatoWeb) {
+        const perfilCadastro=perfisWpp?.get?.(telefone);
+        const cadastroConfirmado=perfilConfirmaEmpresa(perfilCadastro,empresa.razao_social,empresa.nome_fantasia);
+        let titularidadeConfirmada=cadastroConfirmado;
+        if ((!telefone || !existentes.has(telefone) || !cadastroConfirmado) && buscarContatoWeb) {
           achadoWeb = await buscarContatoWeb(empresa);
-          if (achadoWeb?.numero) {
-            const { existentes: temWpp } = await verificarNumerosWhatsapp([achadoWeb.numero]);
-            if (temWpp.has(achadoWeb.numero)) {
+          if (achadoWeb?.numero && achadoWeb.identidadeComprovada===true) {
+            const { existentes: temWpp,indisponivel:verificacaoIndisponivel } = await verificarNumerosWhatsapp([achadoWeb.numero]);
+            if (!verificacaoIndisponivel && temWpp.has(achadoWeb.numero)) {
               telefone = achadoWeb.numero;
               origemTelefone = achadoWeb.fonte || 'web';
               existentes.add(telefone);
               base.telefone = telefone;
+              titularidadeConfirmada=true;
             } else {
               achadoWeb = { ...achadoWeb, motivo: 'achado na web, mas sem WhatsApp' };
             }
@@ -437,6 +442,11 @@ const runProspeccaoTick = async (pool, {
           });
           r.descartados += 1;
           continue;
+        }
+        base.phoneEvidence={identity_verified:titularidadeConfirmada,source:origemTelefone,url:achadoWeb?.origem || null,profile:perfilCadastro || null,signals:achadoWeb?.sinais || [],rejected:(achadoWeb?.rejeitados || []).slice(0,10),checked_at:new Date().toISOString()};
+        if(!titularidadeConfirmada){
+          await registrarProspeccao(pool,{...base,status:'descartado',motivo:'Titularidade não comprovada: WhatsApp ativo não confirma a empresa; necessária fonte oficial ou perfil identificado.'});
+          r.descartados++;continue;
         }
         if (origemTelefone !== 'receita') r.achadosNaWeb = (r.achadosNaWeb || 0) + 1;
         telefonesUsados.add(telefone);
@@ -499,12 +509,13 @@ const runProspeccaoTick = async (pool, {
           continue;
         }
 
-        const contactId = await importarLead(empresa);
+        const contactId = await importarLead({...empresa,telefone_verificado:telefone,telefone_origem:{fonte:origemTelefone,url:achadoWeb?.origem || null,verificado_em:new Date().toISOString()}});
+        if(!contactId)throw new Error('Importação não confirmou o contato com os dados da empresa. Nenhuma mensagem foi enfileirada.');
         // Contato novo não tem conversa: o envio vai por telefone, e a conversa
         // nasce no Chatwoot quando a Evolution entrega.
         await enfileirarEnvio({
           contactId, telefone, texto,
-          dedupeKey: `prospeccao:${soDigitos(empresa.cnpj)}`,
+          dedupeKey: `prospeccao:${soDigitos(empresa.cnpj)}`,phoneEvidence:base.phoneEvidence,
         });
         await registrarProspeccao(pool, {
           ...base, status: 'enfileirado', mensagem: texto, contactId,

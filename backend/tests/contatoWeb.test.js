@@ -113,7 +113,8 @@ test('consulta as quatro fontes com a pergunta certa', async () => {
   assert.match(feitas[1].q, /site:instagram\.com/);
   assert.match(feitas[2].q, /google maps/);
   // As tres primeiras buscam pelo nome CURTO; a ultima pela razao social inteira.
-  assert.match(feitas[0].q, /"sertec"/);
+  assert.match(feitas[0].q, /"SERTEC ENGENHARIA LTDA"/);
+  assert.match(feitas[0].q, /07172169000184/);
   assert.match(feitas[3].q, /"SERTEC ENGENHARIA LTDA"/);
 });
 
@@ -171,7 +172,7 @@ test('agregador nao vira candidato mesmo tendo o CNPJ', async () => {
   assert.match(r.rejeitados[0].motivo, /agregador de CNPJ/);
 });
 
-test('zona cinzenta vai para a IA, e ela pode recusar', async () => {
+test('a IA não pode aprovar um telefone de terceiro sem vínculo com a empresa', async () => {
   const pagina = [{
     url: 'https://blogdaconstrucao.com.br/post',
     title: 'Obras em Vinhedo',
@@ -188,21 +189,15 @@ test('zona cinzenta vai para a IA, e ela pode recusar', async () => {
     },
   });
   assert.equal(recusou.numero, null);
-  assert.match(recusou.motivo, /IA recusou: telefone é da reda/);
-  // A IA recebe os indicios apurados, nao so o numero cru.
-  assert.match(viuPrompt.user, /EMPRESA QUE PROCURAMOS/);
-  assert.match(viuPrompt.user, /VINHEDO\/SP/);
-  assert.match(viuPrompt.user, /ind[íi]cios:/);
-  assert.match(viuPrompt.system, /recusar/);
+  assert.equal(viuPrompt,null,'não gasta IA para contornar ausência de titularidade');
+  assert.ok(recusou.rejeitados.some(r=>r.motivo.includes('Titularidade')));
 
   const aceitou = await buscarContatoWeb(SERTEC, {
     fontes: ['site'],
     buscar: buscaFake(pagina),
     decidirComIa: async () => ({ ok: true, data: { escolha: 0, confianca: 0.8, motivo: 'é o contato da empresa' } }),
   });
-  assert.equal(aceitou.numero, '5519988887777');
-  assert.equal(aceitou.decidido, 'IA');
-  assert.equal(aceitou.confianca, 0.8);
+  assert.equal(aceitou.numero,null);
 });
 
 test('sem IA na zona cinzenta, nao inventa: devolve null com o motivo', async () => {
@@ -215,9 +210,7 @@ test('sem IA na zona cinzenta, nao inventa: devolve null com o motivo', async ()
     }]),
   });
   assert.equal(r.numero, null);
-  assert.match(r.motivo, /sem IA para julgar/);
-  assert.match(r.motivo, /p[áa]gina de terceiro/, 'diz por que nao decidiu sozinho');
-  assert.ok(r.candidatosAvaliados.length >= 1, 'mostra o que avaliou, para auditoria');
+  assert.ok(r.rejeitados.some(r=>r.motivo.includes('Titularidade')));
 });
 
 test('busca que falha vira motivo, nao excecao', async () => {
@@ -259,7 +252,7 @@ test('pagina de terceiro nao decide sozinha, por melhor que pontue', async () =>
     decidirComIa: async () => ({ ok: true, data: { escolha: null, motivo: 'é um portal, não a empresa' } }),
   });
   assert.equal(r.numero, null);
-  assert.match(r.motivo, /IA recusou/);
+  assert.ok(r.rejeitados.some(r=>r.motivo.includes('Titularidade')));
 });
 
 test('telefone longe do nome perde pontos', async () => {
@@ -306,4 +299,19 @@ test('empresa so com nome generico nao tem nome curto', () => {
     },
   });
   assert.equal(dominioDaEmpresa, false, 'outra construtora não é a D.A.G.');
+});
+
+test('doctor and lawyer homonyms cannot become construction company contacts, even with enthusiastic AI',async()=>{
+ for(const [name,url]of [['CONSTRUTORA MELLO DE AZEVEDO SA','https://drbrunomello.com.br/contato'],['CONSTRUTORA BARBOSA MELLO SA','https://barbosaecostaadvogados.com.br'],['PAULISTA OBRAS E PAVIMENTACAO LTDA','https://centralpaulista.com.br/noticia/paulista-obras-e-pavimentacao']]){
+  const r=await buscarContatoWeb({...SERTEC,razao_social:name,nome_fantasia:'',municipio_nome:'São Paulo'}, {fontes:['site'],buscar:buscaFake([{url,title:'Contato',content:`${name} é citado como cliente. Contato do escritório em São Paulo/SP: (11) 99999-8888.`}]),decidirComIa:async()=>({ok:true,data:{escolha:0,confianca:1}})});
+  assert.equal(r.numero,null,name);assert.ok(r.rejeitados.length>0);
+ }
+});
+test('a matching brand in URL query parameters does not prove site ownership',()=>{
+ const result=pontuarPagina({empresa:SERTEC,url:'https://doctor.example/?empresa=sertec',texto:'SERTEC Engenharia em Vinhedo SP, telefone.'});assert.equal(result.dominioDaEmpresa,false);
+});
+test('low confidence or out-of-range AI choice is rejected even for an otherwise valid source',async()=>{
+ for(const data of [{escolha:0,confianca:0.2},{escolha:99,confianca:1},{escolha:'0',confianca:1}]){
+  const r=await buscarContatoWeb(SERTEC,{limiarAceita:999,fontes:['site'],buscar:buscaFake([{url:'https://sertec.com.br',content:'Sertec Engenharia em Vinhedo SP: (19) 99999-8888.'}]),decidirComIa:async()=>({ok:true,data})});assert.equal(r.numero,null);
+ }
 });

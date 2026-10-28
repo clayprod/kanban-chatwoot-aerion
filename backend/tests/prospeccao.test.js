@@ -236,7 +236,7 @@ test('sem WhatsApp na Receita, procura o contato na web antes de desistir', asyn
       return { existentes: new Set(nums.filter((n) => n === '5519998887777')), perfis: new Map() };
     },
     buscarContatoWeb: async () => ({
-      numero: '5519998887777', fonte: 'instagram', origem: 'https://instagram.com/x', celular: true,
+      numero: '5519998887777', fonte: 'instagram', origem: 'https://instagram.com/x', celular: true,identidadeComprovada:true,
     }),
   }));
   assert.equal(r.abordados, 1);
@@ -249,7 +249,7 @@ test('numero achado na web que nao tem WhatsApp nao e usado', async () => {
   const pool = fakePool();
   const r = await runProspeccaoTick(pool, deps({
     verificarNumerosWhatsapp: async () => ({ existentes: new Set(), perfis: new Map() }),
-    buscarContatoWeb: async () => ({ numero: '5519998887777', fonte: 'site', origem: 'https://x.com' }),
+    buscarContatoWeb: async () => ({ numero: '5519998887777', fonte: 'site', origem: 'https://x.com',identidadeComprovada:true }),
   }));
   assert.equal(r.descartados, 1);
   assert.match(pool.gravados.at(-1).motivo, /achado na web, mas sem WhatsApp/);
@@ -350,7 +350,7 @@ test('empresa fora dos ICPs nao e abordada', async () => {
       ddd1: '11', telefone1: '47943786', cnae_fiscal_principal: '0111301',
       cnae_descricao: 'Cultivo de arroz',
     }]),
-    verificarNumerosWhatsapp: async () => ({ existentes: new Set(['551147943786']), perfis: new Map() }),
+    verificarNumerosWhatsapp: async () => ({ existentes: new Set(['551147943786']), perfis: new Map([['551147943786','BOM AMIGO AGROPECUARIA']]) }),
     chatCompletionJson: async () => { chamouIa = true; return { ok: false }; },
     contextoComercial: async () => ({ icp: 'desconhecido', blocoIcp: '', blocoCatalogo: '' }),
   });
@@ -424,4 +424,20 @@ test('verificacao indisponivel NAO vira abordagem', async () => {
   assert.equal(chamouIA, false);
   assert.equal(r.abordados, 0);
   assert.match(r.errosBusca.join(' '), /verificação de WhatsApp indisponível/);
+});
+
+test('a verified web number is the number imported into Chatwoot',async()=>{
+ let imported;
+ const r=await runProspeccaoTick(fakePool(),deps({verificarNumerosWhatsapp:async nums=>({existentes:new Set(nums.includes('5519998887777')?['5519998887777']:[]),perfis:new Map()}),buscarContatoWeb:async()=>({numero:'5519998887777',identidadeComprovada:true,fonte:'site',origem:'https://sertec.com.br'}),importarLead:async company=>{imported=company;return 1;}}));
+ assert.equal(r.abordados,1);assert.equal(imported.telefone_verificado,'5519998887777');assert.equal(imported.telefone_origem.url,'https://sertec.com.br');
+});
+test('unidentified WhatsApp profile never authorizes cold outreach without official evidence',async()=>{
+ let ai=0;
+ const r=await runProspeccaoTick(fakePool(),deps({verificarNumerosWhatsapp:async nums=>({existentes:new Set(nums),perfis:new Map([['5519987654321','Contabilidade']])}),chatCompletionJson:async()=>{ai++;throw Error('must not call');}}));
+ assert.equal(ai,0);assert.equal(r.abordados,0);assert.equal(r.descartados,1);
+ assert.equal(perfilConfirmaEmpresa('Dr Bruno Mello','CONSTRUTORA MELLO DE AZEVEDO SA'),false);
+});
+test('failed import cannot enqueue an unnamed contact',async()=>{
+ let queued=false;
+ const r=await runProspeccaoTick(fakePool(),deps({importarLead:async()=>null,enfileirarEnvio:async()=>{queued=true;}}));assert.equal(queued,false);assert.equal(r.falhas,1);
 });
