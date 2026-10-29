@@ -72,7 +72,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
     return result.access_token;
   };
   async function googleToken(config, serviceAccount = false) {
-    const scope = serviceAccount === 'search_console' ? 'https://www.googleapis.com/auth/webmasters.readonly' : serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
+    const scope = serviceAccount === 'merchant_center' ? 'https://www.googleapis.com/auth/content' : serviceAccount === 'search_console' ? 'https://www.googleapis.com/auth/webmasters.readonly' : serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
     const account = serviceAccount || config.auth_type === 'google_identity' ? config.service_account : null;
     const key = crypto.createHash('sha256').update(JSON.stringify([config, scope])).digest('hex');
     return cached(key, async () => {
@@ -144,8 +144,60 @@ function createProviders({ transport = request, env = process.env } = {}) {
     // Active users are intentionally not summed across days or traffic dimensions.
     revenue: row.purchaseRevenue || 0, ...info,
   });
+  async function merchantList(url, key, headers) {
+    const rows = [], visited = new Set();
+    let pageToken;
+    do {
+      const target = new URL(url);
+      target.searchParams.set('pageSize', '1000');
+      if (pageToken) target.searchParams.set('pageToken', pageToken);
+      const { data } = await json(target.toString(), { headers }, transport);
+      if (data[key] != null && !Array.isArray(data[key])) throw new ProviderError('O Merchant Center retornou uma listagem inválida. Última carga preservada.');
+      rows.push(...(data[key] || []));
+      pageToken = data.nextPageToken;
+      if (pageToken && (visited.has(pageToken) || visited.size >= 1000)) throw new ProviderError('Paginação do Merchant Center inválida. Última carga preservada.');
+      visited.add(pageToken);
+    } while (pageToken);
+    return rows;
+  }
   return {
     woo, bridge,
+    async merchantCatalog(config) {
+      const account = `accounts/${config.account_id}`;
+      const headers = { Authorization: `Bearer ${await googleToken(config, 'merchant_center')}` };
+      const products = await merchantList(`https://merchantapi.googleapis.com/products/v1/${account}/products`, 'products', headers);
+      const sources = await merchantList(`https://merchantapi.googleapis.com/datasources/v1/${account}/dataSources`, 'dataSources', headers);
+      const normalizedSources = [];
+      for (const source of sources) {
+        if (!source.name?.startsWith(`${account}/dataSources/`) || !/^accounts\/\d+\/dataSources\/\d+$/.test(source.name)) throw new ProviderError('Fonte de dados fora da conta Merchant configurada.');
+        let latest = null, uploadError = null;
+        if (source.input === 'FILE') {
+          try { latest = (await json(`https://merchantapi.googleapis.com/datasources/v1/${source.name}/fileUploads/latest`, { headers }, transport)).data; }
+          catch { uploadError = 'O último processamento desta fonte não pôde ser consultado.'; }
+        }
+        // A fetch URL can include credentials. Only expose its public address.
+        let feedUrl = null;
+        try { const url = new URL(source.fileInput?.fetchSettings?.fetchUri); feedUrl = `${url.origin}${url.pathname}`; } catch { /* Not every source uses a URL. */ }
+        normalizedSources.push({ id: String(source.dataSourceId || source.name.split('/').pop()), name: source.displayName || 'Fonte sem nome', input: source.input,
+          scheduled: Boolean(source.fileInput?.fetchSettings?.enabled), frequency: source.fileInput?.fetchSettings?.frequency || null,
+          timezone: source.fileInput?.fetchSettings?.timeZone || null, feedUrl,
+          processingState: latest?.processingState || null, uploadTime: latest?.uploadTime || null,
+          itemsTotal: latest?.itemsTotal == null ? null : Number(latest.itemsTotal), uploadError });
+      }
+      return { observedAt: new Date().toISOString(), accountId: String(config.account_id), sources: normalizedSources,
+        products: products.map(product => {
+          if (!product.name?.startsWith(`${account}/products/`) || !product.offerId) throw new ProviderError('Produto fora da conta Merchant configurada.');
+          const attributes = product.productAttributes || {};
+          return { id: product.name, offerId: String(product.offerId), title: String(attributes.title || product.offerId).slice(0, 500),
+            brand: String(attributes.brand || '').slice(0, 150), availability: attributes.availability || null,
+            contentLanguage: product.contentLanguage || '', feedLabel: product.feedLabel || '', dataSource: product.dataSource || '',
+            destinations: (product.productStatus?.destinationStatuses || []).map(status => ({
+              context: status.reportingContext, approved: status.approvedCountries || [], pending: status.pendingCountries || [], disapproved: status.disapprovedCountries || [],
+            })), issues: (product.productStatus?.itemLevelIssues || []).map(issue => ({ code: String(issue.code || '').slice(0, 150),
+              severity: issue.severity, resolution: issue.resolution, context: issue.reportingContext,
+              countries: issue.applicableCountries || [], description: String(issue.description || '').slice(0, 500), detail: String(issue.detail || '').slice(0, 1000) })) };
+        }) };
+    },
     async test(provider, config) {
       if (provider === 'woocommerce') {
         await woo(config, 'orders', { per_page: 1 });
@@ -162,6 +214,12 @@ function createProviders({ transport = request, env = process.env } = {}) {
       if (provider === 'ga4') {
         await gaReport(config, 'yesterday', 'yesterday', ['date'], ['sessions']);
         return {};
+      }
+      if (provider === 'merchant_center') {
+        const headers = { Authorization: `Bearer ${await googleToken(config, 'merchant_center')}` };
+        const { data } = await json(`https://merchantapi.googleapis.com/accounts/v1/accounts/${config.account_id}`, { headers }, transport);
+        if (String(data.accountId) !== String(config.account_id)) throw new ProviderError('A conta retornada não corresponde ao Merchant configurado.');
+        return { account_name: data.accountName || '', country: 'BR' };
       }
       if (provider === 'search_console') {
         const headers = { Authorization: `Bearer ${await googleToken(config, 'search_console')}` };
@@ -185,6 +243,30 @@ function createProviders({ transport = request, env = process.env } = {}) {
       return { currency: data.currency, timezone: data.timezone_name };
     },
     async metrics(provider, config, from, to, info = {}) {
+      if (provider === 'merchant_center') {
+        const headers = { Authorization: `Bearer ${await googleToken(config, 'merchant_center')}` };
+        const rows = [], visited = new Set();
+        let pageToken;
+        do {
+          const { data } = await json(`https://merchantapi.googleapis.com/reports/v1/accounts/${config.account_id}/reports:search`, postJson({
+            query: `SELECT date, marketing_method, offer_id, title, clicks, impressions FROM product_performance_view WHERE date BETWEEN '${from}' AND '${to}'`,
+            pageSize: 1000, ...(pageToken ? { pageToken } : {}),
+          }, headers), transport);
+          if (data.results != null && !Array.isArray(data.results)) throw new ProviderError('O Merchant Center retornou um relatório inválido.');
+          for (const result of data.results || []) {
+            const row = result.productPerformanceView, date = row?.date;
+            if (!date || !row.offerId || !row.marketingMethod || !Number.isFinite(Number(row.clicks || 0)) || !Number.isFinite(Number(row.impressions || 0))) throw new ProviderError('Métricas de produto incompletas no Merchant Center.');
+            const day = `${date.year}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`;
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < from || day > to) throw new ProviderError('O Merchant Center retornou dados fora do período solicitado.');
+            rows.push({ kind: 'merchant_performance', date: day, offerId: String(row.offerId), title: String(row.title || row.offerId).slice(0, 500),
+              marketingMethod: row.marketingMethod, clicks: Number(row.clicks || 0), impressions: Number(row.impressions || 0) });
+          }
+          pageToken = data.nextPageToken;
+          if (pageToken && (visited.has(pageToken) || visited.size >= 1000)) throw new ProviderError('Paginação do desempenho Merchant inválida.');
+          visited.add(pageToken);
+        } while (pageToken);
+        return rows;
+      }
       if (provider === 'search_console') {
         const headers = { Authorization: `Bearer ${await googleToken(config, 'search_console')}` };
         const rows = [];

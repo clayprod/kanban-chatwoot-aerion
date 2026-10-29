@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-const PROVIDERS = ['woocommerce', 'ga4', 'google_ads', 'meta_ads', 'search_console'];
+const PROVIDERS = ['woocommerce', 'ga4', 'google_ads', 'meta_ads', 'search_console', 'merchant_center'];
 const DAY = 86400000;
 const day = (date = new Date()) => new Date(date).toISOString().slice(0, 10);
 const shiftDay = (date, days) => day(new Date(`${date}T12:00:00Z`).getTime() + days * DAY);

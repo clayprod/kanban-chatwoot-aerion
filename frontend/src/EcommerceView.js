@@ -4,6 +4,7 @@ import { ResponsiveLine } from '@nivo/line';
 import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon, Squares2X2Icon, ShoppingBagIcon, MegaphoneIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
 import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS } from './ecommerceChart';
+import MerchantView from './MerchantView';
 
 export const ECOMMERCE_SECTIONS = [
   { id: 'overview', label: 'Visão geral', icon: Squares2X2Icon },
@@ -11,7 +12,7 @@ export const ECOMMERCE_SECTIONS = [
   { id: 'ads', label: 'Marketing', icon: MegaphoneIcon },
   { id: 'connections', label: 'Conexões', icon: Cog6ToothIcon },
 ];
-const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads', search_console: 'Google Search Console' };
+const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads', search_console: 'Google Search Console', merchant_center: 'Google Merchant Center' };
 const STATE = { pending: 'Aguardando configuração', connected: 'Conectado', syncing: 'Sincronizando', error: 'Requer atenção' };
 const number = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(value);
 const money = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -125,6 +126,7 @@ const FIELDS = {
     ['service_account', 'Credenciais da conta técnica Google Ads (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
   meta_ads: [['account_id', 'ID da conta de anúncios', 'text', 'act_123456789'], ['access_token', 'Token de acesso Meta · ads_read', 'password', 'Token com acesso de análise à conta']],
   search_console: [['site_url', 'Propriedade do Search Console', 'text', 'sc-domain:aerion.com.br ou https://aerion.com.br/'], ['service_account', 'Credenciais da conta técnica Search Console (JSON)', 'textarea', 'Conta de serviço ou identidade federada configurada para a VPS']],
+  merchant_center: [['account_id', 'ID da conta Merchant Center', 'text', '5890381416'], ['service_account', 'Credenciais próprias do Merchant (JSON)', 'textarea', 'Conta de serviço ou identidade federada']],
 };
 const HELP = {
   woocommerce: 'No WooCommerce, gere uma chave de leitura em Configurações → Avançado → API REST. Para UTMs Aerion, instale o plugin de relatórios e configure o usuário técnico abaixo.',
@@ -132,14 +134,16 @@ const HELP = {
   google_ads: 'Habilite a Google Ads API no projeto Google Cloud e obtenha acesso de produção. Use uma conta técnica com acesso Somente leitura ao anunciante ou autorize um usuário por OAuth.',
   meta_ads: 'Use um aplicativo da Aerion e um token com ads_read, obtido por OAuth ou por um usuário de sistema com acesso de análise à conta. O Pixel é conferido na loja; os resultados vêm da Insights API.',
   search_console: 'Habilite a Search Console API no Google Cloud e conceda acesso à propriedade para a conta técnica. Consultamos apenas dados de pesquisa e sitemaps; esta conexão não altera o site nem envia URLs para indexação.',
+  merchant_center: 'Use a conta Merchant Center já autorizada e uma identidade técnica Google salva no painel. A integração consulta desempenho dos produtos, aprovação e fontes de dados. O catálogo continua sendo enviado pelo feed da loja.',
 };
 function ConnectionForm({ provider, connection, status, onUpdate }) {
-  const [form, setForm] = useState(() => ({ ...(connection?.config || {}), enabled: connection?.enabled !== false }));
+  const [form, setForm] = useState(() => ({ ...(provider === 'merchant_center' ? { identity_source: 'ga4' } : {}), ...(connection?.config || {}), enabled: connection?.enabled !== false }));
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [failure, setFailure] = useState(false);
   const technicalAccount = provider === 'google_ads' && form.auth_type === 'google_identity';
-  const fields = FIELDS[provider].filter(([key]) => provider !== 'google_ads' || (key === 'service_account' ? technicalAccount : !technicalAccount || !['client_id', 'client_secret'].includes(key)));
+  const fields = FIELDS[provider].filter(([key]) => (provider !== 'merchant_center' || key !== 'service_account' || form.identity_source === 'own')
+    && (provider !== 'google_ads' || (key === 'service_account' ? technicalAccount : !technicalAccount || !['client_id', 'client_secret'].includes(key))));
   const action = async (kind, event) => {
     event?.preventDefault(); setBusy(kind); setMessage(null);
     try {
@@ -165,6 +169,10 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
     </summary>
     <p className="mt-4 max-w-3xl text-sm text-muted">{HELP[provider]}</p>
     <form onSubmit={event => action('save', event)} className="mt-5 space-y-4" autoComplete="off">
+      {provider === 'merchant_center' && <label className="block space-y-1.5"><span className="text-xs font-medium text-ink">Identidade Google do Merchant</span>
+        <select className={select} value={form.identity_source || 'ga4'} onChange={event => setForm(p => ({ ...p, identity_source: event.target.value }))}>
+          <option value="ga4">Usar conta técnica do Analytics</option><option value="google_ads">Usar conta técnica do Google Ads</option><option value="search_console">Usar conta técnica do Search Console</option><option value="own">Informar credenciais próprias</option>
+        </select></label>}
       {provider === 'google_ads' && <label className="block space-y-1.5"><span className="text-xs font-medium text-ink">Autenticação Google Ads</span>
         <select className={select} value={form.auth_type || 'oauth'} onChange={event => setForm(p => ({ ...p, auth_type: event.target.value }))}>
           <option value="oauth">Autorizar usuário Google (OAuth)</option><option value="google_identity">Conta técnica Google</option>
@@ -192,6 +200,11 @@ function ConnectionForm({ provider, connection, status, onUpdate }) {
       {connection?.info?.tracking_error && <Notice>{connection.info.tracking_error}</Notice>}
       <div className="space-y-1 border-t border-line pt-3 text-xs text-muted">
         <p>Última atualização: {when(connection?.last_success_at)}</p>
+        {provider === 'merchant_center' && <>
+          {connection?.info?.account_name && <p>Conta: {connection.info.account_name} · {connection.config.account_id}</p>}
+          <p>Catálogo consultado em: {when(connection?.info?.catalog_last_success_at)}</p>
+          {connection?.info?.performance_error && <p role="status">Catálogo conectado · desempenho requer atenção: {connection.info.performance_error}</p>}
+        </>}
         {provider === 'meta_ads' && connection?.info?.authorization_expires_at && <p>Autorização Meta válida até: {when(connection.info.authorization_expires_at)}. Renove o acesso antes dessa data para manter a sincronização.</p>}
         {provider === 'woocommerce' && connection?.info?.bridge_last_success_at && <p>Última atualização de links e visitas Aerion: {when(connection.info.bridge_last_success_at)}</p>}
         {connection?.progress && <p>Importação em andamento · {connection.progress.phase} · lote {connection.progress.page}{connection.progress.from ? ` · desde ${connection.progress.from.slice(0, 10)}` : ''}</p>}
@@ -241,7 +254,7 @@ function CrmAudiencePreview({ refresh }) {
 export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
   const [section, setSection] = useState(requestedSection);
   useEffect(() => setSection(requestedSection), [requestedSection]);
-  const parentSection = ['traffic', 'campaigns', 'ads', 'seo'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
+  const parentSection = ['traffic', 'campaigns', 'ads', 'seo', 'merchant'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
   const [range, setRange] = useState(() => ({ from: previousDay(today(), 29), to: today() }));
   const [draftRange, setDraftRange] = useState(range);
   const [report, setReport] = useState(null);
@@ -308,15 +321,17 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
-      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
+      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={report.daily} context={section === 'traffic' ? 'traffic' : 'sales'} />}
       {report && <>
+        {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
         {section === 'overview' && <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
             {[['Receita de produtos', summary.revenue, money, 'Pagamentos confirmados · descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, `Ticket médio ${money(summary.ticket)}`], ['Investimento em mídia', summary.spend, money, summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Google Ads + Meta · BRL'], ['Aguardando pagamento', summary.unpaidValue, money, `${number(summary.unpaidOrders)} pedidos pendentes ou em espera · inclui frete e impostos`]].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}
           </dl>
           <p className="text-xs text-muted">Receita no período anterior ({dateLabel(report.range.previousFrom)} a {dateLabel(report.range.previousTo)}): {money(summary.previousRevenue)}. Receita exclui frete e impostos. Compras registradas no GA4: {number(summary.purchases)}.</p>
           <MediaIndicators summary={summary} />
+          {report.merchant?.performanceAvailable && <div className="flex flex-wrap items-center justify-between gap-3 border-y border-line py-3 text-sm"><p>Produtos nas listagens gratuitas: <strong>{number(report.merchant.methods.find(row => row.method === 'ORGANIC')?.clicks)} cliques</strong> · {number(report.merchant.methods.find(row => row.method === 'ORGANIC')?.impressions)} impressões no período.</p><button type="button" className={btnSecondarySm} onClick={() => setSection('merchant')}>Ver produtos no Google</button></div>}
           <section className={panel}><h3 className="text-base font-semibold">Conversão e oportunidades</h3><dl className="mt-4 grid grid-cols-2 gap-5 lg:grid-cols-4">{[['Sessões GA4', number(summary.sessions)], ['Compras GA4', number(summary.purchases)], ['Compras / sessões GA4', summary.sessions ? percent(summary.purchases / summary.sessions * 100) : '—'], ['Abandono de carrinho', percent(summary.cartAbandonmentRate)]].map(([label, value]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{value}</dd></div>)}</dl></section>
           <Table caption="Produtos com maior receita" rows={report.products.slice(0, 10)} columns={[{ key: 'name', label: 'Produto' }, numeric('quantity', 'Unidades líquidas'), numeric('revenue', 'Receita', money)]} />
         </>}

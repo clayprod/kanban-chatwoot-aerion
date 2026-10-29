@@ -2,7 +2,8 @@ const express = require('express');
 const crypto = require('node:crypto');
 const { PROVIDERS, dateRange, buildReport, verifyWebhook, encryptionKey } = require('./domain');
 const { createProviders, storeUrl } = require('./providers');
-const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, transaction, createSync, encrypt, decrypt } = require('./store');
+const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, connectionConfig, transaction, createSync, encrypt, decrypt } = require('./store');
+const { buildMerchantReport } = require('./merchant');
 const { buildSearchReport } = require('./searchConsole');
 const { crmAudiencePreview } = require('./audiences');
 
@@ -35,6 +36,12 @@ function validateConfig(provider, config) {
   if (provider === 'ga4') {
     if (!/^\d+$/.test(config.property_id || '')) throw new Error('Informe o ID numérico da propriedade GA4.');
     config.service_account = validateGoogleIdentity(config.service_account);
+  }
+  if (provider === 'merchant_center') {
+    if (!/^[1-9]\d{0,19}$/.test(config.account_id || '')) throw new Error('Informe o ID numérico da conta Merchant Center.');
+    config.identity_source = config.identity_source || 'ga4';
+    if (!['ga4', 'google_ads', 'search_console', 'own'].includes(config.identity_source)) throw new Error('Selecione uma identidade Google válida.');
+    if (config.identity_source === 'own') config.service_account = validateGoogleIdentity(config.service_account);
   }
   if (provider === 'search_console') {
     const site = String(config.site_url || '');
@@ -72,7 +79,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
   const loadConfig = async provider => {
     const row = (await pool.query('SELECT * FROM ecommerce_connections WHERE provider=$1', [provider])).rows[0];
     if (!row) throw Object.assign(new Error('Configure esta conexão primeiro.'), { status: 400 });
-    return { row, config: { ...row.config, ...unseal(row.secrets) } };
+    return { row, config: await connectionConfig(pool, row, env) };
   };
   const admin = async (req, res, next) => {
     try {
@@ -156,7 +163,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     const range = dateRange(req.query);
     const [{ rows: records }, { rows: connections }, { rows: excludedOrders }] = await Promise.all([
       pool.query(`SELECT provider,kind,data FROM ecommerce_records r
-        WHERE (date BETWEEN $1 AND $2 OR (provider='woocommerce' AND kind IN ('link','product','coupon')))
+        WHERE (date BETWEEN $1 AND $2 OR (provider='woocommerce' AND kind IN ('link','product','coupon')) OR (provider='merchant_center' AND kind='merchant_catalog'))
           AND NOT (provider='woocommerce' AND kind='order' AND EXISTS (
             SELECT 1 FROM ecommerce_order_exclusions e WHERE e.order_id=r.record_id AND e.excluded))`, [range.previousFrom, range.to]),
       pool.query('SELECT * FROM ecommerce_connections ORDER BY provider'),
@@ -175,6 +182,8 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     report.couponCatalog = ofKind('coupon');
     report.excludedOrders = excludedOrders;
     report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
+    report.merchant = buildMerchantReport(records.find(r => r.provider === 'merchant_center' && r.kind === 'merchant_catalog')?.data,
+      records.filter(r => r.provider === 'merchant_center' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'merchant_center'));
     res.json(report);
   });
   router.get('/audiences', async (req, res) => {
@@ -218,7 +227,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
           }
         }
         try { validateConfig(provider, merged); } catch (error) { throw Object.assign(error, { status: 400 }); }
-        const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id', search_console: 'site_url' }[provider];
+        const identity = { woocommerce: 'url', ga4: 'property_id', google_ads: 'customer_id', meta_ads: 'account_id', search_console: 'site_url', merchant_center: 'account_id' }[provider];
         const changed = old && (old.config[identity] !== merged[identity] || (provider === 'google_ads' && (old.config.purchase_conversion_action_id || '') !== (merged.purchase_conversion_action_id || '')));
         const metaCredentialChanged = provider === 'meta_ads' && previous.access_token !== merged.access_token;
         if (provider === 'google_ads' && (changed || previous.client_id !== merged.client_id || (previous.auth_type || 'oauth') !== merged.auth_type)) delete merged.refresh_token;

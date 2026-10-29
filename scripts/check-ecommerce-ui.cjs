@@ -6,6 +6,7 @@ const { createRequire } = require('node:module');
 const assert = require('node:assert/strict');
 const express = require('../backend/node_modules/express');
 const { normalizeOrder, buildReport, dateRange, day, shiftDay } = require('../backend/ecommerce/domain');
+const { buildMerchantReport } = require('../backend/ecommerce/merchant');
 const requireBrowser = process.argv[2] ? createRequire(path.join(path.resolve(process.argv[2]), 'package.json')) : require;
 let puppeteer;
 try { puppeteer = requireBrowser('puppeteer'); } catch { puppeteer = requireBrowser('puppeteer-core'); }
@@ -13,7 +14,9 @@ const output = path.join(__dirname, '..', '.tmp', 'ecommerce-ui');
 fs.mkdirSync(output, { recursive: true });
 const app = express();
 app.use(express.json());
-const connections = ['woocommerce', 'ga4', 'google_ads', 'meta_ads', 'search_console'].map(provider => ({ provider, config: {}, enabled: true, status: 'connected', last_success_at: new Date().toISOString(), info: {} }));
+const connections = ['woocommerce', 'ga4', 'google_ads', 'meta_ads', 'search_console', 'merchant_center'].map(provider => ({ provider, config: {}, enabled: true, status: 'connected', last_success_at: new Date().toISOString(), info: {} }));
+connections[5].config = { account_id: '5890381416', identity_source: 'ga4' };
+connections[5].info = { account_name: 'Aerion Technologies', performance_last_success_at: new Date().toISOString() };
 connections[0].config = { url: 'https://loja.aerion.com.br' };
 const to = day();
 const orders = Array.from({ length: 9 }, (_, index) => normalizeOrder({ id: index + 1, number: `10${index}`, currency: 'BRL', status: 'completed',
@@ -31,8 +34,12 @@ const metrics = Array.from({ length: 15 }, (_, index) => [
 ]).flat();
 app.get('/api/auth/status', (req, res) => res.json({ authenticated: true, role: 'admin', name: 'Teste local Ecommerce', email: 'teste@example.com', is_app_admin: true }));
 app.get('/api/ecommerce/status', (req, res) => res.json({ connections, encryptionReady: true, oauthRedirectUri: 'https://crm.example.com/api/ecommerce/oauth/google/callback' }));
+const merchantProducts = [{ id: 'accounts/5890381416/products/pt~BR~DRONE-A', offerId: 'DRONE-A', title: 'EVO Lite Enterprise', availability: 'IN_STOCK', destinations: [{ context: 'FREE_LISTINGS', pending: ['BR'] }], issues: [{ code: 'pending_initial_policy_review_free_listings', context: 'FREE_LISTINGS', countries: ['BR'], description: 'Pending initial review', resolution: 'pending_processing', detail: 'A análise inicial pode levar até três dias úteis.' }] }];
+const merchantCatalog = { observedAt: new Date().toISOString(), products: merchantProducts, sources: [{ name: 'PRODUCTS SOURCE 1', scheduled: true, frequency: 'FREQUENCY_DAILY', processingState: 'SUCCEEDED', uploadTime: new Date().toISOString(), itemsTotal: 1, feedUrl: 'https://loja.aerion.com.br/loja/google-merchant.xml/' }] };
+const merchantMetrics = Array.from({ length: 20 }, (_, index) => ['ORGANIC', 'ADS'].map((marketingMethod, method) => ({ date: shiftDay(to, -index), offerId: 'DRONE-A', title: 'EVO Lite Enterprise', marketingMethod, clicks: 5 + index + method, impressions: 100 + index * 10 + method * 50 }))).flat();
 app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range: dateRange(req.query), orders, metrics, connections,
   links: [{ link_id: 'aerion-demo-link', utm_campaign: 'Drones Enterprise', utm_source: 'google', coupon_codes: ['AERION10'] }], visits: [] }), couponCatalog: [],
+  merchant: buildMerchantReport(merchantCatalog, merchantMetrics, dateRange(req.query), connections[5]),
   search: { available: true, site: 'sc-domain:aerion.com.br', latestDate: shiftDay(to, -3), summary: { clicks: 42, impressions: 1800, ctr: 2.33, position: 8.5 },
     pages: [{ landing: 'https://aerion.com.br/loja/produto/autel-evo-lite-enterprise/', clicks: 12, impressions: 350, ctr: 3.43, position: 8 }],
     queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
@@ -42,7 +49,7 @@ app.get('/api/sankhya/report', (req, res) => res.json({ currentRevenueSource: 'h
   { company_id: 102, resource: 'orders', enabled: true, documents: 6, last_success_at: new Date().toISOString() },
   { company_id: 102, resource: 'invoices', enabled: true, last_success_at: null, error: 'Consulta de notas fiscais recusada pelo proxy (HTTP 502). Últimos dados preservados.' },
 ] }));
-app.get('/api/vendas/realizado/ano', (req, res) => res.json({ configured: true, source: 'hybrid_100_database_102_invoices', meses: Array.from({length:12}, (_,i)=>({mes:i+1,receita:i===4?15000:0,receita_100:i===4?10000:0,receita_102:i===4?5000:0,vendas:i===4?3:0})) }));
+app.get('/api/vendas/realizado/ano', (req, res) => res.json({ configured: true, source: 'hybrid_100_database_102_invoices', sources: [{ company: 100, source: 'reporting_database' }, { company: 102, source: 'sankhya_invoices' }], meses: Array.from({length:12}, (_,i)=>({mes:i+1,receita:i===4?15000:0,receita_100:i===4?10000:0,receita_102:i===4?5000:0,vendas:i===4?3:0})) }));
 app.get('/api/vendas/realizado/vendedores/ano', (req, res) => res.json({ configured: true, vendedores: [] }));
 app.use('/api', (req, res) => res.json([]));
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
@@ -76,6 +83,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       ['Visão geral', 'overview', 'Visão geral'], ['Vendas e produtos', 'sales', 'Vendas e produtos'], ['Cupons', 'coupons', 'Vendas e produtos'],
       ['Marketing', 'ads', 'Marketing'], ['Tráfego e conversão', 'traffic', 'Marketing'], ['Campanhas e UTMs', 'campaigns', 'Marketing'],
       ['Busca orgânica e SEO', 'seo', 'Marketing'],
+      ['Produtos no Google', 'merchant', 'Marketing'],
     ];
     for (const [label, id, heading] of sections) {
       await clickSection(label);
@@ -119,10 +127,17 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Mobile chart controls must fit the viewport.');
     await clickSection('Busca orgânica e SEO');
     await page.screenshot({ path: path.join(output, 'seo-mobile.png'), fullPage: true });
+    await clickSection('Produtos no Google');
+    await page.waitForSelector('[aria-label="Desempenho dos produtos no Merchant Center"]');
+    await page.screenshot({ path: path.join(output, 'merchant-mobile.png'), fullPage: true });
+    await page.select('[aria-label="Desempenho dos produtos no Merchant Center"] select', 'all');
+    await page.evaluate(() => document.querySelector('[aria-label="Situação do catálogo e do feed"]').open = true);
+    await page.$eval('[aria-label="Situação do catálogo e do feed"]', element => element.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: path.join(output, 'merchant-mobile-catalog.png'), fullPage: true });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, 'The mobile page must not overflow horizontally.');
     assert.deepEqual(errors, [], 'Dashboard has uncaught browser errors.');
-    console.log(JSON.stringify({ checked: 7, viewports: ['1440x1000', '390x844'], errors, output }));
+    console.log(JSON.stringify({ checked: sections.length, viewports: ['1440x1000', '390x844'], errors, output }));
   } finally {
     await browser?.close();
     server.closeAllConnections();

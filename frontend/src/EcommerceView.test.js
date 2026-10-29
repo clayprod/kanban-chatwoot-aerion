@@ -28,6 +28,20 @@ test('members can consult reports but connection configuration stays restricted'
   expect(screen.queryByLabelText('Consumer Secret')).not.toBeInTheDocument();
 });
 
+test('Merchant appears in connections with a saved Google identity and in Marketing navigation', async () => {
+  const { unmount } = render(<EcommerceView section="connections" isAdmin onNavigate={jest.fn()} />);
+  expect(await screen.findByText('Google Merchant Center')).toBeInTheDocument();
+  fireEvent.click(screen.getByText('Google Merchant Center'));
+  expect(screen.getByLabelText('Identidade Google do Merchant')).toHaveValue('ga4');
+  expect(screen.getByLabelText('ID da conta Merchant Center')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Credenciais próprias do Merchant (JSON)')).not.toBeInTheDocument();
+  unmount();
+  render(<EcommerceView section="ads" onNavigate={jest.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Produtos no Google' }));
+  expect(screen.getByRole('button', { name: 'Marketing' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByText(/Conecte o Google Merchant Center em Conexões/)).toBeInTheDocument();
+});
+
 test('chart series can be hidden, restored and switched to volume without mixing currency', async () => {
   axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : {
     ...report, daily: [{ date: '2026-10-21', revenue: 100, spend: 20, orders: 1, sessions: 10 }],

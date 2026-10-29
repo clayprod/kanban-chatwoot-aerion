@@ -37,13 +37,27 @@ const PUBLIC_FIELDS = {
   woocommerce: ['url', 'report_user'], ga4: ['property_id'],
   google_ads: ['customer_id', 'login_customer_id', 'client_id', 'auth_type', 'purchase_conversion_action_id'], meta_ads: ['account_id'],
   search_console: ['site_url'],
+  merchant_center: ['account_id', 'identity_source'],
 };
 const SECRET_FIELDS = {
   woocommerce: ['consumer_key', 'consumer_secret', 'report_password', 'webhook_secret'],
   ga4: ['service_account'], google_ads: ['client_secret', 'refresh_token', 'service_account'], meta_ads: ['access_token'],
   search_console: ['service_account'],
+  merchant_center: ['service_account'],
 };
-const lockId = provider => ({ woocommerce: 735101, ga4: 735102, google_ads: 735103, meta_ads: 735104, search_console: 735105 }[provider]);
+const lockId = provider => ({ woocommerce: 735101, ga4: 735102, google_ads: 735103, meta_ads: 735104, search_console: 735105, merchant_center: 735106 }[provider]);
+async function connectionConfig(db, row, env = process.env) {
+  const config = { ...row.config, ...decrypt(row.secrets, encryptionKey(env)) };
+  if (row.provider === 'merchant_center' && config.identity_source !== 'own') {
+    const source = config.identity_source || 'ga4';
+    if (!['ga4', 'google_ads', 'search_console'].includes(source)) throw Object.assign(new Error('Selecione uma conexão Google válida para a identidade do Merchant Center.'), { status: 400, retrySeconds: 3600 });
+    const identity = (await db.query('SELECT secrets FROM ecommerce_connections WHERE provider=$1', [source])).rows[0];
+    const account = identity && decrypt(identity.secrets, encryptionKey(env)).service_account;
+    if (!account) throw Object.assign(new Error('A conexão Google selecionada não tem uma conta técnica salva. Configure essa identidade ou escolha credenciais próprias.'), { status: 400, retrySeconds: 3600 });
+    config.service_account = account;
+  }
+  return config;
+}
 function publicConnection(row) {
   return { provider: row.provider, config: row.config, enabled: row.enabled, status: row.status,
     error: row.error, info: row.info, syncing: Boolean(row.cursor), last_success_at: row.last_success_at,
@@ -89,11 +103,21 @@ function createSync({ pool, providers, env = process.env }) {
       if (!locked) return;
       const row = (await client.query('SELECT * FROM ecommerce_connections WHERE provider=$1', [provider])).rows[0];
       if (!row?.enabled || (!force && new Date(row.next_run_at) > new Date())) return;
-      const config = { ...row.config, ...decrypt(row.secrets, encryptionKey(env)) };
+      const config = await connectionConfig(client, row, env);
       await client.query("UPDATE ecommerce_connections SET status='syncing',error=NULL WHERE provider=$1", [provider]);
       const info = row.cursor ? row.info : { ...row.info, ...await providers.test(provider, config) };
       await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
       const today = day();
+      if (provider === 'merchant_center' && (!row.cursor || !row.info.catalog_last_success_at || Date.now() - new Date(row.info.catalog_last_success_at).getTime() >= 3600000)) {
+        // Current catalog and historical performance are independent: a report
+        // permission failure must not erase a healthy catalog snapshot.
+        const catalog = await providers.merchantCatalog(config);
+        await transaction(client, async () => {
+          await upsertRecord(client, provider, 'merchant_catalog', 'current', null, catalog);
+          info.catalog_last_success_at = catalog.observedAt;
+          await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
+        });
+      }
       const bootstrap = !row.last_success_at;
       const start = new Date(); start.setUTCFullYear(start.getUTCFullYear() - 1);
       if (!info.history_from) {
@@ -175,17 +199,31 @@ function createSync({ pool, providers, env = process.env }) {
       } else {
         for (let batch = 0; batch < 3 && cursor; batch++) {
           const from = cursor.next;
-          const to = shiftDay(from, 6) < cursor.to ? shiftDay(from, 6) : cursor.to;
-          const metrics = await providers.metrics(provider, config, from, to, info);
+          const end = shiftDay(from, provider === 'merchant_center' ? 29 : 6);
+          const to = end < cursor.to ? end : cursor.to;
+          let metrics;
+          try { metrics = await providers.metrics(provider, config, from, to, info); }
+          catch (error) {
+            if (provider !== 'merchant_center') throw error;
+            info.performance_error = error.retrySeconds ? error.message : 'Desempenho do Merchant indisponível. O catálogo continua atualizado.';
+            await client.query("UPDATE ecommerce_connections SET info=$2,status='connected',error=NULL,next_run_at=now()+interval '1 hour' WHERE provider=$1", [provider, info]);
+            return;
+          }
           const next = to < cursor.to ? { ...cursor, next: shiftDay(to, 1) } : null;
           await transaction(client, async () => {
             await client.query("DELETE FROM ecommerce_records WHERE provider=$1 AND kind='metric' AND date BETWEEN $2 AND $3", [provider, from, to]);
             for (let i = 0; i < metrics.length; i++) {
               const metric = metrics[i];
-              const id = crypto.createHash('sha256').update(JSON.stringify([metric.date, metric.kind, metric.source, metric.medium, metric.campaignId, metric.campaign, metric.content, metric.landing, metric.event])).digest('hex');
+              const id = crypto.createHash('sha256').update(JSON.stringify([metric.date, metric.kind, metric.source, metric.medium, metric.campaignId, metric.campaign, metric.content, metric.landing, metric.event, ...(provider === 'merchant_center' ? [metric.offerId, metric.marketingMethod, metric.title] : [])])).digest('hex');
               await upsertRecord(client, provider, 'metric', id, metric.date, metric);
             }
             await client.query('UPDATE ecommerce_connections SET cursor=$2,last_success_at=CASE WHEN $2::jsonb IS NULL THEN now() ELSE last_success_at END WHERE provider=$1', [provider, next]);
+            if (provider === 'merchant_center') {
+              info.performance_error = null;
+              info.performance_last_success_at = new Date().toISOString();
+              info.performance_through = to;
+              await client.query('UPDATE ecommerce_connections SET info=$2 WHERE provider=$1', [provider, info]);
+            }
           });
           cursor = next;
         }
@@ -216,4 +254,4 @@ function createSync({ pool, providers, env = process.env }) {
   }
   return { run, tick };
 }
-module.exports = { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, upsertRecord, transaction, createSync, encrypt, decrypt };
+module.exports = { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, connectionConfig, upsertRecord, transaction, createSync, encrypt, decrypt };

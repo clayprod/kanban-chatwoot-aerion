@@ -1,6 +1,6 @@
 # Ecommerce Aerion
 
-O CRM importa dados de uma loja WooCommerce, uma propriedade GA4 e uma conta de anúncios de cada plataforma (Google e Meta). Não altera pedidos, produtos, cupons ou campanhas. Não cria contatos nem dispara mensagens.
+O CRM importa dados de uma loja WooCommerce, uma propriedade GA4, uma conta Merchant Center e uma conta de anúncios de cada plataforma (Google e Meta). Não altera pedidos, produtos, cupons ou campanhas. Não cria contatos nem dispara mensagens.
 
 ## Configuração do servidor
 
@@ -30,6 +30,14 @@ Em **Usuários**, conceda a permissão **Ecommerce → Ver** aos usuários escol
 6. Clique em **Testar acesso salvo** e **Sincronizar agora**. O relatório de vendas funciona sem o plugin; links e visitas próprios dependem dele.
 
 O plugin expõe somente `GET /wp-json/aerion-reports/v1/health`, `/links` e `/visits`. Exige a capacidade `aerion_read_reports`, não exporta hashes de sessão nem dados de clientes e envia `Cache-Control: private, no-store`. Visitas são agregadas por link/dia em UTC, como na tabela original. Links são atribuídos conforme o cookie existente do Aerion Core: último link em até 30 dias. O módulo não instala tags nem altera consentimento.
+
+## Google Merchant Center
+
+Em **Ecommerce → Conexões**, informe o ID da conta e escolha a identidade técnica já salva no Analytics, Google Ads ou Search Console. A opção de credenciais próprias aceita o mesmo JSON de conta de serviço ou identidade federada das outras conexões. O segredo da identidade compartilhada é consultado no servidor a cada sincronização, sem duplicar a credencial ou devolvê-la ao navegador. O projeto precisa ter a Merchant API habilitada e seu registro administrativo na conta concluído. O escopo Google é `content`; o conector usa somente consultas de catálogo, processamento e relatórios.
+
+**Marketing → Produtos no Google** prioriza cliques, impressões, CTR, evolução diária e ranking por oferta, com filtro entre listagens gratuitas e anúncios. CTR é recalculado pelos totais, sem média de taxas. Os números do Merchant não são adicionados aos do Google Ads, GA4 ou à receita da loja. Há um resumo das listagens gratuitas na visão geral. A aprovação atual no Brasil, as pendências, a disponibilidade e o último processamento das fontes ficam em um detalhamento recolhível, independente do período do desempenho.
+
+A sincronização roda a cada hora. O catálogo só é substituído depois da leitura completa de todas as páginas. Desempenho importa até um ano, em lotes de 30 dias, e reconcilia períodos recentes; uma falha nos relatórios conserva o catálogo e os últimos dados disponíveis, mostrando a pendência separada. Uma consulta bem-sucedida sem linhas pode produzir zero atividade; falta de acesso, primeira importação incompleta ou período anterior à cobertura não produz zeros fictícios. O processamento bem-sucedido do feed não comprova aprovação para exibição. Alterar o ID da conta limpa apenas os dados Merchant anteriores.
 
 ## Google Analytics 4
 
