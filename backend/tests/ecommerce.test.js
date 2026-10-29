@@ -236,7 +236,8 @@ test('Search Console uses a separate readonly scope and preserves page/query dai
   const info = await p.test('search_console', config);
   assert.equal(info.permission, 'siteFullUser'); assert.equal(info.sitemaps[0].warnings, 1);
   const rows = await p.metrics('search_console', config, '2026-10-20', '2026-10-21');
-  assert.equal(rows.length, 3); assert.equal(rows.find(r => r.kind === 'search_query').content, 'drone aerion');
+  assert.equal(rows.length, 4); assert.equal(rows.find(r => r.kind === 'search_query').content, 'drone aerion');
+  assert.deepEqual(rows.find(r => r.kind === 'search_total' && r.date === '2026-10-21'), { kind: 'search_total', date: '2026-10-21', clicks: 0, impressions: 0, position: 0, measuredZero: true });
   assert.equal(rows.find(r => r.kind === 'search_page').landing, 'https://aerion.com.br/loja/');
   const assertion = new URLSearchParams(requests[0].options.body).get('assertion').split('.')[1];
   assert.equal(JSON.parse(Buffer.from(assertion, 'base64url').toString()).scope, 'https://www.googleapis.com/auth/webmasters.readonly');

@@ -57,6 +57,8 @@ GA4: públicos por eventos e retenções equivalentes; vínculo Google Ads e `ad
 
 Sincronização de cadastros roda diariamente após configurar `ECOMMERCE_CUSTOMER_LISTS`, um JSON como:
 
+Auditoria agregada de 29/10/2026: 3.868 contatos na conta CRM 2, nenhum com `aerion_advertising_consent` registrado. Isso não permite presumir autorização publicitária a partir de telefone/email ou etapa comercial. A base permanece fora do envio até registrar a elegibilidade verificável.
+
 ```json
 [
   {"source":"crm","segment":"qualified","platform":"meta_ads","id":"ID_DA_LISTA","managedBy":"aerion_crm"},
