@@ -1,5 +1,13 @@
 # Auditoria de medição — Aerion
 
+## Merchant no dashboard — 29/10/2026
+
+A versão `d3b90f8`, publicada pela `main`/CI/GHCR, adicionou a conexão Merchant Center e a área **Marketing → Produtos no Google**, com foco em cliques, impressões, CTR ponderado, gráfico diário e ranking por oferta. Listagens gratuitas e anúncios ficam separados e não são somados novamente às métricas de Google Ads/GA4. O catálogo atual, as pendências e o processamento do feed ficam em detalhamento próprio; há também um resumo das listagens gratuitas na visão geral.
+
+A conexão da conta **5890381416** foi provisionada pela API administrativa do dashboard, com `identity_source=ga4`, reutilizando a identidade federada existente sem copiar seu segredo. O teste de acesso passou. A carga inicial percorreu o histórico solicitado de **29/10/2025 a 29/10/2026**, em cinco lotes operacionais, e terminou `connected`, sem erros. A API do dashboard confirmou 29 ofertas, todas ainda em análise para listagens gratuitas no Brasil; nenhuma atividade orgânica ou de anúncios foi retornada no período consultado de 30 dias. A sincronização automática está habilitada a cada hora.
+
+O processamento diário do feed foi confirmado como `SUCCEEDED`, com 29 itens e última leitura em 29/10 às 03:00 UTC. Surgiu um aviso de resolução de imagem insuficiente para requisitos futuros no **Autel Mapper licença perpétua** (mínimo informado: 500 × 500 pixels), além de revisões iniciais e de imagem ainda pendentes. A tela agrupa o mesmo motivo entre destinos contando cada oferta uma única vez. Nenhum anúncio foi ativado nem produto/feed alterado pelo conector.
+
 ## Autorizações Google verificadas em 28/10/2026
 
 **Situação final em 28/10:** o registro foi concluído com o login pessoal administrador, por OAuth local com PKCE, na conta Merchant Center **5890381416**. A resposta confirmou `accounts/5890381416/developerRegistration` e o projeto **275930572314**. O acesso automatizado pela identidade federada existente foi validado em seguida: leitura da conta, fontes de dados e catálogo, sem conceder Admin à conta técnica. Tokens do login pessoal não foram persistidos.

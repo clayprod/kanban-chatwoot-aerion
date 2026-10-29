@@ -41,6 +41,13 @@ test('Merchant distinguishes successful empty performance, unavailable and prese
   assert.equal(incomplete.methods[0].clicks, null); assert.equal(incomplete.coveragePartial, true);
 });
 
+test('repeated issues across advertising destinations count each affected offer only once', () => {
+  const product = { ...pending, issues: [pending.issues[0], { ...pending.issues[0], context: 'VIDEO_ADS' }] };
+  const report = buildMerchantReport({ ...catalog, products: [product] }, [], range, connection);
+  assert.equal(report.issues.length, 1); assert.equal(report.issues[0].products, 1);
+  assert.deepEqual(report.issues[0].contexts, ['FREE_LISTINGS', 'VIDEO_ADS']);
+});
+
 test('Merchant connection accepts saved technical identities and rejects unsupported account/source values', () => {
   assert.equal(validateConfig('merchant_center', { account_id: '5890381416' }).identity_source, 'ga4');
   assert.throws(() => validateConfig('merchant_center', { account_id: 'https://other.example' }));

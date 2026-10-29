@@ -35,11 +35,13 @@ function buildMerchantReport(catalog, metrics, range, connection) {
     const seen = new Set();
     for (const issue of product.issues) {
       if (issue.countries.length && !issue.countries.includes('BR')) continue;
-      const key = JSON.stringify([issue.code, issue.context]);
+      const key = issue.code;
+      if (!issues.has(key)) issues.set(key, { ...issue, products: 0, examples: [], contexts: [] });
+      const group = issues.get(key);
+      if (issue.context && !group.contexts.includes(issue.context)) group.contexts.push(issue.context);
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!issues.has(key)) issues.set(key, { ...issue, products: 0, examples: [] });
-      const group = issues.get(key); group.products++;
+      group.products++;
       if (group.examples.length < 3) group.examples.push(product.title);
     }
   }
