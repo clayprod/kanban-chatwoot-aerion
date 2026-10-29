@@ -33,6 +33,24 @@ test('webhook provisioning creates only missing topics and preserves existing de
   assert.equal(writes.length, 2); assert.deepEqual(writes.map(w => w.topic), ['product.updated', 'product.deleted']);
   assert(result.hooks[0].existing); assert(!JSON.stringify(result).includes('private'));
 });
+test('Google audience creation uses the Admin API enum and keeps paid-buyer exclusions explicit', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const config = { property_id: '123', service_account: { type: 'service_account', client_email: 'reader@example.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) } };
+  let count = 0;
+  const provider = createProviders({ transport: async (url, options = {}) => {
+    if (url.includes('oauth2.googleapis.com')) return Response.json({ access_token: 'test', expires_in: 3600 });
+    if (url.includes('/googleAdsLinks')) return Response.json({ googleAdsLinks: [{ customerId: '1234567890', adsPersonalizationEnabled: true }] });
+    if (options.method !== 'POST') return Response.json({ audiences: [] });
+    const body = JSON.parse(options.body);
+    assert.equal(body.filterClauses[0].simpleFilter.scope, 'AUDIENCE_FILTER_SCOPE_ACROSS_ALL_SESSIONS');
+    assert.equal(body.filterClauses[0].clauseType, 'INCLUDE');
+    assert(!JSON.stringify(body).includes('inAnyNDayPeriod'));
+    count++; return Response.json({ ...body, name: `properties/123/audiences/${count}`, adsPersonalizationEnabled: true });
+  } });
+  const result = await provider.ensureGoogleStoreAudiences(config);
+  assert.equal(count, 5); assert.equal(result.store.find(a => a.id === 'paid_buyers').days, 180);
+  assert(result.store.find(a => a.id === 'cart').exclusionMethod); assert.equal(result.activationAllowed, false);
+});
 test('feed blocks duplicate SKU, placeholders, missing brand, invalid URLs and undated preorder', () => {
   const p = projectProduct(raw());
   assert(eligibleProducts([p])[0].eligible);
