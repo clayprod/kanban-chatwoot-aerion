@@ -57,15 +57,58 @@ async function download(url, { gate, pncpRequest, maxBytes = MAX_BYTES } = {}) {
   }
   throw new Error('Redirecionamentos demais.');
 }
+const activeDocumentProcesses = new Set();
+function signalDocumentTree(child, signal) {
+  if (!child.pid) return;
+  try {
+    if (process.platform !== 'win32') process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch (error) { if (error.code !== 'ESRCH') throw error; }
+}
+process.once('exit', () => {
+  for (const child of activeDocumentProcesses) {
+    try { signalDocumentTree(child, 'SIGKILL'); } catch {}
+  }
+});
 function run(command, args, timeoutMs = 180000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      windowsHide: true, shell: false, detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, OMP_THREAD_LIMIT: '1', OMP_NUM_THREADS: '1', OMP_WAIT_POLICY: 'PASSIVE',
+        TECHNICAL_EXTRACT_PARENT_PID: String(process.pid) },
+    });
+    if (child.pid) activeDocumentProcesses.add(child);
     const chunks = []; let size = 0, errors = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Tempo de leitura do documento excedido.')); }, timeoutMs);
-    child.stdout.on('data', chunk => { size += chunk.length; if (size > 20 * 1024 * 1024) { child.kill('SIGKILL'); } else chunks.push(chunk); });
+    let failure, settled = false, killTimer;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); clearTimeout(killTimer);
+      // The parent can exit before a descendant closes the inherited pipes.
+      try { signalDocumentTree(child, 'SIGKILL'); } catch {}
+      activeDocumentProcesses.delete(child);
+      if (error) reject(error); else resolve(value);
+    };
+    const terminate = error => {
+      if (failure) return;
+      failure = error;
+      try { signalDocumentTree(child, 'SIGTERM'); } catch {}
+      killTimer = setTimeout(() => { try { signalDocumentTree(child, 'SIGKILL'); } catch {} }, 1000);
+    };
+    const timer = setTimeout(() => terminate(new Error('Tempo de leitura do documento excedido.')), timeoutMs);
+    child.stdout.on('data', chunk => {
+      size += chunk.length;
+      if (size > 20 * 1024 * 1024) terminate(new Error('Saída de extração acima de 20 MB.'));
+      else if (!failure) chunks.push(chunk);
+    });
     child.stderr.on('data', b => { errors = (errors + b).slice(-2000); });
-    child.on('error', error => { clearTimeout(timer); reject(error); });
-    child.on('close', code => { clearTimeout(timer); code === 0 && size <= 20 * 1024 * 1024 ? resolve(Buffer.concat(chunks).toString('utf8')) : reject(new Error(errors || `Falha de extração (${code}).`)); });
+    child.once('exit', () => { try { signalDocumentTree(child, 'SIGKILL'); } catch {} });
+    child.once('error', error => finish(error));
+    child.once('close', code => {
+      if (failure) finish(failure);
+      else if (code === 0 && size <= 20 * 1024 * 1024) finish(null, Buffer.concat(chunks).toString('utf8'));
+      else finish(new Error(errors || `Falha de extração (${code}).`));
+    });
   });
 }
 async function extract(bytes, filename, contentType = '') {

@@ -9,10 +9,30 @@ import tempfile
 import zipfile
 import shutil
 import re
+import os
+import signal
+import ctypes
+from functools import partial
+
+
+def bind_to_parent(expected_parent):
+    """Linux: a killed extractor must not leave an unbounded OCR child behind."""
+    if not sys.platform.startswith('linux'):
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+    # Close the race where the parent exits between fork and prctl.
+    if os.getppid() != expected_parent:
+        os.kill(os.getpid(), signal.SIGKILL)
 
 
 def command(args, timeout=90):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout
+    environment = dict(os.environ, OMP_THREAD_LIMIT='1', OMP_NUM_THREADS='1', OMP_WAIT_POLICY='PASSIVE')
+    setup = partial(bind_to_parent, os.getpid()) if sys.platform.startswith('linux') else None
+    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout,
+                          env=environment, preexec_fn=setup).stdout
 
 
 def archive(source, depth, budget):
@@ -132,6 +152,9 @@ def main(filename, depth=0, budget=None):
 
 if __name__ == '__main__':
     try:
+        parent = int(os.environ.get('TECHNICAL_EXTRACT_PARENT_PID', '0'))
+        if parent > 0:
+            bind_to_parent(parent)
         print(json.dumps(main(sys.argv[1]), ensure_ascii=False))
     except Exception as error:
         print(str(error), file=sys.stderr)
