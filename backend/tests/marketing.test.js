@@ -51,6 +51,23 @@ test('Google audience creation uses the Admin API enum and keeps paid-buyer excl
   assert.equal(count, 5); assert.equal(result.store.find(a => a.id === 'paid_buyers').days, 180);
   assert(result.store.find(a => a.id === 'cart').exclusionMethod); assert.equal(result.activationAllowed, false);
 });
+test('Meta all-visitors rules use the supported URL template and exclude paid buyers for 180 days', async () => {
+  const created = [];
+  const providers = createProviders({ transport: async (url, options) => {
+    if (options.method === 'GET') return Response.json({ data: [] });
+    const fields = Object.fromEntries(new URLSearchParams(options.body));
+    created.push({ ...fields, rule: JSON.parse(fields.rule) });
+    return Response.json({ id: String(created.length) });
+  } });
+  await providers.ensureMetaStoreAudiences({ account_id: '10', access_token: 'secret' }, '123');
+  assert.equal(created.length, 5);
+  const rule = created[0].rule;
+  assert.equal(rule.inclusions.rules[0].template, 'ALL_VISITORS');
+  assert.deepEqual(rule.inclusions.rules[0].filter.filters[0], { field: 'url', operator: 'i_contains', value: '' });
+  assert.equal(rule.inclusions.rules[0].retention_seconds, 30 * 86400);
+  assert.equal(rule.exclusions.rules[0].retention_seconds, 180 * 86400);
+  assert.equal(rule.exclusions.rules[0].filter.filters[0].value, 'Purchase');
+});
 test('feed blocks duplicate SKU, placeholders, missing brand, invalid URLs and undated preorder', () => {
   const p = projectProduct(raw());
   assert(eligibleProducts([p])[0].eligible);

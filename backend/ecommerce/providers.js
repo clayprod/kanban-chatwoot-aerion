@@ -365,9 +365,10 @@ function createProviders({ transport = request, env = process.env } = {}) {
         const name = `Aerion CRM · Loja · ${audience.id} · v1`;
         const candidates = existing.filter(a => a.name === name);
         if (candidates.length > 1) throw new ProviderError('Públicos Aerion duplicados. Revise antes de continuar.');
-        const clause = (event, days) => ({ event_sources: [{ id: pixelId, type: 'pixel' }], retention_seconds: days * 86400,
-          filter: { operator: 'and', filters: [{ field: 'event', operator: 'eq', value: event }] } });
-        const rule = { inclusions: { operator: 'or', rules: [clause(audience.meta, audience.days)] },
+        const clause = (event, days, allVisitors = false) => ({ event_sources: [{ id: pixelId, type: 'pixel' }], retention_seconds: days * 86400,
+          template: allVisitors ? 'ALL_VISITORS' : 'VISITORS_BY_URL',
+          filter: { operator: 'and', filters: [allVisitors ? { field: 'url', operator: 'i_contains', value: '' } : { field: 'event', operator: 'eq', value: event }] } });
+        const rule = { inclusions: { operator: 'or', rules: [clause(audience.meta, audience.days, audience.id === 'visitors')] },
           ...(audience.excludePaidDays ? { exclusions: { operator: 'or', rules: [clause('Purchase', audience.excludePaidDays)] } } : {}) };
         let found = candidates[0];
         if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, subtype: 'WEBSITE', prefill: true, rule }, 'POST');
