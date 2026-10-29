@@ -131,7 +131,8 @@ As linhas de infraestrutura abaixo significam código e testes locais operaciona
 | Aprovações e isolamento | Operacional e validado por testes | Conteúdo e campanhas continuam sujeitos à revisão; nada foi ativado |
 | Merchant existente | Aguardando processamento externo | 29 ofertas recebidas e nenhuma aprovação observada na última fotografia; preservar fonte diária |
 | Catálogo Meta | Dependente de ação do administrador | Conceder `catalog_management`, selecionar Business/catálogo, executar preparação e validar conta/dataset |
-| Públicos Meta/GA4 | Dependente de acesso de escrita e processamento externo | Executar os botões de preparação; conferir regras existentes, vínculo Ads e exclusões |
+| Públicos GA4/Google Ads | Criados; aguardando processamento externo | Cinco públicos confirmados em 29/10 às 21:13 UTC; vínculo Ads `1038983099` com personalização habilitada. Aplicar exclusão do público de compradores nas campanhas antes de ativação |
+| Públicos Meta | Dependente de ação do administrador | Reautorizar a identidade existente: conector oficial retornou HTTP 401 / OAuthException 190; conferir acesso de escrita à conta `1318645390292737` e dataset `1668777180919759` |
 | Listas de cadastro | Dependente de ação do administrador | Mapear listas dedicadas, atribuir capacidade WordPress e registrar elegibilidade comprovada |
 | GA4 pelo servidor | Desabilitado até validação | Validar contexto, consentimento e deduplicação em teste; configurar fluxo/segredo e flags |
 | Meta CAPI existente | Dependente de auditoria da origem | Conciliar o emissor SERVER existente antes de qualquer novo envio |
@@ -149,6 +150,8 @@ O Dockerfile do CRM empacota os três arquivos PHP em `/opt/aerion-integrations/
 Deploy concluído pelo wrapper: imagem `aerion-wordpress:marketing-main-46a6f87`, ID `sha256:d25dc602e424f1ab2e055434fb8219b1f898f930af9bb6738fcc233b3cc8a614`. Fonte CI/GHCR `ghcr.io/clayprod/kanban-chatwoot-aerion@sha256:3455e3f2c902733548f0d0d311f9f696556c2cf84605cb1e18e7ec5922984708`, commit `46a6f8726791f10d7b3c9d1bc201aafd45d6cfa2`. Somente os três arquivos do plugin mudaram; os outros 657 arquivos foram preservados. Passaram volumes, três campanhas, dez artes e as simulações das datas de descontos. O plugin respondeu como 1.2.0 e a primeira projeção terminou às 20:40 UTC de 29/10.
 
 A cópia local em `G:\Drives compartilhados\AERION\03 - Marketing\Website\aerion-elevate-hub` foi sincronizada com os mesmos blobs aprovados da `main`, com conferência de hashes. Dockerfile e entrypoint desse projeto não foram alterados. Nenhuma edição paralela do site ou da análise técnica foi substituída.
+
+Consolidação dos outros agentes publicada em `b637a91`, preservando os cinco commits locais e as correções já existentes no remoto. A revisão de código `c3612ce` passou no CI e foi confirmada na imagem em execução. Feed Meta interno: HTTP 200, 30 itens e logs de URL desabilitados. A API Google aceitou os cinco públicos após adequar o enum e o comprimento da descrição. O SKU `EVO-NEST` ainda não consta entre as ofertas recebidas no snapshot Merchant; não foi criado outro mecanismo de envio. Testes adicionais dos agentes: 27 passaram no Windows; um teste real de OCR não concluiu por dependência executável ausente nesse ambiente.
 
 ## Verificação
 
