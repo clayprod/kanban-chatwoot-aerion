@@ -1,0 +1,16 @@
+# Assemble only from the verified production base and the main CI/GHCR image.
+# No PHP, theme, uploads or database files are read from a developer checkout.
+ARG INTEGRATION_IMAGE
+ARG WORDPRESS_BASE_IMAGE
+FROM ${INTEGRATION_IMAGE} AS validated_integration
+FROM ${WORDPRESS_BASE_IMAGE}
+
+# These hashes identify the 1.1.1 bridge audited in the production image.
+# Fail rather than replace another agent's newer integration unexpectedly.
+RUN echo 'c510f0f3c80a8010474dd5bef7a461491b105cac86db4ac089dccfabb9b83551  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/aerion-ecommerce-reports.php' | sha256sum -c - \
+ && echo '05aaa79783566bcb21c4a19bd27fc91c383c947587849838d737877a23e30b9e  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c -
+
+COPY --from=validated_integration /opt/aerion-integrations/wordpress/ /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/
+RUN php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/aerion-ecommerce-reports.php \
+ && php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php \
+ && php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/marketing.php

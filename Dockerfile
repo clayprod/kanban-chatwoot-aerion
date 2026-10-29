@@ -29,6 +29,8 @@ COPY --from=backend-builder /app/backend ./
 
 # Production WordPress deployments consume this bridge from the CI/GHCR image.
 COPY integrations/wordpress/aerion-ecommerce-reports.php /opt/aerion-integrations/wordpress/aerion-ecommerce-reports.php
+COPY integrations/wordpress/measurement.php /opt/aerion-integrations/wordpress/measurement.php
+COPY integrations/wordpress/marketing.php /opt/aerion-integrations/wordpress/marketing.php
 
 # Install Python dependencies for RFB import script
 RUN pip3 install --break-system-packages --no-cache-dir -r scripts/requirements.txt
