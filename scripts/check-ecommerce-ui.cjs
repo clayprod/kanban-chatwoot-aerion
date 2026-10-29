@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const express = require('../backend/node_modules/express');
 const { normalizeOrder, buildReport, dateRange, day, shiftDay } = require('../backend/ecommerce/domain');
 const { buildMerchantReport } = require('../backend/ecommerce/merchant');
+const { projectProduct, eligibleProducts, reconcileGoogle, STORE_AUDIENCES } = require('../backend/ecommerce/marketingDomain');
 const requireBrowser = process.argv[2] ? createRequire(path.join(path.resolve(process.argv[2]), 'package.json')) : require;
 let puppeteer;
 try { puppeteer = requireBrowser('puppeteer'); } catch { puppeteer = requireBrowser('puppeteer-core'); }
@@ -37,12 +38,19 @@ app.get('/api/ecommerce/status', (req, res) => res.json({ connections, encryptio
 const merchantProducts = [{ id: 'accounts/5890381416/products/pt~BR~DRONE-A', offerId: 'DRONE-A', title: 'EVO Lite Enterprise', availability: 'IN_STOCK', destinations: [{ context: 'FREE_LISTINGS', pending: ['BR'] }], issues: [{ code: 'pending_initial_policy_review_free_listings', context: 'FREE_LISTINGS', countries: ['BR'], description: 'Pending initial review', resolution: 'pending_processing', detail: 'A análise inicial pode levar até três dias úteis.' }] }];
 const merchantCatalog = { observedAt: new Date().toISOString(), products: merchantProducts, sources: [{ name: 'PRODUCTS SOURCE 1', scheduled: true, frequency: 'FREQUENCY_DAILY', processingState: 'SUCCEEDED', uploadTime: new Date().toISOString(), itemsTotal: 1, feedUrl: 'https://loja.aerion.com.br/loja/google-merchant.xml/' }] };
 const merchantMetrics = Array.from({ length: 20 }, (_, index) => ['ORGANIC', 'ADS'].map((marketingMethod, method) => ({ date: shiftDay(to, -index), offerId: 'DRONE-A', title: 'EVO Lite Enterprise', marketingMethod, clicks: 5 + index + method, impressions: 100 + index * 10 + method * 50 }))).flat();
+const marketingProducts = [projectProduct({ id: 1, sku: 'DRONE-A', name: 'EVO Lite Enterprise', description: 'Descrição real da loja para demonstração local.', url: 'https://loja.aerion.com.br/drone/', image: 'https://loja.aerion.com.br/drone.jpg', brand: 'Autel Robotics', price_source: 'aerion_consumer_card_v1', consumer_price: 15000, consumer_regular_price: 16000, availability: 'in_stock', status: 'publish', visible: true, categories: ['Drones'], currency: 'BRL' })];
+const marketing = { enabled: true, products: eligibleProducts(marketingProducts), googleReconciliation: reconcileGoogle(marketingProducts, merchantCatalog),
+  coverage: { products: { observedAt: new Date().toISOString() } }, audiences: { store: STORE_AUDIENCES.map(a => ({ ...a, status: 'administrator_action', size: null })) },
+  readiness: [{ integration: 'meta_catalog', status: 'administrator_action', account: '1318645390292737', action: 'Reautorizar a identidade Meta existente para administrar o catálogo.', link: 'https://business.facebook.com/commerce/' }],
+  diagnostics: [{ productId: '1', httpStatus: 200, indexable: true, issues: ['cross_domain_canonical_review_required'], observedAt: new Date().toISOString() }],
+  contents: [{ id: 'local-draft', product_id: '1', kind: 'creative', status: 'draft', data: { sku: 'DRONE-A', name: 'EVO Lite Enterprise', copy: 'Proposta local aguardando revisão.' } }], jobs: [], history: [], seo: { available: false, rows: [] } };
 app.get('/api/ecommerce/report', (req, res) => res.json({ ...buildReport({ range: dateRange(req.query), orders, metrics, connections,
   links: [{ link_id: 'aerion-demo-link', utm_campaign: 'Drones Enterprise', utm_source: 'google', coupon_codes: ['AERION10'] }], visits: [] }), couponCatalog: [],
   merchant: buildMerchantReport(merchantCatalog, merchantMetrics, dateRange(req.query), connections[5]),
+  marketing,
   search: { available: true, site: 'sc-domain:aerion.com.br', latestDate: shiftDay(to, -3), summary: { clicks: 42, impressions: 1800, ctr: 2.33, position: 8.5 },
     pages: [{ landing: 'https://aerion.com.br/loja/produto/autel-evo-lite-enterprise/', clicks: 12, impressions: 350, ctr: 3.43, position: 8 }],
-    queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: [], sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
+    queries: [{ query: 'autel drones enterprise', clicks: 10, impressions: 300, ctr: 3.33, position: 9 }], daily: Array.from({ length: 20 }, (_, i) => ({ date: shiftDay(to, -i - 3), clicks: 2 + i, impressions: 100 + i * 10, position: 8 })), sitemaps: [{ path: 'https://aerion.com.br/wp-sitemap.xml', errors: 0, warnings: 0 }] } }));
 app.get('/api/ecommerce/audiences', (req, res) => res.json({ available: true, uploaded: false, observedAt: new Date().toISOString(),
   segments: [{ id: 'qualified', label: 'Qualificados e oportunidades', stages: '6 a 12', contacts: 47, emails: 21, suppressed: 0, use: 'Remarketing comercial' }], stages: [], profiles: [] }));
 app.get('/api/sankhya/report', (req, res) => res.json({ currentRevenueSource: 'hybrid_100_database_102_invoices', streams: [
@@ -84,6 +92,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
       ['Marketing', 'ads', 'Marketing'], ['Tráfego e conversão', 'traffic', 'Marketing'], ['Campanhas e UTMs', 'campaigns', 'Marketing'],
       ['Busca orgânica e SEO', 'seo', 'Marketing'],
       ['Produtos no Google', 'merchant', 'Marketing'],
+      ['Automação e catálogos', 'automation', 'Marketing'],
     ];
     for (const [label, id, heading] of sections) {
       await clickSection(label);
@@ -110,6 +119,10 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
         assert(order, 'Marketing charts must precede indicators and result filters.');
       }
       await page.screenshot({ path: path.join(output, `${id}-desktop.png`), fullPage: true });
+      if (id === 'automation') {
+        await page.$eval('[aria-label="Automação de marketing"] form:last-of-type', element => element.scrollIntoView({ block: 'start' }));
+        await page.screenshot({ path: path.join(output, 'automation-desktop-forms.png'), fullPage: true });
+      }
     }
     await clickSection('Metas e Resultados');
     await page.waitForFunction(() => document.body.textContent.includes('100: base atual · 102: ERP automático') && document.body.textContent.includes('Meta × faturamento'));
@@ -127,6 +140,12 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'frontend', '
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Mobile chart controls must fit the viewport.');
     await clickSection('Busca orgânica e SEO');
     await page.screenshot({ path: path.join(output, 'seo-mobile.png'), fullPage: true });
+    await clickSection('Automação e catálogos');
+    await page.waitForSelector('[aria-label="Automação de marketing"]');
+    await page.screenshot({ path: path.join(output, 'automation-mobile.png'), fullPage: true });
+    await page.$eval('[aria-label="Automação de marketing"] form:last-of-type', element => element.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: path.join(output, 'automation-mobile-forms.png'), fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'Automation forms and tables must fit mobile.');
     await clickSection('Produtos no Google');
     await page.waitForSelector('[aria-label="Desempenho dos produtos no Merchant Center"]');
     await page.screenshot({ path: path.join(output, 'merchant-mobile.png'), fullPage: true });

@@ -51,7 +51,7 @@ async function json(url, options = {}, transport = request) {
         throw new ProviderError('O projeto Google Cloud está restrito a contas de teste. Solicite acesso Explorer, Basic ou Standard na visão geral da Google Ads API.', 3600);
       }
     }
-    if ([401, 403].includes(response.status)) throw new ProviderError('Acesso recusado pela plataforma. Revise autorização e permissões.', 3600);
+    if ([401, 403].includes(response.status)) throw new ProviderError('Acesso recusado pela plataforma. Revise autorização e permissões.', 3600, response.status);
     if (response.status === 429) throw new ProviderError('Limite de consultas atingido. A sincronização será retomada.', Math.min(86400, Math.max(300, Number(response.headers.get('retry-after')) || 900)));
     throw new ProviderError(`A plataforma respondeu HTTP ${response.status}.`, 600, response.status);
   }
@@ -72,7 +72,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
     return result.access_token;
   };
   async function googleToken(config, serviceAccount = false) {
-    const scope = serviceAccount === 'merchant_center' ? 'https://www.googleapis.com/auth/content' : serviceAccount === 'search_console' ? 'https://www.googleapis.com/auth/webmasters.readonly' : serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
+    const scope = serviceAccount === 'merchant_center' ? 'https://www.googleapis.com/auth/content' : serviceAccount === 'search_console' ? 'https://www.googleapis.com/auth/webmasters.readonly' : serviceAccount === 'ga4_admin' ? 'https://www.googleapis.com/auth/analytics.edit' : serviceAccount ? 'https://www.googleapis.com/auth/analytics.readonly' : 'https://www.googleapis.com/auth/adwords';
     const account = serviceAccount || config.auth_type === 'google_identity' ? config.service_account : null;
     const key = crypto.createHash('sha256').update(JSON.stringify([config, scope])).digest('hex');
     return cached(key, async () => {
@@ -144,12 +144,12 @@ function createProviders({ transport = request, env = process.env } = {}) {
     // Active users are intentionally not summed across days or traffic dimensions.
     revenue: row.purchaseRevenue || 0, ...info,
   });
-  async function merchantList(url, key, headers) {
+  async function merchantList(url, key, headers, pageSize = 1000) {
     const rows = [], visited = new Set();
     let pageToken;
     do {
       const target = new URL(url);
-      target.searchParams.set('pageSize', '1000');
+      target.searchParams.set('pageSize', String(pageSize));
       if (pageToken) target.searchParams.set('pageToken', pageToken);
       const { data } = await json(target.toString(), { headers }, transport);
       if (data[key] != null && !Array.isArray(data[key])) throw new ProviderError('O Merchant Center retornou uma listagem inválida. Última carga preservada.');
@@ -160,8 +160,285 @@ function createProviders({ transport = request, env = process.env } = {}) {
     } while (pageToken);
     return rows;
   }
+  async function metaRequest(config, path, params = {}, method = 'GET') {
+    if (!/^(?:act_)?\d+(?:\/[a-z_]+)?$/.test(path)) throw new ProviderError('Recurso Meta inválido.');
+    const url = new URL(`https://graph.facebook.com/${env.ECOMMERCE_META_API_VERSION || 'v25.0'}/${path}`);
+    const encoded = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)]));
+    const options = { method, headers: { Authorization: `Bearer ${config.access_token}` } };
+    if (method === 'GET') url.search = encoded.toString();
+    else { options.headers['Content-Type'] = 'application/x-www-form-urlencoded'; options.body = encoded.toString(); }
+    return (await json(url.toString(), options, transport)).data;
+  }
+  async function metaList(config, path, fields) {
+    const rows = [], seen = new Set(); let after;
+    do {
+      const data = await metaRequest(config, path, { fields, limit: 100, ...(after ? { after } : {}) });
+      if (!Array.isArray(data.data)) throw new ProviderError('Listagem Meta inválida.');
+      rows.push(...data.data);
+      after = data.paging?.next ? data.paging?.cursors?.after : null;
+      if (data.paging?.next && (!after || seen.has(after) || seen.size >= 1000)) throw new ProviderError('Paginação Meta inválida.');
+      seen.add(after);
+    } while (after);
+    return rows;
+  }
+  async function adsRequest(config, suffix, body) {
+    return (await json(`https://googleads.googleapis.com/${env.ECOMMERCE_GOOGLE_ADS_VERSION || 'v25'}/${suffix}`, postJson(body, {
+      Authorization: `Bearer ${await googleToken(config)}`, ...(config.login_customer_id ? { 'login-customer-id': config.login_customer_id } : {}),
+    }), transport)).data;
+  }
   return {
     woo, bridge,
+    async stageMetaSalesCampaign(config, plan, key) {
+      if (!/^[a-f0-9]{16}$/.test(key)) throw new ProviderError('Versão de planejamento inválida.');
+      const name = `Aerion CRM · Loja · ${key}`;
+      const existing = (await metaList(config, `act_${config.account_id}/campaigns`, 'id,name,status')).filter(c => c.name === name);
+      if (existing.length > 1 || existing.some(c => c.status !== 'PAUSED')) throw new ProviderError('A estrutura Meta existente precisa de revisão. Nenhuma campanha foi alterada.');
+      const found = existing[0] || await metaRequest(config, `act_${config.account_id}/campaigns`, {
+        name, objective: 'OUTCOME_SALES', status: 'PAUSED', special_ad_categories: [],
+        daily_budget: Math.max(1, Math.round(plan.meta / 30.4 * 100)), bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      }, 'POST');
+      if (!/^\d+$/.test(found.id || '')) throw new ProviderError('A Meta não confirmou a campanha pausada.');
+      const observed = await metaRequest(config, found.id, { fields: 'id,status' });
+      if (observed.status !== 'PAUSED') throw new ProviderError('Não foi possível confirmar o estado pausado da nova campanha.');
+      return { platform: 'meta_ads', id: found.id, status: 'PAUSED', assets: 'approved_assets_and_adsets_required', observedAt: new Date().toISOString() };
+    },
+    async stageGoogleSalesCampaign(config, plan, merchantId, key) {
+      if (!/^[a-f0-9]{16}$/.test(key)) throw new ProviderError('Versão de planejamento inválida.');
+      if (!/^\d+$/.test(merchantId)) throw new ProviderError('Conta Merchant inválida.');
+      const name = `Aerion CRM Loja ${key}`;
+      const result = await adsRequest(config, `customers/${config.customer_id}/googleAds:search`, { query: `SELECT campaign.resource_name, campaign.status FROM campaign WHERE campaign.name = '${name}'` });
+      if ((result.results || []).length > 1 || result.results?.some(r => r.campaign.status !== 'PAUSED')) throw new ProviderError('A estrutura Google existente precisa de revisão. Nenhuma campanha foi alterada.');
+      let resourceName = result.results?.[0]?.campaign.resourceName;
+      if (!resourceName) {
+        const budget = `customers/${config.customer_id}/campaignBudgets/-1`;
+        const operations = [
+          { campaignBudgetOperation: { create: { resourceName: budget, name, amountMicros: String(Math.max(1, Math.round(plan.google / 30.4 * 1e6))), deliveryMethod: 'STANDARD', explicitlyShared: false } } },
+          { campaignOperation: { create: { name, status: 'PAUSED', advertisingChannelType: 'PERFORMANCE_MAX', campaignBudget: budget,
+            maximizeConversionValue: {}, shoppingSetting: { merchantId, feedLabel: 'BR' }, containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING' } } },
+        ];
+        await adsRequest(config, `customers/${config.customer_id}/googleAds:mutate`, { mutateOperations: operations, partialFailure: false, validateOnly: true });
+        const created = await adsRequest(config, `customers/${config.customer_id}/googleAds:mutate`, { mutateOperations: operations, partialFailure: false });
+        resourceName = created.mutateOperationResponses?.find(r => r.campaignResult)?.campaignResult?.resourceName;
+      }
+      if (!new RegExp(`^customers/${config.customer_id}/campaigns/\\d+$`).test(resourceName || '')) throw new ProviderError('O Google não confirmou a campanha pausada.');
+      const observed = await adsRequest(config, `customers/${config.customer_id}/googleAds:search`, { query: `SELECT campaign.status FROM campaign WHERE campaign.resource_name = '${resourceName}'` });
+      if (observed.results?.[0]?.campaign.status !== 'PAUSED') throw new ProviderError('Não foi possível confirmar o estado pausado da nova campanha.');
+      return { platform: 'google_ads', id: resourceName, status: 'PAUSED', assets: 'approved_asset_groups_and_exclusions_required', observedAt: new Date().toISOString() };
+    },
+    async publishProductSeo(config, product, content) {
+      return (await json(`${storeUrl(config.url)}/wp-json/aerion-reports/v1/marketing-seo`, {
+        ...postJson({ product_id: product.id, content_id: content.id, expected_modified_at: product.modifiedAt,
+          title: content.data.title, description: content.data.description }), dispatcher: publicDispatcher,
+        headers: { 'Content-Type': 'application/json', Authorization: basic(config.report_user, config.report_password) },
+      }, transport)).data;
+    },
+    async ga4ServerPurchase(settings, body, { validate = false } = {}) {
+      if (!/^G-[A-Z0-9]+$/.test(settings.measurementId || '') || !settings.apiSecret) throw new ProviderError('Configure a identificação e o segredo do fluxo GA4 Measurement Protocol.');
+      const url = new URL(`https://www.google-analytics.com/${validate ? 'debug/' : ''}mp/collect`);
+      url.search = new URLSearchParams({ measurement_id: settings.measurementId, api_secret: settings.apiSecret });
+      let response;
+      try { response = await transport(url.toString(), { ...postJson({ ...body, ...(validate ? { validation_behavior: 'ENFORCE_RECOMMENDATIONS' } : {}) }), redirect: 'error', signal: AbortSignal.timeout(30000) }); }
+      catch { throw new ProviderError('Não foi possível enviar a medição GA4. A transação será reenviada com o mesmo ID.'); }
+      if (!response.ok) throw new ProviderError(`Medição GA4 respondeu HTTP ${response.status}.`, 300, response.status);
+      if (!validate) return { accepted: true, recorded: false };
+      const result = await response.json();
+      return { valid: Array.isArray(result.validationMessages) && !result.validationMessages.length,
+        messages: (result.validationMessages || []).map(m => ({ code: String(m.validationCode || '').slice(0, 100), field: String(m.fieldPath || '').slice(0, 200) })) };
+    },
+    async customerAudienceBatch(config, audienceId, operation, hashes) {
+      if (!/^\d+$/.test(audienceId) || !['add', 'remove'].includes(operation) || hashes.some(h => !/^[a-f0-9]{64}$/.test(h))) throw new ProviderError('Lote de público inválido.');
+      const result = await metaRequest(config, `${audienceId}/users`, { payload: { schema: 'EMAIL_SHA256', data: hashes.map(h => [h]) } }, operation === 'remove' ? 'DELETE' : 'POST');
+      if (Number(result.num_invalid_entries || 0) > 0) throw new ProviderError('A Meta recusou identificadores do lote. O lote não foi marcado como concluído.');
+    },
+    async customerAudienceGoogle(config, listId, additions, removals) {
+      if (!/^\d+$/.test(listId) || [...additions, ...removals].some(h => !/^[a-f0-9]{64}$/.test(h))) throw new ProviderError('Lista Google inválida.');
+      const { resourceName } = await adsRequest(config, `customers/${config.customer_id}/offlineUserDataJobs:create`, {
+        job: { type: 'CUSTOMER_MATCH_USER_LIST', customerMatchUserListMetadata: { userList: `customers/${config.customer_id}/userLists/${listId}`,
+          ...(additions.length ? { consent: { adUserData: 'GRANTED', adPersonalization: 'GRANTED' } } : {}) } },
+      });
+      if (!new RegExp(`^customers/${config.customer_id}/offlineUserDataJobs/\\d+$`).test(resourceName || '')) throw new ProviderError('Trabalho Google fora da conta configurada.');
+      const operations = [...removals.map(hashedEmail => ({ remove: { userIdentifiers: [{ hashedEmail }] } })),
+        ...additions.map(hashedEmail => ({ create: { userIdentifiers: [{ hashedEmail }] } }))];
+      for (let offset = 0; offset < operations.length; offset += 5000) {
+        const result = await adsRequest(config, `${resourceName}:addOperations`, { enablePartialFailure: false, operations: operations.slice(offset, offset + 5000) });
+        if (result.partialFailureError?.code) throw new ProviderError('Falha parcial no lote Google; envio não concluído.');
+      }
+      await adsRequest(config, `${resourceName}:run`, {});
+      return resourceName;
+    },
+    async customerAudienceJob(config, resourceName) {
+      if (!new RegExp(`^customers/${config.customer_id}/offlineUserDataJobs/\\d+$`).test(resourceName || '')) throw new ProviderError('Trabalho Google inválido.');
+      const result = await adsRequest(config, `customers/${config.customer_id}/googleAds:search`, {
+        query: `SELECT offline_user_data_job.status FROM offline_user_data_job WHERE offline_user_data_job.resource_name = '${resourceName}'`,
+      });
+      return result.results?.[0]?.offlineUserDataJob?.status || 'PENDING';
+    },
+    async ensureGoogleStoreAudiences(config) {
+      const headers = { Authorization: `Bearer ${await googleToken(config, 'ga4_admin')}` };
+      const base = `https://analyticsadmin.googleapis.com/v1alpha/properties/${config.property_id}`;
+      const audiences = await merchantList(`${base}/audiences`, 'audiences', headers, 200);
+      const result = [];
+      for (const definition of require('./marketingDomain').STORE_AUDIENCES) {
+        const displayName = `Aerion CRM · Loja · ${definition.id} · v1`;
+        const candidates = audiences.filter(a => a.displayName === displayName);
+        if (candidates.length > 1) throw new ProviderError('Públicos GA4 duplicados. Revise antes de continuar.');
+        let found = candidates[0];
+        if (!found) {
+          found = (await json(`${base}/audiences`, postJson({ displayName,
+            description: `Loja Aerion: ${definition.ga4}, janela ${definition.days} dias. Excluir o público paid_buyers 180d na campanha de aquisição.`,
+            membershipDurationDays: definition.days,
+            filterClauses: [{ clauseType: 'INCLUDE', simpleFilter: { scope: 'ACROSS_ALL_SESSIONS',
+              filterExpression: { andGroup: { filterExpressions: [{ orGroup: { filterExpressions: [{ eventFilter: { eventName: definition.ga4 } }] } }] } } } }],
+          }, headers), transport)).data;
+        }
+        if (!new RegExp(`^properties/${config.property_id}/audiences/\\d+$`).test(found.name || '')) throw new ProviderError('Público GA4 fora da propriedade configurada.');
+        result.push({ ...definition, platformId: found.name, status: candidates.length ? 'existing_requires_rule_review' : 'awaiting_external_processing', size: null,
+          adsPersonalizationEnabled: found.adsPersonalizationEnabled ?? null,
+          exclusionApplied: !definition.excludePaidDays, exclusionMethod: definition.excludePaidDays ? 'exclude_paid_buyers_180d_at_campaign' : null });
+      }
+      const links = await merchantList(`${base}/googleAdsLinks`, 'googleAdsLinks', headers, 200);
+      return { observedAt: new Date().toISOString(), store: result, googleAdsLinks: links.map(l => ({ customerId: l.customerId, adsPersonalizationEnabled: l.adsPersonalizationEnabled })),
+        activationAllowed: false, note: 'A API GA4 limita filtros dinâmicos inAnyNDayPeriod a 60 dias. A exclusão móvel de compradores por 180 dias deve usar o público paid_buyers separado nas campanhas; não substituir por exclusão permanente.' };
+    },
+    async ensureMetaMarketing(config, settings) {
+      let catalogId = settings.catalogId;
+      if (!catalogId) {
+        if (!/^\d+$/.test(settings.businessId || '')) throw new ProviderError('Configure o Business ID para descobrir o catálogo Aerion existente.');
+        const catalogs = await metaList(config, `${settings.businessId}/owned_product_catalogs`, 'id,name');
+        const matching = catalogs.filter(c => /aerion/i.test(c.name || ''));
+        if (matching.length > 1) throw new ProviderError('Há mais de um catálogo Aerion. Informe o ID apropriado antes de configurar a fonte.');
+        catalogId = matching[0]?.id;
+        if (!catalogId) catalogId = (await metaRequest(config, `${settings.businessId}/owned_product_catalogs`, { name: 'Aerion · Loja', vertical: 'commerce' }, 'POST')).id;
+      }
+      if (!/^\d+$/.test(catalogId || '')) throw new ProviderError('O catálogo não retornou um ID válido.');
+      const feeds = await metaList(config, `${catalogId}/product_feeds`, 'id,name');
+      const owned = feeds.filter(f => f.name === 'Aerion CRM · consumidor');
+      // Do not introduce a second writer or reconfigure a source owned by another integration.
+      if (feeds.some(f => f.name !== 'Aerion CRM · consumidor') || owned.length > 1) throw new ProviderError('O catálogo já possui outra fonte. Revise a migração para uma fonte única antes de continuar.');
+      let feedId = owned[0]?.id;
+      if (!feedId) feedId = (await metaRequest(config, `${catalogId}/product_feeds`, { name: 'Aerion CRM · consumidor',
+        schedule: { interval: 'HOURLY', url: settings.feedUrl, timezone: 'America/Sao_Paulo' } }, 'POST')).id;
+      if (!/^\d+$/.test(feedId || '')) throw new ProviderError('A fonte Meta não retornou um ID válido.');
+      if (owned.length) await metaRequest(config, feedId, { schedule: { interval: 'HOURLY', url: settings.feedUrl, timezone: 'America/Sao_Paulo' } }, 'POST');
+      const sets = await metaList(config, `${catalogId}/product_sets`, 'id,name');
+      const groups = require('./marketingDomain').GROUPS;
+      for (const group of groups) {
+        const name = `Aerion CRM · ${group}`;
+        if (!sets.some(s => s.name === name)) await metaRequest(config, `${catalogId}/product_sets`, { name, filter: { custom_label_0: { eq: group } } }, 'POST');
+      }
+      const sources = await metaList(config, `${catalogId}/external_event_sources`, 'id');
+      if (!sources.some(s => s.id === settings.pixelId)) await metaRequest(config, `${catalogId}/external_event_sources`, { external_event_sources: [...new Set([...sources.map(s => s.id), settings.pixelId])] }, 'POST');
+      const accountCatalogs = await metaList(config, `act_${config.account_id}/product_catalogs`, 'id');
+      return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: accountCatalogs.some(c => c.id === catalogId),
+        observedAt: new Date().toISOString(), status: 'awaiting_external_processing' };
+    },
+    async ensureMetaStoreAudiences(config, pixelId) {
+      if (!/^\d+$/.test(pixelId)) throw new ProviderError('Pixel Meta inválido.');
+      const definitions = require('./marketingDomain').STORE_AUDIENCES;
+      const existing = await metaList(config, `act_${config.account_id}/customaudiences`, 'id,name,rule,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status');
+      const result = [];
+      for (const audience of definitions) {
+        const name = `Aerion CRM · Loja · ${audience.id} · v1`;
+        const candidates = existing.filter(a => a.name === name);
+        if (candidates.length > 1) throw new ProviderError('Públicos Aerion duplicados. Revise antes de continuar.');
+        const clause = (event, days) => ({ event_sources: [{ id: pixelId, type: 'pixel' }], retention_seconds: days * 86400,
+          filter: { operator: 'and', filters: [{ field: 'event', operator: 'eq', value: event }] } });
+        const rule = { inclusions: { operator: 'or', rules: [clause(audience.meta, audience.days)] },
+          ...(audience.excludePaidDays ? { exclusions: { operator: 'or', rules: [clause('Purchase', audience.excludePaidDays)] } } : {}) };
+        let found = candidates[0];
+        if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, subtype: 'WEBSITE', prefill: true, rule }, 'POST');
+        if (!/^\d+$/.test(found.id || '')) throw new ProviderError('A Meta não retornou um ID de público válido.');
+        // Existing resources are never overwritten, even if someone edited their rules.
+        result.push({ ...audience, platformId: found.id, status: candidates.length ? 'existing_requires_rule_review' : 'awaiting_external_processing',
+          size: found.approximate_count_lower_bound ?? null, sizeUpper: found.approximate_count_upper_bound ?? null,
+          processing: found.operation_status?.description || null, uploaded: true });
+      }
+      return { observedAt: new Date().toISOString(), pixelId, store: result, separateFromCrm: true };
+    },
+    async auditProduct(config, product) {
+      const url = new URL(product.url);
+      if (url.origin !== storeUrl(config.url)) throw new ProviderError('URL de produto fora da loja configurada.');
+      let response;
+      try { response = await transport(url.toString(), { dispatcher: publicDispatcher, redirect: 'manual', signal: AbortSignal.timeout(20000) }); }
+      catch { throw new ProviderError('Não foi possível auditar a URL pública.'); }
+      // Stop large pages while streaming; do not download attachments or follow arbitrary redirects.
+      const type = response.headers.get('content-type') || '';
+      let html = '';
+      if (type.includes('text/html') && response.status === 200) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder(); let size = 0;
+        try {
+          for (;;) {
+            const part = await reader.read(); if (part.done) break;
+            size += part.value.length;
+            if (size > 2e6) throw new ProviderError('Página excedeu o limite da auditoria técnica.');
+            html += decoder.decode(part.value, { stream: true });
+          }
+        } finally { await reader.cancel().catch(() => {}); }
+      }
+      const attribute = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1] || '';
+      const tags = html.match(/<(?:meta|link)\b[^>]*>/gi) || [];
+      const canonical = tags.filter(t => /\bcanonical\b/i.test(attribute(t, 'rel'))).map(t => attribute(t, 'href'));
+      const robots = tags.filter(t => /^(robots|googlebot)$/i.test(attribute(t, 'name'))).map(t => attribute(t, 'content')).join(',') + ',' + (response.headers.get('x-robots-tag') || '');
+      const structured = [];
+      for (const script of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+        try {
+          const visit = value => { if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === 'object') { if (value['@type']) structured.push(value); if (value['@graph']) visit(value['@graph']); } };
+          visit(JSON.parse(script[1]));
+        } catch { /* Invalid structured data is reported below. */ }
+      }
+      const productSchema = structured.find(o => [o['@type']].flat().includes('Product'));
+      const links = [...html.matchAll(/<a\b[^>]*>/gi)].map(m => attribute(m[0], 'href')).filter(h => { try { return new URL(h, url).origin === url.origin; } catch { return false; } }).length;
+      const issues = [];
+      if (response.status !== 200) issues.push(`http_${response.status}`);
+      if (response.status === 200 && !type.includes('text/html')) issues.push('not_html');
+      if (/noindex|none/i.test(robots)) issues.push('noindex');
+      if (canonical.length !== 1) issues.push('canonical_missing_or_multiple');
+      if (canonical[0]) {
+        try { if (new URL(canonical[0], url).origin !== url.origin) issues.push('cross_domain_canonical_review_required'); }
+        catch { issues.push('invalid_canonical'); }
+      }
+      if (!productSchema) issues.push('product_schema_missing_or_invalid');
+      if (productSchema?.sku && String(productSchema.sku) !== product.sku) issues.push('schema_sku_mismatch');
+      return { observedAt: new Date().toISOString(), url: `${url.origin}${url.pathname}`, httpStatus: response.status,
+        canonical, indexable: response.status === 200 && !/noindex|none/i.test(robots), internalLinks: links,
+        productSchema: Boolean(productSchema), issues, sitemap: 'verify_search_console_sitemaps', coreWebVitals: 'unavailable' };
+    },
+    async metaCatalog(config, catalogId, feedId) {
+      if (!/^\d+$/.test(catalogId) || (feedId && !/^\d+$/.test(feedId))) throw new ProviderError('IDs do catálogo e da fonte Meta devem ser numéricos.');
+      const headers = { Authorization: `Bearer ${config.access_token}` };
+      const base = `https://graph.facebook.com/${env.ECOMMERCE_META_API_VERSION || 'v25.0'}`;
+      const list = async (path, fields) => {
+        const result = [], seen = new Set(); let after;
+        do {
+          const params = new URLSearchParams({ fields, limit: '100', ...(after ? { after } : {}) });
+          const { data } = await json(`${base}/${path}?${params}`, { headers }, transport);
+          if (!Array.isArray(data.data)) throw new ProviderError('Listagem Meta inválida. Último catálogo preservado.');
+          result.push(...data.data);
+          after = data.paging?.next ? data.paging?.cursors?.after : null;
+          if (data.paging?.next && (!after || seen.has(after) || seen.size >= 1000)) throw new ProviderError('Paginação Meta inválida.');
+          seen.add(after);
+        } while (after);
+        return result;
+      };
+      const { data: catalog } = await json(`${base}/${catalogId}?fields=id,name`, { headers }, transport);
+      if (String(catalog.id) !== catalogId) throw new ProviderError('Catálogo retornado não corresponde ao configurado.');
+      const products = await list(`${catalogId}/products`, 'id,retailer_id,name,availability');
+      const feeds = await list(`${catalogId}/product_feeds`, 'id,name,schedule');
+      if (feedId && !feeds.some(f => String(f.id) === feedId)) throw new ProviderError('Fonte Meta fora do catálogo configurado.');
+      const uploads = feedId ? await list(`${feedId}/uploads`, 'id,start_time,end_time,num_detected_items,num_invalid_items,num_persisted_items') : [];
+      const sources = await list(`${catalogId}/external_event_sources`, 'id');
+      const accountCatalogs = await list(`act_${config.account_id}/product_catalogs`, 'id');
+      const pixelLinked = sources.some(s => String(s.id) === (env.ECOMMERCE_META_PIXEL_ID || '1668777180919759'));
+      const hourlySchedule = feeds.some(f => String(f.id) === feedId && f.schedule?.interval === 'HOURLY');
+      return { observedAt: new Date().toISOString(), catalogId, name: String(catalog.name || '').slice(0, 200),
+        products: products.map(p => ({ id: String(p.id), sku: String(p.retailer_id || ''), name: String(p.name || '').slice(0, 500), availability: p.availability })),
+        feeds: feeds.map(f => ({ id: String(f.id), name: String(f.name || '').slice(0, 200), interval: f.schedule?.interval || null })),
+        uploads: uploads.map(u => ({ id: String(u.id), start: u.start_time, end: u.end_time, detected: u.num_detected_items, invalid: u.num_invalid_items, persisted: u.num_persisted_items })),
+        feedId: feedId || null, connection: 'verified_read', catalogHealth: uploads[0]?.num_invalid_items ? 'issues' : 'unverified',
+        pixelLink: pixelLinked ? 'verified' : 'unverified', hourlySchedule: hourlySchedule ? 'verified' : 'unverified',
+        adAccountLinked: accountCatalogs.some(c => String(c.id) === catalogId), eventMatch: 'requires_platform_diagnostics' };
+    },
     async merchantCatalog(config) {
       const account = `accounts/${config.account_id}`;
       const headers = { Authorization: `Bearer ${await googleToken(config, 'merchant_center')}` };
@@ -281,6 +558,13 @@ function createProviders({ transport = request, env = process.env } = {}) {
               truncated: startRow === 75000 && batch.length === 25000 })));
             if (batch.length < 25000) break;
           }
+        }
+        // A successful query with no row on a finalized day measures zero;
+        // persist that coverage so SEO never confuses it with an unqueried gap.
+        const totals = new Set(rows.filter(r => r.kind === 'search_total').map(r => r.date));
+        const finalizedThrough = new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10);
+        for (let day = from; day <= to && day <= finalizedThrough; day = new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)) {
+          if (!totals.has(day)) rows.push({ kind: 'search_total', date: day, clicks: 0, impressions: 0, position: 0, measuredZero: true });
         }
         return rows;
       }

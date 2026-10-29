@@ -14,6 +14,7 @@ final class Aerion_Ecommerce_Measurement
         add_action('wp', [self::class, 'guard_unpaid_page'], 1);
         add_filter('gtm4wp_purchase_datalayer', [self::class, 'purchase'], 20, 2);
         add_action('wp_footer', [self::class, 'consent_event'], 101);
+        add_action('woocommerce_checkout_create_order', [self::class, 'capture_context'], 20, 2);
     }
 
     public static function options(mixed $options): array
@@ -34,6 +35,25 @@ final class Aerion_Ecommerce_Measurement
     public static function paid(mixed $order): bool
     {
         return $order instanceof WC_Order && $order->is_paid() && (bool) $order->get_date_paid();
+    }
+
+    public static function capture_context(mixed $order, mixed $data): void
+    {
+        if (!$order instanceof WC_Order) { return; }
+        // WooCommerce validates the checkout nonce. No email, name or telephone
+        // is stored here; absence of the consent field never means consent.
+        $raw = isset($_POST['aerion_measurement_context']) ? wp_unslash((string) $_POST['aerion_measurement_context']) : '';
+        if (strlen($raw) > 1000) { return; }
+        $context = json_decode($raw, true);
+        if (!is_array($context) || ($context['statistics'] ?? false) !== true
+            || !preg_match('/^\d+\.\d+$/', (string) ($context['clientId'] ?? ''))) { return; }
+        $cookie = (string) ($_COOKIE['_ga'] ?? '');
+        if (!preg_match('/^GA\d+\.\d+\.(\d+\.\d+)$/', $cookie, $matches) || !hash_equals($matches[1], (string) $context['clientId'])) { return; }
+        $order->update_meta_data('_aerion_measurement_context', [
+            'clientId' => $matches[1], 'statistics' => true,
+            'marketing' => ($context['marketing'] ?? false) === true,
+            'source' => 'wp_consent_api_classic_checkout', 'recordedAt' => gmdate(DATE_ATOM), 'revoked' => false,
+        ]);
     }
 
     public static function consent_options(mixed $options): array
@@ -106,7 +126,19 @@ final class Aerion_Ecommerce_Measurement
         <script id="aerion-measurement-consent">
         (() => {
           let previous = '';
+          const capture = () => {
+            const form = document.querySelector('form.checkout');
+            if (!form) return;
+            let field = form.querySelector('input[name="aerion_measurement_context"]');
+            if (!field) { field = document.createElement('input'); field.type = 'hidden'; field.name = 'aerion_measurement_context'; form.appendChild(field); }
+            const consent = category => typeof window.wp_has_consent === 'function' && window.wp_has_consent(category) === true;
+            if (!consent('statistics')) { field.value = ''; return; }
+            const cookie = document.cookie.split(';').map(s => s.trim()).find(s => s.startsWith('_ga='))?.slice(4) || '';
+            const match = cookie.match(/^GA\d+\.\d+\.(\d+\.\d+)$/);
+            field.value = consent('statistics') && match ? JSON.stringify({statistics:true, marketing:consent('marketing'), clientId:match[1]}) : '';
+          };
           const update = () => {
+            capture();
             const consent = category => typeof window.wp_has_consent === 'function' && window.wp_has_consent(category) === true;
             const statistics = consent('statistics'), marketing = consent('marketing');
             const state = String(statistics) + ':' + String(marketing);
@@ -116,6 +148,7 @@ final class Aerion_Ecommerce_Measurement
             window.dataLayer.push({event:'aerion_consent_updated', aerion_statistics_consent:statistics, aerion_marketing_consent:marketing});
           };
           update();
+          document.addEventListener('submit', capture, true);
           document.addEventListener('wp_listen_for_consent_change', update);
           document.addEventListener('wp_consent_api_status_change_service', update);
         })();

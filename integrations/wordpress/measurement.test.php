@@ -8,14 +8,17 @@ function get_query_var(string $key): int { return 123; }
 function absint(mixed $value): int { return abs((int) $value); }
 function wc_get_order(int $id): WC_Order { global $receipt; return $receipt; }
 class WC_Order {
+    public array $meta = [];
     public function __construct(public bool $paid, public mixed $date) {}
     public function is_paid(): bool { return $this->paid; }
     public function get_date_paid(): mixed { return $this->date; }
     public function get_id(): int { return 123; }
+    public function update_meta_data(string $key, mixed $value): void { $this->meta[$key] = $value; }
     public function get_currency(): string { return 'BRL'; }
     public function get_fees(): array { return []; }
     public function get_items(string $type): array { return [new class { public function get_total(): string { return '99.95'; } }]; }
 }
+function wp_unslash(string $value): string { return $value; }
 function check(bool $value, string $message): void { if (! $value) { throw new RuntimeException($message); } }
 require __DIR__ . '/measurement.php';
 $options = Aerion_Ecommerce_Measurement::options(['gtm-code' => 'GTM-EXISTING']);
@@ -51,4 +54,15 @@ $pix = new class(true, 'paid-date') extends WC_Order {
 };
 $purchase = Aerion_Ecommerce_Measurement::purchase(['ecommerce' => ['items' => [['item_id' => 'SKU', 'price' => 99.95, 'quantity' => 1]]]], $pix);
 check($purchase['ecommerce']['value'] === 94.95 && $purchase['ecommerce']['items'][0]['price'] === 94.95, 'Pix payment discount must reduce purchase value and item prices.');
+$_POST = []; $_COOKIE = [];
+Aerion_Ecommerce_Measurement::capture_context($receipt, []);
+check($receipt->meta === [], 'Missing consent must not create measurement context');
+$_POST['aerion_measurement_context'] = json_encode(['statistics' => true, 'clientId' => '123.456', 'marketing' => false]);
+$_COOKIE['_ga'] = 'GA1.1.123.456';
+Aerion_Ecommerce_Measurement::capture_context($receipt, []);
+check($receipt->meta['_aerion_measurement_context']['statistics'] === true && $receipt->meta['_aerion_measurement_context']['marketing'] === false, 'Separate analytics and advertising consent');
+unset($receipt->meta['_aerion_measurement_context']);
+$_POST['aerion_measurement_context'] = json_encode(['statistics' => false, 'clientId' => '123.456']);
+Aerion_Ecommerce_Measurement::capture_context($receipt, []);
+check($receipt->meta === [], 'Revoked statistics consent does not capture a client ID');
 echo "WordPress measurement tests passed.\n";
