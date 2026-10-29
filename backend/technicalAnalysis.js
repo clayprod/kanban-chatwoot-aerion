@@ -776,7 +776,7 @@ Não arredonde nem altere números. Nunca conclua atendimento. Não converta res
           CASE WHEN j.kind=$1 THEN 0 ELSE 1 END,
           COALESCE((j.context->'payload'->>'base_score')::numeric,(j.context->'payload'->>'score')::numeric,0) DESC,
           CASE WHEN j.state->>'notice_checked'='true' OR j.state->>'initialized'='true' THEN 0 ELSE 1 END,
-          j.updated_at LIMIT 2`, [preferredKind]);
+          j.updated_at LIMIT 1`, [preferredKind]);
       await Promise.all(rows.rows.map(async job => {
       const config = await settings(job.account_id);
       const claimed = await pool.query("UPDATE technical_jobs SET status='running',error=NULL,updated_at=NOW() WHERE id=$1 AND status IN ('queued','running')", [job.id]);

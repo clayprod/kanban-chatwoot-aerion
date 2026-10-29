@@ -503,27 +503,82 @@ const knnPcaItens = async ({ pool: knnPool, queryVec, whereSql = '', params = []
 };
 
 // Preenche embeddings faltantes de pca_itens em lote (para job de backfill).
+// Seleção por chave (id > cursor) sobre índice parcial dos pendentes: custo proporcional ao lote, não ao
+// corpus. O JOIN+ORDER BY global anterior fazia Seq Scan + Sort de ~2,5M linhas a cada lote.
+// Itens que falham em embedar ficam pendentes; o cursor em memória evita reler sempre os mesmos.
+const PCA_PENDING_INDEX = 'idx_pca_itens_embedding_pendente';
+const PCA_BACKFILL_QUERY_TIMEOUT_MS = Math.max(1000, parseInt(process.env.PCA_BACKFILL_QUERY_TIMEOUT_MS || '20000', 10) || 20000);
+const PCA_REMAINING_TTL_MS = 10 * 60 * 1000;
+let pcaBackfillCursor = 0;
+let pcaPendingIndexReady = null;
+let pcaRemainingCache = { at: 0, value: -1 };
+
+const ensurePcaPendingIndex = (targetPool) => {
+  if (!pcaPendingIndexReady) {
+    pcaPendingIndexReady = (async () => {
+      let client = null;
+      try {
+        client = await targetPool.connect();
+        await client.query('SET statement_timeout = 0');
+        await client.query(
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${PCA_PENDING_INDEX}
+             ON pca_itens (id) WHERE embedding IS NULL AND descricao IS NOT NULL`
+        );
+        return true;
+      } catch (error) {
+        console.warn('[embeddings] falha ao criar índice de pendentes do PCA:', error.message);
+        pcaPendingIndexReady = null; // tenta de novo num tick futuro
+        return false;
+      } finally {
+        if (client) client.release(true);
+      }
+    })();
+  }
+  return pcaPendingIndexReady;
+};
+
+const countPcaRemaining = async (targetPool) => {
+  if (Date.now() - pcaRemainingCache.at < PCA_REMAINING_TTL_MS) return pcaRemainingCache.value;
+  const r = await targetPool.query(
+    `SELECT COUNT(*)::int AS total FROM pca_itens WHERE embedding IS NULL AND descricao IS NOT NULL`
+  );
+  pcaRemainingCache = { at: Date.now(), value: r.rows[0] ? r.rows[0].total : -1 };
+  return pcaRemainingCache.value;
+};
+
+const selectPcaPending = async (targetPool, batchSize) => {
+  const client = await targetPool.connect();
+  try {
+    await client.query(`SET statement_timeout = ${PCA_BACKFILL_QUERY_TIMEOUT_MS}`);
+    return await client.query(
+      `SELECT id, descricao FROM pca_itens
+        WHERE embedding IS NULL AND descricao IS NOT NULL AND id > $1
+        ORDER BY id LIMIT $2`,
+      [pcaBackfillCursor, batchSize]
+    );
+  } finally {
+    try { await client.query('RESET statement_timeout'); } catch { /* conexão será descartada */ }
+    client.release();
+  }
+};
+
 const runPcaEmbedBackfillBatch = async ({ pool: bfPool, batchSize = 500 } = {}) => {
   const targetPool = bfPool || pool;
   try {
     if (!targetPool) return { embedded: 0, remaining: -1, unavailable: true };
+    // Sem o índice parcial a query viraria Seq Scan: espera ele existir (criado em background).
+    if (!(await ensurePcaPendingIndex(targetPool))) return { embedded: 0, remaining: -1, unavailable: true };
 
-    const pending = await targetPool.query(
-      `SELECT i.id, i.descricao
-         FROM pca_itens i
-         JOIN pca_planos p ON p.id = i.plano_id
-        WHERE i.embedding IS NULL AND i.descricao IS NOT NULL
-        ORDER BY (p.ano_pca = EXTRACT(YEAR FROM NOW())::int) DESC, p.ano_pca DESC, i.id
-        LIMIT $1`,
-      [batchSize]
-    );
+    const pending = await selectPcaPending(targetPool, batchSize);
 
     if (!pending.rows.length) {
-      const remainingResult = await targetPool.query(
-        `SELECT COUNT(*)::int AS total FROM pca_itens WHERE embedding IS NULL`
-      );
-      return { embedded: 0, remaining: remainingResult.rows[0] ? remainingResult.rows[0].total : 0 };
+      if (pcaBackfillCursor > 0) {
+        pcaBackfillCursor = 0; // fim do corpus: recomeça para pegar os que falharam antes
+        pcaRemainingCache = { at: 0, value: -1 };
+      }
+      return { embedded: 0, remaining: await countPcaRemaining(targetPool), unavailable: pcaBackfillCursor === 0 };
     }
+    pcaBackfillCursor = pending.rows[pending.rows.length - 1].id;
 
     const descricoes = pending.rows.map((row) => row.descricao);
     const vectors = await embedTexts(descricoes);
@@ -555,10 +610,8 @@ const runPcaEmbedBackfillBatch = async ({ pool: bfPool, batchSize = 500 } = {}) 
       embedded = updateResult.rowCount || 0;
     }
 
-    const remainingResult = await targetPool.query(
-      `SELECT COUNT(*)::int AS total FROM pca_itens WHERE embedding IS NULL`
-    );
-    return { embedded, remaining: remainingResult.rows[0] ? remainingResult.rows[0].total : 0 };
+    if (embedded) pcaRemainingCache.value = Math.max(0, pcaRemainingCache.value - embedded);
+    return { embedded, remaining: await countPcaRemaining(targetPool) };
   } catch (error) {
     if (error.code === '42703') {
       // Coluna embedding ainda não existe em pca_itens: backfill indisponível, sem alarde.

@@ -4093,7 +4093,10 @@ const fetchComprasGov = async (pathName, query = {}) => {
 // ============ POOL DE PROXIES PNCP (rotação por IP, fase 1) ============
 // Rotação dentro do gate: cada request interactive/sync sai por um proxy do
 // webshare (bulk fica no IP direto). Ver pncpProxyPool.js para as regras.
-const PNCP_PROXY_POOL = createPncpProxyPool(process.env);
+// A 2ª conta do webshare mora no cofre cifrado (WEBSHARE_TOKEN_2): env não sobrevive a deploy.
+const PNCP_PROXY_POOL = createPncpProxyPool(process.env, {
+  lerTokensExtras: async () => [await cofre.ler('WEBSHARE_TOKEN_2')].filter(Boolean),
+});
 // Contexto da chamada em curso (setado por withPncpGate): as funções de fetch
 // leem daqui qual proxy usar, sem mudar assinatura de ninguém.
 const PNCP_CALL_CONTEXT = new AsyncLocalStorage();

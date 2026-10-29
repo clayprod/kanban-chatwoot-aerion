@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   createPncpProxyPool,
+  refreshPncpProxyPool,
   parseWebshareProxies,
   mergeProxyList,
   pickPncpProxy,
@@ -222,4 +223,38 @@ test('snapshot não expõe credenciais; proxyToUrl escapa caracteres especiais',
     proxyToUrl({ username: 'a@b', password: 'p:x', host: '1.1.1.1', port: 80 }),
     'http://a%40b:p%3Ax@1.1.1.1:80'
   );
+});
+
+test('duas contas do webshare: junta as listas e uma conta fora do ar não derruba a outra', async () => {
+  const pool = createPncpProxyPool(
+    { WEBSHARE_TOKEN: 'tok1', PNCP_PROXY_ENABLED: '1' },
+    { lerTokensExtras: async () => ['tok2'] }
+  );
+  assert.equal(pool.enabled, true);
+  const proxy = (host) => ({ proxy_address: host, port: 80, username: 'u', password: 'p' });
+  const chamados = [];
+  const ok = await refreshPncpProxyPool(pool, {
+    fetchImpl: async (_url, { headers }) => {
+      chamados.push(headers.Authorization);
+      if (headers.Authorization === 'Token tok1') return { ok: true, json: async () => ({ results: [proxy('1.1.1.1')] }) };
+      return { ok: true, json: async () => ({ results: [proxy('2.2.2.2'), proxy('1.1.1.1')] }) };
+    },
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(chamados, ['Token tok1', 'Token tok2']);
+  assert.deepEqual(pool.proxies.map((p) => p.id).sort(), ['1.1.1.1:80', '2.2.2.2:80']);
+
+  const pool2 = createPncpProxyPool({ WEBSHARE_TOKEN: 'tok1', WEBSHARE_TOKEN_2: 'tok2', PNCP_PROXY_ENABLED: '1' });
+  const ok2 = await refreshPncpProxyPool(pool2, {
+    fetchImpl: async (_url, { headers }) => (headers.Authorization === 'Token tok1'
+      ? { ok: false, status: 402 }
+      : { ok: true, json: async () => ({ results: [proxy('3.3.3.3')] }) }),
+  });
+  assert.equal(ok2, true, 'a conta boa sustenta o pool');
+  assert.deepEqual(pool2.proxies.map((p) => p.id), ['3.3.3.3:80']);
+});
+
+test('segunda conta só no cofre NÃO liga proxy sem PNCP_PROXY_ENABLED=1', () => {
+  const pool = createPncpProxyPool({}, { lerTokensExtras: async () => ['tok2'] });
+  assert.equal(pool.enabled, false);
 });

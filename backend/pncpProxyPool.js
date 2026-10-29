@@ -22,10 +22,21 @@ const THROTTLE_DEDUPE_MS = 800;
 const DOWN_BASE_MS = 10 * 60 * 1000;
 const DOWN_MAX_MS = 2 * 60 * 60 * 1000;
 
-const createPncpProxyPool = (env = process.env) => {
-  const token = String(env.WEBSHARE_TOKEN || '').trim();
+const uniqueTokens = (list) => [...new Set(list.map(t => String(t || '').trim()).filter(Boolean))];
+
+// `lerTokensExtras`: async () => string[] com tokens que NÃO vivem em env (o cofre cifrado:
+// env não sobrevive a deploy nesta stack). Várias contas do webshare = mais proxies e mais
+// banda no rodízio.
+const createPncpProxyPool = (env = process.env, { lerTokensExtras = null } = {}) => {
+  const tokens = uniqueTokens([
+    env.WEBSHARE_TOKEN,
+    env.WEBSHARE_TOKEN_2,
+    ...String(env.WEBSHARE_TOKENS || '').split(','),
+  ]);
+  const token = tokens[0] || '';
   // A stored API token must never turn paid bandwidth on after a deploy.
-  const enabled = Boolean(token) && env.PNCP_PROXY_ENABLED === '1';
+  const enabled = (tokens.length > 0 || typeof lerTokensExtras === 'function')
+    && env.PNCP_PROXY_ENABLED === '1';
   const priorities = new Set(
     String(env.PNCP_PROXY_PRIORITIES || 'interactive,sync')
       .split(',')
@@ -35,6 +46,8 @@ const createPncpProxyPool = (env = process.env) => {
   return {
     enabled,
     token,
+    tokens,
+    lerTokensExtras,
     priorities,
     // Lanes de proxy simultâneas (fase 2). +1 lane direta sempre existe.
     maxLanes: (() => {
@@ -88,12 +101,30 @@ const mergeProxyList = (pool, incoming, now = Date.now()) => {
 const refreshPncpProxyPool = async (pool, { fetchImpl = fetch, now = Date.now() } = {}) => {
   if (!pool.enabled) return false;
   try {
-    const response = await fetchImpl(WEBSHARE_LIST_URL, {
-      headers: { Authorization: `Token ${pool.token}` },
-    });
-    if (!response.ok) throw new Error(`webshare list HTTP ${response.status}`);
-    const parsed = parseWebshareProxies(await response.json());
-    if (!parsed.length) throw new Error('webshare list vazia');
+    let extras = [];
+    if (typeof pool.lerTokensExtras === 'function') {
+      try { extras = await pool.lerTokensExtras(); } catch { extras = []; }
+    }
+    const tokens = uniqueTokens([...(pool.tokens || [pool.token]), ...extras]);
+    if (!tokens.length) throw new Error('nenhum token do webshare configurado');
+    // Uma conta fora do ar não derruba a outra: junta o que cada token devolver.
+    const parsed = [];
+    const vistos = new Set();
+    let ultimoErro = null;
+    for (const token of tokens) {
+      try {
+        const response = await fetchImpl(WEBSHARE_LIST_URL, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        if (!response.ok) throw new Error(`webshare list HTTP ${response.status}`);
+        for (const p of parseWebshareProxies(await response.json())) {
+          if (!vistos.has(p.id)) { vistos.add(p.id); parsed.push(p); }
+        }
+      } catch (error) {
+        ultimoErro = error;
+      }
+    }
+    if (!parsed.length) throw ultimoErro || new Error('webshare list vazia');
     mergeProxyList(pool, parsed, now);
     pool.lastRefreshError = null;
     return true;
