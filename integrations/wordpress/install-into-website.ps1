@@ -49,6 +49,7 @@ $encoding = New-Object System.Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null
 Copy-Item -LiteralPath $pluginSource -Destination $pluginTarget
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'measurement.php') -Destination (Join-Path $pluginDirectory 'measurement.php')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'marketing.php') -Destination (Join-Path $pluginDirectory 'marketing.php')
 if ($ExpectedPreviousMerchantHash -ne '') { Copy-Item -LiteralPath $merchantSource -Destination $merchantTarget }
 [IO.File]::WriteAllText($hashMarker, (Get-FileHash -LiteralPath $pluginSource).Hash, $encoding)
 if (-not $dockerText.Contains($dockerLine)) {
