@@ -358,8 +358,11 @@ function createProviders({ transport = request, env = process.env } = {}) {
       }
       const sources = await metaList(config, `${catalogId}/external_event_sources`, 'id');
       if (!sources.some(s => s.id === settings.pixelId)) await metaRequest(config, `${catalogId}/external_event_sources`, { external_event_sources: [...new Set([...sources.map(s => s.id), settings.pixelId])] }, 'POST');
-      const eligibleAccounts = await metaList(config, `${catalogId}/dpa_eligible_ad_accounts`, 'id');
-      return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)),
+      let eligibleAccounts;
+      try { eligibleAccounts = await metaList(config, `${catalogId}/dpa_eligible_ad_accounts`, 'id'); }
+      catch (error) { if (![400, 404].includes(error.httpStatus)) throw error; eligibleAccounts = null; }
+      return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: eligibleAccounts ? eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)) : null,
+        adAccountVerification: eligibleAccounts ? 'available' : 'unavailable_endpoint',
         pendingGroups, observedAt: new Date().toISOString(), status: 'awaiting_external_processing' };
     },
     async ensureMetaStoreAudiences(config, pixelId) {
@@ -459,7 +462,9 @@ function createProviders({ transport = request, env = process.env } = {}) {
       if (feedId && !feeds.some(f => String(f.id) === feedId)) throw new ProviderError('Fonte Meta fora do catálogo configurado.');
       const uploads = feedId ? await list(`${feedId}/uploads`, 'id,start_time,end_time,num_detected_items,num_invalid_items,num_persisted_items') : [];
       const sources = await list(`${catalogId}/external_event_sources`, 'id');
-      const eligibleAccounts = await list(`${catalogId}/dpa_eligible_ad_accounts`, 'id');
+      let eligibleAccounts;
+      try { eligibleAccounts = await list(`${catalogId}/dpa_eligible_ad_accounts`, 'id'); }
+      catch (error) { if (![400, 404].includes(error.httpStatus)) throw error; eligibleAccounts = null; }
       const pixelLinked = sources.some(s => String(s.id) === (env.ECOMMERCE_META_PIXEL_ID || '1668777180919759'));
       const hourlySchedule = feeds.some(f => String(f.id) === feedId && f.schedule?.interval === 'HOURLY');
       return { observedAt: new Date().toISOString(), catalogId, name: String(catalog.name || '').slice(0, 200),
@@ -468,7 +473,8 @@ function createProviders({ transport = request, env = process.env } = {}) {
         uploads: uploads.map(u => ({ id: String(u.id), start: u.start_time, end: u.end_time, detected: u.num_detected_items, invalid: u.num_invalid_items, persisted: u.num_persisted_items })),
         feedId: feedId || null, connection: 'verified_read', catalogHealth: uploads[0]?.num_invalid_items ? 'issues' : 'unverified',
         pixelLink: pixelLinked ? 'verified' : 'unverified', hourlySchedule: hourlySchedule ? 'verified' : 'unverified',
-        adAccountLinked: eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)), eventMatch: 'requires_platform_diagnostics' };
+        adAccountLinked: eligibleAccounts ? eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)) : null,
+        adAccountVerification: eligibleAccounts ? 'available' : 'unavailable_endpoint', eventMatch: 'requires_platform_diagnostics' };
     },
     async merchantCatalog(config) {
       const account = `accounts/${config.account_id}`;

@@ -349,6 +349,9 @@ function createMarketing({ pool, providers, env = process.env }) {
       permission: 'catalog_management, business_management e ads_management; acesso ao catálogo, conta anunciante e dataset Site Aerion',
       action: 'Reautorizar a identidade Meta existente com permissões de catálogo e escrita (ads_read/ads_mcp_management não comprovam esse acesso); selecionar Business/catálogo, executar a preparação da fonte horária e conferir o Pixel/dataset 1668777180919759.',
       link: 'https://business.facebook.com/commerce/', lastError: (pendingJob('meta') || pendingJob('meta_setup'))?.error || null };
+    if (meta?.adAccountVerification === 'unavailable_endpoint') {
+      metaAction.action = 'Catálogo e fonte recebidos. Conferir no Commerce Manager se a conta anunciante Aerion Ads está autorizada a usar este catálogo; o endpoint de elegibilidade da Meta está indisponível para esta conexão.';
+    }
     const productJob = pendingJob('reconcile') || pendingJob('product');
     const google = reconcileGoogle(products, merchant.rows[0]?.data);
     const googleComplete = google.rows.some(r => r.eligible) && google.rows.filter(r => r.eligible).every(r => r.received && r.approved);

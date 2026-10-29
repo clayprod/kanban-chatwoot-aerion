@@ -82,10 +82,11 @@ test('feed blocks duplicate SKU, placeholders, missing brand, invalid URLs and u
   assert.equal(metaFeed([p, { ...p, id: '2' }]).trim().split('\n').length, 1);
 });
 test('Meta catalog setup preserves a scheduled empty feed and defers only empty product sets', async () => {
-  for (const labels of [[], ['Drones', 'Acessorios']]) {
+  for (const [labels, unavailable] of [[[], false], [['Drones', 'Acessorios'], false], [['Drones'], true]]) {
     const writes = [];
     const provider = createProviders({ transport: async (url, options = {}) => {
       const pathname = new URL(url).pathname;
+      if (unavailable && pathname.endsWith('/dpa_eligible_ad_accounts')) return Response.json({ error: { code: 100 } }, { status: 400 });
       if (options.method === 'POST') {
         writes.push({ pathname, fields: Object.fromEntries(new URLSearchParams(options.body)) });
         return Response.json({ id: '999', success: true });
@@ -101,7 +102,9 @@ test('Meta catalog setup preserves a scheduled empty feed and defers only empty 
     const sets = writes.filter(w => w.pathname.endsWith('/product_sets'));
     assert.equal(sets.length, labels.length);
     assert.equal(result.pendingGroups.length, 5 - labels.length);
-    assert(result.adAccountLinked && result.pixelLinked);
+    assert.equal(result.adAccountLinked, unavailable ? null : true);
+    assert(result.pixelLinked);
+    assert.equal(result.adAccountVerification, unavailable ? 'unavailable_endpoint' : 'available');
     assert.equal(result.feedId, '20');
     for (const set of sets) assert(labels.includes(JSON.parse(set.fields.filter).custom_label_0.eq));
   }
