@@ -309,7 +309,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
         let found = candidates[0];
         if (!found) {
           found = (await json(`${base}/audiences`, postJson({ displayName,
-            description: `Loja Aerion: ${definition.ga4}, janela ${definition.days} dias. Excluir o público paid_buyers 180d na campanha de aquisição.`,
+            description: `Loja: ${definition.ga4}; ${definition.days}d. Excluir paid_buyers 180d na campanha.`,
             membershipDurationDays: definition.days,
             filterClauses: [{ clauseType: 'INCLUDE', simpleFilter: { scope: 'AUDIENCE_FILTER_SCOPE_ACROSS_ALL_SESSIONS',
               filterExpression: { andGroup: { filterExpressions: [{ orGroup: { filterExpressions: [{ eventFilter: { eventName: definition.ga4 } }] } }] } } } }],

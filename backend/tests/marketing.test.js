@@ -42,6 +42,7 @@ test('Google audience creation uses the Admin API enum and keeps paid-buyer excl
     if (url.includes('/googleAdsLinks')) return Response.json({ googleAdsLinks: [{ customerId: '1234567890', adsPersonalizationEnabled: true }] });
     if (options.method !== 'POST') return Response.json({ audiences: [] });
     const body = JSON.parse(options.body);
+    assert(body.description.length <= 100, 'GA4 audience descriptions must fit the API limit');
     assert.equal(body.filterClauses[0].simpleFilter.scope, 'AUDIENCE_FILTER_SCOPE_ACROSS_ALL_SESSIONS');
     assert.equal(body.filterClauses[0].clauseType, 'INCLUDE');
     assert(!JSON.stringify(body).includes('inAnyNDayPeriod'));
