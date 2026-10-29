@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test:ecommerce": "node --test tests/ecommerce.test.js tests/ecommerce.integration.test.js tests/merchant.test.js",
+    "test:ecommerce": "node --test --test-concurrency=1 tests/ecommerce.test.js tests/ecommerce.integration.test.js tests/merchant.test.js tests/marketing.test.js",
     "dev": "nodemon index.js",
-    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js tests/disparoMensagens.test.js tests/searchQuality.test.js tests/searchQuality.integration.test.js tests/technicalRules.test.js tests/technicalQuality.test.js tests/productPackages.test.js tests/deepSearchRegression.test.js tests/technicalAnalysisRetry.test.js tests/technicalAnalysis.integration.test.js tests/technicalDocuments.integration.test.js tests/leadStage.test.js tests/aiSettings.test.js tests/outboundQueue.test.js tests/prospeccao.test.js"
+    "test": "node --test tests/trendsMedia.test.js tests/contactFollowups.test.js tests/pncpProxyPool.test.js tests/callTranscripts.test.js tests/patchCallTranscriptWorkflow.test.js tests/cnpj.test.js tests/disparoAudiencia.test.js tests/aiFollowups.test.js tests/whatsappNumeros.test.js tests/disparoMensagens.test.js tests/searchQuality.test.js tests/searchQuality.integration.test.js tests/technicalRules.test.js tests/technicalQuality.test.js tests/productPackages.test.js tests/deepSearchRegression.test.js tests/technicalAnalysisRetry.test.js tests/technicalAnalysis.integration.test.js tests/technicalDocuments.integration.test.js tests/leadStage.test.js tests/aiSettings.test.js tests/outboundQueue.test.js tests/prospeccao.test.js tests/aiResponder.test.js tests/buscaWeb.test.js tests/segmentoClassifier.test.js"
   },
   "keywords": [],
   "author": "",
