@@ -345,16 +345,22 @@ function createProviders({ transport = request, env = process.env } = {}) {
       if (!/^\d+$/.test(feedId || '')) throw new ProviderError('A fonte Meta não retornou um ID válido.');
       if (owned.length) await metaRequest(config, feedId, { schedule: { interval: 'HOURLY', url: settings.feedUrl, timezone: 'America/Sao_Paulo' } }, 'POST');
       const sets = await metaList(config, `${catalogId}/product_sets`, 'id,name');
-      const groups = require('./marketingDomain').GROUPS;
+      const { GROUPS: groups, metaGroupLabel } = require('./marketingDomain');
+      const items = await metaList(config, `${catalogId}/products`, 'id,custom_label_0');
+      const presentLabels = new Set(items.map(item => item.custom_label_0));
+      const pendingGroups = [];
       for (const group of groups) {
         const name = `Aerion CRM · ${group}`;
-        if (!sets.some(s => s.name === name)) await metaRequest(config, `${catalogId}/product_sets`, { name, filter: { custom_label_0: { eq: group } } }, 'POST');
+        if (sets.some(s => s.name === name)) continue;
+        const label = metaGroupLabel(group);
+        if (!presentLabels.has(label)) { pendingGroups.push(group); continue; }
+        await metaRequest(config, `${catalogId}/product_sets`, { name, filter: { custom_label_0: { eq: label } } }, 'POST');
       }
       const sources = await metaList(config, `${catalogId}/external_event_sources`, 'id');
       if (!sources.some(s => s.id === settings.pixelId)) await metaRequest(config, `${catalogId}/external_event_sources`, { external_event_sources: [...new Set([...sources.map(s => s.id), settings.pixelId])] }, 'POST');
       const eligibleAccounts = await metaList(config, `${catalogId}/dpa_eligible_ad_accounts`, 'id');
       return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)),
-        observedAt: new Date().toISOString(), status: 'awaiting_external_processing' };
+        pendingGroups, observedAt: new Date().toISOString(), status: 'awaiting_external_processing' };
     },
     async ensureMetaStoreAudiences(config, pixelId) {
       if (!/^\d+$/.test(pixelId)) throw new ProviderError('Pixel Meta inválido.');
@@ -371,7 +377,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
         const rule = { inclusions: { operator: 'or', rules: [clause(audience.meta, audience.days, audience.id === 'visitors')] },
           ...(audience.excludePaidDays ? { exclusions: { operator: 'or', rules: [clause('Purchase', audience.excludePaidDays)] } } : {}) };
         let found = candidates[0];
-        if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, subtype: 'WEBSITE', prefill: true, rule }, 'POST');
+        if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, prefill: true, rule }, 'POST');
         if (!/^\d+$/.test(found.id || '')) throw new ProviderError('A Meta não retornou um ID de público válido.');
         // Existing resources are never overwritten, even if someone edited their rules.
         result.push({ ...audience, platformId: found.id, status: candidates.length ? 'existing_requires_rule_review' : 'awaiting_external_processing',

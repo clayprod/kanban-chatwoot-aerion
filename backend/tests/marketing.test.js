@@ -57,6 +57,7 @@ test('Meta all-visitors rules use the supported URL template and exclude paid bu
   const providers = createProviders({ transport: async (url, options) => {
     if (options.method === 'GET') return Response.json({ data: [] });
     const fields = Object.fromEntries(new URLSearchParams(options.body));
+    assert.equal(fields.subtype, undefined, 'Website audiences infer their subtype from the pixel rule');
     created.push({ ...fields, rule: JSON.parse(fields.rule) });
     return Response.json({ id: String(created.length) });
   } });
@@ -79,6 +80,33 @@ test('feed blocks duplicate SKU, placeholders, missing brand, invalid URLs and u
   const preorder = projectProduct(raw(1, { availability: 'preorder', availability_date: '2099-02-05T00:00:00-03:00' }));
   const feed = metaFeed([preorder]); assert(feed.includes('preorder')); assert(feed.includes('120.00 BRL')); assert(feed.includes('100.00 BRL')); assert(feed.includes('2099-02-05'));
   assert.equal(metaFeed([p, { ...p, id: '2' }]).trim().split('\n').length, 1);
+});
+test('Meta catalog setup preserves a scheduled empty feed and defers only empty product sets', async () => {
+  for (const labels of [[], ['Drones', 'Acessorios']]) {
+    const writes = [];
+    const provider = createProviders({ transport: async (url, options = {}) => {
+      const pathname = new URL(url).pathname;
+      if (options.method === 'POST') {
+        writes.push({ pathname, fields: Object.fromEntries(new URLSearchParams(options.body)) });
+        return Response.json({ id: '999', success: true });
+      }
+      const data = pathname.endsWith('/product_feeds') ? [{ id: '20', name: 'Aerion CRM · consumidor' }]
+        : pathname.endsWith('/products') ? labels.map((label, index) => ({ id: String(index), custom_label_0: label }))
+        : pathname.endsWith('/external_event_sources') ? [{ id: '30' }]
+        : pathname.endsWith('/dpa_eligible_ad_accounts') ? [{ id: '40' }] : [];
+      return Response.json({ data });
+    } });
+    const result = await provider.ensureMetaMarketing({ account_id: '40', access_token: 'test' },
+      { catalogId: '10', pixelId: '30', feedUrl: 'https://example.com/feed' });
+    const sets = writes.filter(w => w.pathname.endsWith('/product_sets'));
+    assert.equal(sets.length, labels.length);
+    assert.equal(result.pendingGroups.length, 5 - labels.length);
+    assert(result.adAccountLinked && result.pixelLinked);
+    assert.equal(result.feedId, '20');
+    for (const set of sets) assert(labels.includes(JSON.parse(set.fields.filter).custom_label_0.eq));
+  }
+  const accessory = projectProduct(raw(1, { categories: ['Acessórios'] }));
+  assert.equal(metaFeed([accessory]).trim().split('\n')[1].split('\t').at(-1), 'Acessorios');
 });
 test('Google reconciliation distinguishes unavailable, not received, received and approved', () => {
   const product = projectProduct(raw());

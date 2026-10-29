@@ -3,6 +3,7 @@ const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)
 const text = (value, max = 500) => String(value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const https = value => { try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password; } catch { return false; } };
 const GROUPS = ['Drones', 'Kits', 'Payloads', 'Acessórios', 'Outros'];
+const metaGroupLabel = group => String(group).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 function productGroup(categories) {
   const names = categories.join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/payload|camera|sensor/.test(names)) return 'Payloads';
@@ -53,7 +54,7 @@ function metaFeed(products) {
   const cell = value => String(value ?? '').replace(/[\t\r\n]/g, ' ');
   return [columns, ...eligibleProducts(products).filter(p => p.eligible).map(p => [p.sku, p.name, p.description,
     availability[p.availability], 'new', `${p.regularPrice.toFixed(2)} BRL`, p.url, p.image, p.brand, p.gtin,
-    p.price < p.regularPrice ? `${p.price.toFixed(2)} BRL` : '', p.availabilityDate || '', p.parentId !== p.id ? p.parentId : '', p.group])]
+    p.price < p.regularPrice ? `${p.price.toFixed(2)} BRL` : '', p.availabilityDate || '', p.parentId !== p.id ? p.parentId : '', metaGroupLabel(p.group)])]
     .map(row => row.map(cell).join('\t')).join('\n') + '\n';
 }
 function reconcileGoogle(products, snapshot) {
@@ -113,4 +114,4 @@ function seoOpportunities(records, today) {
   }).filter(p => p.impressions >= 100 && ((p.position >= 4 && p.position <= 20) || p.ctr < 2 || p.decline <= -20)).sort((a, b) => b.impressions - a.impressions);
   return { available: true, from: from(27), to: through, previousFrom: from(55), previousTo: from(28), generatedForWeek: shift(-new Date(`${today}T12:00:00Z`).getUTCDay()), rows };
 }
-module.exports = { digest, projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, GROUPS };
+module.exports = { digest, projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, GROUPS, metaGroupLabel };

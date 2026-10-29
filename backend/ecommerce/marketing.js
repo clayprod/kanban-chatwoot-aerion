@@ -194,8 +194,14 @@ function createMarketing({ pool, providers, env = process.env }) {
       const config = await load(db, 'meta_ads');
       const settings = await metaSettings(db);
       if (!settings.catalogId) throw new Error('meta_catalog_required');
+      // Meta rejects empty product sets. Retry missing groups after each feed import,
+      // using the same managed feed and preserving all existing sets.
+      const origin = new URL(env.ECOMMERCE_PUBLIC_URL);
+      if (origin.protocol !== 'https:' || origin.username || origin.password) throw new Error('connection_required');
+      const setup = await providers.ensureMetaMarketing(config, { ...settings, feedUrl: `${origin.origin}/api/ecommerce/feeds/meta?token=${feedToken()}` });
+      await saveState(db, 'meta_setup', setup);
       const snapshot = await providers.metaCatalog(config, settings.catalogId, settings.feedId);
-      await saveState(db, 'meta_catalog', snapshot);
+      await saveState(db, 'meta_catalog', { ...snapshot, pendingGroups: setup.pendingGroups || [] });
       return;
     }
     if (job.kind === 'meta_setup') {
