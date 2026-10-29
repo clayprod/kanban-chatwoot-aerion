@@ -13,7 +13,56 @@
 // trabalho; marco comercial (demo marcada, proposta, negociação, cliente novo) ela
 // apenas SUGERE, e quem decide é o vendedor.
 
+const { sqlExcluiSistema } = require('./sistemaContatos');
+
 const STAGE_LOG_TABLE = 'ai_stage_log';
+
+// Mensagem de ENTRADA que não é fala do cliente: boas-vindas/menu de bot, aviso de
+// ausência, "responderemos em breve". Medido em 2026-10-29: "Bem-vindo à Titton
+// Contabilidade", "Responderei assim que possível" e "Somos um escritório de advocacia"
+// moveram cards para Descartado/Em Contato como se fossem resposta humana.
+const AUTOMATICA = [
+  /bem[\s-]*vind[oa]/i,
+  /seja\s+bem/i,
+  /responder(ei|emos)\s+(assim|o\s+mais|em\s+breve)/i,
+  /hor[aá]rio\s+de\s+atendimento/i,
+  /(estamos|estou)\s+(fora|ausente|indispon[ií]vel)/i,
+  /mensagem\s+autom[aá]tica/i,
+  /atendimento\s+autom[aá]tico/i,
+  /digite\s+(o\s+n[uú]mero|\d)/i,
+  /para\s+(que\s+)?(eu\s+)?possa\s+te\s+(entender|ajudar)/i,
+  /somos\s+(um|uma)\s+(escrit[oó]rio|empresa|ag[eê]ncia)/i,
+  /nosso\s+hor[aá]rio/i,
+];
+// "ok", "obrigado", emoji solto: não mudam etapa.
+const TRIVIAL = /^(ok|okay|blz|beleza|obrigad[oa]|valeu|bom\s+dia|boa\s+(tarde|noite)|oi|ol[aá]|certo|combinado|sim|n[aã]o)?[\s.!,?]*$/iu;
+const ehFalaDeRuido = (texto) => {
+  const t = String(texto || '').trim();
+  if (!t) return true;
+  if (TRIVIAL.test(t.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, ''))) return true;
+  return AUTOMATICA.some((re) => re.test(t));
+};
+
+const normalizar = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+// O motivo tem que citar o que o CLIENTE disse. Paráfrase do modelo ("demonstra algum
+// nível de interesse") não é evidência: exige que a maior parte das palavras do motivo
+// exista nas falas finais do cliente.
+const motivoCitaCliente = (motivo, falas) => {
+  const alvo = normalizar(motivo).replace(/\[.*?\]/g, '').replace(/["'“”]/g, '');
+  const tokens = alvo.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+  if (!tokens.length) return false;
+  const corpus = normalizar(falas.map((f) => f.texto).join(' '));
+  if (corpus.includes(alvo.trim())) return true;
+  const achados = tokens.filter((t) => corpus.includes(t)).length;
+  return achados / tokens.length >= 0.7;
+};
+
+// Ordem do funil de trabalho. Mover para trás (ou cair de 6 para 2) por uma única
+// mensagem é o erro clássico; isso só como sugestão ao vendedor.
+const ORDEM_TRABALHO = [
+  '1. Inbox (Novos)', '2. Em Contato', '3. Follow-up 1', '4. Follow-up 2',
+  '5. Follow-up 3', '6. Qualificado (SQL)',
+];
 
 // Etapas que a IA pode aplicar sozinha. Movimento entre elas é organização de fila,
 // não compromisso comercial. "16. Descartado" entra porque recusa explícita do cliente
@@ -167,6 +216,7 @@ const buscarCandidatosStage = async (pool, { accountId, config, limite }) => {
       JOIN contacts c ON c.id = i.contact_id AND c.account_id = $1
       LEFT JOIN ult_mov mv ON mv.contact_id = i.contact_id
      WHERE COALESCE(TRIM(c.custom_attributes->>'Funil_Vendas'), '') <> ''
+       ${sqlExcluiSistema('c')}
        AND (mv.em IS NULL OR mv.em < i.em)
        -- não reavalia o mesmo contato enquanto ele não falar de novo
        AND NOT EXISTS (
@@ -224,7 +274,10 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
     '- Conversa ativa sem qualificação clara = Em Contato.',
     '- Só diga que houve demo, proposta ou negociação se isso aparecer no histórico.',
     '- Se a etapa atual já descreve bem a situação, repita a etapa atual.',
-    '- Na dúvida entre duas, fique na mais conservadora (a mais atrasada no funil).',
+    '- Na dúvida, REPITA a etapa atual. Nunca volte um lead para uma etapa anterior do',
+    '  funil por causa de uma única mensagem.',
+    '- Ignore mensagens automáticas da empresa do cliente (boas-vindas, menu, "responderemos',
+    '  em breve", apresentação institucional): não são fala de pessoa e não mudam etapa.',
     '',
     'Se a etapa for fria (Descartado, Nurturing, Pausado), diga também em quantos dias',
     'faz sentido voltar a falar com essa pessoa, em "retomar_em_dias". Use o que o',
@@ -315,6 +368,12 @@ const avaliarSugestao = ({ etapaAtual, sugerida, confianca, motivo = '', etapas,
   // Sair de marco comercial tambem e decisao de gente, nao so entrar.
   if ((config.origensProtegidas || ORIGENS_PROTEGIDAS_PADRAO).includes(etapaAtual)) {
     return { acao: 'suggested', motivo: `sair de "${etapaAtual}" precisa de confirmação humana` };
+  }
+  // Regressão no funil de trabalho (ex.: 6. Qualificado → 2. Em Contato).
+  const iAtual = ORDEM_TRABALHO.indexOf(etapaAtual);
+  const iAlvo = ORDEM_TRABALHO.indexOf(alvo);
+  if (iAtual >= 0 && iAlvo >= 0 && iAlvo < iAtual) {
+    return { acao: 'suggested', motivo: `voltar de "${etapaAtual}" para "${alvo}" precisa de confirmação humana` };
   }
   // Marco comercial é decisão de gente: a IA só levanta a mão.
   if (!config.alvosAutomaticos.includes(alvo)) {
@@ -424,6 +483,20 @@ const runStageClassificationTick = async (pool, {
         continue;
       }
 
+      // Falas finais do cliente: se são só ruído (bot da empresa, "ok", emoji), não há
+      // o que classificar. Evita mover card por mensagem automática.
+      const idxUltimo = historico.map((h) => h.autor).lastIndexOf('cliente');
+      const falasCliente = [];
+      for (let i = idxUltimo; i >= 0 && falasCliente.length < 4; i -= 1) {
+        if (historico[i].autor !== 'cliente') break;
+        falasCliente.unshift(historico[i]);
+      }
+      if (!falasCliente.length || falasCliente.every((f) => ehFalaDeRuido(f.texto))) {
+        await registrarStage(pool, { ...base, status: 'skipped', skipReason: 'só mensagem automática ou trivial do cliente' });
+        r.pulados += 1;
+        continue;
+      }
+
       const { system, user } = montarPromptStage({ contato: cand, historico, etapas });
       const ia = await chatCompletionJson({ system, user, maxTokens: 400, temperature: 0.1 });
       if (!ia.ok) {
@@ -445,6 +518,13 @@ const runStageClassificationTick = async (pool, {
       const veredito = avaliarSugestao({
         etapaAtual: cand.etapa_atual, sugerida, confianca, motivo, etapas, config,
       });
+
+      // Sem citação verificável do cliente não há evidência: não move nem sugere.
+      if (sugerida && sugerida !== cand.etapa_atual && !motivoCitaCliente(motivo, falasCliente)) {
+        await registrarStage(pool, { ...comum, status: 'skipped', skipReason: 'motivo não cita fala do cliente' });
+        r.pulados += 1;
+        continue;
+      }
 
       // O destino pode nao ser o que a IA sugeriu: "no momento nao" vira Nurturing.
       const destino = veredito.alvoCorrigido || sugerida;
@@ -523,6 +603,9 @@ const runStageClassificationTick = async (pool, {
 module.exports = {
   STAGE_LOG_TABLE,
   ehAdiamento,
+  ehFalaDeRuido,
+  motivoCitaCliente,
+  ORDEM_TRABALHO,
   ALVOS_AUTOMATICOS_PADRAO,
   ORIGENS_PROTEGIDAS_PADRAO,
   ETAPAS_FRIAS_PADRAO,

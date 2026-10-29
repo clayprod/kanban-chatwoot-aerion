@@ -163,7 +163,7 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
     return todos.filter((it) => {
       if (!verRuido && meta(it.status).ruido) return false;
       if (!q) return true;
-      return [it.contact_name, it.message, it.motivo, it.skip_reason, it.to_stage, it.from_stage]
+      return [it.contact_name, it.message, it.motivo, it.skip_reason, it.to_stage, it.from_stage, it.segmento]
         .filter(Boolean).join(' ').toLowerCase().includes(q);
     });
   }, [todos, busca, verRuido]);
@@ -246,6 +246,7 @@ export default function AutomationView() {
   const [stages, setStages] = useState(null);
   const [prospeccao, setProspeccao] = useState(null);
   const [responder, setResponder] = useState(null);
+  const [segmentos, setSegmentos] = useState(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState('');
   const [busca, setBusca] = useState('');
@@ -256,13 +257,15 @@ export default function AutomationView() {
     setCarregando(true);
     setErro('');
     try {
-      const [f, s, p, resp] = await Promise.all([
+      const [f, s, p, resp, seg] = await Promise.all([
         axios.get('/api/ai-followups?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/ai-stages?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/prospeccao?limit=120').catch((e) => ({ error: e })),
         axios.get('/api/ai-responder?limit=120').catch((e) => ({ error: e })),
+        axios.get('/api/ai-segments?limit=120').catch((e) => ({ error: e })),
       ]);
-      if (f.error && s.error && p.error && resp.error) throw f.error;
+      if (f.error && s.error && p.error && resp.error && seg.error) throw f.error;
+      setSegmentos(seg.error ? null : seg.data);
       setFollowups(f.error ? null : f.data);
       setStages(s.error ? null : s.data);
       setProspeccao(p.error ? null : p.data);
@@ -311,6 +314,7 @@ export default function AutomationView() {
     { id: 'etapa', nome: 'Classificação de etapa', icone: ViewColumnsIcon, n: (stages?.hoje?.applied || 0) + (stages?.hoje?.dry_run || 0) },
     { id: 'prospeccao', nome: 'Prospecção ativa', icone: MagnifyingGlassCircleIcon, n: (prospeccao?.hoje?.abordado || 0) + (prospeccao?.hoje?.enfileirado || 0) + (prospeccao?.hoje?.dry_run || 0) },
     { id: 'responder', nome: 'Respondedor', icone: ChatBubbleLeftRightIcon, n: (responder?.hoje?.sent || 0) + (responder?.hoje?.dry_run || 0) },
+    { id: 'segmento', nome: 'Segmento (etiquetas)', icone: ViewColumnsIcon, n: (segmentos?.hoje?.applied || 0) + (segmentos?.hoje?.dry_run || 0) },
   ];
 
   return (
@@ -473,6 +477,32 @@ export default function AutomationView() {
                   <p className="text-[11px] text-muted2">{it.motivo || it.error}</p>
                 )}
                 {it.icp && <p className="text-[10px] text-muted2">perfil: {it.icp}</p>}
+              </>
+            )}
+          />
+        )}
+        {aba === 'segmento' && (
+          <Painel
+            dados={segmentos}
+            carregando={carregando}
+            onReload={carregar}
+            busca={busca}
+            chaves={{ enabled: 'segment_enabled', dryRun: 'segment_dry_run' }}
+            onToggle={alternar}
+            salvando={salvando}
+            vazio="Nenhum segmento classificado ainda. Roda 1x por dia, só em contatos sem etiqueta de segmento."
+            linhas={(it) => (
+              <>
+                {it.segmento && it.segmento !== 'nenhum' && (
+                  <p className="text-[12px] text-ink">
+                    etiqueta <span className="font-medium">{it.segmento}</span>
+                  </p>
+                )}
+                {it.motivo && <p className="text-[12px] text-muted">{it.motivo}</p>}
+                {(it.skip_reason || it.error) && (
+                  <p className="text-[11px] text-status-warning">{it.skip_reason || it.error}</p>
+                )}
+                {it.provider && <p className="text-[10px] text-muted2">{it.provider} · {it.model}</p>}
               </>
             )}
           />

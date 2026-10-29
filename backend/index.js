@@ -167,6 +167,7 @@ const AUTH_PUBLIC_PATHS = new Set([
   '/auth/logout',
   '/auth/status',
   '/ecommerce/webhooks/woocommerce',
+  '/ecommerce/feeds/meta',
   '/ecommerce/oauth/google/callback',
   '/call-transcripts',
   '/licitacoes/pncp/modalidades',
@@ -783,7 +784,14 @@ const {
   classificarIcp, podeFalarTabelaRevenda, blocoPromptIcp,
 } = require('./icp');
 const { criarCatalogoAerion } = require('./aerionCatalogo');
-const { buscarContatoWeb } = require('./contatoWeb');
+const { buscarContatoWeb, buscarNoTavily, CONSULTAS: CONSULTAS_WEB } = require('./contatoWeb');
+const { criarBuscaWeb, criarTabelasBuscaWeb } = require('./buscaWeb');
+const {
+  createSegmentLogTable,
+  carregarConfigSegmento,
+  runSegmentClassificationTick,
+  SEGMENT_LOG_TABLE,
+} = require('./segmentoClassifier');
 const { criarCofre } = require('./segredos');
 const {
   carregarConfigResponder, createResponderTable, runAiResponderTick,
@@ -845,6 +853,13 @@ const tokenDaInstanciaNoCofre = (instancia) => cofre.ler(
   `EVOLUTION_TOKEN_${SLUG_DA_INSTANCIA(instancia)}`
 );
 const chaveTavily = () => cofre.ler('TAVILY_API_KEY');
+// Places (cota grátis) → Tavily → Chromium headless, com cache por CNPJ e circuit-breaker.
+const buscaWeb = criarBuscaWeb({
+  pool,
+  lerSegredo: (nome) => cofre.ler(nome),
+  buscarNoTavily,
+  consultas: CONSULTAS_WEB,
+});
 const enviarPelaEvolution = criarEnvioEvolution({ resolverToken: tokenDaInstanciaNoCofre });
 // Quais numeros a automacao pode usar. Default no codigo porque env de servico nesta
 // stack ja se perdeu em deploy, e perder env nunca pode liberar um numero errado.
@@ -23561,7 +23576,8 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
 // as env já foram apagadas seis vezes e o worker ficou parado sem ninguém notar.
 app.post('/api/ai-settings', requireAdmin, async (req, res) => {
   const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run',
-    'prospeccao_enabled', 'prospeccao_dry_run', 'responder_enabled', 'responder_dry_run'];
+    'prospeccao_enabled', 'prospeccao_dry_run', 'responder_enabled', 'responder_dry_run',
+    'segment_enabled', 'segment_dry_run'];
   const body = req.body || {};
   const alvos = Object.keys(body).filter((k) => permitidas.includes(k));
   if (!alvos.length) {
@@ -23670,6 +23686,44 @@ app.get('/api/ai-responder', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('[responder] listagem falhou:', error.message);
     res.status(500).json({ error: 'Não foi possível carregar o histórico do respondedor.' });
+  }
+});
+
+// Log do classificador de segmento (etiquetas), mesmo formato do /api/ai-stages.
+app.get('/api/ai-segments', requireAdmin, async (req, res) => {
+  const limite = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+  try {
+    const { rows } = await pool.query(
+      `SELECT l.id, l.contact_id, l.segmento, l.confidence, l.motivo, l.status, l.skip_reason,
+              l.provider, l.model, l.error, l.created_at, c.name AS contact_name
+         FROM ${SEGMENT_LOG_TABLE} l
+         LEFT JOIN contacts c ON c.id = l.contact_id AND c.account_id = l.account_id
+        WHERE l.account_id = $1
+        ORDER BY l.created_at DESC
+        LIMIT $2`,
+      [CHATWOOT_ACCOUNT_ID, limite]
+    );
+    const { rows: hojeRows } = await pool.query(
+      `SELECT status, COUNT(*)::int AS total FROM ${SEGMENT_LOG_TABLE}
+        WHERE account_id = $1
+          AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+        GROUP BY status`,
+      [CHATWOOT_ACCOUNT_ID]
+    );
+    const configEnv = carregarConfigSegmento();
+    const settings = await carregarSettings(pool);
+    res.json({
+      hoje: Object.fromEntries(hojeRows.map((r) => [r.status, r.total])),
+      config: {
+        enabled: resolverFlag(settings, 'segment_enabled', configEnv.enabled),
+        dry_run: resolverFlag(settings, 'segment_dry_run', configEnv.dryRun),
+        max_por_dia: configEnv.maxPorDia,
+        min_confianca: configEnv.minConfianca,
+      },
+      decisoes: rows,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error.message || error) });
   }
 });
 
@@ -24008,6 +24062,7 @@ const registerBackgroundSchedules = () => {
         // quando os indicios nao bastam para decidir sozinho.
         buscarContatoWeb: (empresa) => buscarContatoWeb(empresa, {
           apiKey: chaveTavily,
+          buscarPaginas: buscaWeb.buscarPaginas,
           confirmarCadastro:true,
           decidirComIa: ({ system, user }) => chatCompletionJson({
             system, user, maxTokens: 400, temperature: 0.2,
@@ -24248,8 +24303,10 @@ const registerBackgroundSchedules = () => {
   // RESPONDEU. Quem disse "não tenho interesse" nunca seria candidato lá (o follow-up
   // exige que a última palavra seja nossa), e é justamente quem mais precisa sair da
   // etapa errada. Sem janela comercial: não manda mensagem, só escreve no CRM.
+  // 1x por dia (pedido do Clayton em 29/10): a cada 15 min o reclassificador reagia a cada
+  // "ok" do cliente. Agora roda em lote uma vez, com o histórico do dia já assentado.
   let aiStageRodando = false;
-  cron.schedule('*/15 * * * *', async () => {
+  cron.schedule(process.env.AI_STAGE_CRON || '0 7 * * *', async () => {
     if (!dataLayerReady || aiStageRodando) return;
     const configEnv = carregarConfigStage();
     const settings = await carregarSettings(pool);
@@ -24261,6 +24318,11 @@ const registerBackgroundSchedules = () => {
     if (!config.enabled) return;
     aiStageRodando = true;
     try {
+      // Um tick avalia poucos contatos (AI_STAGE_MAX_PER_TICK); o lote diário repete o
+      // tick até esgotar candidatos ou o teto do dia. Candidato avaliado entra no log e
+      // sai da fila, então o laço sempre avança.
+      const totais = { avaliados: 0, movidos: 0, sugeridos: 0, agendados: 0, pulados: 0, falhas: 0 };
+      for (let rodada = 0; rodada < 40; rodada += 1) {
       const resultado = await runStageClassificationTick(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
@@ -24287,13 +24349,63 @@ const registerBackgroundSchedules = () => {
           dedupeKey: `ia-stage:${tipo}:${contato.contact_id}:${Date.now()}`,
         }),
       });
-      if (resultado.movidos || resultado.sugeridos || resultado.falhas) {
-        console.log('[ia-stage] tick:', resultado);
+      if (resultado.skipped || !resultado.avaliados) break;
+      for (const k of Object.keys(totais)) totais[k] += resultado[k] || 0;
       }
+      if (totais.avaliados) console.log('[ia-stage] lote diário:', totais);
     } catch (error) {
       console.error('[ia-stage] tick falhou:', error.message);
     } finally {
       aiStageRodando = false;
+    }
+  }, { timezone: 'America/Sao_Paulo' });
+
+  // Segmento do cliente em etiquetas (contato e conversa), 1x/dia, só para quem não tem.
+  // A API do Chatwoot SUBSTITUI a lista de etiquetas: o classificador manda a lista final
+  // já mesclada com as existentes.
+  let aiSegmentoRodando = false;
+  cron.schedule(process.env.AI_SEGMENT_CRON || '30 7 * * *', async () => {
+    if (!dataLayerReady || aiSegmentoRodando) return;
+    const configEnv = carregarConfigSegmento();
+    const settings = await carregarSettings(pool);
+    const config = {
+      ...configEnv,
+      enabled: resolverFlag(settings, 'segment_enabled', configEnv.enabled),
+      dryRun: resolverFlag(settings, 'segment_dry_run', configEnv.dryRun),
+    };
+    if (!config.enabled) return;
+    aiSegmentoRodando = true;
+    try {
+      const cw = await resolverChatwootConfig(pool);
+      const aplicarEtiquetas = async ({ tipo, id, labels }) => {
+        if (!cw.chatwootBaseUrl || !cw.chatwootToken) throw new Error('Chatwoot não configurado para etiquetas.');
+        const resp = await fetch(
+          `${cw.chatwootBaseUrl}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/${tipo}/${id}/labels`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', api_access_token: cw.chatwootToken },
+            body: JSON.stringify({ labels }),
+          }
+        );
+        if (!resp.ok) throw new Error(`Chatwoot labels HTTP ${resp.status}`);
+      };
+      const totais = { avaliados: 0, etiquetados: 0, pulados: 0, falhas: 0 };
+      for (let rodada = 0; rodada < 20; rodada += 1) {
+        const r = await runSegmentClassificationTick(pool, {
+          accountId: CHATWOOT_ACCOUNT_ID,
+          chatCompletionJson,
+          carregarContextoConversa,
+          aplicarEtiquetas,
+          config,
+        });
+        if (r.skipped || !r.avaliados) break;
+        for (const k of Object.keys(totais)) totais[k] += r[k] || 0;
+      }
+      if (totais.avaliados) console.log('[ia-segmento] lote diário:', totais);
+    } catch (error) {
+      console.error('[ia-segmento] falhou:', error.message);
+    } finally {
+      aiSegmentoRodando = false;
     }
   }, { timezone: 'America/Sao_Paulo' });
 
@@ -24456,7 +24568,7 @@ const registerBackgroundSchedules = () => {
   // Corpus real ~1,9M itens: 1 lote/min levaria semanas — roda vários lotes por
   // tick com orçamento de tempo (~50s), respeitando o budget diário de tokens.
   let pcaBackfillRunning = false;
-  const PCA_BACKFILL_BATCHES_PER_TICK = Math.max(1, parseInt(process.env.PCA_BACKFILL_BATCHES_PER_TICK || '10', 10) || 10);
+  const PCA_BACKFILL_BATCHES_PER_TICK = Math.max(1, parseInt(process.env.PCA_BACKFILL_BATCHES_PER_TICK || '4', 10) || 4);
   cron.schedule('* * * * *', async () => {
     if (!dataLayerReady || pcaBackfillRunning) return;
     if (process.env.PCA_EMBED_BACKFILL !== '1' || !pcaVectorAvailable || !isEmbeddingsEnabled()) return;
@@ -24539,6 +24651,8 @@ const initializeDataLayer = async () => {
   await createContactReminderTable(pool);
   await createAiFollowupTable(pool);
   await createStageLogTable(pool);
+  await criarTabelasBuscaWeb(pool);
+  await createSegmentLogTable(pool);
   await createAiSettingsTable(pool);
   await createOutboundQueueTable(pool);
   await createProspeccaoTable(pool);

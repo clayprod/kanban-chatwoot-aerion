@@ -51,6 +51,7 @@ const carregarConfigResponder = () => ({
 });
 
 const {rejectedBeforeGeneration,restoreProviderFailures}=require('./aiProviderAvailability');
+const { sqlExcluiSistema } = require('./sistemaContatos');
 const createResponderTable = async (pool) => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${RESPONDER_LOG_TABLE} (
@@ -172,6 +173,7 @@ const buscarPendentes = async (pool, { accountId, config, desde = null }) => {
        AND COALESCE((ct.custom_attributes->>'opt_out')::text, 'false') NOT IN ('true', 'sim', '1')
        AND COALESCE((ct.custom_attributes->>'nao_contatar')::text, 'false') NOT IN ('true', 'sim', '1')
        AND COALESCE(NULLIF(TRIM(LOWER(ct.custom_attributes->>'bloqueado')),''),'false') NOT IN ('true','sim','1','yes')
+       ${sqlExcluiSistema('ct')}
      ORDER BY ue.created_at ASC
      LIMIT $4
     `,

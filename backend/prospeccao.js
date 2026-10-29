@@ -41,6 +41,10 @@ const carregarConfigProspeccao = () => ({
   maxPorTick: inteiro('PROSPECCAO_MAX_PER_TICK', 3),
   candidatosPorPerfil: inteiro('PROSPECCAO_CANDIDATES_PER_PROFILE', 40),
   minConfianca: Number.parseFloat(process.env.PROSPECCAO_MIN_CONFIDENCE ?? '') || 0.6,
+  // Decisão do Clayton (2026-10-29): número da Receita com WhatsApp ATIVO na Evolution basta,
+  // sem exigir que o nome do perfil bata com a razão social (quase nenhum perfil bate).
+  // Os demais freios (SPE, ICP, opt-out, tetos, variação) continuam valendo.
+  aceitarReceitaAtiva: !['0', 'false', 'no', 'nao'].includes(String(process.env.PROSPECCAO_ACEITA_RECEITA_ATIVA ?? '1').trim().toLowerCase()),
 });
 
 const createProspeccaoTable = async (pool) => {
@@ -408,6 +412,14 @@ const runProspeccaoTick = async (pool, {
         let titularidadeConfirmada=cadastroConfirmado;
         if ((!telefone || !existentes.has(telefone) || !cadastroConfirmado) && buscarContatoWeb) {
           achadoWeb = await buscarContatoWeb(empresa);
+          // Provedores fora do ar (cota, rede) não dizem nada sobre a empresa: não queima o
+          // CNPJ. Fica fora do log e volta na próxima rodada.
+          if (achadoWeb?.transitorio && !(telefone && existentes.has(telefone))) {
+            r.falhas += 1;
+            (r.errosBusca ||= []).includes('busca web indisponível')
+              || r.errosBusca.push('busca web indisponível');
+            continue;
+          }
           if (achadoWeb?.numero && achadoWeb.identidadeComprovada===true) {
             const { existentes: temWpp,indisponivel:verificacaoIndisponivel } = await verificarNumerosWhatsapp([achadoWeb.numero]);
             if (!verificacaoIndisponivel && temWpp.has(achadoWeb.numero)) {
@@ -444,6 +456,11 @@ const runProspeccaoTick = async (pool, {
           continue;
         }
         base.phoneEvidence={identity_verified:titularidadeConfirmada,source:origemTelefone,url:achadoWeb?.origem || null,profile:perfilCadastro || null,signals:achadoWeb?.sinais || [],rejected:(achadoWeb?.rejeitados || []).slice(0,10),checked_at:new Date().toISOString()};
+        if (!titularidadeConfirmada && config.aceitarReceitaAtiva && origemTelefone === 'receita') {
+          titularidadeConfirmada = true;
+          base.phoneEvidence.identity_verified = true;
+          base.phoneEvidence.accepted_by = 'receita_whatsapp_ativo';
+        }
         if(!titularidadeConfirmada){
           await registrarProspeccao(pool,{...base,status:'descartado',motivo:'Titularidade não comprovada: WhatsApp ativo não confirma a empresa; necessária fonte oficial ou perfil identificado.'});
           r.descartados++;continue;

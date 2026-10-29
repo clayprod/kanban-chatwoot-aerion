@@ -43,6 +43,7 @@ const CANDIDATO = {
 const HISTORICO = [
   { autor: 'nós', texto: 'Oi! Trabalham com drones?' },
   { autor: 'cliente', texto: 'Trabalhamos sim, mas já temos fornecedor DJI' },
+  { autor: 'cliente', texto: 'Me chama daqui uns meses e pode me mandar a proposta' },
 ];
 
 // Pool falso: responde por assinatura da query e guarda o que foi gravado.
@@ -240,7 +241,7 @@ test('o prompt lista as etapas reais e manda julgar pelo cliente', () => {
   const { system, user } = montarPromptStage({ contato: CANDIDATO, historico: HISTORICO, etapas: ETAPAS });
   for (const e of ETAPAS) assert.ok(system.includes(e), `faltou ${e}`);
   assert.match(system, /Olhe o que o CLIENTE disse/);
-  assert.match(system, /mais conservadora/);
+  assert.match(system, /REPITA a etapa atual/);
   assert.match(user, /Etapa atual: 1\. Inbox \(Novos\)/);
   assert.match(user, /já temos fornecedor DJI/);
 });
@@ -322,7 +323,7 @@ test('etapa quente nao agenda retorno', async () => {
   const r = await runStageClassificationTick(pool, {
     accountId: 2,
     chatCompletionJson: async () => ({
-      ok: true, data: { etapa: '2. Em Contato', confianca: 0.9, motivo: 'x', retomar_em_dias: 90 },
+      ok: true, data: { etapa: '2. Em Contato', confianca: 0.9, motivo: 'pode me mandar a proposta', retomar_em_dias: 90 },
     }),
     carregarContextoConversa: contexto(HISTORICO),
     agendarRetorno: async (a) => { agendados.push(a); },
@@ -336,7 +337,7 @@ test('dry run decide mas nao escreve no contato', async () => {
   const pool = fakePool({ candidatos: [CANDIDATO] });
   const r = await runStageClassificationTick(pool, {
     accountId: 2,
-    chatCompletionJson: async () => ({ ok: true, data: { etapa: '17. Nurturing', confianca: 0.9, motivo: 'x' } }),
+    chatCompletionJson: async () => ({ ok: true, data: { etapa: '17. Nurturing', confianca: 0.9, motivo: 'me chama daqui uns meses' } }),
     carregarContextoConversa: contexto(HISTORICO),
     config: { ...CFG, dryRun: true },
   });
@@ -350,7 +351,7 @@ test('marco comercial notifica e nao escreve', async () => {
   const avisos = [];
   const r = await runStageClassificationTick(pool, {
     accountId: 2,
-    chatCompletionJson: async () => ({ ok: true, data: { etapa: '10. Proposta Enviada', confianca: 0.95, motivo: 'pediu proposta' } }),
+    chatCompletionJson: async () => ({ ok: true, data: { etapa: '10. Proposta Enviada', confianca: 0.95, motivo: 'pode me mandar a proposta' } }),
     carregarContextoConversa: contexto(HISTORICO),
     notify: async (a) => { avisos.push(a); },
     config: CFG,
@@ -366,7 +367,7 @@ test('aborta se o vendedor moveu o card durante a analise', async () => {
   const pool = fakePool({ candidatos: [CANDIDATO], contatoAtual: '6. Qualificado (SQL)' });
   const r = await runStageClassificationTick(pool, {
     accountId: 2,
-    chatCompletionJson: async () => ({ ok: true, data: { etapa: '17. Nurturing', confianca: 0.9, motivo: 'x' } }),
+    chatCompletionJson: async () => ({ ok: true, data: { etapa: '17. Nurturing', confianca: 0.9, motivo: 'me chama daqui uns meses' } }),
     carregarContextoConversa: contexto(HISTORICO),
     config: CFG,
   });
@@ -397,4 +398,42 @@ test('falha da IA vira registro, nao excecao', async () => {
   });
   assert.equal(r.falhas, 1);
   assert.equal(pool.gravados.at(-1).status, 'failed');
+});
+
+test('mensagem automatica e trivial do cliente nao e fala de pessoa', () => {
+  const { ehFalaDeRuido } = require('../leadStage');
+  assert.equal(ehFalaDeRuido('Bem-vindo(a) à Titton Contabilidade! É um prazer atende-lo!'), true);
+  assert.equal(ehFalaDeRuido('Responderei assim que possível.'), true);
+  assert.equal(ehFalaDeRuido('Somos um escritório de advocacia'), true);
+  assert.equal(ehFalaDeRuido('ok 👍'), true);
+  assert.equal(ehFalaDeRuido('Pode mandar a tabela de preços'), false);
+});
+
+test('motivo precisa citar o cliente; parafrase nao vale', () => {
+  const { motivoCitaCliente } = require('../leadStage');
+  const falas = [{ texto: 'Pode me mandar a proposta do Autel EVO' }];
+  assert.equal(motivoCitaCliente('pode me mandar a proposta', falas), true);
+  assert.equal(motivoCitaCliente('O cliente demonstra algum nível de interesse', falas), false);
+});
+
+test('regressao no funil de trabalho vira sugestao, nao movimento', () => {
+  const v = avaliarSugestao({
+    etapaAtual: '6. Qualificado (SQL)', sugerida: '2. Em Contato',
+    confianca: 0.95, motivo: 'x', etapas: ETAPAS, config: CFG,
+  });
+  assert.equal(v.acao, 'suggested');
+  const frente = avaliarSugestao({
+    etapaAtual: '2. Em Contato', sugerida: '6. Qualificado (SQL)',
+    confianca: 0.95, motivo: 'x', etapas: ETAPAS, config: CFG,
+  });
+  assert.equal(frente.acao, 'applied');
+});
+
+test('contato EvolutionAPI e filtrado nas queries de candidatos', () => {
+  const { sqlExcluiSistema, ehContatoSistema } = require('../sistemaContatos');
+  const sql = sqlExcluiSistema('ct', {});
+  assert.match(sql, /'evolutionapi'/);
+  assert.match(sql, /'\+123456'/);
+  assert.equal(ehContatoSistema({ name: 'EvolutionAPI', phone_number: '+123456' }, {}), true);
+  assert.equal(ehContatoSistema({ name: 'EVOLUTIONS AUTOMACAO LTDA', phone_number: '+556181489507' }, {}), false);
 });

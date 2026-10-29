@@ -280,7 +280,13 @@ const buscarNoTavily = async ({ query, apiKey, fetchImpl, timeoutMs }) => {
       }),
       signal: controller.signal,
     });
-    if (!resp.ok) throw new Error(`Tavily HTTP ${resp.status}`);
+    if (!resp.ok) {
+      // O corpo diz se é cota (432), limite de taxa (429) ou chave inválida (401).
+      const corpo = await resp.text().catch(() => '');
+      const e = new Error(`Tavily HTTP ${resp.status}${corpo ? ` ${corpo.slice(0, 100)}` : ''}`);
+      e.status = resp.status;
+      throw e;
+    }
     const d = await resp.json();
     return Array.isArray(d.results) ? d.results : [];
   } finally {
@@ -348,6 +354,7 @@ const buscarContatoWeb = async (empresa, {
   limiarAceita = LIMIAR_ACEITA,
   limiarDuvida = LIMIAR_DUVIDA,
   confirmarCadastro = false,
+  buscarPaginas = null,
 } = {}) => {
   const razaoSocial = empresa?.razao_social || '';
   const nomeFantasia = empresa?.nome_fantasia || '';
@@ -356,7 +363,7 @@ const buscarContatoWeb = async (empresa, {
   // A chave pode vir como funcao: o cofre a busca no banco, porque env nao sobrevive
   // a deploy nesta stack (ver segredos.js).
   const chave = typeof apiKey === 'function' ? await apiKey() : apiKey;
-  if (!chave && !buscar) return { numero: null, motivo: 'TAVILY_API_KEY não configurada', rejeitados: [] };
+  if (!chave && !buscar && !buscarPaginas) return { numero: null, motivo: 'TAVILY_API_KEY não configurada', rejeitados: [] };
 
   const curto = nomeCurto(razaoSocial, nomeFantasia);
   const alvo = { curto, nome, cnpj:soDigitos(empresa?.cnpj),municipio: empresa?.municipio_nome || '', uf: empresa?.uf || '' };
@@ -371,7 +378,15 @@ const buscarContatoWeb = async (empresa, {
 
   const paginas = [];
   const falhas = [];
-  for (const c of consultas) {
+  let transitorio = false;
+  // Cadeia de provedores (Places → Tavily → headless) com cota, cache e circuit-breaker.
+  if (buscarPaginas) {
+    const r = await buscarPaginas({ alvo, empresa });
+    for (const p of r.paginas) paginas.push({ ...p, fonte: p.fonte || r.provedor || 'web' });
+    falhas.push(...(r.falhas || []));
+    transitorio = r.transitorio === true;
+  }
+  for (const c of buscarPaginas ? [] : consultas) {
     const consulta = c.monta(alvo);
     try {
       const achados = buscar
@@ -395,6 +410,8 @@ const buscarContatoWeb = async (empresa, {
       numero: null,
       motivo: falhas.length ? `busca falhou: ${falhas.join('; ')}` : 'nenhuma página encontrada',
       rejeitados: [],
+      // Provedor fora do ar não é "empresa sem telefone": quem chama não pode queimar o CNPJ.
+      transitorio,
     };
   }
 
@@ -408,7 +425,22 @@ const buscarContatoWeb = async (empresa, {
       rejeitados.push({ url, fonte: p.fonte, motivo: 'agregador de CNPJ: republica o telefone da Receita' });
       continue;
     }
-    const { pontos, sinais, dominioDaEmpresa, identidadeComprovada } = pontuarPagina({ texto, url, empresa });
+    let { pontos, sinais, dominioDaEmpresa, identidadeComprovada } = pontuarPagina({ texto, url, empresa });
+    // Perfil do Google (Places): o próprio Google já ligou nome+endereço ao telefone.
+    // Aceita como identidade se TODOS os termos do nome curto estão no nome do negócio e a
+    // cidade está no endereço. É mais forte que "um telefone numa página que cita o nome".
+    if (p.googlePlace) {
+      const nomeG = semAcento(p.googlePlace.nome || '');
+      const endG = semAcento(p.googlePlace.endereco || '');
+      const toks = termosSignificativos(nomeCurto(razaoSocial, nomeFantasia) || nome);
+      const cidade = semAcento(empresa?.municipio_nome || '');
+      if (toks.length && toks.every((t) => nomeG.includes(t)) && (!cidade || endG.includes(cidade))) {
+        identidadeComprovada = true;
+        dominioDaEmpresa = true;
+        pontos = Math.max(pontos, limiarAceita);
+        sinais = [...sinais, 'perfil do Google (nome e cidade conferem)'];
+      }
+    }
     // Ancoras para medir proximidade: o nome curto e a razao social.
     const telefones = extrairTelefones(texto, {
       ancoras: [nomeCurto(razaoSocial, nomeFantasia), nomeFantasia, razaoSocial],
@@ -530,4 +562,5 @@ module.exports = {
   pontuarPagina,
   montarPromptContato,
   buscarContatoWeb,
+  buscarNoTavily,
 };
