@@ -129,7 +129,11 @@ As linhas de infraestrutura abaixo significam código e testes locais operaciona
 | Campanhas | Planejamento pausado; sem orçamento fornecido nesta tarefa | Informar total/divisão, aprovar recursos e revisar exclusões; manter estruturas novas pausadas |
 | Core Web Vitals / vínculo Search Console–GA4 | Não verificados | Validar nas contas Google; não apresentar ausência como zero |
 
-Produção: `main` → CI → GHCR, conforme AGENTS.md. Não copiar checkout de desenvolvimento para contêiner e não substituir a implantação WordPress atual por uma árvore antiga/incompleta. No momento desta implementação, o clone remoto da loja inspecionado não continha o pacote/rotina de produção descritos em `docs/ECOMMERCE.md`; integrar o artefato na fonte de implantação atual antes de publicar a loja.
+Produção: `main` → CI → GHCR, conforme AGENTS.md. Não copiar checkout de desenvolvimento para contêiner e não substituir a implantação WordPress atual por uma árvore antiga/incompleta.
+
+Auditoria no servidor em 29/10: contêiner `tenryu_aerion-wordpress-wordpress-1`, imagem `aerion-wordpress:20261024-transit`, ID `sha256:5f32e2097f2e58e2b0d99e171635666e84f1be9a5a4876c0d3fa6d08af84b85a`. Os 659 arquivos de tema/plugins Aerion coincidiram entre `/opt/aerion/wp-content` e o volume ativo, sem divergências. A fonte local completa foi localizada no projeto Website do Drive compartilhado; o remoto inspecionado estava incompleto.
+
+O Dockerfile do CRM empacota os três arquivos PHP em `/opt/aerion-integrations/wordpress/`. `integrations/wordpress/Dockerfile.overlay` permite montar uma nova imagem WordPress usando **somente** a base de produção auditada e os arquivos da imagem CI/GHCR de `main`. Exige os hashes anteriores do plugin, conserva o restante da imagem e valida a sintaxe PHP. Passar `WORDPRESS_BASE_IMAGE` pelo ID imutável auditado e `INTEGRATION_IMAGE` pelo digest da imagem CI correspondente ao commit aprovado. A publicação deve usar `/usr/local/sbin/aerion-wordpress-deploy IMAGE`, preservando volumes e as verificações de campanhas; verificar novamente que a produção não mudou antes de executar o wrapper.
 
 ## Verificação
 
