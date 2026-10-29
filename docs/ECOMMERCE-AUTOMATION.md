@@ -40,6 +40,8 @@ O botão **Configurar fonte e conjuntos Meta** enfileira uma fonte `Aerion CRM �
 
 A elegibilidade da conta anunciante é consultada pelo endpoint do catálogo `/{catalog_id}/dpa_eligible_ad_accounts`. Auditoria efetiva no servidor em 29/10: a credencial atual concedeu apenas `ads_mcp_management`, `ads_read` e `public_profile`. Isso não demonstra autorização para gestão de catálogo/escrita pela Graph API; a reautorização administrativa precisa cobrir as operações e os ativos correspondentes. Nenhum token foi exibido ou persistido no relatório.
 
+A tentativa pelo conector oficial Meta Ads também confirmou o bloqueio: leitura de catálogo/associação ao dataset e criação do público de visitantes retornaram **HTTP 401, OAuthException 190**. A leitura de públicos funcionou e retornou zero. Reautorizar o conector e revisar os ativos da conta `1318645390292737` e do dataset `1668777180919759`; nenhuma dessas tentativas criou público ou alterou campanha.
+
 Configurações do servidor:
 
 | Variável | Uso |
@@ -58,6 +60,8 @@ O Nginx do CRM desliga access/error logging especificamente nessa rota para não
 ## Públicos e cadastros
 
 Meta: visitantes/produtos 30 dias, carrinho 14, checkout 7, compradores 180; aquisição/recuperação excluem Purchase 180 dias. Recursos existentes de mesmo nome não são reescritos: aparecem para conferência. Criação parcial é recuperada pela busca por nome antes de repetir POST.
+
+Visitantes usam o template `ALL_VISITORS` com filtro de URL `i_contains` vazio, conforme o conector oficial; não um filtro de evento PageView. Os demais públicos usam os eventos correspondentes com `VISITORS_BY_URL`.
 
 GA4: públicos por eventos e retenções equivalentes; vínculo Google Ads e `adsPersonalizationEnabled` são lidos. A API limita `inAnyNDayPeriod` a 60 dias. Por isso os compradores 180d ficam em público separado para exclusão nas campanhas: não são substituídos por exclusão permanente nem declarados como já excluídos. O nome público é versionado. Nenhuma campanha é ativada ao criar listas.
 
