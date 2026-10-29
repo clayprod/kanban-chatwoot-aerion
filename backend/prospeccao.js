@@ -353,7 +353,7 @@ const runProspeccaoTick = async (pool, {
     // Busca fora do try matava o tick inteiro quando um perfil dava 504/401.
     let encontradas;
     try {
-      encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil);
+      encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil, { titulo: perfil.titulo });
     } catch (error) {
       r.falhas += 1;
       r.errosBusca = [...(r.errosBusca || []), `${perfil.titulo}: ${String(error.message || error)}`];

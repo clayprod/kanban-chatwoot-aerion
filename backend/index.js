@@ -786,6 +786,7 @@ const {
 const { criarCatalogoAerion } = require('./aerionCatalogo');
 const { buscarContatoWeb, buscarNoTavily, CONSULTAS: CONSULTAS_WEB } = require('./contatoWeb');
 const { criarBuscaWeb, criarTabelasBuscaWeb } = require('./buscaWeb');
+const { corrigirCnaes } = require('./cnaeCorretor');
 const {
   createSegmentLogTable,
   carregarConfigSegmento,
@@ -840,6 +841,17 @@ const cnaesQueExistem = async (lista) => {
     }
   }
   return codigos.filter((c) => cacheCnaesExistentes.get(c));
+};
+
+// Tabela inteira de CNAEs da Receita (~1,3 mil linhas), em memória por 6h, para o corretor.
+let tabelaCnaesCache = { em: 0, linhas: [] };
+const carregarTabelaCnaes = async () => {
+  if (tabelaCnaesCache.linhas.length && Date.now() - tabelaCnaesCache.em < 6 * 3600 * 1000) {
+    return tabelaCnaesCache.linhas;
+  }
+  const { rows } = await pool.query('SELECT codigo, descricao FROM rfb_cnaes');
+  tabelaCnaesCache = { em: Date.now(), linhas: rows };
+  return rows;
 };
 
 // Numeros da operacao comercial: o par inbox<->instancia sai do proprio Chatwoot.
@@ -21412,6 +21424,8 @@ só entra se o ângulo for topografia/mapeamento, nunca pulverização de safra.
 - Conecte correlatos a casos de uso reais (inspeção, mapeamento, segurança, energia, obras).
 - Ignore fofoca/celebridade/esporte sem ângulo B2B.
 - Filtros: CNAEs BR reais (0000-0/00), porte 01|03|05, capital e idade em números, situacao ["2"].
+- SEMPRE preencha cnae_labels com a descrição oficial de cada código: se o código não
+  existir, o sistema o troca pelo CNAE real mais próximo usando essa descrição.
 - CNAE TEM QUE EXISTIR de verdade na CNAE 2.3 do IBGE. Código com formato certo e que
   não existe faz a busca devolver zero calada: "7520-0/00" e "3511-2/00" não existem e
   queimaram duas sugestões em 23/10. Na dúvida, use o código da seção/divisão que você
@@ -24079,15 +24093,28 @@ const registerBackgroundSchedules = () => {
           cnpj: String(empresa?.cnpj || '').replace(/[^0-9A-Za-z]/g, '') || null,
         }),
         carregarPerfis: () => require('./prospectingProfiles').loadProspectingProfiles({pool,readToday:loadTrendsIntelCacheOnly,sanitize:reSanitizeCachedIntel,sourceAllowed:isSectorTrendsSource}),
-        buscarEmpresas: async (filtros, tamanho) => {
+        buscarEmpresas: async (filtros, tamanho, contexto = {}) => {
           // CNAE que a IA inventou tem o formato certo e nao existe. Medido em
           // 24/10: "7520-0/00" e "3511-2/00" nao estao em rfb_cnaes, e o 7520 era o
           // UNICO codigo do perfil "Defesa Civil e seguranca publica" — aquele perfil
           // devolvia total 0 em 0.0s para sempre, sem ninguem saber por que.
-          const filtrosLimpos = { ...filtros, cnae: await cnaesQueExistem(filtros.cnae) };
+          // Em vez de só descartar o código inexistente, troca pelo CNAE real mais próximo
+          // (pela descrição, na mesma divisão); sem como saber, descarta e avisa.
+          const correcao = (filtros.cnae || []).length
+            ? corrigirCnaes({
+              lista: filtros.cnae,
+              labels: filtros.cnae_labels,
+              titulo: contexto.titulo,
+              tabela: await carregarTabelaCnaes(),
+            })
+            : null;
+          if (correcao?.corrigidos.length) {
+            console.warn('[prospeccao] CNAE inexistente corrigido:', JSON.stringify(correcao.corrigidos));
+          }
+          const filtrosLimpos = { ...filtros, cnae: correcao ? correcao.validos : filtros.cnae };
           if ((filtros.cnae || []).length && !filtrosLimpos.cnae.length) {
             throw new Error(
-              `nenhum CNAE do perfil existe na base (${(filtros.cnae || []).join(', ')})`
+              `nenhum CNAE do perfil existe na base nem tem substituto seguro (${(filtros.cnae || []).join(', ')})`
             );
           }
           const qs = paramsDaBusca(filtrosLimpos, { pageSize: tamanho });
