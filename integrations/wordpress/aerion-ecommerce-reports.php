@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Aerion Ecommerce Reports
  * Description: API privada de leitura de links UTM e visitas agregadas para o CRM Aerion.
- * Version: 1.1.1
+ * Version: 1.2.0
  * Requires PHP: 8.2
  * Requires at least: 6.6
  */
@@ -14,6 +14,7 @@ if (! defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/measurement.php';
+require_once __DIR__ . '/marketing.php';
 
 final class Aerion_Ecommerce_Reports
 {
@@ -22,6 +23,9 @@ final class Aerion_Ecommerce_Reports
         add_role('aerion_report_reader', 'Aerion — Leitor de relatórios', [
             'read' => true,
             'aerion_read_reports' => true,
+        ]);
+        add_role('aerion_audience_sync', 'Aerion — Sincronização de públicos', [
+            'read' => true, 'aerion_read_reports' => true, 'aerion_sync_audiences' => true,
         ]);
     }
 
@@ -45,7 +49,7 @@ final class Aerion_Ecommerce_Reports
     public static function health(): WP_REST_Response
     {
         return self::response([
-            'version' => '1.1.1',
+            'version' => '1.2.0',
             'ecommerce_policy' => 'paid_only_product_value_sku_pix_v2',
             'timezone' => wp_timezone_string(),
             'currency' => function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : '',

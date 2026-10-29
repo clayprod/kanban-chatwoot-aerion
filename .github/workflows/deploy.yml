@@ -65,7 +65,7 @@ jobs:
 
       - name: Validate Ecommerce frontend
         working-directory: frontend
-        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js SankhyaReportingPanel.test.js MerchantView.test.js
+        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js SankhyaReportingPanel.test.js MerchantView.test.js MarketingAutomationView.test.js
         env:
           CI: true
 
@@ -95,6 +95,9 @@ jobs:
       - name: Validate Shopping manufacturer brands
         run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/merchant.test.php
 
+      - name: Validate consumer marketing projection
+        run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/marketing.test.php
+
       - name: Export validated WordPress integration
         uses: actions/upload-artifact@v4
         with:
@@ -102,6 +105,7 @@ jobs:
           path: |
             integrations/wordpress/aerion-ecommerce-reports.php
             integrations/wordpress/measurement.php
+            integrations/wordpress/marketing.php
             integrations/wordpress/class-aerion-google-merchant.php
           retention-days: 14
 

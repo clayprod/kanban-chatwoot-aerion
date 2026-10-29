@@ -5,6 +5,7 @@ import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownI
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
 import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS } from './ecommerceChart';
 import MerchantView from './MerchantView';
+import MarketingAutomationView from './MarketingAutomationView';
 
 export const ECOMMERCE_SECTIONS = [
   { id: 'overview', label: 'Visão geral', icon: Squares2X2Icon },
@@ -103,6 +104,26 @@ function SalesChart({ rows, context = 'sales' }) {
 
 const ratio = value => value == null ? '—' : `${number(value)}×`;
 const percent = value => value == null ? '—' : `${number(value)}%`;
+function OrganicSearchChart({ search, range }) {
+  const [metric, setMetric] = useState('clicks');
+  const labels = { clicks: 'Cliques orgânicos', impressions: 'Impressões na busca', ctr: 'CTR orgânico', position: 'Posição média' };
+  const rows = new Map((search?.daily || []).map(r => [r.date, r]));
+  const points = [];
+  for (let day = range.from; day <= range.to; day = new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)) {
+    const row = rows.get(day);
+    points.push({ x: day, y: row ? metric === 'ctr' ? row.impressions ? row.clicks / row.impressions * 100 : null : metric === 'position' && !row.impressions ? null : row[metric] : null });
+  }
+  return <section className={panel} aria-label="Evolução da busca orgânica no Search Console">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold">Busca orgânica ao longo do tempo</h3><p className="mt-1 text-xs text-muted">Search Console · America/Los_Angeles · lacunas indicam dias sem cobertura</p></div><label><span className="sr-only">Métrica de busca orgânica</span><select className={select} value={metric} onChange={e => setMetric(e.target.value)}>{Object.entries(labels).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select></label></div>
+    {!search?.available || !points.some(p => p.y != null) ? <p className="py-10 text-sm text-muted">Ainda não há medições disponíveis nesta janela.</p> : <div className="mt-4 h-64" role="img" aria-label={`${labels[metric]} por dia, preservando lacunas de cobertura`}><ResponsiveLine
+      data={[{ id: labels[metric], data: points }]} margin={{ top: 12, right: 15, bottom: 40, left: 55 }} xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }}
+      axisBottom={{ tickSize: 0, tickPadding: 12, tickValues: points.filter((_, i) => i % Math.max(1, Math.ceil(points.length / 5)) === 0).map(p => p.x), format: d => dateLabel(d).slice(0, 5) }}
+      axisLeft={{ tickSize: 0, tickPadding: 8 }} colors={['#4f8ef7']} enableGridX={false} enablePoints={points.length <= 45} pointSize={4} animate={false} enableSlices="x"
+      theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } } }}
+      sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink">{dateLabel(slice.points[0]?.data.x)} · {labels[metric]}: {number(slice.points[0]?.data.y)}{metric === 'ctr' ? '%' : ''}</div>}
+    /></div>}
+  </section>;
+}
 function MediaIndicators({ summary }) {
   const media = summary.media || {};
   return <section className={panel}><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-base font-semibold">Eficiência da mídia</h3><span className="text-xs text-muted">{summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Fontes conectadas · BRL'}</span></div><dl className="mt-4 grid grid-cols-2 gap-5 lg:grid-cols-6">{[
@@ -254,7 +275,7 @@ function CrmAudiencePreview({ refresh }) {
 export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
   const [section, setSection] = useState(requestedSection);
   useEffect(() => setSection(requestedSection), [requestedSection]);
-  const parentSection = ['traffic', 'campaigns', 'ads', 'seo', 'merchant'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
+  const parentSection = ['traffic', 'campaigns', 'ads', 'seo', 'merchant', 'automation'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
   const [range, setRange] = useState(() => ({ from: previousDay(today(), 29), to: today() }));
   const [draftRange, setDraftRange] = useState(range);
   const [report, setReport] = useState(null);
@@ -321,10 +342,11 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
-      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
+      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={report.daily} context={section === 'traffic' ? 'traffic' : 'sales'} />}
       {report && <>
         {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
+        {section === 'automation' && <MarketingAutomationView data={report.marketing} isAdmin={isAdmin} onRefresh={reload} />}
         {section === 'overview' && <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
             {[['Receita de produtos', summary.revenue, money, 'Pagamentos confirmados · descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, `Ticket médio ${money(summary.ticket)}`], ['Investimento em mídia', summary.spend, money, summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Google Ads + Meta · BRL'], ['Aguardando pagamento', summary.unpaidValue, money, `${number(summary.unpaidOrders)} pedidos pendentes ou em espera · inclui frete e impostos`]].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}
@@ -355,6 +377,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
           <Table caption="Links Aerion · último link em até 30 dias" rows={filter(report.links)} columns={[{ key: 'utm_campaign', label: 'Campanha' }, { key: 'utm_source', label: 'Origem' }, { key: 'link_id', label: 'ID link' }, numeric('landings', 'Acessos registrados'), numeric('visitorDays', 'Visitantes-dia'), numeric('orders', 'Pedidos pagos'), numeric('revenue', 'Receita', money), numeric('couponOutside', 'Cupom fora do link')]} />
         </>}
         {section === 'seo' && <>
+          <OrganicSearchChart search={report.search} range={report.range} />
           <section className={panel}><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Visibilidade na busca do Google</h3><p className="mt-1 break-all text-xs text-muted">{report.search?.site || 'Propriedade ainda não conectada'}</p></div><p className="text-xs text-muted">{report.search?.latestDate ? `Dados finalizados até ${dateLabel(report.search.latestDate)}` : 'Aguardando dados finalizados'}</p></div>
             <dl className="mt-5 grid grid-cols-2 gap-5 lg:grid-cols-4">{[['Cliques orgânicos', report.search?.summary?.clicks, number], ['Impressões na busca', report.search?.summary?.impressions, number], ['CTR orgânico', report.search?.summary?.ctr, percent], ['Posição média', report.search?.summary?.position, number]].map(([label, value, format]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{format(value)}</dd></div>)}</dl>
             

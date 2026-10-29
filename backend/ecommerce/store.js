@@ -32,6 +32,7 @@ async function createTables(pool) {
     );
     ALTER TABLE ecommerce_oauth_states ADD COLUMN IF NOT EXISTS context text NOT NULL DEFAULT '';
   `);
+  await require('./marketing').createMarketingTables(pool);
 }
 const PUBLIC_FIELDS = {
   woocommerce: ['url', 'report_user'], ga4: ['property_id'],
@@ -139,6 +140,11 @@ function createSync({ pool, providers, env = process.env }) {
       if (provider === 'woocommerce') {
         const events = (await client.query('SELECT * FROM ecommerce_webhooks WHERE processed_at IS NULL ORDER BY received_at LIMIT 10')).rows;
         for (const event of events) {
+          if (event.topic.startsWith('product.')) {
+            // Product webhooks are handled by the independent persistent marketing queue.
+            await client.query('UPDATE ecommerce_webhooks SET processed_at=now() WHERE delivery_id=$1', [event.delivery_id]);
+            continue;
+          }
           if (['order.deleted', 'order.trashed'].includes(event.topic)) {
             await client.query("DELETE FROM ecommerce_records WHERE provider='woocommerce' AND kind='order' AND record_id=$1", [String(event.resource_id)]);
           } else if (event.resource_id) await syncOrder(client, config, event.resource_id);

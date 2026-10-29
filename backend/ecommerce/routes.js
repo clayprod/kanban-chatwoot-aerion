@@ -6,6 +6,7 @@ const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, co
 const { buildMerchantReport } = require('./merchant');
 const { buildSearchReport } = require('./searchConsole');
 const { crmAudiencePreview } = require('./audiences');
+const { createMarketing, enqueueMarketing } = require('./marketing');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function validateGoogleIdentity(value) {
@@ -73,6 +74,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     return ready;
   };
   const sync = createSync({ pool, providers, env });
+  const marketing = createMarketing({ pool, providers, env });
   const seal = value => encrypt(value, encryptionKey(env));
   const unseal = value => decrypt(value, encryptionKey(env));
   const router = express.Router();
@@ -91,6 +93,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
   router.use(async (req, res, next) => {
     try { await ensure(); next(); } catch { res.status(503).json({ error: 'Ecommerce indisponível: verifique o banco de dados.' }); }
   });
+  marketing.mountPublic(router);
   // These two endpoints use their own authentication, not the CRM session cookie.
   router.post('/webhooks/woocommerce', async (req, res) => {
     const contentType = req.get('content-type') || '';
@@ -105,9 +108,16 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     const resourceId = Number(req.body?.id);
     // The activation ping has no order ID; acknowledge it only after signature verification.
     if (req.body?.webhook_id && !req.body?.id) return res.sendStatus(204);
-    if (!delivery || delivery.length > 200 || !['order.created', 'order.updated', 'order.deleted', 'order.restored', 'order.trashed'].includes(topic)
+    if (!delivery || delivery.length > 200 || !['order.created', 'order.updated', 'order.deleted', 'order.restored', 'order.trashed', 'product.created', 'product.updated', 'product.deleted', 'product.restored', 'product.trashed'].includes(topic)
       || !Number.isSafeInteger(resourceId) || resourceId <= 0) return res.status(400).json({ error: 'Webhook inválido.' });
-    await pool.query('INSERT INTO ecommerce_webhooks(delivery_id,topic,resource_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [delivery, topic, resourceId]);
+    const client = await pool.connect();
+    try {
+      await transaction(client, async () => {
+        const inserted = await client.query('INSERT INTO ecommerce_webhooks(delivery_id,topic,resource_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING delivery_id', [delivery, topic, resourceId]);
+        if (inserted.rowCount && topic.startsWith('product.')) await enqueueMarketing(client, 'product', resourceId);
+        if (inserted.rowCount && ['order.created', 'order.updated', 'order.restored'].includes(topic)) await enqueueMarketing(client, 'paid_event', resourceId);
+      });
+    } finally { client.release(); }
     await pool.query("UPDATE ecommerce_connections SET next_run_at=now() WHERE provider='woocommerce'");
     res.sendStatus(202);
   });
@@ -184,13 +194,23 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
     report.merchant = buildMerchantReport(records.find(r => r.provider === 'merchant_center' && r.kind === 'merchant_catalog')?.data,
       records.filter(r => r.provider === 'merchant_center' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'merchant_center'));
+    report.marketing = await marketing.report();
+    report.marketing.observedSpend = { from: range.from, to: range.to, days: Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86400000) + 1,
+      google: report.platforms.find(p => p.provider === 'google_ads' && p.available)?.spend ?? null,
+      meta: report.platforms.find(p => p.provider === 'meta_ads' && p.available)?.spend ?? null };
+    report.visibility = { search: report.search, merchant: report.merchant };
+    report.diagnostics = report.marketing.diagnostics;
+    report.metaCatalog = report.marketing.metaCatalog;
+    report.coverage = report.marketing.coverage;
     res.json(report);
   });
   router.get('/audiences', async (req, res) => {
     try { res.json(await crmAudiencePreview(pool, Number(env.CHATWOOT_ACCOUNT_ID || 2))); }
     catch { res.status(503).json({ error: 'Não foi possível consultar as etapas do CRM. Os demais relatórios continuam disponíveis.' }); }
   });
+  marketing.mountRead(router);
   router.use(admin);
+  marketing.mountAdmin(router);
   router.put('/orders/:id/exclusion', async (req, res) => {
     const id = String(req.params.id || '');
     const reason = String(req.body?.reason || '').trim();
@@ -238,6 +258,18 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
           if (provider === 'woocommerce') {
             await client.query('DELETE FROM ecommerce_webhooks');
             await client.query('DELETE FROM ecommerce_order_exclusions');
+            await client.query('DELETE FROM ecommerce_marketing_products');
+            await client.query('DELETE FROM ecommerce_marketing_jobs');
+            await client.query('DELETE FROM ecommerce_marketing_state');
+            await client.query("UPDATE ecommerce_marketing_content SET status='stale'");
+          }
+          if (provider === 'meta_ads') {
+            await client.query("DELETE FROM ecommerce_marketing_state WHERE name IN ('meta_catalog','meta_setup','meta_audiences','customer_audiences')");
+            await client.query("DELETE FROM ecommerce_marketing_jobs WHERE kind IN ('meta','meta_setup','meta_audiences')");
+          }
+          if (provider === 'ga4') {
+            await client.query("DELETE FROM ecommerce_marketing_state WHERE name='google_audiences'");
+            await client.query("DELETE FROM ecommerce_marketing_jobs WHERE kind='google_audiences'");
           }
         }
         const enabled = req.body.enabled !== false && (provider !== 'google_ads' || merged.auth_type === 'google_identity' || Boolean(merged.refresh_token));
@@ -284,7 +316,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     const status = error.status || (error.retrySeconds ? 502 : 500);
     res.status(status).json({ error: error.status || error.retrySeconds ? error.message : 'Não foi possível concluir. Verifique a configuração do servidor e a chave de criptografia.' });
   });
-  return { router, ensure, tick: async () => { await ensure(); await sync.tick(); } };
+  return { router, ensure, tick: async () => { await ensure(); await Promise.allSettled([sync.tick(), marketing.tick()]); } };
 }
 function verifyStateCookie(cookie, state) {
   return Buffer.byteLength(cookie) === Buffer.byteLength(state) && crypto.timingSafeEqual(Buffer.from(cookie), Buffer.from(state));
