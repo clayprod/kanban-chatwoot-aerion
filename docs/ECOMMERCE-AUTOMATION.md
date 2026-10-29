@@ -53,6 +53,8 @@ Configurações do servidor:
 
 IDs resultantes são persistidos no estado `meta_setup`. O feed TSV é `/api/ecommerce/feeds/meta?token=SEGREDO`; a URL completa só vai à fonte Meta, não aos relatórios. Não registrar query strings dessa rota no proxy. A primeira carga precisa terminar antes de servir o feed; uma loja indisponível não vira feed vazio. Rotação da chave/token exige atualizar a agenda da fonte pelo botão de configuração.
 
+O Nginx do CRM desliga access/error logging especificamente nessa rota para não reter o token em URLs ou em linhas de falha do upstream. A configuração é validada com `nginx -t` na imagem do CI. Proxies adicionais devem preservar a mesma proteção.
+
 ## Públicos e cadastros
 
 Meta: visitantes/produtos 30 dias, carrinho 14, checkout 7, compradores 180; aquisição/recuperação excluem Purchase 180 dias. Recursos existentes de mesmo nome não são reescritos: aparecem para conferência. Criação parcial é recuperada pela busca por nome antes de repetir POST.
@@ -121,14 +123,15 @@ As linhas de infraestrutura abaixo significam código e testes locais operaciona
 
 | Componente | Situação verificável | Próxima ação |
 | --- | --- | --- |
-| Fila, HMAC, projeção, retentativas, aprovações e isolamento | Operacional em testes PostgreSQL/PHP | Publicar código pelo CI e instalar o pacote WordPress correspondente |
-| Merchant existente | Conexão de produção verificada em 29/10, sem erro | Preservar fonte e acompanhar aprovação/destinos no Merchant |
+| Fila, HMAC, projeção e retentativas | Operacional em produção | 37 registros projetados; 30 publicados/elegíveis; webhooks 4, 5 e 6 ativos e assinados |
+| Aprovações e isolamento | Operacional e validado por testes | Conteúdo e campanhas continuam sujeitos à revisão; nada foi ativado |
+| Merchant existente | Aguardando processamento externo | 29 ofertas recebidas e nenhuma aprovação observada na última fotografia; preservar fonte diária |
 | Catálogo Meta | Dependente de ação do administrador | Conceder `catalog_management`, selecionar Business/catálogo, executar preparação e validar conta/dataset |
 | Públicos Meta/GA4 | Dependente de acesso de escrita e processamento externo | Executar os botões de preparação; conferir regras existentes, vínculo Ads e exclusões |
 | Listas de cadastro | Dependente de ação do administrador | Mapear listas dedicadas, atribuir capacidade WordPress e registrar elegibilidade comprovada |
 | GA4 pelo servidor | Desabilitado até validação | Validar contexto, consentimento e deduplicação em teste; configurar fluxo/segredo e flags |
 | Meta CAPI existente | Dependente de auditoria da origem | Conciliar o emissor SERVER existente antes de qualquer novo envio |
-| SEO | Diagnóstico e propostas operacionais; publicação condicionada | Auditar emissor do tema, conceder capacidade e habilitar o adaptador somente após validar |
+| SEO | Diagnóstico operacional: 30 URLs HTTP 200 e 6 oportunidades | Publicação condicionada a aprovação, capacidade e auditoria do emissor do tema |
 | Content Hub | Briefing preparado no painel | Integrar uma interface de entrada/retorno de arquivos e revisar os criativos |
 | Campanhas | Planejamento pausado; sem orçamento fornecido nesta tarefa | Informar total/divisão, aprovar recursos e revisar exclusões; manter estruturas novas pausadas |
 | Core Web Vitals / vínculo Search Console–GA4 | Não verificados | Validar nas contas Google; não apresentar ausência como zero |
@@ -138,6 +141,10 @@ Produção: `main` → CI → GHCR, conforme AGENTS.md. Não copiar checkout de 
 Auditoria no servidor em 29/10: contêiner `tenryu_aerion-wordpress-wordpress-1`, imagem `aerion-wordpress:20261024-transit`, ID `sha256:5f32e2097f2e58e2b0d99e171635666e84f1be9a5a4876c0d3fa6d08af84b85a`. Os 659 arquivos de tema/plugins Aerion coincidiram entre `/opt/aerion/wp-content` e o volume ativo, sem divergências. A fonte local completa foi localizada no projeto Website do Drive compartilhado; o remoto inspecionado estava incompleto.
 
 O Dockerfile do CRM empacota os três arquivos PHP em `/opt/aerion-integrations/wordpress/`. `integrations/wordpress/Dockerfile.overlay` permite montar uma nova imagem WordPress usando **somente** a base de produção auditada e os arquivos da imagem CI/GHCR de `main`. Exige os hashes anteriores do plugin, conserva o restante da imagem e valida a sintaxe PHP. Passar `WORDPRESS_BASE_IMAGE` pelo ID imutável auditado e `INTEGRATION_IMAGE` pelo digest da imagem CI correspondente ao commit aprovado. A publicação deve usar `/usr/local/sbin/aerion-wordpress-deploy IMAGE`, preservando volumes e as verificações de campanhas; verificar novamente que a produção não mudou antes de executar o wrapper.
+
+Deploy concluído pelo wrapper: imagem `aerion-wordpress:marketing-main-46a6f87`, ID `sha256:d25dc602e424f1ab2e055434fb8219b1f898f930af9bb6738fcc233b3cc8a614`. Fonte CI/GHCR `ghcr.io/clayprod/kanban-chatwoot-aerion@sha256:3455e3f2c902733548f0d0d311f9f696556c2cf84605cb1e18e7ec5922984708`, commit `46a6f8726791f10d7b3c9d1bc201aafd45d6cfa2`. Somente os três arquivos do plugin mudaram; os outros 657 arquivos foram preservados. Passaram volumes, três campanhas, dez artes e as simulações das datas de descontos. O plugin respondeu como 1.2.0 e a primeira projeção terminou às 20:40 UTC de 29/10.
+
+A cópia local em `G:\Drives compartilhados\AERION\03 - Marketing\Website\aerion-elevate-hub` foi sincronizada com os mesmos blobs aprovados da `main`, com conferência de hashes. Dockerfile e entrypoint desse projeto não foram alterados. Nenhuma edição paralela do site ou da análise técnica foi substituída.
 
 ## Verificação
 

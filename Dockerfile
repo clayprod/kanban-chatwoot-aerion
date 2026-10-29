@@ -22,6 +22,7 @@ RUN apk add --no-cache curl nginx supervisor python3 py3-pip poppler-utils tesse
 # Copy built frontend and nginx config
 COPY --from=frontend-builder /app/frontend/build /usr/share/nginx/html
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
+RUN nginx -t
 
 # Copy backend
 WORKDIR /app
