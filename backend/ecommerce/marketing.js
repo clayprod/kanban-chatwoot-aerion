@@ -115,6 +115,14 @@ function createMarketing({ pool, providers, env = process.env }) {
     });
   }
   async function execute(db, job) {
+    if (job.kind === 'webhooks') {
+      const config = await load(db, 'woocommerce');
+      const origin = new URL(env.ECOMMERCE_PUBLIC_URL);
+      if (origin.protocol !== 'https:' || origin.username || origin.password) throw new Error('connection_required');
+      const result = await providers.ensureProductWebhooks(config, `${origin.origin}/api/ecommerce/webhooks/woocommerce`);
+      await saveState(db, 'webhooks', result);
+      return;
+    }
     if (job.kind === 'campaign_stage') {
       const states = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('campaign_plan','campaign_review')")).rows.map(r => [r.name, r.data]));
       if (!states.campaign_plan || !states.campaign_review?.exclusionsReviewed) throw new Error('campaign_review_required');
@@ -259,12 +267,13 @@ function createMarketing({ pool, providers, env = process.env }) {
       if (!woo?.enabled) return;
       if (env.ECOMMERCE_MARKETING_ENABLED === '0') return;
       await db.query(`INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('reconcile','nightly') ON CONFLICT DO NOTHING`);
+      await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('webhooks','products') ON CONFLICT DO NOTHING");
       await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('seo_weekly','opportunities') ON CONFLICT DO NOTHING");
       if (env.ECOMMERCE_META_CATALOG_ID) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('meta','catalog') ON CONFLICT DO NOTHING");
       if (env.ECOMMERCE_CUSTOMER_LISTS) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('customer_audiences','daily') ON CONFLICT DO NOTHING");
       // Successful recurring jobs become due again; retries keep their own backoff.
       await db.query(`UPDATE ecommerce_marketing_jobs SET status='pending',attempts=0 WHERE status='done' AND
-        ((kind IN ('reconcile','seo','seo_weekly','meta_audiences','google_audiences','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
+        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','google_audiences','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
       for (let i = 0; i < 8; i++) {
         const job = (await db.query(`UPDATE ecommerce_marketing_jobs SET status='running',lease_until=now()+interval '10 minutes'
           WHERE id=(SELECT id FROM ecommerce_marketing_jobs WHERE status IN ('pending','retry') AND next_run_at<=now()
@@ -331,8 +340,8 @@ function createMarketing({ pool, providers, env = process.env }) {
     const metaAction = { integration: 'meta_catalog', status: meta && !pendingJob('meta') && meta.pixelLink === 'verified' && meta.hourlySchedule === 'verified' && meta.adAccountLinked
       ? meta.uploads?.[0]?.end && !Number(meta.uploads[0].invalid) ? 'operational' : 'awaiting_external_processing' : 'administrator_action',
       account: env.ECOMMERCE_META_CATALOG_ID || state.meta_setup?.catalogId || connections.rows.find(c => c.provider === 'meta_ads')?.config.account_id || null,
-      permission: 'catalog_management; acesso ao catálogo, conta anunciante e dataset Site Aerion',
-      action: 'Conceder catálogo à identidade Meta existente; configurar ECOMMERCE_META_CATALOG_ID e ECOMMERCE_META_FEED_ID; cadastrar uma única fonte horária e vincular Pixel/dataset 1668777180919759.',
+      permission: 'catalog_management, business_management e ads_management; acesso ao catálogo, conta anunciante e dataset Site Aerion',
+      action: 'Reautorizar a identidade Meta existente com permissões de catálogo e escrita (ads_read/ads_mcp_management não comprovam esse acesso); selecionar Business/catálogo, executar a preparação da fonte horária e conferir o Pixel/dataset 1668777180919759.',
       link: 'https://business.facebook.com/commerce/', lastError: (pendingJob('meta') || pendingJob('meta_setup'))?.error || null };
     const productJob = pendingJob('reconcile') || pendingJob('product');
     const google = reconcileGoogle(products, merchant.rows[0]?.data);
@@ -351,6 +360,10 @@ function createMarketing({ pool, providers, env = process.env }) {
       coverage: { timezone: 'America/Sao_Paulo', products: state.products || null, meta: meta?.observedAt || null,
         searchConsoleGa4Link: 'unverified', coreWebVitals: 'unavailable', serverPurchase: env.ECOMMERCE_GA4_SERVER_PURCHASE_ENABLED === '1' && env.ECOMMERCE_GA4_SERVER_PURCHASE_VALIDATED === '1' ? 'enabled_consent_required' : 'disabled_pending_consent_and_emitter_audit' },
       readiness: [
+        { integration: 'product_webhooks', status: state.webhooks && !state.webhooks.existingSecretsRequireReview && !pendingJob('webhooks') ? 'operational' : 'administrator_action',
+          permission: 'WooCommerce REST API: leitura e escrita de webhooks',
+          action: 'O worker cadastra somente os três webhooks de produto ausentes, assinados com o segredo existente. Se a chave for somente leitura, conceder escrita ou cadastrar os tópicos no WooCommerce. Webhooks existentes são preservados; conferir seu segredo.',
+          link: 'https://loja.aerion.com.br/wp-admin/admin.php?page=wc-settings&tab=advanced&section=webhooks', lastError: pendingJob('webhooks')?.error || null },
         { integration: 'products', status: enabled && state.products && !productJob ? 'operational' : 'administrator_action',
           account: connections.rows.find(c => c.provider === 'woocommerce')?.config.url || null,
           permission: 'aerion_read_reports', action: 'Instalar marketing.php junto do plugin de relatórios e cadastrar webhooks product.created, product.updated e product.deleted na URL de webhook existente.',

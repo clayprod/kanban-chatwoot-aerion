@@ -188,6 +188,30 @@ function createProviders({ transport = request, env = process.env } = {}) {
   }
   return {
     woo, bridge,
+    async ensureProductWebhooks(config, deliveryUrl) {
+      const target = new URL(deliveryUrl);
+      if (target.protocol !== 'https:' || target.username || target.password || target.search || target.hash) throw new ProviderError('URL de webhook inválida.');
+      const existing = [];
+      for (let page = 1; page <= 1000; page++) {
+        const { data } = await woo(config, 'webhooks', { page, per_page: 100 });
+        if (!Array.isArray(data)) throw new ProviderError('Listagem de webhooks inválida.');
+        existing.push(...data);
+        if (data.length < 100) break;
+        if (page === 1000) throw new ProviderError('Limite de paginação dos webhooks atingido.');
+      }
+      const hooks = [];
+      for (const topic of ['product.created', 'product.updated', 'product.deleted']) {
+        const found = existing.filter(h => h.topic === topic && h.delivery_url === deliveryUrl);
+        if (found.length > 1 || found.some(h => h.status !== 'active')) throw new ProviderError('Há webhooks duplicados ou desativados para este destino. Revise antes de continuar.');
+        const hook = found[0] || (await json(`${storeUrl(config.url)}/wp-json/wc/v3/webhooks`, {
+          ...postJson({ name: `Aerion CRM · ${topic}`, topic, delivery_url: deliveryUrl, status: 'active', secret: config.webhook_secret }),
+          dispatcher: publicDispatcher, headers: { 'Content-Type': 'application/json', Authorization: basic(config.consumer_key, config.consumer_secret) },
+        }, transport)).data;
+        if (!hook.id || hook.topic !== topic || hook.status !== 'active') throw new ProviderError('O WooCommerce não confirmou o webhook ativo.');
+        hooks.push({ id: String(hook.id), topic, status: hook.status, existing: Boolean(found[0]), verifiedSecret: !found[0] || found[0].secret === config.webhook_secret });
+      }
+      return { observedAt: new Date().toISOString(), hooks, signature: 'HMAC-SHA256', existingSecretsRequireReview: hooks.some(h => !h.verifiedSecret) };
+    },
     async stageMetaSalesCampaign(config, plan, key) {
       if (!/^[a-f0-9]{16}$/.test(key)) throw new ProviderError('Versão de planejamento inválida.');
       const name = `Aerion CRM · Loja · ${key}`;
@@ -328,8 +352,8 @@ function createProviders({ transport = request, env = process.env } = {}) {
       }
       const sources = await metaList(config, `${catalogId}/external_event_sources`, 'id');
       if (!sources.some(s => s.id === settings.pixelId)) await metaRequest(config, `${catalogId}/external_event_sources`, { external_event_sources: [...new Set([...sources.map(s => s.id), settings.pixelId])] }, 'POST');
-      const accountCatalogs = await metaList(config, `act_${config.account_id}/product_catalogs`, 'id');
-      return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: accountCatalogs.some(c => c.id === catalogId),
+      const eligibleAccounts = await metaList(config, `${catalogId}/dpa_eligible_ad_accounts`, 'id');
+      return { catalogId, feedId, pixelId: settings.pixelId, pixelLinked: true, adAccountLinked: eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)),
         observedAt: new Date().toISOString(), status: 'awaiting_external_processing' };
     },
     async ensureMetaStoreAudiences(config, pixelId) {
@@ -428,7 +452,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
       if (feedId && !feeds.some(f => String(f.id) === feedId)) throw new ProviderError('Fonte Meta fora do catálogo configurado.');
       const uploads = feedId ? await list(`${feedId}/uploads`, 'id,start_time,end_time,num_detected_items,num_invalid_items,num_persisted_items') : [];
       const sources = await list(`${catalogId}/external_event_sources`, 'id');
-      const accountCatalogs = await list(`act_${config.account_id}/product_catalogs`, 'id');
+      const eligibleAccounts = await list(`${catalogId}/dpa_eligible_ad_accounts`, 'id');
       const pixelLinked = sources.some(s => String(s.id) === (env.ECOMMERCE_META_PIXEL_ID || '1668777180919759'));
       const hourlySchedule = feeds.some(f => String(f.id) === feedId && f.schedule?.interval === 'HOURLY');
       return { observedAt: new Date().toISOString(), catalogId, name: String(catalog.name || '').slice(0, 200),
@@ -437,7 +461,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
         uploads: uploads.map(u => ({ id: String(u.id), start: u.start_time, end: u.end_time, detected: u.num_detected_items, invalid: u.num_invalid_items, persisted: u.num_persisted_items })),
         feedId: feedId || null, connection: 'verified_read', catalogHealth: uploads[0]?.num_invalid_items ? 'issues' : 'unverified',
         pixelLink: pixelLinked ? 'verified' : 'unverified', hourlySchedule: hourlySchedule ? 'verified' : 'unverified',
-        adAccountLinked: accountCatalogs.some(c => String(c.id) === catalogId), eventMatch: 'requires_platform_diagnostics' };
+        adAccountLinked: eligibleAccounts.some(c => String(c.id).replace(/^act_/, '') === String(config.account_id)), eventMatch: 'requires_platform_diagnostics' };
     },
     async merchantCatalog(config) {
       const account = `accounts/${config.account_id}`;
