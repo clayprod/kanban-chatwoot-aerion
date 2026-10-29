@@ -15,7 +15,12 @@ const PORT = Number(process.env.PORT || 3100);
 const PACING_MS = Number(process.env.PACING_MS || 3000);
 const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS || 3);
 const PROXY_ENABLED = ['1', 'true', 'yes'].includes(String(process.env.HEADLESS_PROXY_ENABLED || '').toLowerCase());
-const WEBSHARE_TOKEN = process.env.WEBSHARE_TOKEN || '';
+// Várias contas do Webshare: mais proxies e mais banda no mesmo rodízio.
+const WEBSHARE_TOKENS = [...new Set([
+  process.env.WEBSHARE_TOKEN,
+  process.env.WEBSHARE_TOKEN_2,
+  ...String(process.env.WEBSHARE_TOKENS || '').split(','),
+].map((t) => String(t || '').trim()).filter(Boolean))];
 const WEBSHARE_URL = 'https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100';
 
 let browser = null;
@@ -25,23 +30,28 @@ let cursor = 0;
 const quarentena = new Map(); // id -> até quando
 
 const carregarProxies = async () => {
-  if (!PROXY_ENABLED || !WEBSHARE_TOKEN) return [];
+  if (!PROXY_ENABLED || !WEBSHARE_TOKENS.length) return [];
   if (proxies.length && Date.now() - proxiesEm < 30 * 60 * 1000) return proxies;
-  try {
-    const r = await fetch(WEBSHARE_URL, { headers: { Authorization: `Token ${WEBSHARE_TOKEN}` } });
-    if (!r.ok) throw new Error(`webshare HTTP ${r.status}`);
-    const d = await r.json();
-    proxies = (d.results || [])
-      .filter((p) => p.valid !== false && p.proxy_address && p.port && p.username && p.password)
-      .map((p) => ({
-        id: `${p.proxy_address}:${p.port}`,
-        server: `http://${p.proxy_address}:${p.port}`,
-        username: p.username,
-        password: p.password,
-      }));
+  const juntos = new Map();
+  for (const token of WEBSHARE_TOKENS) {
+    try {
+      const r = await fetch(WEBSHARE_URL, { headers: { Authorization: `Token ${token}` } });
+      if (!r.ok) throw new Error(`webshare HTTP ${r.status}`);
+      const d = await r.json();
+      for (const p of d.results || []) {
+        if (p.valid === false || !p.proxy_address || !p.port || !p.username || !p.password) continue;
+        const id = `${p.proxy_address}:${p.port}`;
+        juntos.set(id, { id, server: `http://${id}`, username: p.username, password: p.password });
+      }
+    } catch (error) {
+      // Uma conta fora do ar não derruba a outra.
+      console.warn('[headless] lista de proxies indisponível:', error.message);
+    }
+  }
+  if (juntos.size) {
+    // Intercala as contas no rodízio: bytes gastos se espalham entre as duas franquias.
+    proxies = [...juntos.values()];
     proxiesEm = Date.now();
-  } catch (error) {
-    console.warn('[headless] lista de proxies indisponível:', error.message);
   }
   return proxies;
 };
@@ -56,15 +66,21 @@ const proximoProxy = async () => {
   return null;
 };
 
-const obterBrowser = async () => {
-  if (browser?.isConnected()) return browser;
-  browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    // Habilita proxy por contexto.
-    proxy: { server: 'http://per-context' },
-  });
-  return browser;
+// Dois navegadores: o modo "per-context" só aceita contextos com proxy próprio (um contexto
+// sem proxy tentaria o endereço fictício e daria ERR_PROXY_CONNECTION_FAILED).
+let browserDireto = null;
+const ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'];
+const obterBrowser = async (comProxy) => {
+  if (comProxy) {
+    if (!browser?.isConnected()) {
+      browser = await chromium.launch({ headless: true, args: ARGS, proxy: { server: 'http://per-context' } });
+    }
+    return browser;
+  }
+  if (!browserDireto?.isConnected()) {
+    browserDireto = await chromium.launch({ headless: true, args: ARGS });
+  }
+  return browserDireto;
 };
 
 const extrair = () => {
@@ -83,7 +99,7 @@ const extrair = () => {
 };
 
 const buscarUma = async (query, proxy) => {
-  const ctx = await (await obterBrowser()).newContext({
+  const ctx = await (await obterBrowser(Boolean(proxy))).newContext({
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
