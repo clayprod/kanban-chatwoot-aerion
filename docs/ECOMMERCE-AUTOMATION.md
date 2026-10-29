@@ -26,6 +26,8 @@ A cotação executa como usuário anônimo, usa `Aerion_Pricing::quote($product,
 
 Cadastrar webhooks WooCommerce `product.created`, `product.updated` e `product.deleted`, com o **mesmo segredo e URL** já usados pelos eventos de pedido. A rota também aceita restauração/lixeira. Corpos JSON são verificados por HMAC sobre os bytes originais; entrega repetida não enfileira novamente. O corpo do produto não é confiado como projeção: o worker relê a loja.
 
+O worker tenta cadastrar automaticamente somente os tópicos ausentes com a chave REST existente. Uma chave somente leitura produz pendência de autorização, sem apagar nem substituir webhooks de outro responsável. Webhooks já existentes para o mesmo tópico/destino são preservados e pedem conferência do segredo; duplicados ou desativados bloqueiam o provisionamento.
+
 O worker executa no cron existente de um minuto, com prioridade para alterações de produto/pagamento, até oito trabalhos por ciclo. Reconcilia o catálogo completo diariamente, mantém leases recuperáveis e revisões para eventos recebidos durante um processamento. Uma falha não substitui um snapshot completo válido. O alvo de cinco minutos depende de fila e disponibilidade normais; importação/aprovação das plataformas tem prazo separado.
 
 SKU duplicado, imagem placeholder, descrição/URL ausente, preço público inválido, marca/identificador ausente ou pré-venda sem data futura impedem exportação. Categorias formam Drones, Kits, Payloads, Acessórios e Outros; Outros pede classificação, sem inventá-la. Exclusão de produto remove a família correspondente; reconciliação remove itens e variações que deixaram de existir.
@@ -35,6 +37,8 @@ SKU duplicado, imagem placeholder, descrição/URL ausente, preço público inv�
 Usa a identidade já salva em Meta Ads. A preparação consulta todos os catálogos próprios do Business ID, reutiliza o único Aerion identificado e cria um apenas quando nenhum apropriado foi encontrado. Mais de um exige seleção explícita. Um catálogo com outra fonte bloqueia a preparação: não é criado um segundo mecanismo concorrente.
 
 O botão **Configurar fonte e conjuntos Meta** enfileira uma fonte `Aerion CRM · consumidor`, coleta `HOURLY`, grupos por `custom_label_0` e associação ao Pixel/dataset. A associação à conta anunciante é consultada; se faltar, fica uma ação no painel. A sincronização horária lê itens, uploads, contagens de inválidos, vínculo e agenda. Recebimento e saúde da conexão aparecem separadamente. Correspondência de eventos ainda exige diagnóstico da plataforma.
+
+A elegibilidade da conta anunciante é consultada pelo endpoint do catálogo `/{catalog_id}/dpa_eligible_ad_accounts`. Auditoria efetiva no servidor em 29/10: a credencial atual concedeu apenas `ads_mcp_management`, `ads_read` e `public_profile`. Isso não demonstra autorização para gestão de catálogo/escrita pela Graph API; a reautorização administrativa precisa cobrir as operações e os ativos correspondentes. Nenhum token foi exibido ou persistido no relatório.
 
 Configurações do servidor:
 

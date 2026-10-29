@@ -22,6 +22,17 @@ test('projection only accepts consumer quotes and strips all private pricing and
   assert.equal(product.version, projectProduct(raw()).version);
   assert.notEqual(product.version, projectProduct(raw(1, { consumer_price: 110 })).version);
 });
+test('webhook provisioning creates only missing topics and preserves existing deliveries and secrets', async () => {
+  const writes = [];
+  const url = 'https://crm.example.com/api/ecommerce/webhooks/woocommerce';
+  const providers = createProviders({ transport: async (target, options) => {
+    if (options.method !== 'POST') return Response.json([{ id: 1, topic: 'product.created', status: 'active', delivery_url: url }]);
+    const body = JSON.parse(options.body); writes.push(body); return Response.json({ id: writes.length + 1, ...body });
+  } });
+  const result = await providers.ensureProductWebhooks({ url: 'https://loja.aerion.com.br', consumer_key: 'ck', consumer_secret: 'cs', webhook_secret: 'private' }, url);
+  assert.equal(writes.length, 2); assert.deepEqual(writes.map(w => w.topic), ['product.updated', 'product.deleted']);
+  assert(result.hooks[0].existing); assert(!JSON.stringify(result).includes('private'));
+});
 test('feed blocks duplicate SKU, placeholders, missing brand, invalid URLs and undated preorder', () => {
   const p = projectProduct(raw());
   assert(eligibleProducts([p])[0].eligible);
@@ -71,9 +82,11 @@ test('Meta import only follows validated cursors, validates feed ownership and s
     if (u.pathname.endsWith('/123')) return Response.json({ id: '123', name: 'Aerion' });
     if (u.pathname.endsWith('/products')) return Response.json({ data: [{ id: '11', retailer_id: 'SKU-1' }] });
     if (u.pathname.endsWith('/product_feeds')) return Response.json({ data: [{ id: '12', name: 'Source' }] });
+    if (u.pathname.endsWith('/dpa_eligible_ad_accounts')) return Response.json({ data: [{ id: 'act_10' }] });
     return Response.json({ data: [] });
   } });
-  assert.equal((await providers.metaCatalog(config, '123', '12')).products[0].sku, 'SKU-1');
+  const snapshot = await providers.metaCatalog(config, '123', '12');
+  assert.equal(snapshot.products[0].sku, 'SKU-1'); assert.equal(snapshot.adAccountLinked, true);
   await assert.rejects(providers.metaCatalog(config, '123', '999'), /fora do catálogo/);
   const denied = createProviders({ transport: async () => Response.json({ token: 'secret' }, { status: 401 }) });
   await assert.rejects(denied.metaCatalog(config, '123'), e => !e.message.includes('secret'));
