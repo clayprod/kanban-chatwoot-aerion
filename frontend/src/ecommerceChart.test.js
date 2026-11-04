@@ -52,3 +52,19 @@ test('CPM uses grouped investment and impressions, keeping platforms and missing
   const empty = prepareSalesChart([{ date: '2026-10-19', spend: 5, impressions: 0 }], 'cpm', 'day', ['cpm']);
   expect(empty.points[0].cpm).toBeNull();
 });
+import { movingAverage, isSmallSample, adStatus } from './ecommerceChart';
+test('moving average keeps gaps and needs at least three measured points', () => {
+  expect(movingAverage([2, 4, 6, 8], 3)).toEqual([null, null, 4, 6]);
+  expect(movingAverage([2, 4, null, 6, 8], 3)).toEqual([null, null, null, null, null]);
+});
+test('small sample flags tiny totals but not healthy volume', () => {
+  expect(isSmallSample([3, 5, 2, 4, 6, 1])).toBe(true);
+  expect(isSmallSample([40, 50, 60, 70, 80])).toBe(false);
+  expect(isSmallSample([null, null])).toBe(false);
+});
+test('ad status separates live, paused and never-delivered platforms', () => {
+  expect(adStatus('2026-11-03', '2026-11-04').tone).toBe('live');
+  expect(adStatus('2026-10-27', '2026-11-04')).toMatchObject({ tone: 'paused', days: 8 });
+  expect(adStatus(null, '2026-11-04').tone).toBe('idle');
+  expect(adStatus(null, '2026-11-04', false).tone).toBe('off');
+});

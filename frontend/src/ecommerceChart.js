@@ -15,6 +15,11 @@ export const CHART_SERIES = {
     ['impressions', 'Impressões totais', '#0d9488', 'right'], ['metaImpressions', 'Impressões Meta', '#60a5fa', 'right'], ['googleImpressions', 'Impressões Google', '#fbbf24', 'right'],
   ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
+  store: [
+    ['paidImpressions', 'Mídia paga · impressões', '#8b78f5', 'left'], ['searchImpressions', 'Busca orgânica · impressões', '#3b82f6', 'left'], ['shopImpressions', 'Shopping gratuito · impressões', '#d97706', 'left'],
+    ['paidClicks', 'Mídia paga · cliques', '#8b78f5', 'left'], ['searchClicks', 'Busca orgânica · cliques', '#3b82f6', 'left'], ['shopClicks', 'Shopping gratuito · cliques', '#d97706', 'left'],
+    ['sessions', 'Sessões GA4', '#0d9488', 'left'], ['orders', 'Pedidos pagos', '#e56767', 'left'],
+  ],
   traffic: [['sessions', 'Sessões GA4', '#3b82f6', 'left'], ['purchases', 'Compras GA4', '#0d9488', 'right']],
 };
 export const CHART_AXES = {
@@ -24,8 +29,9 @@ export const CHART_AXES = {
   cpm: ['CPM · R$/mil impressões', 'Impressões'],
   volume: ['Pedidos pagos', 'Sessões GA4'],
   traffic: ['Sessões GA4', 'Compras GA4'],
+  store: ['Contagem', 'Contagem'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'], store: ['paidImpressions', 'searchImpressions', 'shopImpressions', 'sessions'] };
 
 function axisMaximum(values) {
   const max = values.reduce((n, value) => Math.max(n, value || 0), 0);
@@ -36,7 +42,7 @@ function axisMaximum(values) {
 }
 export function prepareSalesChart(rows, mode, interval, visible) {
   const series = CHART_SERIES[mode], buckets = new Map();
-  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue'];
+  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue', 'paidImpressions', 'paidClicks', 'searchImpressions', 'searchClicks', 'shopImpressions', 'shopClicks'];
   for (const row of rows) {
     const date = new Date(`${row.date}T12:00:00Z`);
     if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
@@ -65,4 +71,28 @@ export function prepareSalesChart(rows, mode, interval, visible) {
   // render slices once; axes and tooltips always show the original units.
   const data = selected.map(([key, id, color, axis]) => ({ id, color, axis, data: points.map(point => ({ x: point.date, y: point[key] == null ? null : point[key] / max[axis], rawValue: point[key] ?? null })) }));
   return { series, available, data, max, points, selected };
+}
+
+// Média móvel que ignora lacunas: janela de até `size` pontos medidos terminando no ponto atual.
+export function movingAverage(values, size = 7) {
+  return values.map((value, i) => {
+    if (value == null) return null;
+    const window = values.slice(Math.max(0, i - size + 1), i + 1).filter(v => v != null);
+    return window.length >= Math.min(3, size) ? window.reduce((n, v) => n + v, 0) / window.length : null;
+  });
+}
+// Volume pequeno: poucas unidades no período ou poucos dias com medição.
+export function isSmallSample(values, additive = true) {
+  const measured = values.filter(v => v != null);
+  if (!measured.length) return false;
+  const total = measured.reduce((n, v) => n + v, 0);
+  return additive ? total < 30 || measured.length < 5 : measured.length < 5;
+}
+// Estado de uma plataforma de anúncio a partir do último dia com entrega real.
+export function adStatus(lastDay, today, connected = true) {
+  if (!connected) return { tone: 'off', label: 'Não conectado' };
+  if (!lastDay) return { tone: 'idle', label: 'Conectado · nunca teve entrega' };
+  const days = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${lastDay}T12:00:00Z`)) / 86400000);
+  if (days <= 2) return { tone: 'live', label: 'Ativa', lastDay, days };
+  return { tone: 'paused', label: 'Sem entrega', lastDay, days };
 }

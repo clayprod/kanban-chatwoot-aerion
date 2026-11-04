@@ -3,7 +3,8 @@ import axios from 'axios';
 import { ResponsiveLine } from '@nivo/line';
 import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon, Squares2X2Icon, ShoppingBagIcon, MegaphoneIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
-import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS } from './ecommerceChart';
+import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS, movingAverage, isSmallSample, adStatus } from './ecommerceChart';
+import { mergeStoreDaily, channelTable, funnelSteps } from './storeReach';
 import MerchantView from './MerchantView';
 import MarketingAutomationView from './MarketingAutomationView';
 
@@ -71,34 +72,56 @@ function grouped(rows, keys, fields) {
   });
   return [...map.values()];
 }
+function CampaignStatus({ report }) {
+  const names = { google_ads: 'Google Ads', meta_ads: 'Meta Ads' };
+  const today0 = today();
+  const items = ['google_ads', 'meta_ads'].map(p => ({ p, status: adStatus(report.adActivity?.[p] || null, today0, report.connections?.some(c => c.provider === p && c.last_success_at)) }));
+  const tones = { live: 'border-emerald-500/40 bg-emerald-500/10', paused: 'border-amber-500/40 bg-amber-500/10', idle: 'border-line bg-bg2', off: 'border-line bg-bg2' };
+  return <section aria-label="Situação das campanhas" className="grid gap-3 sm:grid-cols-2">{items.map(({ p, status }) => <div key={p} className={`rounded-xl border p-3 text-sm ${tones[status.tone]}`}>
+    <div className="flex items-center justify-between gap-2"><b>{names[p]}</b><span className="text-xs">{status.tone === 'live' ? '● ' : status.tone === 'paused' ? '⏸ ' : '○ '}{status.label}</span></div>
+    <p className="mt-1 text-xs text-muted">{status.tone === 'live' ? `Última entrega em ${dateLabel(status.lastDay)}.` : status.tone === 'paused' ? `Conectado e sincronizando, mas sem impressões desde ${dateLabel(status.lastDay)} (${status.days} dias). Zeros no gráfico significam campanha parada, não falha de integração.` : status.tone === 'idle' ? 'A conta está conectada e nunca registrou impressões ou investimento.' : 'Conecte a conta em Conexões para acompanhar.'}</p></div>)}</section>;
+}
 function SalesChart({ rows, context = 'sales' }) {
-  const [visible, setVisible] = useState(CHART_DEFAULTS[context === 'traffic' ? 'traffic' : 'money']);
-  const [mode, setMode] = useState(context === 'traffic' ? 'traffic' : 'money');
+  const [visible, setVisible] = useState(CHART_DEFAULTS[context === 'traffic' ? 'traffic' : 'store']);
+  const [mode, setMode] = useState(context === 'traffic' ? 'traffic' : 'store');
   const [interval, setInterval] = useState('day');
   const { series, available, data, max, points, selected } = prepareSalesChart(rows, mode, interval, visible);
   const axisFormat = (side, value) => mode === 'reach' && side === 'right' ? `${number(value)}%` : mode === 'efficiency' && side === 'right' ? `${number(value)}×` : new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
   const rawFormat = (side, value) => mode === 'reach' && side === 'right' ? percent(value) : mode === 'money' || ((mode === 'efficiency' || mode === 'cpm') && side === 'left') ? money(value) : mode === 'efficiency' ? `${number(value)}×` : number(value);
   const hasAxis = side => selected.some(([, , , axis]) => axis === side);
   return <section className={panel} aria-label={context === 'traffic' ? 'Tráfego e compras no GA4' : 'Receita diária de produtos'}>
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">{context === 'traffic' ? 'Sessões e compras ao longo do tempo' : 'Vendas e investimento ao longo do tempo'}</h3><p className={`${labelClass} mt-1`}>{mode === 'traffic' ? 'Sessões e compras registradas na mesma fonte · GA4' : mode === 'money' ? 'Receita pela data de pagamento · mídia pelo dia da conta' : mode === 'efficiency' ? 'CPC ponderado por cliques · ROAS atribuído pelas plataformas' : mode === 'cpm' ? 'Custo por mil impressões · investimento e impressões do período' : mode === 'reach' ? 'Impressões por plataforma · CTR ponderado por impressões' : 'Pedidos pela data de pagamento · sessões do GA4'}</p></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-semibold">{context === 'traffic' ? 'Sessões e compras ao longo do tempo' : 'Vendas e investimento ao longo do tempo'}</h3><p className={`${labelClass} mt-1`}>{mode === 'store' ? 'Alcance por canal (mídia paga, busca orgânica, Shopping gratuito) e o que chegou à loja · um gráfico por métrica' : mode === 'traffic' ? 'Sessões e compras registradas na mesma fonte · GA4' : mode === 'money' ? 'Receita pela data de pagamento · mídia pelo dia da conta' : mode === 'efficiency' ? 'CPC ponderado por cliques · ROAS atribuído pelas plataformas' : mode === 'cpm' ? 'Custo por mil impressões · investimento e impressões do período' : mode === 'reach' ? 'Impressões por plataforma · CTR ponderado por impressões' : 'Pedidos pela data de pagamento · sessões do GA4'}</p></div>
       <div className="flex flex-wrap gap-2"><label className="sr-only" htmlFor="ecommerce-chart-interval">Agrupar gráfico</label><select id="ecommerce-chart-interval" className={select} value={interval} onChange={e => setInterval(e.target.value)}><option value="day">Por dia</option><option value="week">Por semana</option><option value="month">Por mês</option></select></div>
     </div>
-    {context !== 'traffic' && <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Métrica do gráfico">{(context === 'traffic' ? [['traffic', 'Sessões e compras']] : [['money', 'Vendas e investimento'], ['efficiency', 'CPC e ROAS'], ['cpm', 'CPM e impressões'], ['reach', 'Impressões e CTR'], ['volume', 'Pedidos e sessões']]).map(([id, label]) => <button type="button" key={id} aria-pressed={mode === id} onClick={() => { setMode(id); setVisible(CHART_DEFAULTS[id]); }} className={`${btnSecondarySm} ${mode === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
+    {context !== 'traffic' && <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Métrica do gráfico">{(context === 'traffic' ? [['traffic', 'Sessões e compras']] : [['store', 'Loja inteira'], ['money', 'Vendas e investimento'], ['efficiency', 'CPC e ROAS'], ['cpm', 'CPM e impressões'], ['reach', 'Impressões e CTR'], ['volume', 'Pedidos e sessões']]).map(([id, label]) => <button type="button" key={id} aria-pressed={mode === id} onClick={() => { setMode(id); setVisible(CHART_DEFAULTS[id]); }} className={`${btnSecondarySm} ${mode === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
     <div className="my-4 flex flex-wrap gap-2" aria-label="Mostrar ou ocultar linhas do gráfico">{series.map(([id, label, color, axis]) => <button key={id} type="button" disabled={!available.some(([key]) => key === id)} title={`${axis === 'right' ? 'Eixo direito' : 'Eixo esquerdo'}: ${CHART_AXES[mode][axis === 'right' ? 1 : 0]}`} aria-pressed={visible.includes(id)} onClick={() => setVisible(v => v.includes(id) ? v.filter(k => k !== id) : [...v, id])} className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40 ${visible.includes(id) ? 'border-line bg-bg2 text-ink' : 'border-transparent text-muted'}`}><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}<span className="text-muted" aria-hidden="true">{axis === 'right' ? '→' : '←'}</span></button>)}</div>
-    {!available.length ? <p className="py-12 text-sm text-muted">{(mode === 'reach' || mode === 'cpm') ? 'Ainda não há impressões disponíveis nas fontes de mídia conectadas neste período.' : mode === 'traffic' ? 'Ainda não há sessões ou compras disponíveis no GA4 neste período.' : mode === 'efficiency' ? 'Ainda não há cliques e investimento disponíveis para calcular CPC e ROAS neste período.' : 'Conecte o WooCommerce para acompanhar a evolução de vendas.'}</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <>
-      <div className="mb-2 flex justify-between gap-5 text-xs text-muted"><span>{hasAxis('left') ? `Esquerda: ${CHART_AXES[mode][0]}` : ''}</span><span className="text-right">{hasAxis('right') ? `Direita: ${CHART_AXES[mode][1]}` : ''}</span></div>
-      <div className="h-80" role="img" aria-label="Evolução das métricas selecionadas no período, com escalas independentes à esquerda e à direita">
-      <ResponsiveLine data={data} margin={{ top: 16, right: hasAxis('right') ? 55 : 12, bottom: 44, left: hasAxis('left') ? 55 : 12 }}
-        xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 1, nice: false }} colors={({ color }) => color}
-        axisTop={null} axisRight={hasAxis('right') ? { tickValues: [0, 0.25, 0.5, 0.75, 1], tickSize: 0, tickPadding: 10, format: n => axisFormat('right', n * max.right) } : null} axisBottom={{ tickValues: data[0].data.filter((_, i) => i % Math.max(1, Math.ceil(data[0].data.length / 5)) === 0).map(d => d.x), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 12 }}
-        axisLeft={hasAxis('left') ? { tickValues: [0, 0.25, 0.5, 0.75, 1], tickSize: 0, tickPadding: 10, format: n => axisFormat('left', n * max.left) } : null} gridYValues={[0, 0.25, 0.5, 0.75, 1]} enablePoints={points.length <= 45} pointSize={4}
-        enableGridX={false} enableArea={false} enableSlices="x" animate={false}
-        theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } }, tooltip: { container: { background: '#172033', color: '#fff', borderRadius: 8 } } }}
-        sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink"><strong>{dateLabel(slice.points[0].data.x)}</strong>{slice.points.map(point => {
-          const serie = data.find(s => s.id === point.serieId), raw = serie?.data.find(d => d.x === point.data.x)?.rawValue;
-          return <div className="mt-2 flex justify-between gap-5" key={point.id}><span>{point.serieId} · {serie?.axis === 'right' ? 'dir.' : 'esq.'}</span><b>{rawFormat(serie?.axis, raw)}</b></div>;
-        })}</div>} />
-      </div></>}
+    {!available.length ? <p className="py-12 text-sm text-muted">{(mode === 'reach' || mode === 'cpm') ? 'Ainda não há impressões disponíveis nas fontes de mídia conectadas neste período.' : mode === 'traffic' ? 'Ainda não há sessões ou compras disponíveis no GA4 neste período.' : mode === 'efficiency' ? 'Ainda não há cliques e investimento disponíveis para calcular CPC e ROAS neste período.' : mode === 'store' ? 'Conecte Google Ads, Meta, Search Console ou Merchant para ver o alcance da loja.' : 'Conecte o WooCommerce para acompanhar a evolução de vendas.'}</p> : !data.length ? <p className="py-12 text-sm text-muted">Selecione uma linha acima para exibir o gráfico.</p> : <>
+    <div className="space-y-3" role="group" aria-label="Uma escala por métrica, sem eixo duplo">
+      {selected.map(([key, id, color, axis]) => {
+        const serie = data.find(s => s.id === id);
+        const values = serie.data.map(d => d.rawValue).filter(v => v != null);
+        const last = [...values].pop(), total = values.reduce((n, v) => n + v, 0);
+        const additive = !['cpc', 'metaCpc', 'googleCpc', 'roas', 'ctr', 'metaCtr', 'googleCtr', 'cpm', 'metaCpm', 'googleCpm'].includes(key);
+        const fmt = v => rawFormat(axis, v);
+        const maxRaw = Math.max(...values, 0);
+        const small = isSmallSample(serie.data.map(d => d.rawValue), additive);
+        const average = interval === 'day' && points.length >= 10 && !small ? movingAverage(serie.data.map(d => d.rawValue)) : null;
+        return <div key={key} className="rounded-lg border border-line bg-bg2/40 p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2"><span className="flex items-center gap-2 text-sm font-medium"><span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />{id}</span>
+            <span className="text-xs text-muted">{small && <span className="mr-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300" title="Poucas unidades no período: variações grandes em porcentagem podem ser só ruído.">amostra pequena</span>}{additive ? <>Total <b className="text-ink tabular-nums">{fmt(total)}</b> · </> : null}último <b className="text-ink tabular-nums">{fmt(last)}</b> · pico <b className="text-ink tabular-nums">{fmt(maxRaw)}</b></span></div>
+          <div className="h-32" role="img" aria-label={`${id} por ${interval === 'day' ? 'dia' : interval === 'week' ? 'semana' : 'mês'}`}>
+            <ResponsiveLine data={[{ id, data: serie.data.map(d => ({ x: d.x, y: d.rawValue })) }, ...(average ? [{ id: `${id} · média 7 dias`, data: serie.data.map((d, i) => ({ x: d.x, y: average[i] })) }] : [])]} margin={{ top: 8, right: 12, bottom: 24, left: 52 }}
+              xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }} colors={average ? [`${color}66`, color] : [color]} curve="monotoneX" lineWidth={2}
+              axisTop={null} axisRight={null} axisLeft={{ tickValues: 3, tickSize: 0, tickPadding: 8, format: v => axisFormat(axis, v) }}
+              axisBottom={{ tickValues: points.filter((_, i) => i % Math.max(1, Math.ceil(points.length / 6)) === 0).map(p => p.date), format: d => dateLabel(d).slice(0, 5), tickSize: 0, tickPadding: 8 }}
+              gridYValues={3} enableGridX={false} enableArea areaOpacity={0.12} enablePoints={points.length <= 31 && !average} pointSize={5} pointColor="#0f172a" pointBorderWidth={2} pointBorderColor={{ from: 'serieColor' }}
+              useMesh enableCrosshair animate={false}
+              theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } }, crosshair: { line: { stroke: '#94a3b8', strokeOpacity: 0.5, strokeDasharray: '3 3' } } }}
+              tooltip={({ point }) => <div className="rounded-lg border border-line bg-surf px-3 py-2 text-xs text-ink">{dateLabel(point.data.x)} · {String(point.serieId).includes('média') ? 'média 7 dias' : 'valor do dia'} <b>{fmt(point.data.y)}</b></div>} />
+          </div>
+        </div>;
+      })}
+    </div></>}
   </section>;
 }
 
@@ -123,6 +146,19 @@ function OrganicSearchChart({ search, range }) {
       sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink">{dateLabel(slice.points[0]?.data.x)} · {labels[metric]}: {number(slice.points[0]?.data.y)}{metric === 'ctr' ? '%' : ''}</div>}
     /></div>}
   </section>;
+}
+function FunnelBars({ steps }) {
+  const top = Math.max(...steps.map(([, v]) => v || 0), 1);
+  return <section className={panel} aria-label="Funil da loja"><h3 className="text-base font-semibold">Do alcance à venda</h3><p className={`${labelClass} mt-1`}>Soma dos canais no período; a largura é relativa à etapa maior. A queda entre etapas mostra onde está o gargalo.</p>
+    <ol className="mt-4 space-y-2">{steps.map(([label, value], i) => { const prev = i ? steps[i - 1][1] : null;
+      return <li key={label} className="grid grid-cols-[7.5rem_1fr_9rem] items-center gap-3 text-sm"><span className="text-muted">{label}</span>
+        <div className="h-5 rounded bg-bg2"><div className="h-5 rounded-r bg-primary/70" style={{ width: `${value ? Math.max(1, value / top * 100) : 0}%` }} /></div>
+        <span className="tabular-nums"><b>{number(value)}</b>{prev && value != null ? value > prev
+          ? <span className="ml-2 text-xs text-amber-300" title="Esta etapa tem mais eventos que a anterior. Cada evento é contado separadamente no GA4 e pode haver falha de medição; a taxa não é confiável.">⚠ maior que a anterior</span>
+          : <span className="ml-2 text-xs text-muted">{percent(value / prev * 100)} da etapa anterior</span> : null}</span></li>; })}</ol></section>;
+}
+function ChannelCrossing({ rows }) {
+  return <Table caption="Canais lado a lado · alcance → visita → compra" rows={rows} columns={[{ key: 'label', label: 'Canal', render: r => <span title={r.note}>{r.label}</span> }, numeric('impressions', 'Impressões'), numeric('clicks', 'Cliques'), numeric('ctr', 'CTR', percent), numeric('sessions', 'Sessões GA4'), numeric('sessionsPerClick', 'Sessões por clique', ratio), numeric('purchases', 'Compras GA4'), numeric('buyRate', 'Compras / sessões', percent)]} />;
 }
 function MediaIndicators({ summary }) {
   const media = summary.media || {};
@@ -343,7 +379,8 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
       {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
-      {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={report.daily} context={section === 'traffic' ? 'traffic' : 'sales'} />}
+      {report && ['overview', 'ads', 'campaigns'].includes(section) && <CampaignStatus report={report} />}
+      {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={mergeStoreDaily(report)} context={section === 'traffic' ? 'traffic' : 'sales'} />}
       {report && <>
         {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
         {section === 'automation' && <MarketingAutomationView data={report.marketing} isAdmin={isAdmin} onRefresh={reload} />}
@@ -353,6 +390,8 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
           </dl>
           <p className="text-xs text-muted">Receita no período anterior ({dateLabel(report.range.previousFrom)} a {dateLabel(report.range.previousTo)}): {money(summary.previousRevenue)}. Receita exclui frete e impostos. Compras registradas no GA4: {number(summary.purchases)}.</p>
           <MediaIndicators summary={summary} />
+          <FunnelBars steps={funnelSteps(report)} />
+          <ChannelCrossing rows={channelTable(report)} />
           {report.merchant?.performanceAvailable && <div className="flex flex-wrap items-center justify-between gap-3 border-y border-line py-3 text-sm"><p>Produtos nas listagens gratuitas: <strong>{number(report.merchant.methods.find(row => row.method === 'ORGANIC')?.clicks)} cliques</strong> · {number(report.merchant.methods.find(row => row.method === 'ORGANIC')?.impressions)} impressões no período.</p><button type="button" className={btnSecondarySm} onClick={() => setSection('merchant')}>Ver produtos no Google</button></div>}
           <section className={panel}><h3 className="text-base font-semibold">Conversão e oportunidades</h3><dl className="mt-4 grid grid-cols-2 gap-5 lg:grid-cols-4">{[['Sessões GA4', number(summary.sessions)], ['Compras GA4', number(summary.purchases)], ['Compras / sessões GA4', summary.sessions ? percent(summary.purchases / summary.sessions * 100) : '—'], ['Abandono de carrinho', percent(summary.cartAbandonmentRate)]].map(([label, value]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{value}</dd></div>)}</dl></section>
           <Table caption="Produtos com maior receita" rows={report.products.slice(0, 10)} columns={[{ key: 'name', label: 'Produto' }, numeric('quantity', 'Unidades líquidas'), numeric('revenue', 'Receita', money)]} />
@@ -425,7 +464,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         {['overview', 'ads'].includes(section) && <p className="mt-4 border-t border-line pt-3 text-xs text-muted">ROAS usa a atribuição das plataformas e pode contabilizar a mesma venda em ambas. MER usa as vendas reais de produtos da loja e não mede atribuição. CPC, CTR, CPM e CPA usam totais ponderados.</p>}
         {section === 'overview' && <p className="mt-4 text-xs text-muted">Abandono exige um funil de usuários com carrinho e compra no mesmo intervalo. A medição está em validação; pedidos não pagos e contagens de eventos não permitem calcular essa taxa. Compras / sessões mede ocorrências por sessão, não a proporção de pessoas que compraram.</p>}
         {section === 'seo' && <p className="mt-4 border-t border-line pt-3 text-xs text-muted">Pesquisa web · dias no fuso do Pacífico · dados finalizados podem ter atraso. Cliques da busca não equivalem a sessões do GA4 ou vendas. Consultas anônimas são omitidas; os detalhamentos podem não somar o total. Posição é ponderada por impressões; menor é melhor.</p>}
-        {['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <p>Os eixos dos gráficos têm escalas independentes: compare a evolução, não a altura das linhas. Taxas são recalculadas pelos totais de cada dia, semana ou mês.</p>}
+        {['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <p>Cada métrica tem seu próprio gráfico e sua própria escala. Impressões de canais diferentes não são pessoas únicas e podem se sobrepor (a mesma pessoa pode ver anúncio e resultado orgânico). Taxas são recalculadas pelos totais de cada dia, semana ou mês.</p>}
         {['overview', 'ads', 'campaigns'].includes(section) && <p>Pedidos aguardando pagamento incluem frete e impostos, refletem a situação atual e não representam abandono de carrinho. Impressões não representam pessoas únicas.</p>}
       </ReportNotes>}
 </>}
