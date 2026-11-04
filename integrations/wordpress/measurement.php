@@ -125,6 +125,11 @@ final class Aerion_Ecommerce_Measurement
         ?>
         <script id="aerion-measurement-consent">
         (() => {
+          // Moove keeps an accept-all flag until navigation; that flag prevents
+          // a later Save on the same page from replacing the previous cookie.
+          // Use its native reload option so a subsequent revocation is saved
+          // by the CMP itself. Do not introduce another consent-cookie writer.
+          if (window.moove_frontend_gdpr_scripts) window.moove_frontend_gdpr_scripts.force_reload = 'true';
           let previous = '';
           const capture = () => {
             const form = document.querySelector('form.checkout');

@@ -114,4 +114,18 @@ function seoOpportunities(records, today) {
   }).filter(p => p.impressions >= 100 && ((p.position >= 4 && p.position <= 20) || p.ctr < 2 || p.decline <= -20)).sort((a, b) => b.impressions - a.impressions);
   return { available: true, from: from(27), to: through, previousFrom: from(55), previousTo: from(28), generatedForWeek: shift(-new Date(`${today}T12:00:00Z`).getUTCDay()), rows };
 }
-module.exports = { digest, projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, GROUPS, metaGroupLabel };
+function audienceReadiness(state, failures = []) {
+  return [['meta', 'meta_audiences'], ['google', 'google_audiences']].map(([platform, key]) => {
+    const rows = state[key]?.store || [];
+    const complete = STORE_AUDIENCES.every(definition => rows.some(row => row.id === definition.id && row.platformId));
+    const failure = failures.find(job => job.kind === key);
+    return { integration: `${key}_store`, status: complete && !failure ? 'awaiting_external_processing' : 'administrator_action',
+      action: complete && !failure
+        ? platform === 'google'
+          ? 'Os cinco públicos estão cadastrados no GA4. Aguardar população e conferir regras e vínculo Ads; excluir o público de compradores 180d nas campanhas antes de ativar.'
+          : 'Os cinco públicos de eventos estão cadastrados na Meta. Aguardar população; conferir regras, exclusões de compradores e disponibilidade para entrega. Não depende de importar contatos do CRM.'
+        : 'Conferir conexão e preparar os cinco públicos de eventos da loja; uma falha não apaga os públicos já cadastrados.',
+      lastError: failure?.error || null };
+  });
+}
+module.exports = { digest, projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, GROUPS, metaGroupLabel, audienceReadiness };

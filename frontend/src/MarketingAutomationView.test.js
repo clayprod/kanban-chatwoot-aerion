@@ -37,3 +37,9 @@ test('journey marks finished steps and keeps the first pending step as next', ()
   expect(steps[0].detail).toBe('1 de 2 produtos elegíveis');
   expect(steps.findIndex(s => !s.done)).toBe(0);
 });
+
+test('server confirmation limitations do not describe the browser tag as blocked', () => {
+  render(<MarketingAutomationView data={{ ...data, readiness: [{ integration: 'measurement_ga4_server', status: 'administrator_action', action: 'Configurar segredo privado após validação.' }] }} isAdmin={false} />);
+  expect(screen.getByText('GA4 · confirmação adicional pelo servidor')).toBeInTheDocument();
+  expect(screen.getByText(/sua pendência não bloqueia o checkout ou a tag do navegador/)).toBeInTheDocument();
+});

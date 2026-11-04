@@ -1,9 +1,10 @@
 const crypto = require('node:crypto');
-const { projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities } = require('./marketingDomain');
+const { projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, audienceReadiness } = require('./marketingDomain');
 const { connectionConfig, transaction, lockId } = require('./store');
 const { encryptionKey } = require('./domain');
 const { createCustomerAudienceTables, syncCustomerAudiences } = require('./customerAudiences');
 const { paidGa4Payload, createMeasurementTables } = require('./serverMeasurement');
+const { createCampaignAssistant } = require('./contentHub');
 
 async function createMarketingTables(pool) {
   await pool.query(`
@@ -49,8 +50,9 @@ async function saveState(db, name, data) {
 async function productsFrom(db) {
   return (await db.query('SELECT data,updated_at FROM ecommerce_marketing_products ORDER BY product_id')).rows.map(r => ({ ...r.data, updatedAt: r.updated_at }));
 }
-function createMarketing({ pool, providers, env = process.env }) {
+function createMarketing({ pool, providers, env = process.env, contentHub }) {
   let ticking = false;
+  const assistant = createCampaignAssistant({ pool, env, enqueue: enqueueMarketing, saveState, hub: contentHub });
   const feedToken = () => env.ECOMMERCE_META_FEED_TOKEN || crypto.createHmac('sha256', encryptionKey(env)).update('aerion-meta-feed-v1').digest('hex');
   const metaSettings = async db => {
     const saved = (await db.query("SELECT data FROM ecommerce_marketing_state WHERE name='meta_setup'")).rows[0]?.data || {};
@@ -115,6 +117,7 @@ function createMarketing({ pool, providers, env = process.env }) {
     });
   }
   async function execute(db, job) {
+    if (await assistant.execute(db, job)) return;
     if (job.kind === 'webhooks') {
       const config = await load(db, 'woocommerce');
       const origin = new URL(env.ECOMMERCE_PUBLIC_URL);
@@ -357,6 +360,8 @@ function createMarketing({ pool, providers, env = process.env }) {
     const googleComplete = google.rows.some(r => r.eligible) && google.rows.filter(r => r.eligible).every(r => r.received && r.approved);
     return { observedAt: new Date().toISOString(), enabled,
       products: eligibleProducts(products), jobs: jobs.rows, history: history.rows, contents: contents.rows,
+      assistant: { configured: assistant.configured, latestPlan: state.assistant_latest || null, capabilities: state.content_hub_capabilities || null,
+        publication: 'approval_required', activationAllowed: false },
       googleReconciliation: google, metaCatalog: meta,
       diagnostics: Object.entries(state).filter(([key]) => key.startsWith('seo:')).map(([key, value]) => ({ productId: key.slice(4), ...value })),
       seo: state.seo_weekly || seoOpportunities(searches.rows.map(r => r.data), new Date().toISOString().slice(0, 10)),
@@ -381,8 +386,14 @@ function createMarketing({ pool, providers, env = process.env }) {
           account: connections.rows.find(c => c.provider === 'merchant_center')?.config.account_id || null,
           action: 'Conferir destinos, domínio e vínculo Ads no Merchant; preservar a fonte diária existente.', link: 'https://merchants.google.com/' },
         metaAction,
-        { integration: 'measurement', status: 'administrator_action', action: 'Identificar origem dos eventos SERVER do Meta; validar consentimento, event_id e GA4 Measurement Protocol em teste antes de habilitar envio pago.' },
-        { integration: 'audiences', status: 'administrator_action', action: 'Validar autorização de escrita Meta/GA4 e elegibilidade publicitária dos cadastros antes de criar ou sincronizar listas.' },
+        { integration: 'measurement_ga4_server', status: env.ECOMMERCE_GA4_SERVER_PURCHASE_ENABLED === '1' && env.ECOMMERCE_GA4_SERVER_PURCHASE_VALIDATED === '1' ? 'operational' : 'administrator_action',
+          permission: 'Acesso ao segredo Measurement Protocol do fluxo GA4',
+          action: 'Confirmação adicional pelo servidor. O envio de compra paga pelo navegador usa a tag existente do GTM e não depende deste segredo. Para habilitar o adicional, configurar segredo privado e validar consentimento e deduplicação em teste.',
+          link: 'https://analytics.google.com/' },
+        { integration: 'measurement_meta_server', status: 'administrator_action', action: 'Auditar o emissor de servidor Meta já existente, consentimento e event_id antes de acrescentar ou habilitar outro envio. Esta revisão é separada do Pixel do navegador.' },
+        ...audienceReadiness(state, failures.rows),
+        { integration: 'audiences_crm', status: state.customer_audiences && !pendingJob('customer_audiences') ? 'awaiting_external_processing' : 'administrator_action',
+          action: 'Listas de cadastros são separadas dos públicos de eventos da loja. Exigem elegibilidade publicitária comprovada e destinos próprios de loja/CRM; não enviar contatos sem prova.' },
       ] };
   }
   function mountPublic(router) {
@@ -399,6 +410,7 @@ function createMarketing({ pool, providers, env = process.env }) {
     router.get('/marketing', async (req, res) => res.json(await report()));
   }
   function mountAdmin(router) {
+    assistant.mountAdmin(router);
     router.post('/marketing/reconcile', async (req, res) => { await enqueueMarketing(pool, 'reconcile', 'nightly'); res.status(202).json({ queued: true }); });
     router.post('/marketing/meta/sync', async (req, res) => { await enqueueMarketing(pool, 'meta', 'catalog'); res.status(202).json({ queued: true }); });
     router.post('/marketing/meta/setup', async (req, res) => { await enqueueMarketing(pool, 'meta_setup', 'catalog'); res.status(202).json({ queued: true }); });
@@ -453,7 +465,8 @@ function createMarketing({ pool, providers, env = process.env }) {
       if (!/^[a-f0-9-]{36}$/i.test(req.params.id) || !['approved', 'rejected'].includes(req.body?.status)) return res.status(400).json({ error: 'Revisão inválida.' });
       const result = await pool.query(`UPDATE ecommerce_marketing_content c SET status=$2,reviewed_by=$3,reviewed_at=now()
         WHERE id=$1 AND status='draft' AND ($2='rejected' OR (length(trim(c.data->>'copy'))>0 AND EXISTS
-          (SELECT 1 FROM ecommerce_marketing_products p WHERE p.product_id=c.product_id AND p.data->>'version'=c.product_version))) RETURNING id,status`,
+          (SELECT 1 FROM ecommerce_marketing_products p WHERE p.product_id=c.product_id AND p.data->>'version'=c.product_version)
+          AND (NOT COALESCE(c.data->'contentHub' ? 'requestId',false) OR (c.data->'contentHub'->>'status'='ready_for_review' AND c.data->'contentHub'->'selectedAsset'->>'url' IS NOT NULL)))) RETURNING id,status`,
       [req.params.id, req.body.status, String(req.auth?.uid || req.auth?.sub || 'admin')]);
       if (!result.rowCount) return res.status(409).json({ error: 'Texto vazio, versão desatualizada ou revisão já concluída. Prepare uma nova versão.' });
       res.json(result.rows[0]);

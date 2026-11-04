@@ -1010,7 +1010,7 @@ function aerion_render_storefront_block(array $attributes): string
         </section>
         <?php if($offerProducts): ?>
         <section class="aerion-store-section aerion-store-offers"><div class="aerion-container">
-            <header class="aerion-store-heading aerion-store-heading--offers"><h2><?php echo esc_html($offerTitle); ?><?php if($offerCampaign): ?> <span aria-hidden="true">🔥</span><?php endif; ?></h2><?php if($offerCampaign)echo Aerion_Campaigns::countdown($offerCampaign,'large'); ?></header>
+            <header class="aerion-store-heading aerion-store-heading--offers"><h2><?php if(!empty($offerCampaign['url'])): ?><a href="<?php echo esc_url($offerCampaign['url']); ?>" style="color:inherit;text-decoration:none;font:inherit;letter-spacing:inherit;text-transform:inherit"><?php endif; ?><?php echo esc_html($offerTitle); ?><?php if($offerCampaign): ?> <span aria-hidden="true">🔥</span><?php endif; ?><?php if(!empty($offerCampaign['url'])): ?></a><?php endif; ?></h2><?php if($offerCampaign)echo Aerion_Campaigns::countdown($offerCampaign,'large'); ?></header>
             <div class="aerion-store-offers__carousel" data-aerion-product-strip>
                 <button type="button" data-aerion-strip-prev aria-label="Ofertas anteriores">‹</button>
                 <div class="aerion-store-offers__track" data-aerion-strip-track><?php foreach($offerProducts as $offer)echo aerion_store_product_card($offer,'aerion-store-product--offer'); ?></div>

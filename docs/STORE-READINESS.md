@@ -12,7 +12,7 @@
 
 ## Código e operação
 
-O cabeçalho da vitrine usa o título real da campanha em destaque que fornece os produtos. Exceções de preço de um único SKU não renomeiam toda a campanha. Sem campanha, o texto é “Produtos em destaque”. Mantém o estilo visual e não transforma o título em link.
+O cabeçalho da vitrine usa o título real da campanha em destaque que fornece os produtos. Exceções de preço de um único SKU não renomeiam toda a campanha. Sem campanha, o texto é “Produtos em destaque”. Mantém o estilo visual de texto; o título é um link para a campanha ativa, conforme a preferência mais recente.
 
 O bridge privado `marketing-webhooks` exige `aerion_read_reports` e retorna apenas metadados e impressões digitais SHA-256 de segredos fortes; o segredo bruto nunca é enviado. O worker confronta ID, tópico, status, destino e impressão digital. Uma leitura indisponível continua sem confirmação; não é declarada sucesso.
 
@@ -29,3 +29,27 @@ Fixtures reproduzíveis: `integrations/wordpress/testing/seed.php`, `isolation.p
 - Base CRM: ausência de prova publicitária continua impedindo envio. Cookie de navegação não concede autorização à base inteira.
 - Merchant: justificar a ausência de `EVO-NEST` sem trocar o mecanismo de feed existente.
 - Core Web Vitals, revogação e continuidade entre domínios exigem evidência própria; HTTP 200 e consentimento inicial não cobrem esses testes.
+
+## Deploy e conferência final em 04/11
+
+- PR #7 integrada em `c8f2539`, CI concluída. WordPress em `aerion-wordpress:readiness-main-c8f2539`, usando o wrapper protegido. Exatamente dois arquivos alterados e outros 658 preservados. O código dos dois arquivos também foi sincronizado no projeto local do G Drive.
+- Os dois endereços públicos da loja retornaram `Black November 🔥` em `<h2>`, com aparência de texto. O ajuste seguinte restaura o link do título para a campanha, conforme solicitado.
+- Os três webhooks assinados de produtos foram conferidos pelo bridge privado: estado operacional, sem rotação dos segredos existentes.
+- O mecanismo SEO aprovado está habilitado e a identidade de integração possui a capacidade específica. Nenhum texto novo foi publicado ou aprovado automaticamente.
+- Rótulos dos cinco públicos Meta relidos diretamente da API: quatro `engaged_users` e compradores `general_customers`. A organização não altera regras ou campanhas.
+- Os públicos GA4 existem; a exclusão de compradores 180d é aplicada na campanha, conforme a estratégia existente. Sua criação não comprova que as exclusões das futuras campanhas já foram concluídas.
+- A API Admin GA4 permite ler o fluxo `12276810230`, mas nega leitura de seus segredos Measurement Protocol com `403 PERMISSION_DENIED: The caller does not have permission`. A tag GTM do navegador não utiliza esse segredo. A conversão Ads de compra existente `7463161089` permanece primária; nenhuma segunda ação primária de compra foi criada.
+
+O dashboard separa confirmação adicional GA4 de servidor, emissor Meta de servidor, públicos de eventos por plataforma e listas de cadastros CRM. Públicos com os cinco IDs retornados ficam aguardando processamento externo, com revisão de regras explícita; erro ou recurso ausente mantém pendência. Isso não atesta tamanho, entrega, exclusão ou aprovação da plataforma.
+
+Não foi adotado envio de HTTP que se passe pelo navegador para contornar a permissão GA4. O caminho suportado atual usa o GTM web; para confirmação independente de o comprador retornar à página de sucesso, falta habilitar uma credencial de servidor com acesso autorizado e completar a validação de consentimento. Um administrador pode fornecer um segredo privado do fluxo existente sem conceder administração geral à integração.
+
+Auditoria móvel em laboratório (CPU 4x e rede 1,6 Mbps), sem interação: loja LCP 3,45s/CLS 0,001; produto Mini 7 LCP 12,66s/CLS 0,423. Não são Core Web Vitals de usuários reais. O produto demanda investigação de renderização/galeria antes de declarar otimização completa; nenhuma alteração visual especulativa foi aplicada com base somente nesse ensaio.
+
+O EVO-NEST não entra no feed Google por falta de peso, comprimento, largura e altura, verificados diretamente no WooCommerce. Está sem estoque e sem encomenda habilitada. Não foram inventadas medidas ou alterada sua disponibilidade para forçar aprovação.
+
+## Integração Hub e revogação de consentimento
+
+O Hub passou nos 853 testes da CI após configurar o Chrome disponível no runner; API e worker publicados a partir de `main`. CRM conectado à marca existente `aerion-technologies` pela rede Docker privada autenticada. A resposta pública 403 não foi tratada como sucesso. Capabilities de imagens/vídeos lidas e plano do Mini 7 com recomendação real da IA salvo para revisão, sem verba ou ativação. Contrato de UI em `CAMPAIGN-ASSISTANT-API.md`; a conexão de backend não comprova que a interface já consome todas as novas ações.
+
+O teste identificou que “Aceitar todos” mantém um sinal interno do Moove que impede salvar uma revogação subsequente na mesma página. A opção nativa de recarga após decisão resolve sem um segundo gravador de cookies. Teste de navegador passou em desktop e celular: negado inicialmente, permitido após aceite, negado após salvar revogação e persistido negado após recarga. Coleta externa interceptada; nenhum pedido ou lead criado. Depois da revogação somente sinais Google `G100` sem armazenamento publicitário/Analytics são admitidos pelo teste, conforme o Consent Mode; evento Meta ou coleta GA4 com armazenamento permitido reprova. Script reproduzível: `scripts/validate-store-consent.cjs` (`--candidate-native-reload` testa a opção antes de implantá-la).

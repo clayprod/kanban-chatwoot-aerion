@@ -9,7 +9,7 @@ FROM ${WORDPRESS_BASE_IMAGE}
 # Fail rather than replace another agent's newer integration unexpectedly.
 RUN echo 'a868284dc8ef559afbb096705e0f47657c7b5dff3eba1831a955eb94141d20bd  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/aerion-ecommerce-reports.php' | sha256sum -c - \
  && echo '77838c64042a3e520e42c63a7693ea722928d63255df084d0d682777bda13357  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c - \
- && echo '5492e03a7a0f6c3810aa0a7d4a9668d857933bf93c381fa8da6ca18b20b2f5ad  /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php' | sha256sum -c -
+ && echo '4527b4ca403c8dcf91bff8b4f7fa7cfbfca8435ae20b63bf6374320ed6290013  /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php' | sha256sum -c -
 
 COPY --from=validated_integration /opt/aerion-integrations/wordpress/ /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/
 COPY --from=validated_integration /opt/aerion-integrations/storefront/render-commerce.php /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php

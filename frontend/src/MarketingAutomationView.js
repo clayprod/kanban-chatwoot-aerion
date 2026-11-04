@@ -8,6 +8,7 @@ const diagnosticLabel = { cross_domain_canonical_review_required: 'Revisar canon
 const name = { products: 'Produtos da loja', product_webhooks: 'Atualizações por webhook', google_catalog: 'Catálogo Google', meta_catalog: 'Catálogo Meta', measurement: 'Medição e compras', audiences: 'Públicos', visitors: 'Visitantes', product_interest: 'Interesse em produtos', cart: 'Carrinho', checkout: 'Checkout', paid_buyers: 'Compradores pagos' };
 const date = value => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value)) : 'Sem atualização';
 const money = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+Object.assign(name, { measurement_ga4_server: 'GA4 · confirmação adicional pelo servidor', measurement_meta_server: 'Meta · emissor de servidor', meta_audiences_store: 'Públicos de eventos · Meta', google_audiences_store: 'Públicos de eventos · GA4 / Google Ads', audiences_crm: 'Listas de cadastros · loja / CRM' });
 function DataTable({ caption, columns, rows, empty }) {
   return <div className="min-w-0 overflow-x-auto rounded-xl border border-line bg-surf"><table className="w-full text-left text-sm">
     <caption className="p-4 text-left font-semibold">{caption}</caption>
@@ -155,7 +156,7 @@ export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
       ]} />
     <details className="border-t border-line pt-3 text-xs text-muted"><summary className="cursor-pointer py-2 font-medium">Histórico, cobertura e critérios</summary><div className="space-y-4 py-3">
       <p>Fuso: America/Sao_Paulo. Dados do Google, Meta e Search Console permanecem separados. Feed recebido não comprova aprovação; preço e condições alterados exigem nova revisão de conteúdo. CRM e loja usam públicos separados. Campanhas existentes são preservadas.</p>
-      <p>Compras de servidor: aguardando auditoria da origem atual e consentimento. Core Web Vitals e vínculo Search Console–GA4: ainda não verificados. Aprovação de texto não publica conteúdo nem ativa anúncios.</p>
+      <p>A compra paga pode ser medida no navegador pela tag existente do GTM, conforme consentimento. A confirmação adicional GA4 pelo servidor exige credencial própria e validação; sua pendência não bloqueia o checkout ou a tag do navegador. O Pixel e o emissor de servidor Meta têm verificações separadas. Core Web Vitals e vínculo Search Console–GA4: ainda não verificados. Aprovação de texto não publica conteúdo nem ativa anúncios.</p>
       <DataTable caption="Trabalhos persistentes" rows={data.jobs || []} empty="Nenhum trabalho agendado." columns={[
         ['kind', 'Trabalho'], ['resource', 'Recurso'], ['status', 'Situação', r => stateLabel[r.status] || r.status], ['attempts', 'Tentativas'], ['error', 'Último erro'], ['next_run_at', 'Próxima execução', r => date(r.next_run_at)],
       ]} />
