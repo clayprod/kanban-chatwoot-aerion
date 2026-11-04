@@ -9,7 +9,7 @@ const { createEcommerce } = require('../ecommerce/routes');
 const { createMarketing, enqueueMarketing } = require('../ecommerce/marketing');
 const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCustomerAudiences } = require('../ecommerce/customerAudiences');
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
-const { createContentHub, recommendCampaign } = require('../ecommerce/contentHub');
+const { createContentHub, recommendCampaign, createCampaignAssistant } = require('../ecommerce/contentHub');
 
 test('campaign advice uses available products, preserves fixed budgets and never activates or invents historical results', () => {
   const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' }))];
@@ -303,6 +303,30 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal((await request(`/feeds/meta?token=${env.ECOMMERCE_META_FEED_TOKEN}`, null, 'GET', { 'x-role': 'anonymous' })).status, 503);
       assert.equal((await request('/marketing/reconcile', {}, 'POST', { 'x-role': 'member' })).status, 403);
       assert.equal((await request('/marketing', null, 'GET', { 'x-role': 'anonymous' })).status, 403);
+    });
+    await t.test('Hub credentials persist encrypted across service instances and failed replacements preserve access', async () => {
+      const originalFetch = global.fetch, secret = 'durable-private-hub-token';
+      global.fetch = async (url, options = {}) => {
+        if (new URL(url).hostname !== 'hub.example.com') return originalFetch(url, options);
+        return options.headers.Authorization === 'Bearer ' + secret ? Response.json({ brandId: 'aerion-technologies', capabilities: {} }) : Response.json({ error: secret }, { status: 403 });
+      };
+      try {
+        const path = '/marketing/assistant/connection';
+        assert.equal((await request(path, { url: 'https://hub.example.com', brandId: 'aerion-technologies', token: secret }, 'PUT')).status, 200);
+        const stored = (await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='content_hub'")).rows[0].secrets;
+        assert(!stored.includes(secret));
+        const fresh = createCampaignAssistant({ pool, env: { ...env, ECOMMERCE_CONTENT_HUB_TOKEN: 'environment-fallback' }, enqueue: enqueueMarketing,
+          saveState: async (db, name, data) => db.query('INSERT INTO ecommerce_marketing_state(name,data) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET data=EXCLUDED.data', [name, data]) });
+        assert.equal((await fresh.connectionStatus()).configured, true);
+        assert.equal((await fresh.connectionStatus()).source, 'encrypted_database');
+        await fresh.execute(pool, { kind: 'hub_capabilities' });
+        assert.equal((await request(path, { token: 'wrong-token-with-valid-length' }, 'PUT')).status, 409);
+        assert.equal((await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='content_hub'")).rows[0].secrets, stored);
+        assert(!JSON.stringify((await request('/marketing')).data).includes(secret));
+        assert.equal((await request(path, { enabled: false }, 'PUT')).status, 200);
+        assert.equal((await fresh.connectionStatus()).configured, false, 'Disabling persisted settings must also disable an environment fallback');
+        assert.equal((await request(path, { enabled: true }, 'PUT')).status, 200);
+      } finally { global.fetch = originalFetch; }
     });
     await t.test('signed duplicate deliveries coalesce and product events never become orders', async () => {
       const body = { id: 1 }, headers = { 'x-wc-webhook-topic': 'product.updated', 'x-wc-webhook-delivery-id': 'product-delivery-1', 'x-wc-webhook-signature': crypto.createHmac('sha256', config.webhook_secret).update(JSON.stringify(body)).digest('base64') };

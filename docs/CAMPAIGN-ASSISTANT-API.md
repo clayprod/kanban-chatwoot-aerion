@@ -18,6 +18,7 @@ Todas as escritas abaixo exigem o administrador já autenticado do dashboard. Pr
 | Método / rota | Corpo / resposta |
 |---|---|
 | `GET /marketing` | `assistant.configured`, `assistant.latestPlan`, `assistant.capabilities`, além de `contents`, `jobs` e `history` existentes |
+| `PUT /marketing/assistant/connection` | Administrador: `{url,brandId,token,enabled:true}`; testa a marca antes de substituir configuração, cifra a credencial no PostgreSQL e nunca devolve o token. `{enabled:false}` suspende a conexão sem apagar a credencial. Não reapresentar o campo secreto preenchido. |
 | `POST /marketing/assistant/capabilities` | Sem corpo; enfileira leitura das rotas reais do Hub |
 | `POST /marketing/assistant/plan` | `{goal, productIds?:[], budget?:{total,google,meta}}`; salva plano por regras e enfileira orientação da IA se conectado |
 | `POST /marketing/content/:id/generate` | `{capability:'text-to-image',aspectRatio:'4:5',maximumCostUsd:1,providerId?,modelId?}` |
@@ -26,6 +27,8 @@ Todas as escritas abaixo exigem o administrador já autenticado do dashboard. Pr
 | `POST /marketing/content/:id/review` | Aprovação existente. Geração vinculada exige arquivo concluído e selecionado; preço/versão desatualizados impedem aprovação. |
 
 Cada rascunho aceita uma solicitação de geração. Repetir não cobra de novo; para uma nova tentativa intencional, criar nova versão do briefing. Um resultado incerto exige conferir o Hub, nunca repetir silenciosamente.
+
+`assistant.source=encrypted_database` indica persistência que sobrevive ao deploy; variáveis de ambiente são somente fallback. Uma configuração persistida desabilitada também bloqueia o fallback. `contentHub.failure` contém código e orientação sanitizados quando o provedor falha; saldo em atraso não significa que a API do Hub esteja desconectada. Mostrar falha por rota junto do conteúdo, sem declarar geração concluída.
 
 `contents[].data.contentHub`: `requestId`, `jobId`, `status` (`queued`, `running`, `ready_for_review`, `failed`), `assets[]` (`url`,`contentType`,`bytes`), `selectedAsset`, `costUsd`, `generation` e `productVersion`. Custo desconhecido não é zero. Qualidade automática do Hub não aprova o arquivo no CRM.
 

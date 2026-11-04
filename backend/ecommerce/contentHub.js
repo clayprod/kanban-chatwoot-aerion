@@ -1,5 +1,13 @@
 const crypto = require('node:crypto');
 const { eligibleProducts, campaignPlan } = require('./marketingDomain');
+const { encrypt, decrypt, encryptionKey } = require('./domain');
+
+function hubOrigin(origin) {
+  let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
+  const privateService = base.origin === 'http://tenryu_hub-api:3000';
+  if ((!privateService && base.protocol !== 'https:') || base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('content_hub_connection_required');
+  return base;
+}
 
 function createContentHub({ env = process.env, transport = global.fetch } = {}) {
   const origin = env.ECOMMERCE_CONTENT_HUB_URL || 'https://hub.tenryu.com.br';
@@ -8,9 +16,7 @@ function createContentHub({ env = process.env, transport = global.fetch } = {}) 
   const configured = Boolean(token);
   async function call(path, body) {
     if (!configured) throw new Error('content_hub_connection_required');
-    let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
-    const privateService = base.origin === 'http://tenryu_hub-api:3000';
-    if ((!privateService && base.protocol !== 'https:') || base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('content_hub_connection_required');
+    const base = hubOrigin(origin);
     let response;
     try { response = await transport(new URL('/api/marketing/' + path, base), {
       method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(90000),
@@ -30,7 +36,7 @@ function createContentHub({ env = process.env, transport = global.fetch } = {}) 
 }
 function hubProduct(product) {
   return { sku: product.sku, name: product.name, description: product.description, price: product.price, currency: product.currency,
-    image: product.image, url: product.url, version: product.version };
+    image: product.image, url: product.url, version: product.version, availability: product.availability, availabilityDate: product.availabilityDate || null };
 }
 function recommendCampaign(products, input = {}) {
   const selected = eligibleProducts(products).filter(p => p.eligible && p.availability !== 'out_of_stock'
@@ -55,9 +61,29 @@ function recommendCampaign(products, input = {}) {
     limitations: ['A seleção inicial usa elegibilidade e disponibilidade; não é uma previsão de vendas.', 'Recomendações não alteram campanhas, status ou verbas existentes.', 'Geração de mídia tem custo próprio em USD, separado da verba de anúncios.'] };
 }
 
-function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, hub = createContentHub({ env }) }) {
+function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, hub: providedHub }) {
+  async function savedConnection(db = pool) {
+    return (await db.query("SELECT * FROM ecommerce_marketing_connections WHERE name='content_hub'")).rows[0];
+  }
+  async function getHub(db = pool) {
+    if (providedHub) return providedHub;
+    const row = await savedConnection(db);
+    if (!row) return createContentHub({ env });
+    let secrets;try { secrets = decrypt(row.secrets, encryptionKey(env)); } catch { throw new Error('content_hub_credentials_unavailable'); }
+    return createContentHub({ env: { ...env, ECOMMERCE_CONTENT_HUB_URL: row.config.url,
+      ECOMMERCE_CONTENT_HUB_BRAND: row.config.brandId, ECOMMERCE_CONTENT_HUB_TOKEN: row.enabled ? secrets.token : '' } });
+  }
+  async function connectionStatus() {
+    if (providedHub) return { configured: providedHub.configured, source: 'injected' };
+    try {
+      const row = await savedConnection();
+      return { configured: (await getHub()).configured, source: row ? 'encrypted_database' : 'environment',
+        lastVerifiedAt: row?.last_success_at || null };
+    } catch { return { configured: false, source: 'unavailable', error: 'content_hub_credentials_unavailable' }; }
+  }
   async function execute(db, job) {
     if (!job.kind.startsWith('hub_')) return false;
+    const hub = await getHub(db);
     if (job.kind === 'hub_capabilities') { await saveState(db, 'content_hub_capabilities', { ...await hub.capabilities(), observedAt: new Date().toISOString() }); return true; }
     if (job.kind === 'hub_advice') {
       const plan = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['assistant_plan:' + job.resource])).rows[0]?.data;
@@ -88,18 +114,39 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       const expectedType = settings.generation.capability === 'image-to-video' ? 'video/' : 'image/';
       const assets = (jobState.artifacts || []).filter(a => (a.contentType || '').startsWith(expectedType) && /^https:\/\//.test(a.url || '')).map(a => ({ url: a.url, contentType: a.contentType, bytes: a.bytes }));
       const status = jobState.status === 'done' ? assets.length ? 'ready_for_review' : 'failed' : ['failed', 'cancelled'].includes(jobState.status) ? 'failed' : 'running';
-      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND status='draft'`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, observedAt: new Date().toISOString() })]);
+      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND status='draft'`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, failure: jobState.failure || null, observedAt: new Date().toISOString() })]);
       if (status === 'running') await enqueue(db, 'hub_poll', found.id);
       return true;
     }
     throw new Error('content_hub_unknown_job');
   }
   function mountAdmin(router) {
+    router.put('/marketing/assistant/connection', async (req, res) => {
+      const body = req.body || {}, row = await savedConnection();
+      if (body.enabled === false && row) {
+        await pool.query("UPDATE ecommerce_marketing_connections SET enabled=false,updated_at=now() WHERE name='content_hub'");
+        return res.json({ configured: false });
+      }
+      const config = { url: body.url || row?.config.url || 'https://hub.tenryu.com.br', brandId: body.brandId || row?.config.brandId || 'aerion-technologies' };
+      try { hubOrigin(config.url); } catch { return res.status(400).json({ error: 'Informe HTTPS ou o serviço Docker privado autorizado do Hub.' }); }
+      if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(config.brandId)) return res.status(400).json({ error: 'Marca inválida.' });
+      let token = body.token;
+      if (!token && row) { try { token = decrypt(row.secrets, encryptionKey(env)).token; } catch { return res.status(409).json({ error: 'Não foi possível abrir a credencial existente. Informe uma nova.' }); } }
+      if (typeof token !== 'string' || token.length < 16 || token.length > 4096) return res.status(400).json({ error: 'Informe a credencial privada do Hub.' });
+      const candidate = createContentHub({ env: { ...env, ECOMMERCE_CONTENT_HUB_URL: config.url, ECOMMERCE_CONTENT_HUB_BRAND: config.brandId, ECOMMERCE_CONTENT_HUB_TOKEN: token } });
+      let capabilities;try { capabilities = await candidate.capabilities(); } catch { return res.status(409).json({ error: 'O Hub não confirmou acesso à marca. A configuração anterior foi preservada.' }); }
+      await pool.query(`INSERT INTO ecommerce_marketing_connections(name,config,secrets,enabled,last_success_at) VALUES('content_hub',$1,$2,true,now())
+        ON CONFLICT(name) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=true,last_success_at=now(),updated_at=now()`, [config, encrypt({ token }, encryptionKey(env))]);
+      await saveState(pool, 'content_hub_capabilities', { ...capabilities, observedAt: new Date().toISOString() });
+      res.json({ configured: true, source: 'encrypted_database', brandId: config.brandId });
+    });
     router.post('/marketing/assistant/capabilities', async (req, res) => {
+      const hub = await getHub();
       if (!hub.configured) return res.status(409).json({ error: 'Configure a conexão privada com o Content Hub.' });
       await enqueue(pool, 'hub_capabilities', 'aerion'); res.status(202).json({ queued: true });
     });
     router.post('/marketing/assistant/plan', async (req, res) => {
+      const hub = await getHub();
       if (req.body?.productIds && (!Array.isArray(req.body.productIds) || req.body.productIds.length > 8)) return res.status(400).json({ error: 'Selecione até oito produtos para a análise.' });
       const products = (await pool.query('SELECT data FROM ecommerce_marketing_products ORDER BY product_id')).rows.map(row => row.data);
       const plan = recommendCampaign(products, req.body || {});
@@ -109,6 +156,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       res.status(201).json({ ...plan, ai: hub.configured ? 'queued' : 'unavailable', rulesBased: true });
     });
     router.post('/marketing/content/:id/generate', async (req, res) => {
+      const hub = await getHub();
       if (!/^[a-f0-9-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Conteúdo inválido.' });
       if (!hub.configured) return res.status(409).json({ error: 'Configure a conexão privada com o Content Hub.' });
       const body = req.body || {};
@@ -147,6 +195,6 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       res.json({ selected: true, approvalRequired: true });
     });
   }
-  return { execute, mountAdmin, configured: hub.configured };
+  return { execute, mountAdmin, connectionStatus };
 }
 module.exports = { createContentHub, hubProduct, recommendCampaign, createCampaignAssistant };

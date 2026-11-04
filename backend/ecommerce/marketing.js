@@ -7,6 +7,10 @@ const { paidGa4Payload, createMeasurementTables } = require('./serverMeasurement
 const { createCampaignAssistant } = require('./contentHub');
 
 async function createMarketingTables(pool) {
+  await pool.query(`CREATE TABLE IF NOT EXISTS ecommerce_marketing_connections (
+    name text PRIMARY KEY, config jsonb NOT NULL DEFAULT '{}', secrets text NOT NULL,
+    enabled boolean NOT NULL DEFAULT false, last_success_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now()
+  )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ecommerce_marketing_products (
       product_id text PRIMARY KEY, parent_id text NOT NULL, data jsonb NOT NULL,
@@ -360,7 +364,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
     const googleComplete = google.rows.some(r => r.eligible) && google.rows.filter(r => r.eligible).every(r => r.received && r.approved);
     return { observedAt: new Date().toISOString(), enabled,
       products: eligibleProducts(products), jobs: jobs.rows, history: history.rows, contents: contents.rows,
-      assistant: { configured: assistant.configured, latestPlan: state.assistant_latest || null, capabilities: state.content_hub_capabilities || null,
+      assistant: { ...await assistant.connectionStatus(), latestPlan: state.assistant_latest || null, capabilities: state.content_hub_capabilities || null,
         publication: 'approval_required', activationAllowed: false },
       googleReconciliation: google, metaCatalog: meta,
       diagnostics: Object.entries(state).filter(([key]) => key.startsWith('seo:')).map(([key, value]) => ({ productId: key.slice(4), ...value })),
