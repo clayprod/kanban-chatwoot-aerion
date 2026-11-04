@@ -131,12 +131,25 @@ const estrategiaDaTentativa = (tentativa, maximo) => {
   return ESTRATEGIA_SEQUENCIA[indice];
 };
 
-// Etapas onde um empurrão automático é seguro. Negociação, proposta enviada,
-// descartado e fechado-perdido ficam de fora de propósito: ali quem fala é o vendedor.
+// Etapas ativas do funil. Decisão do Clayton em 04/11: o padrão antigo (só Follow-up 1-3 e
+// Nurturing, ~100 contatos já gastos) deixou o follow-up sem nada para enviar desde 29/10.
+// Ficam de FORA só os estados finais, onde mandar mensagem é erro: Descartado,
+// Fechado-Perdido/Ganho, Novos Clientes, Pausado e Recompra. Mesmo nas etapas de proposta e
+// negociação a IA só fala quando a última palavra foi nossa e a situação lida da conversa
+// permite (SITUACOES_SEM_MENSAGEM: handoff, recusa, virou cliente, aguardando nós).
 const ETAPAS_PADRAO = [
+  '1. Inbox (Novos)',
+  '2. Em Contato',
   '3. Follow-up 1',
   '4. Follow-up 2',
   '5. Follow-up 3',
+  '6. Qualificado (SQL)',
+  '7. Agendamento Demo',
+  '8. Demo Realizada',
+  '9. Elaborando Proposta',
+  '10. Proposta Enviada',
+  '11. Em Negociação',
+  '12. Aprovação Interna',
   '17. Nurturing',
 ];
 
@@ -350,8 +363,21 @@ const buscarCandidatos = async (pool, { accountId, config, limite }) => {
        AND (carga.ultimo_envio IS NULL OR carga.ultimo_envio <= NOW() - make_interval(secs => $7))
        AND COALESCE(carga.hoje, 0) < $8
        AND COALESCE(carga.ultima_hora, 0) < $9
-     -- Agendado vencido primeiro; depois o parado ha mais tempo.
-     ORDER BY (retorno.id IS NOT NULL) DESC, retorno.due_at ASC NULLS LAST, um.created_at ASC
+     -- Agendado vencido primeiro; depois os mais QUENTES (negociação, proposta, demo,
+     -- qualificado), depois conversa em andamento, nurturing e, por último, Inbox frio:
+     -- com teto diário baixo, o orçamento do número vai para quem mais tende a responder.
+     ORDER BY (retorno.id IS NOT NULL) DESC, retorno.due_at ASC NULLS LAST,
+              CASE
+                WHEN c.custom_attributes->>'Funil_Vendas' IN
+                  ('11. Em Negociação','12. Aprovação Interna','10. Proposta Enviada',
+                   '9. Elaborando Proposta','8. Demo Realizada','7. Agendamento Demo',
+                   '6. Qualificado (SQL)') THEN 0
+                WHEN c.custom_attributes->>'Funil_Vendas' IN
+                  ('2. Em Contato','3. Follow-up 1','4. Follow-up 2','5. Follow-up 3') THEN 1
+                WHEN c.custom_attributes->>'Funil_Vendas' = '17. Nurturing' THEN 2
+                ELSE 3
+              END ASC,
+              um.created_at ASC
      LIMIT $6
     `,
     [
