@@ -115,7 +115,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       const expectedType = settings.generation.capability === 'image-to-video' ? 'video/' : 'image/';
       const assets = (jobState.artifacts || []).filter(a => (a.contentType || '').startsWith(expectedType) && /^https:\/\//.test(a.url || '')).map(a => ({ url: a.url, contentType: a.contentType, bytes: a.bytes }));
       const status = jobState.status === 'done' ? assets.length ? 'ready_for_review' : 'failed' : ['failed', 'cancelled'].includes(jobState.status) ? 'failed' : 'running';
-      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND data->'contentHub'->>'requestId'=$3`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, failure: jobState.failure || null, observedAt: new Date().toISOString() }), settings.requestId]);
+      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND data->'contentHub'->>'requestId'=$3`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, review: jobState.review || null, failure: jobState.failure || null, observedAt: new Date().toISOString() }), settings.requestId]);
       if (status === 'running') await enqueue(db, 'hub_poll', found.id);
       return true;
     }

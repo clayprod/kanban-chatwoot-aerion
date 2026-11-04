@@ -42,3 +42,10 @@ test('an unselected or unfinished file cannot be approved and the provider failu
   expect(screen.getByRole('button', { name: 'Aprovar criativo selecionado' })).toBeDisabled();
   expect(suggestedRoute({ ...data, contents }, 'image')).toEqual(route);
 });
+
+test('automatic visual findings remain visible and never approve a draft', () => {
+  const contents = [{ id: 'c', kind: 'creative', status: 'draft', data: { name: 'Mini 7', contentHub: { requestId: 'r', status: 'ready_for_review', assets: [], review: { reviews: [{ summary: 'Conferir geometria da câmera.', categories: { productFidelity: { score: 70, note: 'O sensor difere da fotografia real.' } } }] } } } }];
+  render(<CampaignAssistantView data={{ ...data, contents }} isAdmin />);
+  expect(screen.getByText(/O sensor difere da fotografia real/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Aprovar criativo selecionado' })).toBeDisabled();
+});
