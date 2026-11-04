@@ -13,7 +13,7 @@ const {
 
 const ETAPAS = [
   '1. Inbox (Novos)', '2. Em Contato', '3. Follow-up 1', '5. Follow-up 3',
-  '6. Qualificado (SQL)', '7. Agendamento Demo', '10. Proposta Enviada',
+  '6. Qualificado (SQL)', '7. Agendamento Demo', '8. Demo Realizada', '10. Proposta Enviada',
   '11. Em Negociação', '16. Descartado', '17. Nurturing', '18. Novos Clientes',
 ];
 
@@ -47,7 +47,7 @@ const HISTORICO = [
 ];
 
 // Pool falso: responde por assinatura da query e guarda o que foi gravado.
-const fakePool = ({ candidatos = [], etapas = ETAPAS, aplicadosHoje = 0, contatoAtual } = {}) => {
+const fakePool = ({ candidatos = [], etapas = ETAPAS, aplicadosHoje = 0, contatoAtual, notas = [] } = {}) => {
   const gravados = [];
   const escritas = [];
   const client = {
@@ -79,7 +79,8 @@ const fakePool = ({ candidatos = [], etapas = ETAPAS, aplicadosHoje = 0, contato
       }
       if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: aplicadosHoje }] };
       if (sql.includes('DISTINCT custom_attributes')) return { rows: etapas.map((e) => ({ etapa: e })) };
-      if (sql.includes('WITH ult_in')) return { rows: candidatos };
+      if (sql.includes('WITH ult_msg')) return { rows: candidatos };
+      if (sql.includes('FROM notes')) return { rows: notas };
       throw new Error(`query inesperada: ${sql.slice(0, 50)}`);
     },
   };
@@ -436,4 +437,53 @@ test('contato EvolutionAPI e filtrado nas queries de candidatos', () => {
   assert.match(sql, /'\+123456'/);
   assert.equal(ehContatoSistema({ name: 'EvolutionAPI', phone_number: '+123456' }, {}), true);
   assert.equal(ehContatoSistema({ name: 'EVOLUTIONS AUTOMACAO LTDA', phone_number: '+556181489507' }, {}), false);
+});
+
+// O Ciro (04/11): demo presencial registrada só como NOTA, sem nenhuma mensagem de WhatsApp.
+const NOTA_CIRO = {
+  content: 'Falei com o Ciro, que quer apostar no Mini 7. Fiz a demo presencial na loja.',
+  created_at: '2026-11-04T17:34:00.000Z',
+};
+const CANDIDATO_CIRO = { ...CANDIDATO, contact_id: 6022, name: 'CIRO', ultimo_movimento: null };
+
+test('lead so com nota (sem conversa) e avaliado e o prompt mostra a nota da equipe', async () => {
+  const pool = fakePool({ candidatos: [CANDIDATO_CIRO], notas: [NOTA_CIRO] });
+  let prompt = null;
+  const r = await runStageClassificationTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async ({ system, user }) => {
+      prompt = { system, user };
+      return { ok: true, data: { etapa: '8. Demo Realizada', confianca: 0.9, motivo: 'Fiz a demo presencial na loja' } };
+    },
+    carregarContextoConversa: contexto([]),
+    config: CFG,
+  });
+  assert.ok(prompt, 'a IA tem que ser consultada mesmo sem conversa');
+  assert.match(prompt.user, /NOTAS DA EQUIPE/);
+  assert.match(prompt.user, /demo presencial/);
+  assert.match(prompt.system, /nota/i);
+  assert.equal(r.sugeridos, 1, 'demo realizada e marco comercial: sugere, quem acata e o vendedor');
+  assert.equal(pool.gravados.at(-1).status, 'suggested');
+  assert.equal(pool.gravados.at(-1).to, '8. Demo Realizada');
+});
+
+test('nota anterior ao ultimo movimento de etapa nao conta como evidencia nova', async () => {
+  const pool = fakePool({
+    candidatos: [{ ...CANDIDATO_CIRO, ultimo_movimento: '2026-11-05T10:00:00.000Z' }],
+    notas: [NOTA_CIRO],
+  });
+  const r = await runStageClassificationTick(pool, {
+    accountId: 2,
+    chatCompletionJson: async () => { throw new Error('nao deveria chamar a IA'); },
+    carregarContextoConversa: contexto([]),
+    config: CFG,
+  });
+  assert.equal(r.pulados, 1);
+  assert.equal(pool.gravados.at(-1).skip, 'sem histórico textual');
+});
+
+test('motivo que cita a nota da equipe vale como evidencia', () => {
+  const { motivoCitaCliente } = require('../leadStage');
+  assert.equal(motivoCitaCliente('quer apostar no Mini 7', [{ texto: NOTA_CIRO.content }]), true);
+  assert.equal(motivoCitaCliente('demonstrou interesse genérico', [{ texto: NOTA_CIRO.content }]), false);
 });
