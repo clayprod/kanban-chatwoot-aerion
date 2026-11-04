@@ -224,6 +224,20 @@ test('campaign writers create paused shells and never change existing active cam
 });
 
 const databaseUrl = process.env.ECOMMERCE_TEST_DATABASE_URL;
+test('audience readiness distinguishes created store audiences, missing resources and failed refreshes from CRM eligibility', () => {
+  const { audienceReadiness, STORE_AUDIENCES } = require('../ecommerce/marketingDomain');
+  const store = STORE_AUDIENCES.map((row, index) => ({ ...row, platformId: String(index + 1) }));
+  const complete = { meta_audiences: { store }, google_audiences: { store } };
+  assert(audienceReadiness(complete).every(row => row.status === 'awaiting_external_processing'));
+  assert(audienceReadiness({}).every(row => row.status === 'administrator_action'));
+  const partial = audienceReadiness({ ...complete, meta_audiences: { store: store.slice(1) } });
+  assert.equal(partial[0].status, 'administrator_action');
+  assert.equal(partial[1].status, 'awaiting_external_processing');
+  const failed = audienceReadiness(complete, [{ kind: 'meta_audiences', error: 'access_denied' }]);
+  assert.equal(failed[0].lastError, 'access_denied');
+  assert.equal(failed[0].status, 'administrator_action');
+  assert(failed[1].action.includes('excluir'));
+});
 test('marketing durable jobs, webhook idempotency, snapshots, approvals and access controls in isolated PostgreSQL', { skip: !databaseUrl }, async t => {
   const schema = `marketing_test_${crypto.randomBytes(8).toString('hex')}`;
   const root = new Pool({ connectionString: databaseUrl });

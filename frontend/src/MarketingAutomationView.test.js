@@ -28,3 +28,9 @@ test('failed reconciliation exposes an actionable error and retains product info
   expect(await screen.findByRole('alert')).toHaveTextContent('Ative em Conexões');
   expect(screen.getAllByText('DRONE').length).toBeGreaterThan(0);
 });
+
+test('server confirmation limitations do not describe the browser tag as blocked', () => {
+  render(<MarketingAutomationView data={{ ...data, readiness: [{ integration: 'measurement_ga4_server', status: 'administrator_action', action: 'Configurar segredo privado após validação.' }] }} isAdmin={false} />);
+  expect(screen.getByText('GA4 · confirmação adicional pelo servidor')).toBeInTheDocument();
+  expect(screen.getByText(/sua pendência não bloqueia o checkout ou a tag do navegador/)).toBeInTheDocument();
+});

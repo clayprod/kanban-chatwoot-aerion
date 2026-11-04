@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities } = require('./marketingDomain');
+const { projectProduct, eligibleProducts, metaFeed, reconcileGoogle, STORE_AUDIENCES, campaignPlan, seoOpportunities, audienceReadiness } = require('./marketingDomain');
 const { connectionConfig, transaction, lockId } = require('./store');
 const { encryptionKey } = require('./domain');
 const { createCustomerAudienceTables, syncCustomerAudiences } = require('./customerAudiences');
@@ -381,8 +381,14 @@ function createMarketing({ pool, providers, env = process.env }) {
           account: connections.rows.find(c => c.provider === 'merchant_center')?.config.account_id || null,
           action: 'Conferir destinos, domínio e vínculo Ads no Merchant; preservar a fonte diária existente.', link: 'https://merchants.google.com/' },
         metaAction,
-        { integration: 'measurement', status: 'administrator_action', action: 'Identificar origem dos eventos SERVER do Meta; validar consentimento, event_id e GA4 Measurement Protocol em teste antes de habilitar envio pago.' },
-        { integration: 'audiences', status: 'administrator_action', action: 'Validar autorização de escrita Meta/GA4 e elegibilidade publicitária dos cadastros antes de criar ou sincronizar listas.' },
+        { integration: 'measurement_ga4_server', status: env.ECOMMERCE_GA4_SERVER_PURCHASE_ENABLED === '1' && env.ECOMMERCE_GA4_SERVER_PURCHASE_VALIDATED === '1' ? 'operational' : 'administrator_action',
+          permission: 'Acesso ao segredo Measurement Protocol do fluxo GA4',
+          action: 'Confirmação adicional pelo servidor. O envio de compra paga pelo navegador usa a tag existente do GTM e não depende deste segredo. Para habilitar o adicional, configurar segredo privado e validar consentimento e deduplicação em teste.',
+          link: 'https://analytics.google.com/' },
+        { integration: 'measurement_meta_server', status: 'administrator_action', action: 'Auditar o emissor de servidor Meta já existente, consentimento e event_id antes de acrescentar ou habilitar outro envio. Esta revisão é separada do Pixel do navegador.' },
+        ...audienceReadiness(state, failures.rows),
+        { integration: 'audiences_crm', status: state.customer_audiences && !pendingJob('customer_audiences') ? 'awaiting_external_processing' : 'administrator_action',
+          action: 'Listas de cadastros são separadas dos públicos de eventos da loja. Exigem elegibilidade publicitária comprovada e destinos próprios de loja/CRM; não enviar contatos sem prova.' },
       ] };
   }
   function mountPublic(router) {
