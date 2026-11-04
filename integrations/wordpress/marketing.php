@@ -2,11 +2,18 @@
 /** Public consumer projection; no customer identifiers or wholesale metadata. */
 declare(strict_types=1);
 if (!defined('ABSPATH')) { exit; }
+if (!defined('AERION_APPROVED_SEO_OUTPUT') && function_exists('get_option') && get_option('aerion_approved_seo_output_enabled') === 'yes') {
+    define('AERION_APPROVED_SEO_OUTPUT', true);
+}
 
 final class Aerion_Marketing_Products
 {
     public static function register(): void
     {
+        register_rest_route('aerion-reports/v1', '/marketing-webhooks', [
+            'methods' => 'GET', 'callback' => [self::class, 'webhook_fingerprints'],
+            'permission_callback' => static fn(): bool => current_user_can('aerion_read_reports'),
+        ]);
         register_rest_route('aerion-reports/v1', '/marketing-seo', [
             'methods' => 'POST', 'callback' => [self::class, 'publish_seo'],
             'permission_callback' => static fn(): bool => current_user_can('aerion_publish_seo'),
@@ -28,6 +35,18 @@ final class Aerion_Marketing_Products
                 'product_id' => ['default' => 0, 'type' => 'integer', 'minimum' => 0],
             ],
         ]);
+    }
+    public static function webhook_fingerprints(): WP_REST_Response
+    {
+        global $wpdb;
+        $rows=[];
+        foreach ($wpdb->get_col("SELECT webhook_id FROM {$wpdb->prefix}wc_webhooks WHERE status='active'") as $id) {
+            $hook=wc_get_webhook((int)$id);if (!$hook) continue;
+            $secret=$hook->get_secret();
+            $rows[]=['id'=>(string)$id,'topic'=>$hook->get_topic(),'status'=>$hook->get_status(),
+                'delivery_url'=>$hook->get_delivery_url(),'secret_fingerprint'=>strlen($secret)>=32?hash('sha256',$secret):null];
+        }
+        $response=new WP_REST_Response($rows);$response->header('Cache-Control','private, no-store');return $response;
     }
     public static function seo_title(string $title): string
     {

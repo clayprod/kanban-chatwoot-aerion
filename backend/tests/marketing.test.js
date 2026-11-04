@@ -52,6 +52,18 @@ test('Google audience creation uses the Admin API enum and keeps paid-buyer excl
   assert.equal(count, 5); assert.equal(result.store.find(a => a.id === 'paid_buyers').days, 180);
   assert(result.store.find(a => a.id === 'cart').exclusionMethod); assert.equal(result.activationAllowed, false);
 });
+test('webhook verification accepts only a matching private fingerprint and destination', async () => {
+  const target='https://crm.example.com/api/ecommerce/webhooks/woocommerce',secret='a'.repeat(32);
+  const topics=['product.created','product.updated','product.deleted'];
+  const hooks=topics.map((topic,index)=>({id:index+1,topic,status:'active',delivery_url:target,secret:'********'}));
+  const fingerprint=crypto.createHash('sha256').update(secret).digest('hex');
+  const provider=createProviders({transport:async url=>Response.json(url.includes('marketing-webhooks')
+    ? hooks.map((h,index)=>({...h,secret:undefined,secret_fingerprint:fingerprint,delivery_url:index===2?'https://other.example.com/':target})) : hooks)});
+  const result=await provider.ensureProductWebhooks({url:'https://loja.aerion.com.br',consumer_key:'ck',consumer_secret:'cs',report_user:'reader',report_password:'app',webhook_secret:secret},target);
+  assert.deepEqual(result.hooks.map(h=>h.verifiedSecret),[true,true,false]);
+  assert.equal(result.existingSecretsRequireReview,true);
+  assert(!JSON.stringify(result).includes(fingerprint));assert(!JSON.stringify(result).includes(secret));
+});
 test('Meta all-visitors rules use the supported URL template and exclude paid buyers for 180 days', async () => {
   const created = [];
   const providers = createProviders({ transport: async (url, options) => {
@@ -63,6 +75,8 @@ test('Meta all-visitors rules use the supported URL template and exclude paid bu
   } });
   await providers.ensureMetaStoreAudiences({ account_id: '10', access_token: 'secret' }, '123');
   assert.equal(created.length, 5);
+  assert.deepEqual(JSON.parse(created[0].audience_labels), ['ENGAGED_USERS']);
+  assert.deepEqual(JSON.parse(created[4].audience_labels), ['GENERAL_CUSTOMERS']);
   const rule = created[0].rule;
   assert.equal(rule.inclusions.rules[0].template, 'ALL_VISITORS');
   assert.deepEqual(rule.inclusions.rules[0].filter.filters[0], { field: 'url', operator: 'i_contains', value: '' });
