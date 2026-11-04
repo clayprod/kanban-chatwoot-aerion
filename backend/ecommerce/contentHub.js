@@ -34,7 +34,10 @@ function hubProduct(product) {
 }
 function recommendCampaign(products, input = {}) {
   const selected = eligibleProducts(products).filter(p => p.eligible && p.availability !== 'out_of_stock'
-    && (!input.productIds?.length || input.productIds.map(String).includes(p.id))).slice(0, 3);
+    && (!input.productIds?.length || input.productIds.map(String).includes(p.id)))
+    .sort((a, b) => Number(!['Drones', 'Kits'].includes(a.group)) - Number(!['Drones', 'Kits'].includes(b.group))
+      || Number(a.availability !== 'in_stock') - Number(b.availability !== 'in_stock') || a.name.localeCompare(b.name, 'pt-BR'))
+    .slice(0, 3);
   if (!selected.length) throw Object.assign(new Error('Selecione produtos elegíveis disponíveis ou em pré-venda com prazo real.'), { status: 409 });
   const budget = input.budget ? campaignPlan(input.budget, selected, []) : null;
   return { id: crypto.randomUUID(), goal: String(input.goal || 'Preparar as primeiras vendas da loja').slice(0, 3000),
@@ -75,7 +78,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       }
       if (!receipt) receipt = await hub.generate({ idempotencyKey: settings.requestId, contentId: found.id, product: hubProduct(found.product), prompt: found.data.copy,
         ...settings.generation });
-      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND status='draft'`, [found.id, JSON.stringify({ ...settings, status: 'queued', jobId: receipt.jobId || receipt.job?.id || null })]);
+      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND status='draft'`, [found.id, JSON.stringify({ ...settings, status: 'queued', jobId: receipt.jobId || receipt.job?.id || null, estimatedCostUsd: receipt.estimatedCostUsd ?? null })]);
       await enqueue(db, 'hub_poll', found.id); return true;
     }
     if (job.kind === 'hub_poll') {
@@ -116,11 +119,19 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       if (found.data.contentHub?.requestId) return res.status(409).json({ error: 'Este rascunho já possui uma solicitação. Acompanhe seu estado; crie outra versão para uma nova geração.' });
       let inputImage;
       if (body.capability === 'image-to-video') {
-        const source = (await pool.query(`SELECT data FROM ecommerce_marketing_content WHERE id=$1 AND product_id=$2 AND product_version=$3 AND status='approved'`, [body.sourceContentId, found.product_id, found.product_version])).rows[0]?.data;
-        if (!source?.contentHub?.selectedAsset?.contentType?.startsWith('image/')) return res.status(409).json({ error: 'Escolha primeiro uma imagem aprovada deste produto para animar o vídeo com fidelidade.' });
-        inputImage = source.contentHub.selectedAsset.url;
+        if (body.sourceContentId) {
+          const source = (await pool.query(`SELECT data FROM ecommerce_marketing_content WHERE id=$1 AND product_id=$2 AND product_version=$3 AND status='approved'`, [body.sourceContentId, found.product_id, found.product_version])).rows[0]?.data;
+          if (!source?.contentHub?.selectedAsset?.contentType?.startsWith('image/')) return res.status(409).json({ error: 'Uma imagem gerada precisa estar aprovada para servir de origem ao vídeo.' });
+          inputImage = source.contentHub.selectedAsset.url;
+        } else {
+          // A published catalog photograph is already the real product reference;
+          // it does not require approving a newly generated still first.
+          if (!eligibleProducts([found.product])[0].eligible) return res.status(409).json({ error: 'O vídeo exige uma foto real de um produto elegível da loja.' });
+          inputImage = found.product.image;
+        }
       }
       const settings = { status: 'queued', requestId: crypto.randomUUID(), integration: 'api', productVersion: found.product_version,
+        ...(inputImage ? { sourceType: body.sourceContentId ? 'approved_creative' : 'catalog_product_photo' } : {}),
         generation: { capability: body.capability, aspectRatio: body.aspectRatio, maximumCostUsd: Number(body.maximumCostUsd), ...(inputImage ? { inputImage, duration: Number(body.duration) } : {}),
           ...(body.providerId ? { providerId: String(body.providerId).slice(0, 80) } : {}), ...(body.modelId ? { modelId: String(body.modelId).slice(0, 200) } : {}) } };
       const updated = await pool.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}',$2::jsonb) WHERE id=$1 AND status='draft' AND NOT COALESCE(data->'contentHub' ? 'requestId',false) RETURNING id`, [found.id, JSON.stringify(settings)]);

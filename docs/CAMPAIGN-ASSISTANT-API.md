@@ -8,7 +8,7 @@ Backend Ecommerce; preserve a tela existente. A implementação visual pode usar
 2. Plano inicial por regras, seguido de orientação textual da IA com dados reais. Exibir as duas origens; estado `queued` não significa que a IA já respondeu.
 3. Revisar plano, condições e orçamento mensal total com parcelas Google/Meta fixas. Sem verba preenchida, mostrar “Ainda não definido”, nunca zero ou uma verba inventada.
 4. Criar briefing em `/marketing/content` (existente), gerar imagem com teto de custo em USD, acompanhar fila, selecionar arquivo e aprovar versão.
-5. Vídeo anima uma imagem já aprovada do mesmo produto/versão. Mostrar seleção da origem antes da geração. A duração deve pertencer à rota disponível no Hub.
+5. Vídeo usa por padrão a foto real já publicada no catálogo. Outra opção é animar uma imagem gerada e aprovada do mesmo produto/versão. Mostrar a origem; não aprovar automaticamente um criativo recém-gerado. A duração deve pertencer à rota disponível no Hub.
 6. Criar apenas estruturas pausadas depois de revisar ativos, metas de compra, exclusões, elegibilidade e orçamento. Ativação/publicação não fazem parte da geração.
 
 ## Rotas
@@ -21,7 +21,7 @@ Todas as escritas abaixo exigem o administrador já autenticado do dashboard. Pr
 | `POST /marketing/assistant/capabilities` | Sem corpo; enfileira leitura das rotas reais do Hub |
 | `POST /marketing/assistant/plan` | `{goal, productIds?:[], budget?:{total,google,meta}}`; salva plano por regras e enfileira orientação da IA se conectado |
 | `POST /marketing/content/:id/generate` | `{capability:'text-to-image',aspectRatio:'4:5',maximumCostUsd:1,providerId?,modelId?}` |
-| `POST /marketing/content/:id/generate` | Vídeo: `{capability:'image-to-video',aspectRatio:'9:16',duration:5,maximumCostUsd:2,sourceContentId,providerId?,modelId?}`. Valores são exemplos de contrato, não recomendação de gasto nem garantia de rota. |
+| `POST /marketing/content/:id/generate` | Vídeo: `{capability:'image-to-video',aspectRatio:'9:16',duration:5,maximumCostUsd:2,sourceContentId?,providerId?,modelId?}`. Sem `sourceContentId`, usa a foto real da loja. Valores são exemplos de contrato, não recomendação de gasto nem garantia de rota. |
 | `POST /marketing/content/:id/assets/select` | `{url}`; aceita somente arquivo devolvido pelo Hub para esse rascunho |
 | `POST /marketing/content/:id/review` | Aprovação existente. Geração vinculada exige arquivo concluído e selecionado; preço/versão desatualizados impedem aprovação. |
 

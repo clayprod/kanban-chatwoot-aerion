@@ -277,11 +277,11 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
     if (deleted && params.product_id) throw Object.assign(new Error('gone'), { httpStatus: 404 });
     return { data: { price_source: 'aerion_consumer_card_v1', parents_count: rows.length ? 1 : 0, products: rows } };
   }, auditProduct: async () => ({ httpStatus: 200, indexable: true, issues: [], observedAt: new Date().toISOString() }) };
-  let hubSubmitted = false, hubGenerations = 0;
+  let hubGenerations = 0;const hubReceipts = new Map();
   const contentHub = { configured: true, brandId: 'aerion',
     capabilities: async () => ({ capabilities: [] }), advice: async () => ({ text: 'Recomendação para revisão', advisoryOnly: true }),
-    receipt: async () => { if (!hubSubmitted) throw Object.assign(new Error('not found'), { httpStatus: 404 }); return { state: 'done', jobId: 'hub-job', job: { id: 'hub-job', status: 'done', artifacts: [{ url: 'https://hub.example.com/image.png', contentType: 'image/png', bytes: 100 }] } }; },
-    generate: async () => { hubSubmitted = true; hubGenerations++; return { jobId: 'hub-job' }; } };
+    receipt: async id => { if (!hubReceipts.has(id)) throw Object.assign(new Error('not found'), { httpStatus: 404 }); return hubReceipts.get(id); },
+    generate: async input => { hubGenerations++;hubReceipts.set(input.idempotencyKey, { state: 'done', jobId: 'hub-job', job: { id: 'hub-job', status: 'done', artifacts: [{ url: 'https://hub.example.com/image.png', contentType: 'image/png', bytes: 100 }] } });return { jobId: 'hub-job' }; } };
   const service = createEcommerce({ pool, env, providers, contentHub });
   await service.ensure();
   const worker = createMarketing({ pool, env, providers, contentHub });
@@ -352,6 +352,16 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal((await request(path + '/assets/select', { url: 'https://other.example.com/fake.png' }, 'POST')).status, 409);
       assert.equal((await request(path + '/assets/select', { url: 'https://hub.example.com/image.png' }, 'POST')).status, 200);
       assert.equal((await request(path + '/review', { status: 'approved' }, 'POST')).status, 200);
+      const video = await request('/marketing/content', { productId: '1', kind: 'creative', copy: 'Vídeo fiel a partir da fotografia real.' }, 'POST');
+      const videoPath = '/marketing/content/' + video.data.id;
+      const videoAsk = { capability: 'image-to-video', aspectRatio: '9:16', duration: 5, maximumCostUsd: 1 };
+      assert.equal((await request(videoPath + '/generate', { ...videoAsk, sourceContentId: video.data.id }, 'POST')).status, 409);
+      assert.equal((await request(videoPath + '/generate', videoAsk, 'POST')).status, 202);
+      await worker.tick();await worker.tick();
+      const renderedVideo = (await request('/marketing')).data.contents.find(c => c.id === video.data.id);
+      assert.equal(renderedVideo.data.contentHub.sourceType, 'catalog_product_photo');
+      assert.equal(renderedVideo.data.contentHub.status, 'failed', 'An image returned for a video job must not be ready for approval');
+      assert.equal(hubGenerations, 2);
     });
     await t.test('SEO publication requires an explicit approved current proposal and safely acknowledges retries', async () => {
       let published = 0;
