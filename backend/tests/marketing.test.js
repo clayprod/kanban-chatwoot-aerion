@@ -10,7 +10,14 @@ const { createMarketing, enqueueMarketing } = require('../ecommerce/marketing');
 const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCustomerAudiences } = require('../ecommerce/customerAudiences');
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
 const { createContentHub, recommendCampaign, createCampaignAssistant } = require('../ecommerce/contentHub');
-const { buildCampaignStrategy } = require('../ecommerce/campaignStrategy');
+const { buildCampaignStrategy, mediaSafetyEvidence } = require('../ecommerce/campaignStrategy');
+
+test('AI receives existing protection evidence with unavailable and preserved coverage, never an invented absence', () => {
+  assert.equal(mediaSafetyEvidence({}).google.status, 'not_audited');
+  const evidence = mediaSafetyEvidence({ google_media_safety: { accountId: '123', observedAt: '2026-11-04', complete: false, datasets: { accountExclusions: { available: false, preserved: true, rows: [{ customerNegativeCriterion: { type: 'CONTENT_LABEL', contentLabel: { type: 'JUVENILE' } } }] } } } });
+  assert.equal(evidence.google.exclusionsAvailable, false);assert.equal(evidence.google.exclusionsPreserved, true);
+  assert.equal(evidence.google.exclusionTypes.CONTENT_LABEL, 1);assert.equal(evidence.verifiedInventoryGuarantee, false);
+});
 
 test('campaign comparison retains PMax and Meta automation as candidates without overriding existing audience protections', () => {
   const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' })), projectProduct(raw(3, { categories: ['Acessórios'] }))];

@@ -59,4 +59,16 @@ function buildCampaignStrategy(products, input = {}) {
     sources: SOURCES, recommendationStatus: 'review_required', platformSelection: null, activationAllowed: false,
   };
 }
-module.exports = { buildCampaignStrategy, economics };
+function mediaSafetyEvidence(states) {
+  const google = states.google_media_safety, meta = states.meta_media_safety;
+  const criteria = google?.datasets?.accountExclusions;
+  return { google: google ? { accountId: google.accountId, observedAt: google.observedAt, readComplete: google.complete,
+    exclusionsAvailable: Boolean(criteria?.available), exclusionsPreserved: Boolean(criteria?.preserved), exclusionsObservedAt: criteria?.observedAt,
+    exclusionTypes: (criteria?.rows || []).reduce((counts, row) => { const key = row.customerNegativeCriterion?.type || 'UNKNOWN';counts[key] = (counts[key] || 0) + 1;return counts; }, {}),
+    contentLabels: (criteria?.rows || []).map(row => row.customerNegativeCriterion?.contentLabel?.type).filter(Boolean),
+    campaignSettingsAvailable: Boolean(google.datasets?.campaigns?.available),
+    campaigns: (google.datasets?.campaigns?.rows || []).slice(0, 30).map(row => row.campaign), limitations: google.limitations,
+  } : { status: 'not_audited' }, meta: meta ? { accountId: meta.accountId, observedAt: meta.observedAt, adsets: meta.adsets?.slice(0, 30), limitations: meta.limitations } : { status: 'not_audited' },
+  verifiedInventoryGuarantee: false, instruction: 'Preservar as proteções existentes. Conferir data e cobertura; leitura incompleta ou antiga não comprova configuração atual. Não cancelar PMax ou desabilitar Advantage+ por princípio.' };
+}
+module.exports = { buildCampaignStrategy, economics, mediaSafetyEvidence };

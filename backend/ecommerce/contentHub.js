@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { eligibleProducts, campaignPlan } = require('./marketingDomain');
 const { encrypt, decrypt, encryptionKey } = require('./domain');
-const { buildCampaignStrategy } = require('./campaignStrategy');
+const { buildCampaignStrategy, mediaSafetyEvidence } = require('./campaignStrategy');
 
 function hubOrigin(origin) {
   let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
@@ -90,7 +90,8 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     if (job.kind === 'hub_advice') {
       const plan = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['assistant_plan:' + job.resource])).rows[0]?.data;
       if (!plan) throw new Error('content_hub_plan_required');
-      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(hubProduct), proposedPlan: plan, evidence: { salesHistory: 'not_supplied', audienceDelivery: 'not_verified' } });
+      const safety = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('google_media_safety','meta_media_safety')")).rows.map(row => [row.name, row.data]));
+      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(hubProduct), proposedPlan: plan, evidence: { salesHistory: 'not_supplied', audienceDelivery: 'not_verified', mediaSafety: mediaSafetyEvidence(safety) } });
       await saveState(db, 'assistant_plan:' + job.resource, { ...plan, advice, status: 'ready_for_review' });
       await saveState(db, 'assistant_latest', { ...plan, advice, status: 'ready_for_review' }); return true;
     }
