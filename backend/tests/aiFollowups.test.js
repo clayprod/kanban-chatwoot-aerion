@@ -705,3 +705,43 @@ test('erro do Chatwoot não derruba o lote', async () => {
   assert.equal(r.falhas, 1);
   assert.equal(r.enviados, 1);
 });
+
+// Casos reais de 04/11: o sistema mandou isto a leads parados há meses.
+test('a barreira recusa as duas mensagens-template mandadas em 04/11', () => {
+  const ruins = [
+    'Parece que o gimbal ainda está em pauta para vocês. O que mudou desde a nossa última conversa sobre isso?',
+    'Agradeço pelo e-mail enviado! Imagino que o planejamento de vocês esteja em andamento. O que mudou desde a última conversa sobre o projeto?',
+    'A DroneShow já passou, mas imagino que a necessidade de otimizar a operação de vocês continua. O que mudou na abordagem de vocês?',
+  ];
+  for (const t of ruins) {
+    assert.ok(validarMensagem(t, 0.95, CONFIG_BASE), `devia recusar: ${t.slice(0, 40)}`);
+  }
+});
+
+test('mensagem concreta, com assunto pelo nome e saída confortável, passa', () => {
+  const boa = 'Oi, tudo bem? Aqui é da Aerion. Faz uns meses que falamos do gimbal. Ainda faz sentido retomar ou o assunto esfriou por aí?';
+  assert.equal(validarMensagem(boa, 0.9, CONFIG_BASE), null);
+});
+
+test('a estratégia da 1ª tentativa não manda mais "O que mudou" nem presumir interesse', () => {
+  const { ESTRATEGIA_SEQUENCIA } = require('../aiFollowups');
+  const todas = ESTRATEGIA_SEQUENCIA.join(' ');
+  assert.ok(!/o que mudou/i.test(todas));
+  assert.ok(!/imagino que/i.test(todas.replace(/NAO presuma[^.]*\./, '')));
+  assert.match(ESTRATEGIA_SEQUENCIA[0], /saida confortavel/);
+});
+
+test('depois de 45+ dias parado o prompt entra em modo reativação; antes disso não', () => {
+  const base = {
+    contato: { name: 'CM Engenharia', funil: '3. Follow-up 1' },
+    historico: [{ autor: 'cliente', texto: 'Tem gimbal para o EVO?', em: '2026-06-01T12:00:00Z' }],
+    followupsAnteriores: 0,
+    agora: new Date('2026-11-04T12:00:00Z'),
+  };
+  const longo = montarPrompt({ ...base, diasSilencio: 156 });
+  assert.match(longo.user, /REATIVAÇÃO APÓS LONGO SILÊNCIO \(156 dias\)/);
+  assert.match(longo.user, /SAUDAÇÃO simples/);
+  assert.match(longo.system, /PROIBIDO/);
+  const curto = montarPrompt({ ...base, diasSilencio: 10 });
+  assert.ok(!/REATIVAÇÃO/.test(curto.user));
+});

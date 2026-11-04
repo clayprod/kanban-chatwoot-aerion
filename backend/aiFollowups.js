@@ -24,6 +24,16 @@ const TZ = 'America/Sao_Paulo';
 
 const MENSAGEM_MAX_CHARS = 600;
 
+// Vícios de template que soam robô (casos CM Engenharia e Lenzi, 04/11): afirma o que não sabe,
+// agradece algo que ninguém mandou e faz pergunta vaga. O prompt já proíbe; esta é a barreira
+// que não depende do modelo. Checada DEPOIS da despedida, que tem mensagem própria.
+const VICIOS_DE_TEMPLATE = [
+  /\bagrade[çc]o\s+(?:pelo|pela|por)\b/i,
+  /\bo\s+que\s+mudou\b/i,
+  /\bem\s+pauta\b/i,
+  /desde\s+a\s+(?:nossa\s+|[uú]ltima\s+)?conversa/i,
+  /\b(?:parece|imagino)\s+que\b/i,
+];
 // A IA não negocia: preço, prazo e desconto são do vendedor.
 const TERMOS_PROIBIDOS = [
   /R\$\s*\d/i,
@@ -110,13 +120,15 @@ const lista = (nome, padrao) => {
 // Follow-up nao e a mesma mensagem repetida: e uma sequencia que muda de angulo a
 // cada tentativa. Repetir "ainda tem interesse?" tres vezes cansa e queima o lead.
 const ESTRATEGIA_SEQUENCIA = [
-  'Primeira tentativa: retome o assunto de onde parou, curto e sem pressao. '
-    + 'Feche com uma pergunta calibrada ("Como esta...", "O que mudou em...") '
-    + 'que faca a pessoa pensar e responder com mais que um sim.',
-  'Segunda tentativa: mude o angulo e TRAGA VALOR. Um ponto concreto do produto que '
-    + 'casa com o que a pessoa falou, um caso parecido, uma duvida tecnica que costuma '
-    + 'aparecer no segmento dela. Use labeling antes da pergunta ("Imagino que a '
-    + 'prioridade de voces agora seja X..."). A pergunta vem do valor, nao do pedido.',
+  'Primeira tentativa: retome o assunto EXATO de onde parou, citando o que ELE pediu ou '
+    + 'perguntou (fato que esta no historico), curto e sem pressao. NAO presuma que o '
+    + 'interesse continua nem diga o que ele "deve estar precisando": voce nao sabe. Feche '
+    + 'com UMA pergunta simples, com saida confortavel ("Ainda faz sentido retomar isso?", '
+    + '"Chegou a avancar com isso por ai?").',
+  'Segunda tentativa: mude o angulo e TRAGA VALOR concreto: um ponto do produto que casa '
+    + 'com o que a pessoa falou (use so o que estiver no catalogo informado), ou uma duvida '
+    + 'tecnica que costuma aparecer no segmento dela. Nao presuma a prioridade dela: '
+    + 'pergunte qual e. A pergunta nasce do valor, nao do pedido.',
   'Terceira tentativa: ultimo toque da cadencia, e ele e VALUE-ADD, nunca despedida. '
     + 'Traga algo util de novo e descubra o TIMING com pergunta calibrada: '
     + '"Quando voces costumam revisar esse tipo de investimento?". '
@@ -512,6 +524,12 @@ const montarPrompt = ({
     '  O cadastro do contato costuma ser razão social ou apelido do comercial ("DRONE',
     '  FLORIANO", "Felipe GRS80"): nunca extraia um primeiro nome dali. Sem nome confiável,',
     '  comece sem vocativo ("Oi, tudo bem?").',
+    '- PROIBIDO abrir agradecendo ("Agradeço pelo e-mail/contato/retorno"): quem retoma o',
+    '  contato somos nós, então não há nada a agradecer e a frase soa respondendo a algo que',
+    '  não existe.',
+    '- PROIBIDO, porque soa robô: "O que mudou", "desde a nossa última conversa", "em pauta",',
+    '  "Parece que", "Imagino que", "Gostaria de entender", "alinhar", "otimizar a operação".',
+    '  Escreva como gente: concreto, com o assunto pelo nome (o gimbal, o EVO Max, a proposta).',
     '- Nunca use placeholder entre chaves.',
     '- No máximo um emoji, e só se o histórico já tiver tom informal.',
     '- Esta é uma SEQUÊNCIA. Nunca repita a abordagem nem a pergunta de uma tentativa',
@@ -520,11 +538,13 @@ const montarPrompt = ({
     ...(blocoIcp ? ['', blocoIcp, ''] : []),
     ...(blocoCatalogo ? [blocoCatalogo, ''] : []),
     'Técnicas do processo comercial da Aerion (base Chris Voss) — use, não cite:',
-    '- PERGUNTA CALIBRADA: comece por "Como" ou "O que". Nunca "por que" (soa cobrança),',
-    '  nunca pergunta fechada de sim/não que o cliente responde com uma palavra e some.',
-    '- LABELING: nomeie a situação dele antes de perguntar ("Imagino que a frota de vocês',
-    '  esteja rodando no limite...", "Parece que o momento aí está corrido..."). Mostra que',
-    '  você entende a realidade dele e desarma.',
+    '- PERGUNTA CALIBRADA: específica, ligada a algo que ELE disse ou pediu. Nunca "por que"',
+    '  (soa cobrança). Pergunta genérica de consultoria ("o que mudou na abordagem de',
+    '  vocês...") não é calibrada, é vaga: ninguém responde.',
+    '- LABELING: só sobre FATOS do histórico ("você tinha me perguntado do gimbal em maio").',
+    '  NUNCA sobre o que ele sente, precisa ou prioriza HOJE ("imagino que a necessidade',
+    '  continua", "parece que o gimbal ainda está em pauta"): você não sabe, e afirmar o',
+    '  que não sabe soa robô e chute. Se quer saber, pergunte.',
     '- BUSCAR O "NÃO": pergunta onde o "não" é confortável devolve controle para o cliente',
     '  e costuma destravar resposta. "Seria absurdo olharmos isso de novo agora?" funciona',
     '  melhor que "você tem interesse?".',
@@ -616,6 +636,20 @@ const montarPrompt = ({
       ? `>>> Depois disso nós mandamos ${nossasDepois} mensagem(ns) e ele não respondeu. Isso é insistência nossa, não fato novo.`
       : null,
     '',
+    (Number(diasSilencio) >= 45)
+      ? [
+        `>>> REATIVAÇÃO APÓS LONGO SILÊNCIO (${diasSilencio} dias). Esta pessoa pode nem lembrar de nós. Faça assim:`,
+        '    1) Comece com uma SAUDAÇÃO simples e humana, como quem retoma contato ("Oi, tudo bem?",',
+        '       "Olá, tudo certo por aí?") e se identifique ("aqui é da Aerion"). Sem agradecer nada:',
+        '       não agradeça "pelo e-mail", "pelo contato" nem "pelo retorno" — ninguém nos escreveu agora.',
+        '    2) Situe no tempo e no assunto REAL do histórico ("faz uns meses que falamos sobre o gimbal").',
+        '    3) Só então, se couber, UMA linha de valor concreto (só do catálogo informado, sem inventar novidade).',
+        '    4) Termine com pergunta simples e com saída confortável ("ainda faz sentido retomar ou o assunto esfriou?").',
+        '    Nunca presuma que o interesse continua ("imagino que o planejamento esteja andando").',
+        '    Nunca use pergunta vaga de consultoria ("o que mudou desde a última conversa").',
+      ].join(String.fromCharCode(10))
+      : null,
+    '',
     'Histórico completo (mais antigo primeiro):',
     linhas,
     anteriores.length ? '' : null,
@@ -645,6 +679,9 @@ const validarMensagem = (texto, confianca, config) => {
   if (TERMOS_PROIBIDOS.some((re) => re.test(limpo))) return 'mensagem toca em tema comercial proibido';
   if (TERMOS_DESPEDIDA.some((re) => re.test(limpo))) {
     return 'mensagem se despede do lead — a cadência termina em silêncio, não em adeus';
+  }
+  if (VICIOS_DE_TEMPLATE.some((re) => re.test(limpo))) {
+    return 'mensagem com vício de template (presume interesse, agradece sem motivo ou pergunta vaga)';
   }
   // Number(null) é 0 — sem este teste, confiança ausente virava "abaixo do mínimo".
   if (confianca === null || confianca === undefined || confianca === '') return 'confiança ausente';
