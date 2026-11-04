@@ -5,7 +5,7 @@ function chatgptCatalog(products) {
   const assessed = eligibleProducts(products), valid = assessed.filter(p => p.eligible && p.brand);
   const cell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const csv = [columns, ...valid.map(p => [p.sku,p.name.slice(0,150),p.description,p.url,p.brand,p.image,`${p.price.toFixed(2)} BRL`,p.availability === 'preorder' ? 'pre_order' : p.availability,'Aerion Technologies','https://loja.aerion.com.br','https://loja.aerion.com.br/trocas-devolucoes/','BR','BR','true','false','true',JSON.stringify({custom_label_0:p.group})])].map(row => row.map(cell).join(',')).join('\n') + '\n';
-  return { csv, hash: crypto.createHash('sha256').update(csv).digest('hex'), count: valid.length, excluded: assessed.filter(p => !p.eligible || !p.brand).map(p => ({ sku:p.sku, issues:[...p.issues,...(!p.brand?['missing_brand']:[])] })) };
+  return { csv, hash: crypto.createHash('sha256').update(csv).digest('hex'), count: valid.length,skus:valid.map(p=>p.sku), excluded: assessed.filter(p => !p.eligible || !p.brand).map(p => ({ sku:p.sku, issues:[...p.issues,...(!p.brand?['missing_brand']:[])] })) };
 }
 async function uploadCatalog({ credentials, content, previousHostHash, persistHostHash, Client = require('ssh2-sftp-client') }) {
   let uri;try { uri = new URL(credentials.connection_uri); } catch { throw new Error('sftp_connection_invalid'); }

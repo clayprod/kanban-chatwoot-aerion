@@ -43,7 +43,8 @@ async function main() {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const save = (name, object) => { fs.writeFileSync(path.join(directory, name), JSON.stringify(object, null, 2), { mode: 0o600 }); fs.chmodSync(path.join(directory, name), 0o600); };
   const read = name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
-  const account = JSON.parse(fs.readFileSync(value('--credentials'), 'utf8'));
+  const credentialPath=value('--credentials');
+  const account = JSON.parse(fs.readFileSync(credentialPath==='/dev/stdin'?0:credentialPath, 'utf8'));
   const access = await token(account, prepare || publish ? ['readonly', 'edit.containers', 'edit.containerversions', 'publish'] : ['readonly']);
   let last = 0;
   const request = async (endpoint, method = 'GET', body) => {

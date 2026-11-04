@@ -121,12 +121,18 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     // Empty/incomplete local data never wipes a valid remote catalog.
     if (!file.count) throw new Error('chatgpt_catalog_no_eligible_products');
     const client=createChatgptAdsClient(secrets.apiKey,transport);
-    if(!setup.catalogFullRefresh){await client.request(`feeds/${encodeURIComponent(setup.resources.feed.id)}/settings`,'PATCH',{is_full_refresh:true});setup.catalogFullRefresh=true;await saveState(db,name,setup);}
+    if(!setup.catalogFullRefresh&&!setup.catalogFullRefreshUnavailable){
+      try{await client.request(`feeds/${encodeURIComponent(setup.resources.feed.id)}/settings`,'PATCH',{is_full_refresh:true});setup.catalogFullRefresh=true;}
+      catch(error){if(![403,404].includes(error.httpStatus))throw error;setup.catalogFullRefreshUnavailable={httpStatus:error.httpStatus,action:'Solicitar à OpenAI liberação de catalog replacement para este feed BR.',feedId:setup.resources.feed.id,help:'https://developers.openai.com/ads/product-feeds'};}
+      await saveState(db,name,setup);
+    }
     if (setup.catalog?.hash !== file.hash || setup.catalog?.status !== 'uploaded') {
       await uploadCatalog({ credentials:secrets.sftp,content:file.csv,previousHostHash:secrets.sftpHostHash,persistHostHash:async hash=>{
         secrets.sftpHostHash=hash;const changed=await db.query("UPDATE ecommerce_marketing_connections SET secrets=$1,updated_at=now() WHERE name='chatgpt_ads' AND secrets=$2",[encrypt(secrets,encryptionKey(env)),row.secrets]);if(changed.rowCount!==1)throw new Error('connection_changed');
       } });
-      setup.catalog={status:'uploaded',hash:file.hash,count:file.count,excluded:file.excluded,uploadedAt:new Date().toISOString(),acceptance:'awaiting_external_processing'};
+      const removed=(setup.catalog?.skus||[]).filter(sku=>!file.skus.includes(sku));
+      if(!setup.catalogFullRefresh&&removed.length)await client.request(`feeds/${encodeURIComponent(setup.resources.feed.id)}/products`,'PATCH',{products:removed.map(sku=>({id:sku,variants:[{id:sku,availability:{status:'out_of_stock'}}]}))});
+      setup.catalog={status:'uploaded',hash:file.hash,count:file.count,skus:file.skus,removedMarkedUnavailable:removed.length,excluded:file.excluded,uploadedAt:new Date().toISOString(),acceptance:'awaiting_external_processing',cleanupMode:setup.catalogFullRefresh?'catalog_replacement':'removed_products_out_of_stock_delta'};
       await saveState(db,name,setup);
     }
     try { const uploads=await client.list('feeds/uploads');setup.catalog.uploads=uploads.filter(u=>u.feed_id===setup.resources.feed.id).slice(0,5).map(u=>({id:u.upload_id,status:u.status,accepted:u.rows_accepted,rejected:u.rows_rejected,adsEligible:u.rows_ads_eligible,diagnostics:(u.diagnostics||[]).map(d=>({code:d.code,field:d.field,rowsAffected:d.rows_affected}))})); }
