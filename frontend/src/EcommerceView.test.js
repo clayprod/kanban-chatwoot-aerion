@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import axios from 'axios';
-import EcommerceView from './EcommerceView';
+import EcommerceView, { readEcommerceSection } from './EcommerceView';
 
 jest.mock('axios', () => ({ get: jest.fn(), put: jest.fn(), post: jest.fn(), isCancel: jest.fn() }));
 jest.mock('@nivo/line', () => ({ ResponsiveLine: () => <div>Gráfico de receita</div> }));
@@ -14,6 +14,15 @@ beforeEach(() => {
   jest.clearAllMocks();
   axios.isCancel.mockReturnValue(false);
   axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : report }));
+});
+
+test('campaign assistant has a dedicated navigation entry and a valid deep link', async () => {
+  expect(readEcommerceSection('?ecommerce=assistant')).toBe('assistant');
+  expect(readEcommerceSection('?ecommerce=unknown')).toBe(null);
+  render(<EcommerceView section="assistant" isAdmin onNavigate={jest.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Campanhas com IA' })).toHaveAttribute('aria-current', 'page');
+  expect(await screen.findByRole('region', { name: 'Conexão ChatGPT Ads' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Advertiser API key do ChatGPT Ads')).toHaveAttribute('type', 'password');
 });
 test('empty sources show setup guidance and unavailable metrics instead of invented results', async () => {
   render(<EcommerceView isAdmin onNavigate={jest.fn()} />);

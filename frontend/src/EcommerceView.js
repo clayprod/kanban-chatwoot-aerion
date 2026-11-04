@@ -7,13 +7,20 @@ import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS, movingAverage, isSmallSa
 import { mergeStoreDaily, channelTable, funnelSteps } from './storeReach';
 import MerchantView from './MerchantView';
 import MarketingAutomationView from './MarketingAutomationView';
+import CampaignAssistantView from './CampaignAssistantView';
+import ChatgptAdsPanel from './ChatgptAdsPanel';
 
 export const ECOMMERCE_SECTIONS = [
   { id: 'overview', label: 'Visão geral', icon: Squares2X2Icon },
   { id: 'sales', label: 'Vendas e produtos', icon: ShoppingBagIcon },
   { id: 'ads', label: 'Marketing', icon: MegaphoneIcon },
+  { id: 'assistant', label: 'Campanhas com IA', icon: MegaphoneIcon },
   { id: 'connections', label: 'Conexões', icon: Cog6ToothIcon },
 ];
+export function readEcommerceSection(search = window.location.search) {
+  const section = new URLSearchParams(search).get('ecommerce');
+  return [...ECOMMERCE_SECTIONS.map(s => s.id), 'traffic', 'campaigns', 'seo', 'merchant', 'automation', 'coupons'].includes(section) ? section : null;
+}
 const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads', search_console: 'Google Search Console', merchant_center: 'Google Merchant Center' };
 const STATE = { pending: 'Aguardando configuração', connected: 'Conectado', syncing: 'Sincronizando', error: 'Requer atenção' };
 const number = value => value == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(value);
@@ -384,6 +391,7 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
       {report && <>
         {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
         {section === 'automation' && <MarketingAutomationView data={report.marketing} isAdmin={isAdmin} onRefresh={reload} />}
+        {section === 'assistant' && <div className="space-y-5"><p className="max-w-3xl text-sm text-muted">Prepare o plano com a IA, compare estratégias e produza arquivos para revisão. A geração de conteúdo e a ativação de anúncios são decisões separadas.</p><CampaignAssistantView data={report.marketing || {}} isAdmin={isAdmin} onRefresh={reload} /><ChatgptAdsPanel data={report.marketing?.chatgptAds} isAdmin={isAdmin} onRefresh={reload} /></div>}
         {section === 'overview' && <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
             {[['Receita de produtos', summary.revenue, money, 'Pagamentos confirmados · descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, `Ticket médio ${money(summary.ticket)}`], ['Investimento em mídia', summary.spend, money, summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Google Ads + Meta · BRL'], ['Aguardando pagamento', summary.unpaidValue, money, `${number(summary.unpaidOrders)} pedidos pendentes ou em espera · inclui frete e impostos`]].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}

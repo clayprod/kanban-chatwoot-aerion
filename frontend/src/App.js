@@ -5,7 +5,7 @@ import SearchGuide from './SearchGuide';
 import SearchEvidence from './SearchEvidence';
 import SearchWatchlistReview from './SearchWatchlistReview';
 import ProductCatalog from './ProductCatalog';
-import EcommerceView, { ECOMMERCE_SECTIONS } from './EcommerceView';
+import EcommerceView, { ECOMMERCE_SECTIONS, readEcommerceSection } from './EcommerceView';
 import SankhyaReportingPanel from './SankhyaReportingPanel';
 import TechnicalResult from './TechnicalResult';
 import OpportunityPreview from './OpportunityPreview';
@@ -8355,8 +8355,8 @@ function App() {
   // ─────────────────────────────────────────────────────────
 
   const [activeTab, setActiveTab] = useState('leads');
-  const [activeView, setActiveView] = useState(() => readPipelinePage() || readPncpPage().job ? 'Licitações' : new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'Ecommerce' : 'Overview');
-  const [ecommerceSubview, setEcommerceSubview] = useState(() => new URLSearchParams(window.location.search).get('ecommerce') === 'connections' ? 'connections' : 'overview');
+  const [activeView, setActiveView] = useState(() => readPipelinePage() || readPncpPage().job ? 'Licitações' : readEcommerceSection() ? 'Ecommerce' : 'Overview');
+  const [ecommerceSubview, setEcommerceSubview] = useState(() => readEcommerceSection() || 'overview');
   const [processActiveSection, setProcessActiveSection] = useState(processBlueprint.map[0]?.id || 'metas-2026');
   const [processQuery, setProcessQuery] = useState('');
   // Dark (Aerion Command) is the only theme — no light/dark toggle.
