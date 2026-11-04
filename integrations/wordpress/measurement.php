@@ -49,11 +49,18 @@ final class Aerion_Ecommerce_Measurement
             || !preg_match('/^\d+\.\d+$/', (string) ($context['clientId'] ?? ''))) { return; }
         $cookie = (string) ($_COOKIE['_ga'] ?? '');
         if (!preg_match('/^GA\d+\.\d+\.(\d+\.\d+)$/', $cookie, $matches) || !hash_equals($matches[1], (string) $context['clientId'])) { return; }
-        $order->update_meta_data('_aerion_measurement_context', [
+        $saved = [
             'clientId' => $matches[1], 'statistics' => true,
             'marketing' => ($context['marketing'] ?? false) === true,
             'source' => 'wp_consent_api_classic_checkout', 'recordedAt' => gmdate(DATE_ATOM), 'revoked' => false,
-        ]);
+        ];
+        if ($saved['marketing']) {
+            foreach (['oppref' => '__oppref', 'obref' => '__obref'] as $field => $cookie_name) {
+                $value = (string) ($_COOKIE[$cookie_name] ?? '');
+                if ($value !== '' && strlen($value) <= 512 && !preg_match('/[\r\n]/', $value)) { $saved[$field] = $value; }
+            }
+        }
+        $order->update_meta_data('_aerion_measurement_context', $saved);
     }
 
     public static function consent_options(mixed $options): array

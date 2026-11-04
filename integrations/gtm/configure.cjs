@@ -100,7 +100,7 @@ async function main() {
   for (const tag of plan.tags) await upsert('tags', tag);
   const status = await request(`${workspace.path}/status`);
   if (status.mergeConflict?.length) throw new Error('GTM workspace has merge conflicts.');
-  const created = await request(`${workspace.path}:create_version`, 'POST', { name: 'Aerion Ecommerce · compras pagas e consentimento', notes: 'GA4 ecommerce estruturado; Meta Purchase com event_id, SKU e consentimento. Mantém ações de leads Google Ads existentes.' });
+  const created = await request(`${workspace.path}:create_version`, 'POST', { name: chatgptPixel ? 'Aerion ChatGPT Ads · consentimento e compras pagas' : 'Aerion Ecommerce · compras pagas e consentimento', notes: chatgptPixel ? 'Adiciona somente medição ChatGPT Ads com consentimento, SKU, centavos e ID estável de compra. Preserva tags Google/Meta e campanhas.' : 'GA4 ecommerce estruturado; Meta Purchase com event_id, SKU e consentimento. Mantém ações de leads Google Ads existentes.' });
   if (created.compilerError || created.syncStatus?.mergeConflict?.length || !created.containerVersion?.path) throw new Error('GTM did not compile a clean version.');
   save('prepared-version.json', created.containerVersion);
   const state = { container: CONTAINER, publicId: PUBLIC_ID, baseVersion: live.containerVersionId,

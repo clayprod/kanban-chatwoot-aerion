@@ -503,6 +503,19 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal(renderedVideo.data.contentHub.status, 'failed', 'An image returned for a video job must not be ready for approval');
       assert.equal(hubGenerations, 2);
     });
+    await t.test('human Hub media can be selected without generating it and approval requires explicit branding checks',async()=>{
+      const before=hubGenerations;
+      contentHub.library=async()=>({brandId:'aerion',total:1,items:[{dir:'assets',filename:'manual.png',url:'https://hub.example.com/manual.png',contentType:'image/png',origin:'recebido'}]});
+      contentHub.selectAsset=async()=>({asset:{dir:'assets',filename:'manual.png',url:'https://hub.example.com/manual.png',contentType:'image/png',pinned:true}});
+      const draft=await request('/marketing/content',{productId:'1',kind:'creative',copy:'Briefing com identidade Aerion para revisão.'},'POST');
+      const path='/marketing/content/'+draft.data.id;
+      assert.equal((await request(path+'/assets/library',{dir:'assets',filename:'manual.png'},'POST')).status,200);
+      assert.equal((await request(path+'/review',{status:'approved'},'POST')).status,400);
+      const accepted=await request(path+'/review',{status:'approved',brandingReview:{logo:true,typography:true,colors:true,layout:true,product:true}},'POST');
+      assert.equal(accepted.status,200);assert.equal(hubGenerations,before);
+      const saved=(await pool.query('SELECT data FROM ecommerce_marketing_content WHERE id=$1',[draft.data.id])).rows[0].data;
+      assert.equal(saved.brandingReview.logo,true);assert.equal(saved.contentHub.integration,'hub_library');
+    });
     await t.test('SEO publication requires an explicit approved current proposal and safely acknowledges retries', async () => {
       let published = 0;
       providers.publishProductSeo = async (config, product, content) => { published++; return { published: true, content_id: content.id, product: raw(1, { consumer_price: 110, modified_at: '2026-10-29T12:00:00-03:00' }) }; };

@@ -5,7 +5,7 @@ function chatgptBootstrap(pixel) {
   if (w.aerionChatgptSend) return;
   if (!w.oaiq) { var q = function () { q.q.push(arguments); };q.q = [];w.oaiq = q; }
   w.oaiq('consent', false);
-  var initialized = false, sent = {}, views = {};
+  var initialized = false, pageSent = false, sent = {}, views = {};
   function init() {
     if (!allowed()) return;
     if (!initialized) {
@@ -13,6 +13,7 @@ function chatgptBootstrap(pixel) {
       var script = document.createElement('script');script.async = true;script.src = 'https://bzrcdn.openai.com/sdk/oaiq.min.js';document.head.appendChild(script);
     }
     w.oaiq('consent', true);
+    if(!pageSent){pageSent=true;w.oaiq('measure','page_viewed',{type:'contents'},{event_id:'aerion_page_'+Date.now()});}
   }
   w.aerionChatgptSend = function (event, ecommerce, eventId) {
     if (!allowed()) return;
