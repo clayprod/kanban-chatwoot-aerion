@@ -188,6 +188,39 @@ function createProviders({ transport = request, env = process.env } = {}) {
   }
   return {
     woo, bridge,
+    async metaMediaSafety(config) {
+      const rows = await metaList(config, `act_${config.account_id}/adsets`, 'id,name,effective_status,campaign_id,targeting,optimization_goal');
+      const keys = ['publisher_platforms', 'effective_publisher_platforms', 'facebook_positions', 'instagram_positions', 'audience_network_positions', 'effective_audience_network_positions', 'brand_safety_content_filter_levels', 'effective_brand_safety_content_filter_levels', 'targeting_automation', 'age_min', 'age_max'];
+      return { accountId: config.account_id, observedAt: new Date().toISOString(), changesApplied: false,
+        adsets: rows.map(row => ({ id: row.id, name: row.name, status: row.effective_status, campaignId: row.campaign_id, optimizationGoal: row.optimization_goal,
+          targeting: Object.fromEntries(keys.filter(k => row.targeting?.[k] != null).map(k => [k, row.targeting[k]])) })),
+        limitations: ['Campos ausentes não comprovam que uma restrição inexiste.', 'Listas de bloqueio, controles da conta e expansão precisam de conferência adicional.', 'Este diagnóstico não altera conjuntos, público, posicionamentos ou orçamento.'] };
+    },
+    async googleMediaSafety(config) {
+      const datasets = {};let retrySeconds = 0;
+      const queries = {
+        accountExclusions: 'SELECT customer_negative_criterion.type, customer_negative_criterion.content_label.type, customer_negative_criterion.placement.url, customer_negative_criterion.mobile_application.app_id, customer_negative_criterion.mobile_app_category.mobile_app_category_constant, customer_negative_criterion.placement_list.shared_set FROM customer_negative_criterion',
+        campaigns: "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.network_settings.target_google_search, campaign.network_settings.target_search_network, campaign.network_settings.target_content_network, campaign.geo_target_type_setting.positive_geo_target_type FROM campaign WHERE campaign.status != 'REMOVED'",
+        placementLists: "SELECT shared_set.resource_name, shared_set.name, shared_set.type, shared_set.member_count FROM shared_set WHERE shared_set.type = 'NEGATIVE_PLACEMENTS' AND shared_set.status != 'REMOVED'",
+        placements: 'SELECT campaign.id, performance_max_placement_view.display_name, performance_max_placement_view.placement, performance_max_placement_view.placement_type, metrics.impressions FROM performance_max_placement_view WHERE segments.date DURING LAST_30_DAYS ORDER BY metrics.impressions DESC LIMIT 200',
+      };
+      for (const [name, query] of Object.entries(queries)) {
+        try {
+          const rows = [], seen = new Set();let pageToken;
+          do {
+            const data = await adsRequest(config, `customers/${config.customer_id}/googleAds:search`, { query, ...(pageToken ? { pageToken } : {}) });
+            if (!Array.isArray(data.results || [])) throw new ProviderError('Resposta de auditoria inválida.');
+            rows.push(...(data.results || []));pageToken = data.nextPageToken;
+            if (pageToken && (seen.has(pageToken) || seen.size >= 10)) throw new ProviderError('Auditoria excedeu a paginação disponível.');
+            if (pageToken) seen.add(pageToken);
+          } while (pageToken);
+          datasets[name] = { available: true, rows, observedAt: new Date().toISOString(), coverage: name === 'placements' ? 'top_200_last_30_days_impressions_only' : 'account_read' };
+        } catch (error) { retrySeconds = Math.max(retrySeconds, Number(error.retrySeconds) || 300);datasets[name] = { available: false, error: error.httpStatus ? `platform_http_${error.httpStatus}` : 'audit_unavailable' }; }
+      }
+      return { accountId: config.customer_id, observedAt: new Date().toISOString(), datasets,
+        complete: Object.values(datasets).every(d => d.available), changesApplied: false, retrySeconds,
+        limitations: ['Listas herdadas do MCC e seu conteúdo ainda exigem conferência.', 'O relatório de posicionamentos PMax retorna impressões; não comprova gasto ou conversões por site.', 'Leitura de exclusões não certifica bloqueio de todo conteúdo infantil, jogos ou apostas.'] };
+    },
     async ensureProductWebhooks(config, deliveryUrl) {
       const target = new URL(deliveryUrl);
       if (target.protocol !== 'https:' || target.username || target.password || target.search || target.hash) throw new ProviderError('URL de webhook inválida.');

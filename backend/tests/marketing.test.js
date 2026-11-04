@@ -9,7 +9,71 @@ const { createEcommerce } = require('../ecommerce/routes');
 const { createMarketing, enqueueMarketing } = require('../ecommerce/marketing');
 const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCustomerAudiences } = require('../ecommerce/customerAudiences');
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
-const { createContentHub, recommendCampaign } = require('../ecommerce/contentHub');
+const { createContentHub, recommendCampaign, createCampaignAssistant } = require('../ecommerce/contentHub');
+const { buildCampaignStrategy, mediaSafetyEvidence } = require('../ecommerce/campaignStrategy');
+
+test('AI receives existing protection evidence with unavailable and preserved coverage, never an invented absence', () => {
+  assert.equal(mediaSafetyEvidence({}).google.status, 'not_audited');
+  const evidence = mediaSafetyEvidence({ google_media_safety: { accountId: '123', observedAt: '2026-11-04', complete: false, datasets: { accountExclusions: { available: false, preserved: true, rows: [{ customerNegativeCriterion: { type: 'CONTENT_LABEL', contentLabel: { type: 'JUVENILE' } } }] } } } });
+  assert.equal(evidence.google.exclusionsAvailable, false);assert.equal(evidence.google.exclusionsPreserved, true);
+  assert.equal(evidence.google.exclusionTypes.CONTENT_LABEL, 1);assert.equal(evidence.verifiedInventoryGuarantee, false);
+});
+
+test('campaign comparison retains PMax and Meta automation as candidates without overriding existing audience protections', () => {
+  const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' })), projectProduct(raw(3, { categories: ['Acessórios'] }))];
+  const plan = buildCampaignStrategy(products, { scope: 'family', family: 'Drones' });
+  assert.deepEqual(plan.productIds, ['1']);assert.equal(plan.economics, null);assert.equal(plan.activationAllowed, false);
+  assert(plan.choices.some(c => c.id === 'pmax'));assert(plan.choices.some(c => c.id === 'meta_sales'));
+  assert.equal(plan.mediaSafety.preserveExisting, true);assert.equal(plan.mediaSafety.automaticCampaignChanges, false);
+  assert.equal(plan.platformSelection, null);assert(plan.sources.some(s => /jonloomer/.test(s.url)));
+  const offers = buildCampaignStrategy(products, { scope: 'sale' });assert.equal(offers.productCount, 2);assert(offers.promotion.includes('não comprova'));
+  assert.throws(() => buildCampaignStrategy(products, { scope: 'family', family: 'inventada' }));
+});
+
+test('margin scenarios cannot invent profitability or turn break-even revenue ratios into bidding targets', () => {
+  const strategy = buildCampaignStrategy([projectProduct(raw())], { economics: { averageOrderValue: 1000, contributionMarginPercent: 20, reservePerOrder: 50 } });
+  assert.equal(strategy.economics.maximumAcquisitionCost, 150);assert.equal(strategy.economics.breakEvenRoas, 5);
+  assert.equal(strategy.economics.biddingTargetApplied, false);assert.equal(strategy.economics.source, 'user_supplied_scenario');
+  for (const input of [{ averageOrderValue: 1000 }, { averageOrderValue: 1000, contributionMarginPercent: 0 }, { averageOrderValue: 1000, contributionMarginPercent: 20, reservePerOrder: 200 }]) assert.throws(() => buildCampaignStrategy([projectProduct(raw())], { economics: input }));
+});
+
+test('Google media audit is read-only, paginated and keeps unsupported placement cost unavailable', async () => {
+  let exclusionPages = 0;
+  const providers = createProviders({ transport: async (url, options) => {
+    if (String(url).includes('oauth2.googleapis.com')) return Response.json({ access_token: 'test', expires_in: 3600 });
+    assert(String(url).endsWith('googleAds:search'));const body = JSON.parse(options.body);
+    if (body.query.includes('FROM customer_negative_criterion')) { exclusionPages++;return Response.json(exclusionPages === 1 ? { results: [{ customerNegativeCriterion: { type: 'CONTENT_LABEL', contentLabel: { type: 'JUVENILE' } } }], nextPageToken: 'page-2' } : { results: [{ customerNegativeCriterion: { type: 'MOBILE_APP_CATEGORY' } }] }); }
+    if (body.query.includes('FROM performance_max_placement_view')) { assert(!body.query.includes('metrics.cost'));return Response.json({ results: [] }); }
+    return Response.json({ results: [] });
+  } });
+  const result = await providers.googleMediaSafety({ customer_id: '123', refresh_token: 'test' });
+  assert.equal(result.changesApplied, false);assert.equal(result.complete, true);assert.equal(result.datasets.accountExclusions.rows.length, 2);
+  const failed = createProviders({ transport: async (url, options) => String(url).includes('oauth2.googleapis.com') ? Response.json({ access_token: 'test' }) : JSON.parse(options.body).query.includes('FROM shared_set') ? Response.json({}, { status: 403 }) : Response.json({ results: [] }) });
+  const partial = await failed.googleMediaSafety({ customer_id: '123', refresh_token: 'test' });
+  assert.equal(partial.complete, false);assert.equal(partial.datasets.placementLists.error, 'platform_http_403');assert.equal(partial.datasets.placements.available, true);
+});
+
+test('Meta media audit reads existing targeting without inventing missing controls or returning custom audience lists', async () => {
+  let count = 0;
+  const providers = createProviders({ transport: async (url, options) => {
+    assert.equal(options.method, 'GET');assert.equal(new URL(url).hostname, 'graph.facebook.com');count++;
+    return Response.json(count === 1 ? { data: [{ id: 'one', effective_status: 'ACTIVE', targeting: { publisher_platforms: ['facebook', 'instagram'], custom_audiences: [{ id: 'private-list' }] } }], paging: { next: 'https://ignored.invalid', cursors: { after: 'page-2' } } } : { data: [{ id: 'two', targeting: {} }] });
+  } });
+  const result = await providers.metaMediaSafety({ account_id: '123', access_token: 'test' });
+  assert.equal(count, 2);assert.equal(result.adsets.length, 2);assert.equal(result.changesApplied, false);
+  assert(!JSON.stringify(result).includes('private-list'));assert.deepEqual(result.adsets[1].targeting, {});
+});
+
+test('late Hub results retain files and costs after rejection without regenerating or approving content', async () => {
+  const writes = [], found = { id: 'draft', status: 'rejected', product_version: 'old', product: { version: 'new' }, data: { contentHub: { requestId: 'request', generation: { capability: 'text-to-image' } } } };
+  let receipts = 0;
+  const db = { query: async (sql, params) => { if (sql.startsWith('SELECT c.')) return { rows: [found] };writes.push({ sql, params });return { rows: [] }; } };
+  const assistant = createCampaignAssistant({ pool: db, hub: { receipt: async () => { receipts++;return { job: { id: 'job', status: 'done', costUsd: 0.09, artifacts: [{ url: 'https://hub.test/file.jpg', contentType: 'image/jpeg', bytes: 100 }] } }; } }, enqueue: async () => { throw Error('Finished result must not queue another job'); } });
+  await assistant.execute(db, { kind: 'hub_generate', resource: 'draft' });assert.equal(receipts, 0);
+  await assistant.execute(db, { kind: 'hub_poll', resource: 'draft' });assert.equal(receipts, 1);assert.equal(writes.length, 1);
+  const saved = JSON.parse(writes[0].params[1]);assert.equal(saved.assets.length, 1);assert.equal(saved.costUsd, 0.09);
+  assert.equal(writes[0].params[2], 'request');assert(!/SET status/.test(writes[0].sql));
+});
 
 test('campaign advice uses available products, preserves fixed budgets and never activates or invents historical results', () => {
   const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' }))];
@@ -304,6 +368,30 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal((await request('/marketing/reconcile', {}, 'POST', { 'x-role': 'member' })).status, 403);
       assert.equal((await request('/marketing', null, 'GET', { 'x-role': 'anonymous' })).status, 403);
     });
+    await t.test('Hub credentials persist encrypted across service instances and failed replacements preserve access', async () => {
+      const originalFetch = global.fetch, secret = 'durable-private-hub-token';
+      global.fetch = async (url, options = {}) => {
+        if (new URL(url).hostname !== 'hub.example.com') return originalFetch(url, options);
+        return options.headers.Authorization === 'Bearer ' + secret ? Response.json({ brandId: 'aerion-technologies', capabilities: {} }) : Response.json({ error: secret }, { status: 403 });
+      };
+      try {
+        const path = '/marketing/assistant/connection';
+        assert.equal((await request(path, { url: 'https://hub.example.com', brandId: 'aerion-technologies', token: secret }, 'PUT')).status, 200);
+        const stored = (await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='content_hub'")).rows[0].secrets;
+        assert(!stored.includes(secret));
+        const fresh = createCampaignAssistant({ pool, env: { ...env, ECOMMERCE_CONTENT_HUB_TOKEN: 'environment-fallback' }, enqueue: enqueueMarketing,
+          saveState: async (db, name, data) => db.query('INSERT INTO ecommerce_marketing_state(name,data) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET data=EXCLUDED.data', [name, data]) });
+        assert.equal((await fresh.connectionStatus()).configured, true);
+        assert.equal((await fresh.connectionStatus()).source, 'encrypted_database');
+        await fresh.execute(pool, { kind: 'hub_capabilities' });
+        assert.equal((await request(path, { token: 'wrong-token-with-valid-length' }, 'PUT')).status, 409);
+        assert.equal((await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='content_hub'")).rows[0].secrets, stored);
+        assert(!JSON.stringify((await request('/marketing')).data).includes(secret));
+        assert.equal((await request(path, { enabled: false }, 'PUT')).status, 200);
+        assert.equal((await fresh.connectionStatus()).configured, false, 'Disabling persisted settings must also disable an environment fallback');
+        assert.equal((await request(path, { enabled: true }, 'PUT')).status, 200);
+      } finally { global.fetch = originalFetch; }
+    });
     await t.test('signed duplicate deliveries coalesce and product events never become orders', async () => {
       const body = { id: 1 }, headers = { 'x-wc-webhook-topic': 'product.updated', 'x-wc-webhook-delivery-id': 'product-delivery-1', 'x-wc-webhook-signature': crypto.createHmac('sha256', config.webhook_secret).update(JSON.stringify(body)).digest('base64') };
       assert.equal((await request('/webhooks/woocommerce', body, 'POST', headers)).status, 202);
@@ -315,6 +403,15 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal((await pool.query("SELECT count(*)::int n FROM ecommerce_records WHERE kind='order'")).rows[0].n, 0);
       const feed = await request(`/feeds/meta?token=${env.ECOMMERCE_META_FEED_TOKEN}`, null, 'GET', { 'x-role': 'anonymous' });
       assert.equal(feed.status, 200); assert(feed.text.includes('SKU-1'));
+    });
+    await t.test('strategy previews do not save campaigns, enqueue work or invoke paid AI', async () => {
+      const before = (await pool.query('SELECT count(*)::int n FROM ecommerce_marketing_jobs')).rows[0].n;
+      const preview = await request('/marketing/assistant/preview', { productIds: ['1'], scope: 'product' }, 'POST');
+      assert.equal(preview.status, 200);assert.equal(preview.data.aiRequested, false);assert.equal(preview.data.strategy.platformSelection, null);
+      assert.equal((await pool.query('SELECT count(*)::int n FROM ecommerce_marketing_jobs')).rows[0].n, before);
+      assert.equal((await pool.query("SELECT 1 FROM ecommerce_marketing_state WHERE name='assistant_latest'")).rowCount, 0);
+      assert.equal((await request('/marketing/assistant/preview', {}, 'POST', { 'x-role': 'member' })).status, 403);
+      assert.equal((await request('/marketing/assistant/preview', { scope: 'invalid' }, 'POST')).status, 400);
     });
     await t.test('failed reconciliation retains valid projection and only sanitized error codes', async () => {
       fail = true; await enqueueMarketing(pool, 'reconcile', 'nightly'); await worker.tick();
