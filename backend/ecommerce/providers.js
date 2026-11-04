@@ -199,6 +199,12 @@ function createProviders({ transport = request, env = process.env } = {}) {
         if (data.length < 100) break;
         if (page === 1000) throw new ProviderError('Limite de paginação dos webhooks atingido.');
       }
+      let proofs = [];
+      if (config.report_user && config.report_password && existing.length) {
+        try { const result = (await bridge(config, 'marketing-webhooks')).data; if (Array.isArray(result)) proofs = result; }
+        catch { /* An unavailable proof remains explicitly unverified. */ }
+      }
+      const expectedFingerprint = crypto.createHash('sha256').update(config.webhook_secret || '').digest('hex');
       const hooks = [];
       for (const topic of ['product.created', 'product.updated', 'product.deleted']) {
         const found = existing.filter(h => h.topic === topic && h.delivery_url === deliveryUrl);
@@ -208,7 +214,9 @@ function createProviders({ transport = request, env = process.env } = {}) {
           dispatcher: publicDispatcher, headers: { 'Content-Type': 'application/json', Authorization: basic(config.consumer_key, config.consumer_secret) },
         }, transport)).data;
         if (!hook.id || hook.topic !== topic || hook.status !== 'active') throw new ProviderError('O WooCommerce não confirmou o webhook ativo.');
-        hooks.push({ id: String(hook.id), topic, status: hook.status, existing: Boolean(found[0]), verifiedSecret: !found[0] || found[0].secret === config.webhook_secret });
+        const proof = proofs.find(p => String(p.id) === String(hook.id) && p.topic === topic && p.status === 'active' && p.delivery_url === deliveryUrl);
+        hooks.push({ id: String(hook.id), topic, status: hook.status, existing: Boolean(found[0]),
+          verifiedSecret: !found[0] || found[0].secret === config.webhook_secret || proof?.secret_fingerprint === expectedFingerprint });
       }
       return { observedAt: new Date().toISOString(), hooks, signature: 'HMAC-SHA256', existingSecretsRequireReview: hooks.some(h => !h.verifiedSecret) };
     },
@@ -368,7 +376,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
     async ensureMetaStoreAudiences(config, pixelId) {
       if (!/^\d+$/.test(pixelId)) throw new ProviderError('Pixel Meta inválido.');
       const definitions = require('./marketingDomain').STORE_AUDIENCES;
-      const existing = await metaList(config, `act_${config.account_id}/customaudiences`, 'id,name,rule,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status');
+      const existing = await metaList(config, `act_${config.account_id}/customaudiences`, 'id,name,rule,audience_labels,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status');
       const result = [];
       for (const audience of definitions) {
         const name = `Aerion CRM · Loja · ${audience.id} · v1`;
@@ -380,11 +388,13 @@ function createProviders({ transport = request, env = process.env } = {}) {
         const rule = { inclusions: { operator: 'or', rules: [clause(audience.meta, audience.days, audience.id === 'visitors')] },
           ...(audience.excludePaidDays ? { exclusions: { operator: 'or', rules: [clause('Purchase', audience.excludePaidDays)] } } : {}) };
         let found = candidates[0];
-        if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, prefill: true, rule }, 'POST');
+        const labels = [audience.id === 'paid_buyers' ? 'GENERAL_CUSTOMERS' : 'ENGAGED_USERS'];
+        if (!found) found = await metaRequest(config, `act_${config.account_id}/customaudiences`, { name, prefill: true, rule, audience_labels: labels }, 'POST');
         if (!/^\d+$/.test(found.id || '')) throw new ProviderError('A Meta não retornou um ID de público válido.');
         // Existing resources are never overwritten, even if someone edited their rules.
         result.push({ ...audience, platformId: found.id, status: candidates.length ? 'existing_requires_rule_review' : 'awaiting_external_processing',
           size: found.approximate_count_lower_bound ?? null, sizeUpper: found.approximate_count_upper_bound ?? null,
+          labels: candidates.length ? found.audience_labels || [] : labels,
           processing: found.operation_status?.description || null, uploaded: true });
       }
       return { observedAt: new Date().toISOString(), pixelId, store: result, separateFromCrm: true };

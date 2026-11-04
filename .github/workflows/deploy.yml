@@ -98,6 +98,12 @@ jobs:
       - name: Validate consumer marketing projection
         run: docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php /tests/marketing.test.php
 
+      - name: Validate storefront campaign renderer
+        run: |
+          docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php -l /tests/site/render-commerce.php
+          docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php -l /tests/testing/isolation.php
+          docker run --rm -v "$PWD/integrations/wordpress:/tests:ro" php:8.2-cli php -l /tests/testing/seed.php
+
       - name: Export validated WordPress integration
         uses: actions/upload-artifact@v4
         with:
