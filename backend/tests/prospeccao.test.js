@@ -441,3 +441,49 @@ test('failed import cannot enqueue an unnamed contact',async()=>{
  let queued=false;
  const r=await runProspeccaoTick(fakePool(),deps({importarLead:async()=>null,enfileirarEnvio:async()=>{queued=true;}}));assert.equal(queued,false);assert.equal(r.falhas,1);
 });
+
+test('descarte não é para sempre: política de nova tentativa por motivo', () => {
+  const { politicaNovaTentativa } = require('../prospeccao');
+  assert.deepEqual(politicaNovaTentativa({ status: 'descartado', motivo: 'SPE/SCP: CNPJ de uma obra' }), { modo: 'infinito', dias: 0 });
+  assert.equal(politicaNovaTentativa({ status: 'descartado', motivo: 'número da Receita sem WhatsApp; na web: nenhum candidato' }).dias, 30);
+  assert.equal(politicaNovaTentativa({ status: 'descartado', motivo: 'outra empresa deste mesmo lote já recebe neste número' }).dias, 7);
+  assert.equal(politicaNovaTentativa({ status: 'descartado', motivo: 'fora dos ICPs da Aerion' }).dias, 180);
+  assert.equal(politicaNovaTentativa({ status: 'falhou', motivo: 'erro da IA' }).dias, 3);
+  assert.equal(politicaNovaTentativa({ status: 'enfileirado' }).modo, 'nulo', 'quem foi abordado nunca volta');
+});
+
+test('o registro reabre descarte/falha (espera crescente) mas nunca sobrescreve abordado', async () => {
+  const { registrarProspeccao } = require('../prospeccao');
+  let sql = ''; let params = [];
+  const pool = { query: async (s, p) => { sql = s; params = p; return { rows: [] }; } };
+  await registrarProspeccao(pool, { accountId: 2, cnpj: '12.345.678/0001-90', status: 'descartado', motivo: 'sem telefone no cadastro; na web: x' });
+  assert.match(sql, /DO UPDATE SET/);
+  assert.match(sql, /tentativas = t\.tentativas \+ 1/);
+  assert.match(sql, /LEAST\(t\.tentativas \+ 1, 4\)/, 'espera cresce até 4x');
+  assert.match(sql, /WHERE t\.status IN \('descartado', 'falhou'\)/);
+  assert.deepEqual(params.slice(-2), ['dias', 30]);
+});
+
+test('o ciclo INSISTE: página 1 já toda tentada, vai para a página 2 e completa a cota', async () => {
+  const velha = { ...EMPRESA, cnpj: '11111111000111' };
+  const nova = { ...EMPRESA, cnpj: '22222222000122' };
+  const paginas = [];
+  const pool = fakePool({ jaTentados: [velha.cnpj] });
+  const r = await runProspeccaoTick(pool, deps({
+    config: { ...CFG, candidatosPorPerfil: 1, paginasPorPerfil: 3, orcamentoMs: 60000, maxPorTick: 1 },
+    buscarEmpresas: async (_f, _n, ctx) => { paginas.push(ctx.page); return ctx.page === 1 ? [velha] : [nova]; },
+  }));
+  assert.deepEqual(paginas, [1, 2]);
+  assert.equal(r.paginas, 2);
+  assert.equal(r.abordados, 1, 'a empresa nova da 2ª página foi abordada');
+});
+
+test('o ciclo para de paginar quando a cota do ciclo já foi cumprida', async () => {
+  const paginas = [];
+  const r = await runProspeccaoTick(fakePool(), deps({
+    config: { ...CFG, candidatosPorPerfil: 1, paginasPorPerfil: 5, maxPorTick: 1 },
+    buscarEmpresas: async (_f, _n, ctx) => { paginas.push(ctx.page); return [{ ...EMPRESA, cnpj: `9${ctx.page}`.padEnd(14, '0') }]; },
+  }));
+  assert.equal(r.abordados, 1);
+  assert.deepEqual(paginas, [1], 'cota cumprida na 1ª página: não busca mais');
+});

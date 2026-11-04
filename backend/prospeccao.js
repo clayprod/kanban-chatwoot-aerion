@@ -40,6 +40,11 @@ const carregarConfigProspeccao = () => ({
   maxPorDia: inteiro('PROSPECCAO_MAX_PER_DAY', 10),
   maxPorTick: inteiro('PROSPECCAO_MAX_PER_TICK', 3),
   candidatosPorPerfil: inteiro('PROSPECCAO_CANDIDATES_PER_PROFILE', 40),
+  // O ciclo INSISTE até completar a cota: segue para as próximas páginas de cada perfil
+  // (em rodízio entre perfis) até abordar o que cabe no ciclo, acabar as páginas ou o tempo.
+  // Sem isso a página 1 se esgotava e o ciclo das 14:20 de 04/11 avaliou 0 empresas.
+  paginasPorPerfil: inteiro('PROSPECCAO_PAGES_PER_PROFILE', 8),
+  orcamentoMs: inteiro('PROSPECCAO_TICK_BUDGET_MS', 10 * 60 * 1000),
   minConfianca: Number.parseFloat(process.env.PROSPECCAO_MIN_CONFIDENCE ?? '') || 0.6,
   // Decisão do Clayton (2026-10-29): número da Receita com WhatsApp ATIVO na Evolution basta,
   // sem exigir que o nome do perfil bata com a razão social (quase nenhum perfil bate).
@@ -71,6 +76,21 @@ const createProspeccaoTable = async (pool) => {
   // Tabela ja existia em producao antes do ICP entrar.
   await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS icp TEXT`);
   await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS phone_evidence JSONB`);
+  // Descarte NÃO é para sempre: cada linha guarda quando a empresa pode ser tentada de novo.
+  // NULL = nunca mais (abordado/enfileirado); 'infinity' = descarte definitivo (SPE/SCP).
+  await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS proxima_tentativa TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD COLUMN IF NOT EXISTS tentativas INTEGER NOT NULL DEFAULT 1`);
+  // Linhas antigas (todas bloqueavam para sempre): aplica a mesma política, a partir de quando foram criadas.
+  await pool.query(`
+    UPDATE ${PROSPECCAO_LOG_TABLE} SET proxima_tentativa = CASE
+      WHEN status = 'falhou' THEN created_at + INTERVAL '3 days'
+      WHEN motivo ILIKE '%SPE/SCP%' THEN 'infinity'::timestamptz
+      WHEN motivo ILIKE '%fora dos ICPs%' THEN created_at + INTERVAL '180 days'
+      WHEN motivo ILIKE '%mesmo lote%' THEN created_at + INTERVAL '7 days'
+      WHEN motivo ~* '(confian|mensagem|corpo|link|caracteres)' THEN created_at + INTERVAL '14 days'
+      ELSE created_at + INTERVAL '30 days' END
+    WHERE proxima_tentativa IS NULL AND status IN ('descartado', 'falhou')
+  `);
   // 'enfileirado' nasceu depois da tabela: abordagem gerada e na fila, ainda nao
   // entregue. Quem entrega e o despachante, e e ele que alimenta o teto diario.
   await pool.query(`
@@ -177,7 +197,7 @@ const cnaesValidos = (lista) => [...new Set(
 )];
 
 // Monta a query da busca RFB a partir do perfil sugerido.
-const paramsDaBusca = (filtros, { pageSize }) => {
+const paramsDaBusca = (filtros, { pageSize, page = 1 }) => {
   const p = new URLSearchParams();
   if (filtros.nome) p.set('nome', filtros.nome);
   if (filtros.uf) p.set('uf', filtros.uf);
@@ -192,7 +212,7 @@ const paramsDaBusca = (filtros, { pageSize }) => {
   // ~20s. Idade da empresa e refino desejavel; 504 a cada tick nao e.
   p.set('situacao', (filtros.situacao || ['2']).join ? (filtros.situacao || ['2']).join(',') : '2');
   p.set('only_matriz', filtros.only_matriz === false ? 'false' : 'true');
-  p.set('page', '1');
+  p.set('page', String(Math.max(1, Number(page) || 1)));
   p.set('page_size', String(pageSize));
   return p;
 };
@@ -209,7 +229,9 @@ const filtrarNovos = async (pool, accountId, empresas) => {
     [accountId]
   );
   const { rows: jaTentados } = await pool.query(
-    `SELECT cnpj FROM ${PROSPECCAO_LOG_TABLE} WHERE account_id = $1`,
+    // Só bloqueia quem foi abordado/enfileirado (NULL) ou descarte ainda dentro do prazo de espera.
+    `SELECT cnpj FROM ${PROSPECCAO_LOG_TABLE}
+      WHERE account_id = $1 AND (proxima_tentativa IS NULL OR proxima_tentativa > NOW())`,
     [accountId]
   );
   const conhecidos = new Set([
@@ -278,19 +300,51 @@ const montarPromptAbordagem = ({
   return { system, user };
 };
 
+// Quando uma empresa descartada pode ser tentada de novo. O que é circunstância (sem WhatsApp
+// hoje, telefone não achado, provedor fora do ar) volta; o que é identidade (SPE/SCP, obra)
+// nunca volta. A espera cresce a cada nova tentativa (x1, x2, x3, x4), para não martelar
+// a mesma empresa. Contato já na base (opt-out incluído) nunca chega aqui: filtrarNovos o corta.
+const politicaNovaTentativa = ({ status, motivo }) => {
+  if (status !== 'descartado' && status !== 'falhou') return { modo: 'nulo', dias: 0 };
+  if (status === 'falhou') return { modo: 'dias', dias: 3 };
+  const m = String(motivo || '');
+  if (/SPE\/SCP/i.test(m)) return { modo: 'infinito', dias: 0 };
+  if (/fora dos ICPs/i.test(m)) return { modo: 'dias', dias: 180 };
+  if (/mesmo lote/i.test(m)) return { modo: 'dias', dias: 7 };
+  if (/confian|mensagem|corpo|link|caracteres/i.test(m)) return { modo: 'dias', dias: 14 };
+  return { modo: 'dias', dias: 30 };
+};
+
+const proximaTentativaSql = (n) => `CASE $15::text
+  WHEN 'nulo' THEN NULL
+  WHEN 'infinito' THEN 'infinity'::timestamptz
+  ELSE NOW() + make_interval(days => $16::int * LEAST(${n}, 4)) END`;
+
 const registrarProspeccao = async (pool, d) => {
+  const { modo, dias } = politicaNovaTentativa({ status: d.status, motivo: d.motivo });
   await pool.query(
-    `INSERT INTO ${PROSPECCAO_LOG_TABLE}
+    `INSERT INTO ${PROSPECCAO_LOG_TABLE} AS t
        (account_id, cnpj, razao_social, telefone, perfil, status, motivo,
-        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, icp,phone_evidence)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
-     ON CONFLICT (account_id, cnpj) WHERE cnpj IS NOT NULL DO NOTHING`,
+        perfil_whatsapp, confirmou_empresa, contact_id, mensagem, error, icp, phone_evidence,
+        proxima_tentativa, tentativas)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb, ${proximaTentativaSql(1)}, 1)
+     ON CONFLICT (account_id, cnpj) WHERE cnpj IS NOT NULL DO UPDATE SET
+       razao_social = EXCLUDED.razao_social, telefone = EXCLUDED.telefone, perfil = EXCLUDED.perfil,
+       status = EXCLUDED.status, motivo = EXCLUDED.motivo, perfil_whatsapp = EXCLUDED.perfil_whatsapp,
+       confirmou_empresa = EXCLUDED.confirmou_empresa, contact_id = EXCLUDED.contact_id,
+       mensagem = EXCLUDED.mensagem, error = EXCLUDED.error, icp = EXCLUDED.icp,
+       phone_evidence = EXCLUDED.phone_evidence, created_at = NOW(),
+       tentativas = t.tentativas + 1,
+       proxima_tentativa = ${proximaTentativaSql('t.tentativas + 1')}
+     -- Só reabre linha que era descarte/falha. Abordado/enfileirado nunca é sobrescrito.
+     WHERE t.status IN ('descartado', 'falhou')`,
     [
       d.accountId, soDigitos(d.cnpj) || null, d.razaoSocial ?? null, d.telefone ?? null,
       d.perfil ?? null, d.status, d.motivo ?? null, d.perfilWhatsapp ?? null,
       d.confirmouEmpresa ?? null, d.contactId ?? null, d.mensagem ?? null, d.error ?? null,
       d.icp ?? null,
       JSON.stringify(d.phoneEvidence || null),
+      modo, dias,
     ]
   );
 };
@@ -347,13 +401,25 @@ const runProspeccaoTick = async (pool, {
   const r = { abordados: 0, descartados: 0, falhas: 0, avaliados: 0, perfis: perfis.length };
   const limite = Math.max(1, Math.min(config.maxPorTick, saldo));
 
-  for (const perfil of perfis) {
+  // Fila de (perfil, página) em rodízio: página 1 de cada perfil primeiro, depois a 2, etc.
+  const fila = perfis.map((perfil) => ({ perfil, pagina: 1 }));
+  const prazo = Date.now() + (config.orcamentoMs || 600000);
+  r.paginas = 0;
+
+  while (fila.length) {
     if (r.abordados >= limite) break;
+    if (Date.now() > prazo) { r.esgotouTempo = true; break; }
+    const { perfil, pagina } = fila.shift();
 
     // Busca fora do try matava o tick inteiro quando um perfil dava 504/401.
     let encontradas;
     try {
-      encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil, { titulo: perfil.titulo });
+      encontradas = await buscarEmpresas(perfil.filtros, config.candidatosPorPerfil, { titulo: perfil.titulo, page: pagina });
+      r.paginas += 1;
+      // Página cheia = pode haver mais. Enfileira a próxima ANTES de processar esta.
+      if (encontradas.length >= config.candidatosPorPerfil && pagina < (config.paginasPorPerfil || 1)) {
+        fila.push({ perfil, pagina: pagina + 1 });
+      }
     } catch (error) {
       r.falhas += 1;
       r.errosBusca = [...(r.errosBusca || []), `${perfil.titulo}: ${String(error.message || error)}`];
@@ -376,6 +442,8 @@ const runProspeccaoTick = async (pool, {
       r.falhas += 1;
       r.errosBusca = [...(r.errosBusca || []),
         `${perfil.titulo}: verificação de WhatsApp indisponível — não abordo sem conferir`];
+      // A Evolution caiu: as próximas páginas falhariam do mesmo jeito. Encerra o ciclo.
+      fila.length = 0;
       continue;
     }
 
@@ -568,6 +636,7 @@ module.exports = {
   montarPromptAbordagem,
   comporAbordagem,
   registrarProspeccao,
+  politicaNovaTentativa,
   contarHoje,
   runProspeccaoTick,
 };
