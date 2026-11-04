@@ -93,7 +93,8 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       await saveState(db, 'assistant_latest', { ...plan, advice, status: 'ready_for_review' }); return true;
     }
     const found = (await db.query(`SELECT c.*,p.data AS product FROM ecommerce_marketing_content c JOIN ecommerce_marketing_products p ON p.product_id=c.product_id WHERE c.id=$1`, [job.resource])).rows[0];
-    if (!found || found.status !== 'draft' || found.product_version !== found.product.version) throw new Error('content_hub_current_draft_required');
+    if (!found) return true;
+    if (job.kind === 'hub_generate' && (found.status !== 'draft' || found.product_version !== found.product.version)) return true;
     const settings = found.data.contentHub;
     if (!settings?.requestId) throw new Error('content_hub_invalid_request');
     if (job.kind === 'hub_generate') {
@@ -114,7 +115,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       const expectedType = settings.generation.capability === 'image-to-video' ? 'video/' : 'image/';
       const assets = (jobState.artifacts || []).filter(a => (a.contentType || '').startsWith(expectedType) && /^https:\/\//.test(a.url || '')).map(a => ({ url: a.url, contentType: a.contentType, bytes: a.bytes }));
       const status = jobState.status === 'done' ? assets.length ? 'ready_for_review' : 'failed' : ['failed', 'cancelled'].includes(jobState.status) ? 'failed' : 'running';
-      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND status='draft'`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, failure: jobState.failure || null, observedAt: new Date().toISOString() })]);
+      await db.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}', $2::jsonb) WHERE id=$1 AND data->'contentHub'->>'requestId'=$3`, [found.id, JSON.stringify({ ...settings, jobId: jobState.id, status, assets, costUsd: jobState.costUsd, failure: jobState.failure || null, observedAt: new Date().toISOString() }), settings.requestId]);
       if (status === 'running') await enqueue(db, 'hub_poll', found.id);
       return true;
     }

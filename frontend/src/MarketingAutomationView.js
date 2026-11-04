@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { btnSecondarySm, input, select } from './ui';
+import CampaignAssistantView from './CampaignAssistantView';
 
 const stateLabel = { operational: 'Operacional', awaiting_external_processing: 'Aguardando processamento externo', existing_requires_rule_review: 'Existente · conferir regras', administrator_action: 'Ação do administrador', pending: 'Na fila', running: 'Em processamento', retry: 'Nova tentativa agendada', done: 'Concluído', draft: 'Aguardando revisão', approved: 'Aprovado', published: 'Publicado', rejected: 'Rejeitado', stale: 'Desatualizado' };
 const issueLabel = { not_published: 'Fora de publicação', missing_sku: 'SKU ausente', duplicate_sku: 'SKU duplicado', missing_real_image: 'Imagem real ausente', missing_url: 'URL ausente', missing_description: 'Descrição ausente', invalid_consumer_price: 'Preço público inválido', missing_brand_or_gtin: 'Marca ou GTIN ausente', unknown_availability: 'Estoque não confirmado', missing_future_availability_date: 'Pré-venda sem data futura', classification_required: 'Classificar categoria' };
@@ -47,7 +48,7 @@ function Journey({ steps }) {
     <ol className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{steps.map((step, i) => <li key={step.id} aria-current={i === next ? 'step' : undefined} className={`rounded-lg border p-3 text-sm ${step.done ? 'border-emerald-500/30 bg-emerald-500/5' : i === next ? 'border-primary bg-primary/10' : 'border-line bg-bg2'}`}>
       <div className="flex items-center gap-2 font-medium"><span aria-hidden="true">{step.done ? '✓' : i === next ? '→' : '○'}</span>{step.title}{i === next && <span className="ml-auto rounded bg-primary/20 px-1.5 py-0.5 text-xs text-primary">próximo</span>}</div>
       <p className="mt-1 text-xs">{step.detail}</p><p className="mt-1 text-xs text-muted">{step.why}</p></li>)}</ol>
-    <p className="mt-4 rounded-lg border border-dashed border-line p-3 text-xs text-muted">Em breve aqui: sugestão de público, divisão do investimento por etapa do funil e geração de imagens e vídeos de campanha. Quem decide e aprova é sempre você.</p>
+    <p className="mt-4 text-xs text-muted">Use o assistente abaixo para preparar o plano e os arquivos. Público e investimento precisam ser revisados antes de ativar; geração de conteúdo não publica anúncios.</p>
   </section>;
 }
 export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
@@ -72,6 +73,7 @@ export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
       {isAdmin && <div className="flex flex-wrap gap-2"><button type="button" className={btnSecondarySm} disabled={busy || !data.enabled} onClick={() => act('reconcile')}>Conciliar produtos</button><button type="button" className={btnSecondarySm} disabled={busy || !data.enabled} onClick={() => act('meta/sync')}>Consultar catálogo Meta</button></div>}
     </div>
     <Journey steps={journeySteps(data)} />
+    <CampaignAssistantView data={data} isAdmin={isAdmin} onRefresh={onRefresh} />
     {message && <p role={failure ? 'alert' : 'status'} className={`rounded-lg border p-3 text-sm ${failure ? 'border-red/30' : 'border-line'} bg-surf`}>{message}</p>}
     <details className="rounded-xl border border-line p-4"><summary className="cursor-pointer text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Catálogo, públicos e SEO · detalhes técnicos</summary><div className="mt-4 space-y-6">
     <div className="flex flex-wrap gap-3"><label className="min-w-0"><span className="mb-1 block text-xs text-muted">Buscar produto ou SKU</span><input className={`${input} max-w-full`} value={query} onChange={e => setQuery(e.target.value)} /></label><label><span className="mb-1 block text-xs text-muted">Elegibilidade</span><select className={select} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">Todos</option><option value="eligible">Elegíveis</option><option value="pending">Com pendências</option></select></label></div>

@@ -11,6 +11,17 @@ const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCusto
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
 const { createContentHub, recommendCampaign, createCampaignAssistant } = require('../ecommerce/contentHub');
 
+test('late Hub results retain files and costs after rejection without regenerating or approving content', async () => {
+  const writes = [], found = { id: 'draft', status: 'rejected', product_version: 'old', product: { version: 'new' }, data: { contentHub: { requestId: 'request', generation: { capability: 'text-to-image' } } } };
+  let receipts = 0;
+  const db = { query: async (sql, params) => { if (sql.startsWith('SELECT c.')) return { rows: [found] };writes.push({ sql, params });return { rows: [] }; } };
+  const assistant = createCampaignAssistant({ pool: db, hub: { receipt: async () => { receipts++;return { job: { id: 'job', status: 'done', costUsd: 0.09, artifacts: [{ url: 'https://hub.test/file.jpg', contentType: 'image/jpeg', bytes: 100 }] } }; } }, enqueue: async () => { throw Error('Finished result must not queue another job'); } });
+  await assistant.execute(db, { kind: 'hub_generate', resource: 'draft' });assert.equal(receipts, 0);
+  await assistant.execute(db, { kind: 'hub_poll', resource: 'draft' });assert.equal(receipts, 1);assert.equal(writes.length, 1);
+  const saved = JSON.parse(writes[0].params[1]);assert.equal(saved.assets.length, 1);assert.equal(saved.costUsd, 0.09);
+  assert.equal(writes[0].params[2], 'request');assert(!/SET status/.test(writes[0].sql));
+});
+
 test('campaign advice uses available products, preserves fixed budgets and never activates or invents historical results', () => {
   const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' }))];
   const plan = recommendCampaign(products, { budget: { total: 1000, google: 600, meta: 400 } });
