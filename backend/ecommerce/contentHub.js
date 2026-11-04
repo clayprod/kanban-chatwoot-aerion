@@ -4,12 +4,13 @@ const { eligibleProducts, campaignPlan } = require('./marketingDomain');
 function createContentHub({ env = process.env, transport = global.fetch } = {}) {
   const origin = env.ECOMMERCE_CONTENT_HUB_URL || 'https://hub.tenryu.com.br';
   const token = env.ECOMMERCE_CONTENT_HUB_TOKEN;
-  const brandId = env.ECOMMERCE_CONTENT_HUB_BRAND || 'aerion';
+  const brandId = env.ECOMMERCE_CONTENT_HUB_BRAND || 'aerion-technologies';
   const configured = Boolean(token);
   async function call(path, body) {
     if (!configured) throw new Error('content_hub_connection_required');
-    const base = new URL(origin);
-    if (base.protocol !== 'https:' || base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('content_hub_connection_required');
+    let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
+    const privateService = base.origin === 'http://tenryu_hub-api:3000';
+    if ((!privateService && base.protocol !== 'https:') || base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('content_hub_connection_required');
     let response;
     try { response = await transport(new URL('/api/marketing/' + path, base), {
       method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(90000),

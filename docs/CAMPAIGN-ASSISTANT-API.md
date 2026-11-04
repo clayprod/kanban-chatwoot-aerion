@@ -31,7 +31,7 @@ Cada rascunho aceita uma solicitação de geração. Repetir não cobra de novo;
 
 ## Configuração privada
 
-`ECOMMERCE_CONTENT_HUB_URL=https://hub.tenryu.com.br`, `ECOMMERCE_CONTENT_HUB_BRAND=aerion`, `ECOMMERCE_CONTENT_HUB_TOKEN` somente no backend. Não colocar token no frontend, URLs, relatórios ou logs. A identidade é a integração de servidor existente, separada do OAuth do MCP.
+`ECOMMERCE_CONTENT_HUB_URL=https://hub.tenryu.com.br`, `ECOMMERCE_CONTENT_HUB_BRAND=aerion-technologies` (marca já existente), `ECOMMERCE_CONTENT_HUB_TOKEN` somente no backend. Não colocar token no frontend, URLs, relatórios ou logs. A identidade é a integração de servidor existente, separada do OAuth do MCP. No VPS, o endereço público devolve 403 ao servidor; a alternativa permitida é exclusivamente `http://tenryu_hub-api:3000`, na rede Docker privada compartilhada e ainda autenticada por Bearer. Nenhum outro endereço HTTP é permitido.
 
 O Hub oferece `/api/marketing/capabilities/:brandId`, `/advice`, `/generations` e `/requests/:id`, sob o Bearer já existente. Geração usa o mesmo motor MCP/console, com referências de produto obrigatórias, marca e teto por pedido, além do teto geral do Hub. Não usa um gerador concorrente. Pedidos são idempotentes no Hub por 30 dias; o CRM conserva o identificador no conteúdo.
 

@@ -30,6 +30,10 @@ test('Content Hub uses private bearer auth, refuses redirects and never reflects
   } });
   await assert.rejects(hub.capabilities(), error => error.httpStatus === 403 && !error.message.includes(secret));
   await assert.rejects(createContentHub({ env: {} }).capabilities(), /connection_required/);
+  let requested = false;
+  const internal = createContentHub({ env: { ECOMMERCE_CONTENT_HUB_TOKEN: secret, ECOMMERCE_CONTENT_HUB_URL: 'http://tenryu_hub-api:3000' }, transport: async url => { requested = true;assert.equal(new URL(url).hostname, 'tenryu_hub-api');return Response.json({}); } });
+  await internal.capabilities();assert(requested);
+  await assert.rejects(createContentHub({ env: { ECOMMERCE_CONTENT_HUB_TOKEN: secret, ECOMMERCE_CONTENT_HUB_URL: 'http://example.com' } }).capabilities(), /connection_required/);
 });
 
 const raw = (id = 1, extra = {}) => ({ id, parent_id: id, sku: `SKU-${id}`, name: 'Drone real', description: 'Especificação fornecida pela loja.',
