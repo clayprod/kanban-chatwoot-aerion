@@ -125,6 +125,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
   async function execute(db, job) {
     if (await assistant.execute(db, job)) return;
     if (job.kind === 'chatgpt_ads_sync') { await chatgptAds.sync(db);return; }
+    if (job.kind === 'chatgpt_ads_setup') { await chatgptAds.setup(db);return; }
     if (job.kind === 'meta_safety') { await saveState(db, 'meta_media_safety', await providers.metaMediaSafety(await load(db, 'meta_ads')));return; }
     if (job.kind === 'google_safety') {
       const result = await providers.googleMediaSafety(await load(db, 'google_ads'));
@@ -305,7 +306,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
           ORDER BY CASE kind WHEN 'product' THEN 0 WHEN 'paid_event' THEN 0 WHEN 'reconcile' THEN 1 WHEN 'meta' THEN 2 ELSE 3 END,next_run_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`)).rows[0];
         if (!job) break;
         const sourceLocks = ['customer_audiences','campaign_stage'].includes(job.kind) ? [lockId('woocommerce'), lockId('meta_ads'), lockId('google_ads')]
-          : [job.kind === 'chatgpt_ads_sync' ? 735107 : lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
+          : [job.kind.startsWith('chatgpt_ads_') ? 735107 : lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
         const acquired = [];
         for (const id of sourceLocks) {
           if (!(await db.query('SELECT pg_try_advisory_lock($1) AS locked', [id])).rows[0].locked) break;

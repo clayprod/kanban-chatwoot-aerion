@@ -1,15 +1,18 @@
 const { encrypt, decrypt, encryptionKey } = require('./domain');
+const crypto = require('node:crypto');
 const API = 'https://api.ads.openai.com/v1/';
 function createChatgptAdsClient(token, transport = global.fetch) {
-  async function get(path) {
+  async function request(path, method = 'GET', body, idempotencyKey) {
     if (!token) throw Object.assign(new Error('Configure a chave da conta ChatGPT Ads.'), { status: 409 });
     const target = new URL(path, API);
     if (target.origin !== 'https://api.ads.openai.com' || !target.pathname.startsWith('/v1/') || target.username || target.password) throw new Error('chatgpt_ads_invalid_destination');
-    let r;try { r = await transport(target, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(45000) }); }
+    if (!['GET', 'POST', 'PATCH'].includes(method)) throw new Error('chatgpt_ads_invalid_method');
+    let r;try { r = await transport(target, { method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}), ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(45000) }); }
     catch { throw Object.assign(new Error('Não foi possível consultar ChatGPT Ads.'), { retrySeconds: 300 }); }
     if (!r.ok) throw Object.assign(new Error(`ChatGPT Ads respondeu HTTP ${r.status}. Confira a chave da conta e a liberação do recurso no Ads Manager.`), { status: 409, httpStatus: r.status, retrySeconds: r.status === 429 ? 900 : 3600 });
     try { return await r.json(); } catch { throw Object.assign(new Error('ChatGPT Ads retornou uma resposta inválida.'), { retrySeconds: 300 }); }
   }
+  const get = path => request(path);
   async function list(path) {
     const rows = [], seen = new Set();let after;
     do {
@@ -21,7 +24,7 @@ function createChatgptAdsClient(token, transport = global.fetch) {
     } while (after);
     return rows;
   }
-  return { get, list };
+  return { get, list, request };
 }
 function publicAccount(account) {
   if (!account || typeof account.id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(account.id)) throw Object.assign(new Error('A chave não confirmou uma conta ChatGPT Ads válida.'), { status: 409 });
@@ -32,8 +35,55 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
   async function status() {
     const row = await saved(pool);
     const snapshot = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_snapshot:' + row.config.account.id])).rows[0]?.data : null;
-    return { configured: Boolean(row?.enabled), account: row?.config?.account || null, lastVerifiedAt: row?.last_success_at || null, snapshot: snapshot || null,
+    const setup = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_setup:' + row.config.account.id])).rows[0]?.data : null;
+    return { configured: Boolean(row?.enabled), account: row?.config?.account || null, lastVerifiedAt: row?.last_success_at || null, snapshot: snapshot || null, setup: setup || null,
       measurement: 'requires_pixel_and_consent_validation', audiences: 'requires_eligible_identifiers_and_account_readiness', activationAllowed: false };
+  }
+  async function setup(db) {
+    const row = await saved(db);if (!row?.enabled) throw new Error('connection_required');
+    const key = encryptionKey(env), secrets = decrypt(row.secrets, key), client = createChatgptAdsClient(secrets.apiKey, transport);
+    const account = publicAccount(await client.get('ad_account'));
+    if (account.id !== row.config.account.id) throw new Error('chatgpt_ads_account_mismatch');
+    const stateKey = 'chatgpt_ads_setup:' + account.id;
+    const state = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', [stateKey])).rows[0]?.data || { resources: {}, operations: {} };
+    const persist = async () => { state.observedAt = new Date().toISOString();state.accountReview = account.reviewStatus;state.activationAllowed = false;await saveState(db, stateKey, state); };
+    const storeSecrets = async () => { const result = await db.query("UPDATE ecommerce_marketing_connections SET secrets=$1,updated_at=now() WHERE name='chatgpt_ads' AND secrets=$2", [encrypt(secrets, key), row.secrets]);if (result.rowCount !== 1) throw new Error('connection_changed');row.secrets = (await saved(db)).secrets; };
+    const once = async (name, path, body, pick) => {
+      if (state.resources[name]) return state.resources[name];
+      // A lost creation response must be reconciled instead of creating duplicates.
+      if (state.operations[name]?.status === 'requesting' || state.operations[name]?.status === 'ambiguous') return null;
+      state.operations[name] = { status: 'requesting' };await persist();
+      try {
+        const result = await client.request(path, 'POST', body, crypto.createHash('sha256').update(account.id + ':' + name + ':v1').digest('hex'));
+        const resource = await pick(result);if (!resource) throw new Error('invalid_creation_response');
+        state.resources[name] = resource;state.operations[name] = { status: 'configured' };await persist();return resource;
+      } catch (error) { state.operations[name] = { status: error.httpStatus ? 'administrator_action' : 'ambiguous', error: error.httpStatus ? `platform_http_${error.httpStatus}` : 'creation_requires_reconciliation', endpoint: path, help: 'https://developers.openai.com/ads/api-partner-setup' };await persist();return null; }
+    };
+    const events = await client.list('conversions/event_settings');
+    // Recover a source from a previously created event definition when possible.
+    const previous = events.find(e => e.name === 'Aerion · Loja · Compra paga');
+    if (!state.resources.pixel && previous?.source_ids?.length === 1) state.operations.pixel = { status: 'administrator_action', error: 'existing_source_pixel_id_required', sourceId: previous.source_ids[0] };
+    const pixel = state.operations.pixel?.error === 'existing_source_pixel_id_required' ? null : await once('pixel', 'conversions/pixels', { name: 'Aerion · Loja · Site', client_type: 'web' }, r => r.id && r.pixel_id ? { sourceId: r.id, pixelId: String(r.pixel_id) } : null);
+    if (!secrets.conversionsApiKey) await once('capi', 'conversions/api_keys', { name: 'Aerion · Loja · Compras pagas servidor' }, async r => { if (!r.api_key) return null;secrets.conversionsApiKey = r.api_key;await storeSecrets();return { configured: true, enabled: false, validationRequired: true }; });
+    if (pixel) for (const [name, type, label] of [['purchase','order_created','Compra paga'],['checkout','checkout_started','Checkout'],['cart','items_added','Carrinho'],['product','contents_viewed','Produto'],['lead','lead_created','Lead confirmado']]) {
+      const found = events.find(e => e.name === 'Aerion · Loja · ' + label && e.event_type === type && e.source_ids?.includes(pixel.sourceId) && !e.archived);
+      if (found) { state.resources['event_' + name] = { id: found.id, eventType: type, primary: name === 'purchase' };continue; }
+      await once('event_' + name, 'conversions/event_settings', { name: 'Aerion · Loja · ' + label, event_type: type, attribution_window_days: 30, source_ids: [pixel.sourceId] }, r => r.id ? { id: r.id, eventType: type, primary: name === 'purchase' } : null);
+    }
+    const feeds = await client.list('feeds');
+    const matchingFeed = feeds.find(f => f.name === 'Aerion · Loja · Catálogo BR');
+    if (matchingFeed) state.resources.feed = { id: matchingFeed.feed_id || matchingFeed.id, countries: ['BR'] };
+    const feed = await once('feed', 'feeds', { name: 'Aerion · Loja · Catálogo BR', countries: ['BR'] }, r => r.feed_id || r.id ? { id: r.feed_id || r.id, countries: ['BR'] } : null);
+    if (feed && !secrets.sftp) await once('sftp', `feeds/${encodeURIComponent(feed.id)}/sftp_access`, { authentication_method: 'password' }, async r => { secrets.sftp = r;await storeSecrets();return { configured: true }; });
+    const audiences = await client.list('custom_audiences');
+    for (const [name, label, source, segment] of [['store_buyers','Loja · Compradores pagos 180d','store','paid_buyers'],['crm_customers','CRM · Clientes comerciais','crm','customers'],['crm_qualified','CRM · Qualificados','crm','qualified'],['crm_nurturing','CRM · Nutrição','crm','nurturing'],['crm_excluded','CRM · Descartados','crm','excluded']]) {
+      const title = 'Aerion · ' + label, found = audiences.find(a => a.name === title && a.status !== 'archived');
+      if (found) state.resources[name] = { id: found.id, source, segment, status: found.status, matchedUserRange: found.matched_user_count_range || null };
+      else await once(name, 'custom_audiences', { name: title, description: source === 'store' ? 'Somente compras online pagas e elegíveis nos últimos 180 dias. Exclusão/recompra; CRM separado.' : 'Segmento comercial separado da loja. Somente identificadores com elegibilidade demonstrada.' }, r => r.id ? { id: r.id, source, segment, status: r.status, matchedUserRange: r.matched_user_count_range || null } : null);
+    }
+    state.audienceMembership = { enabled: false, reason: 'eligibility_and_membership_validation_required' };
+    state.campaigns = { status: 'not_created', reason: 'explicit_chatgpt_budget_and_approved_assets_required', automaticBudgetTransfer: false };
+    await persist();await sync(db);return state;
   }
   async function sync(db) {
     const row = await saved(db);
@@ -58,11 +108,13 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
       const apiKey = req.body?.apiKey;
       if (typeof apiKey !== 'string' || apiKey.length < 16 || apiKey.length > 4096 || /[\r\n]/.test(apiKey)) return res.status(400).json({ error: 'Informe a Advertiser API key da conta ChatGPT Ads. A chave da API de modelos é outra credencial.' });
       const account = publicAccount(await createChatgptAdsClient(apiKey, transport).get('ad_account'));
-      await pool.query(`INSERT INTO ecommerce_marketing_connections(name,config,secrets,enabled,last_success_at) VALUES('chatgpt_ads',$1,$2,true,now()) ON CONFLICT(name) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=true,last_success_at=now(),updated_at=now()`, [{ account }, encrypt({ apiKey }, encryptionKey(env))]);
+      const secrets = old?.config?.account?.id === account.id ? decrypt(old.secrets, encryptionKey(env)) : {};
+      await pool.query(`INSERT INTO ecommerce_marketing_connections(name,config,secrets,enabled,last_success_at) VALUES('chatgpt_ads',$1,$2,true,now()) ON CONFLICT(name) DO UPDATE SET config=EXCLUDED.config,secrets=EXCLUDED.secrets,enabled=true,last_success_at=now(),updated_at=now()`, [{ account }, encrypt({ ...secrets, apiKey }, encryptionKey(env))]);
       await enqueue(pool, 'chatgpt_ads_sync', 'account');res.json({ configured: true, account });
     });
     router.post('/marketing/chatgpt-ads/sync', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_sync', 'account');res.status(202).json({ queued: true }); });
+    router.post('/marketing/chatgpt-ads/setup', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_setup', 'account');res.status(202).json({ queued: true, activationAllowed: false }); });
   }
-  return { status, sync, mountAdmin };
+  return { status, sync, setup, mountAdmin };
 }
 module.exports = { createChatgptAdsClient, publicAccount, createChatgptAds };
