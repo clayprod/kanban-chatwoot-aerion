@@ -11,6 +11,19 @@ const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCusto
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
 const { createContentHub, recommendCampaign, createCampaignAssistant } = require('../ecommerce/contentHub');
 const { buildCampaignStrategy, mediaSafetyEvidence } = require('../ecommerce/campaignStrategy');
+const { createChatgptAdsClient, createChatgptAds } = require('../ecommerce/chatgptAds');
+
+test('ChatGPT Ads client keeps the account key on the official host, paginates and sanitizes failures', async () => {
+  let calls = 0;const secret = 'private-advertiser-test-key';
+  const client = createChatgptAdsClient(secret, async (url, options) => {
+    calls++;assert.equal(url.origin, 'https://api.ads.openai.com');assert.equal(options.headers.Authorization, 'Bearer ' + secret);assert.equal(options.redirect, 'error');
+    return Response.json(calls === 1 ? { data: [{ id: 'one' }], has_more: true, last_id: 'one' } : { data: [{ id: 'two' }], has_more: false });
+  });
+  assert.equal((await client.list('campaigns')).length, 2);
+  await assert.rejects(client.get('https://evil.invalid'), /invalid_destination/);
+  await assert.rejects(createChatgptAdsClient(secret, async () => Response.json({ error: secret }, { status: 403 })).get('ad_account'), error => !error.message.includes(secret) && error.httpStatus === 403);
+  await assert.rejects(createChatgptAdsClient(secret, async () => Response.json({ data: [], has_more: true })).list('campaigns'), /incomplete_pagination/);
+});
 
 test('AI receives existing protection evidence with unavailable and preserved coverage, never an invented absence', () => {
   assert.equal(mediaSafetyEvidence({}).google.status, 'not_audited');
@@ -390,6 +403,36 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
         assert.equal((await request(path, { enabled: false }, 'PUT')).status, 200);
         assert.equal((await fresh.connectionStatus()).configured, false, 'Disabling persisted settings must also disable an environment fallback');
         assert.equal((await request(path, { enabled: true }, 'PUT')).status, 200);
+      } finally { global.fetch = originalFetch; }
+    });
+    await t.test('ChatGPT Ads credentials are encrypted, admin-only and preserve snapshots on partial access', async () => {
+      const originalFetch = global.fetch, secret = 'private-advertiser-key-for-tests';let partial = false;
+      global.fetch = async (url, options = {}) => {
+        if (new URL(url).hostname !== 'api.ads.openai.com') return originalFetch(url, options);
+        assert(!options.method || options.method === 'GET');
+        if (options.headers.Authorization !== 'Bearer ' + secret) return Response.json({ error: secret }, { status: 403 });
+        if (new URL(url).pathname.endsWith('/ad_account')) return Response.json({ id: 'account_test', name: 'Test', currency_code: 'BRL', status: 'active', review: { status: 'pending' } });
+        if (partial && new URL(url).pathname.endsWith('/custom_audiences')) return Response.json({ error: secret }, { status: 403 });
+        return Response.json({ data: [{ id: 'resource_test', name: 'Test', email: 'never-export@example.com' }], has_more: false });
+      };
+      try {
+        const path = '/marketing/chatgpt-ads/connection';
+        assert.equal((await request(path, { apiKey: secret }, 'PUT', { 'x-role': 'member' })).status, 403);
+        assert.equal((await request(path, { apiKey: secret }, 'PUT')).status, 200);
+        const stored = (await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='chatgpt_ads'")).rows[0].secrets;
+        assert(!stored.includes(secret));
+        const fresh = createChatgptAds({ pool, env, enqueue: enqueueMarketing, saveState: async (db, name, data) => db.query('INSERT INTO ecommerce_marketing_state(name,data) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET data=EXCLUDED.data', [name, data]) });
+        await fresh.sync(pool);partial = true;
+        await assert.rejects(fresh.sync(pool), /partial_access/);
+        const status = await fresh.status();
+        assert.equal(status.configured, true);assert.equal(status.snapshot.complete, false);
+        assert.equal(status.snapshot.datasets.audiences.available, false);assert.equal(status.snapshot.datasets.audiences.preserved, true);
+        assert.equal(status.snapshot.datasets.audiences.rows.length, 1);
+        assert(!JSON.stringify(status).includes(secret));assert(!JSON.stringify(status).includes('never-export'));
+        assert.equal((await request(path, { apiKey: 'invalid-replacement-key' }, 'PUT')).status, 409);
+        assert.equal((await pool.query("SELECT secrets FROM ecommerce_marketing_connections WHERE name='chatgpt_ads'")).rows[0].secrets, stored);
+        assert.equal((await request(path, { enabled: false }, 'PUT')).status, 200);
+        assert.equal((await fresh.status()).configured, false);
       } finally { global.fetch = originalFetch; }
     });
     await t.test('signed duplicate deliveries coalesce and product events never become orders', async () => {

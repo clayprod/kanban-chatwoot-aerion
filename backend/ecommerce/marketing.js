@@ -5,6 +5,7 @@ const { encryptionKey } = require('./domain');
 const { createCustomerAudienceTables, syncCustomerAudiences } = require('./customerAudiences');
 const { paidGa4Payload, createMeasurementTables } = require('./serverMeasurement');
 const { createCampaignAssistant } = require('./contentHub');
+const { createChatgptAds } = require('./chatgptAds');
 
 async function createMarketingTables(pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS ecommerce_marketing_connections (
@@ -57,6 +58,7 @@ async function productsFrom(db) {
 function createMarketing({ pool, providers, env = process.env, contentHub }) {
   let ticking = false;
   const assistant = createCampaignAssistant({ pool, env, enqueue: enqueueMarketing, saveState, hub: contentHub });
+  const chatgptAds = createChatgptAds({ pool, env, enqueue: enqueueMarketing, saveState });
   const feedToken = () => env.ECOMMERCE_META_FEED_TOKEN || crypto.createHmac('sha256', encryptionKey(env)).update('aerion-meta-feed-v1').digest('hex');
   const metaSettings = async db => {
     const saved = (await db.query("SELECT data FROM ecommerce_marketing_state WHERE name='meta_setup'")).rows[0]?.data || {};
@@ -122,6 +124,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
   }
   async function execute(db, job) {
     if (await assistant.execute(db, job)) return;
+    if (job.kind === 'chatgpt_ads_sync') { await chatgptAds.sync(db);return; }
     if (job.kind === 'meta_safety') { await saveState(db, 'meta_media_safety', await providers.metaMediaSafety(await load(db, 'meta_ads')));return; }
     if (job.kind === 'google_safety') {
       const result = await providers.googleMediaSafety(await load(db, 'google_ads'));
@@ -295,14 +298,14 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       if (env.ECOMMERCE_CUSTOMER_LISTS) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('customer_audiences','daily') ON CONFLICT DO NOTHING");
       // Successful recurring jobs become due again; retries keep their own backoff.
       await db.query(`UPDATE ecommerce_marketing_jobs SET status='pending',attempts=0 WHERE status='done' AND
-        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
+        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','chatgpt_ads_sync','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
       for (let i = 0; i < 8; i++) {
         const job = (await db.query(`UPDATE ecommerce_marketing_jobs SET status='running',lease_until=now()+interval '10 minutes'
           WHERE id=(SELECT id FROM ecommerce_marketing_jobs WHERE status IN ('pending','retry') AND next_run_at<=now()
           ORDER BY CASE kind WHEN 'product' THEN 0 WHEN 'paid_event' THEN 0 WHEN 'reconcile' THEN 1 WHEN 'meta' THEN 2 ELSE 3 END,next_run_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`)).rows[0];
         if (!job) break;
         const sourceLocks = ['customer_audiences','campaign_stage'].includes(job.kind) ? [lockId('woocommerce'), lockId('meta_ads'), lockId('google_ads')]
-          : [lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
+          : [job.kind === 'chatgpt_ads_sync' ? 735107 : lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
         const acquired = [];
         for (const id of sourceLocks) {
           if (!(await db.query('SELECT pg_try_advisory_lock($1) AS locked', [id])).rows[0].locked) break;
@@ -378,6 +381,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       googleReconciliation: google, metaCatalog: meta,
       mediaSafety: state.google_media_safety || null,
       mediaSafetyMeta: state.meta_media_safety || null,
+      chatgptAds: await chatgptAds.status(),
       diagnostics: Object.entries(state).filter(([key]) => key.startsWith('seo:')).map(([key, value]) => ({ productId: key.slice(4), ...value })),
       seo: state.seo_weekly || seoOpportunities(searches.rows.map(r => r.data), new Date().toISOString().slice(0, 10)),
       audiences: { store: state.meta_audiences?.store || STORE_AUDIENCES.map(a => ({ ...a, status: 'administrator_action', uploaded: false, size: null })),
@@ -426,6 +430,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
   }
   function mountAdmin(router) {
     assistant.mountAdmin(router);
+    chatgptAds.mountAdmin(router);
     router.post('/marketing/safety/google', async (req, res) => { await enqueueMarketing(pool, 'google_safety', 'account');res.status(202).json({ queued: true, readOnly: true }); });
     router.post('/marketing/safety/meta', async (req, res) => { await enqueueMarketing(pool, 'meta_safety', 'account');res.status(202).json({ queued: true, readOnly: true }); });
     router.post('/marketing/reconcile', async (req, res) => { await enqueueMarketing(pool, 'reconcile', 'nightly'); res.status(202).json({ queued: true }); });
