@@ -122,6 +122,15 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
   }
   async function execute(db, job) {
     if (await assistant.execute(db, job)) return;
+    if (job.kind === 'meta_safety') { await saveState(db, 'meta_media_safety', await providers.metaMediaSafety(await load(db, 'meta_ads')));return; }
+    if (job.kind === 'google_safety') {
+      const result = await providers.googleMediaSafety(await load(db, 'google_ads'));
+      const previous = (await db.query("SELECT data FROM ecommerce_marketing_state WHERE name='google_media_safety'")).rows[0]?.data;
+      for (const [key, value] of Object.entries(result.datasets)) if (!value.available && previous?.datasets?.[key]?.rows) result.datasets[key] = { ...previous.datasets[key], ...value, preserved: true };
+      await saveState(db, 'google_media_safety', result);
+      if (!result.complete) throw Object.assign(new Error('google_safety_incomplete'), { retrySeconds: result.retrySeconds });
+      return;
+    }
     if (job.kind === 'webhooks') {
       const config = await load(db, 'woocommerce');
       const origin = new URL(env.ECOMMERCE_PUBLIC_URL);
@@ -286,14 +295,14 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       if (env.ECOMMERCE_CUSTOMER_LISTS) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('customer_audiences','daily') ON CONFLICT DO NOTHING");
       // Successful recurring jobs become due again; retries keep their own backoff.
       await db.query(`UPDATE ecommerce_marketing_jobs SET status='pending',attempts=0 WHERE status='done' AND
-        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','google_audiences','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
+        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
       for (let i = 0; i < 8; i++) {
         const job = (await db.query(`UPDATE ecommerce_marketing_jobs SET status='running',lease_until=now()+interval '10 minutes'
           WHERE id=(SELECT id FROM ecommerce_marketing_jobs WHERE status IN ('pending','retry') AND next_run_at<=now()
           ORDER BY CASE kind WHEN 'product' THEN 0 WHEN 'paid_event' THEN 0 WHEN 'reconcile' THEN 1 WHEN 'meta' THEN 2 ELSE 3 END,next_run_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`)).rows[0];
         if (!job) break;
         const sourceLocks = ['customer_audiences','campaign_stage'].includes(job.kind) ? [lockId('woocommerce'), lockId('meta_ads'), lockId('google_ads')]
-          : [lockId(job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
+          : [lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
         const acquired = [];
         for (const id of sourceLocks) {
           if (!(await db.query('SELECT pg_try_advisory_lock($1) AS locked', [id])).rows[0].locked) break;
@@ -367,6 +376,8 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       assistant: { ...await assistant.connectionStatus(), latestPlan: state.assistant_latest || null, capabilities: state.content_hub_capabilities || null,
         publication: 'approval_required', activationAllowed: false },
       googleReconciliation: google, metaCatalog: meta,
+      mediaSafety: state.google_media_safety || null,
+      mediaSafetyMeta: state.meta_media_safety || null,
       diagnostics: Object.entries(state).filter(([key]) => key.startsWith('seo:')).map(([key, value]) => ({ productId: key.slice(4), ...value })),
       seo: state.seo_weekly || seoOpportunities(searches.rows.map(r => r.data), new Date().toISOString().slice(0, 10)),
       audiences: { store: state.meta_audiences?.store || STORE_AUDIENCES.map(a => ({ ...a, status: 'administrator_action', uploaded: false, size: null })),
@@ -415,6 +426,8 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
   }
   function mountAdmin(router) {
     assistant.mountAdmin(router);
+    router.post('/marketing/safety/google', async (req, res) => { await enqueueMarketing(pool, 'google_safety', 'account');res.status(202).json({ queued: true, readOnly: true }); });
+    router.post('/marketing/safety/meta', async (req, res) => { await enqueueMarketing(pool, 'meta_safety', 'account');res.status(202).json({ queued: true, readOnly: true }); });
     router.post('/marketing/reconcile', async (req, res) => { await enqueueMarketing(pool, 'reconcile', 'nightly'); res.status(202).json({ queued: true }); });
     router.post('/marketing/meta/sync', async (req, res) => { await enqueueMarketing(pool, 'meta', 'catalog'); res.status(202).json({ queued: true }); });
     router.post('/marketing/meta/setup', async (req, res) => { await enqueueMarketing(pool, 'meta_setup', 'catalog'); res.status(202).json({ queued: true }); });

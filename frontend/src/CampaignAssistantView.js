@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { btnPrimarySm, btnSecondarySm, input, select } from './ui';
+import CampaignStrategyPanel, { CampaignStrategyInputs } from './CampaignStrategyPanel';
 
 const stageNames = { acquisition: 'Encontrar novos compradores', consideration: 'Ajudar quem está comparando', recovery: 'Recuperar intenção de compra' };
 const states = { queued: 'Na fila do Hub', running: 'Gerando arquivo', ready_for_review: 'Pronto para sua revisão', failed: 'A geração falhou' };
@@ -15,16 +16,19 @@ export function suggestedRoute(data, medium) {
   return preferred || available[0] || null;
 }
 export default function CampaignAssistantView({ data, isAdmin, onRefresh }) {
-  const assistant = data.assistant || {}, plan = assistant.latestPlan;
+  const assistant = data.assistant || {};
+  const [preview, setPreview] = useState(null), [planning, setPlanning] = useState({ scope: 'product', family: 'Drones', economics: {} });
+  const plan = preview || assistant.latestPlan;
   const [productId, setProductId] = useState(''), [goal, setGoal] = useState('Conseguir as primeiras vendas da loja com um teste pequeno e mensurável.');
   const [stage, setStage] = useState('acquisition'), [medium, setMedium] = useState('image'), [limit, setLimit] = useState('1'), [direction, setDirection] = useState('');
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');
   const lock = useRef(false);
+  useEffect(() => setPreview(null), [productId, planning, goal]);
   const products = (data.products || []).filter(p => p.eligible && p.availability !== 'out_of_stock');
   const product = products.find(p => p.id === productId) || products.find(p => p.id === plan?.products?.[0]?.id) || products[0];
   const drafts = (data.contents || []).filter(c => c.kind === 'creative' && c.data?.contentHub?.requestId).slice(0, 12);
   const route = suggestedRoute(data, medium);
-  const pending = plan?.status === 'queued' || drafts.some(c => c.status === 'draft' && ['queued', 'running'].includes(c.data.contentHub.status));
+  const pending = plan?.status === 'queued' || drafts.some(c => c.status === 'draft' && ['queued', 'running'].includes(c.data.contentHub.status)) || (data.jobs || []).some(j => ['google_safety', 'meta_safety'].includes(j.kind) && ['pending', 'running', 'retry'].includes(j.status));
   useEffect(() => {
     if (!pending || !onRefresh) return undefined;
     const timer = setInterval(() => { if (document.visibilityState === 'visible') onRefresh(); }, 10000);
@@ -40,9 +44,9 @@ export default function CampaignAssistantView({ data, isAdmin, onRefresh }) {
   function preparePlan(event) {
     event.preventDefault();
     if (!product || !assistant.configured || !goal.trim()) return;
-    act(() => axios.post('/api/ecommerce/marketing/assistant/plan', { goal, productIds: [product.id],
-      ...(data.campaign ? { budget: { total: data.campaign.total, google: data.campaign.google, meta: data.campaign.meta } } : {}) }), 'Plano inicial salvo. A IA está preparando a recomendação para revisão.');
+    act(async () => { await axios.post('/api/ecommerce/marketing/assistant/plan', planInput());setPreview(null); }, 'Plano inicial salvo. A IA está preparando a recomendação para revisão.');
   }
+  function planInput() { return { goal, ...planning, productIds: [product.id], ...(data.campaign ? { budget: { total: data.campaign.total, google: data.campaign.google, meta: data.campaign.meta } } : {}) }; }
   function generate(event) {
     event.preventDefault();
     if (!product || !route || !assistant.configured) return;
@@ -64,11 +68,13 @@ export default function CampaignAssistantView({ data, isAdmin, onRefresh }) {
     {isAdmin && <form onSubmit={preparePlan} className="mt-5 space-y-3">
       <div className="grid gap-3 md:grid-cols-2"><label className="min-w-0"><span className="mb-1 block text-xs text-muted">Produto principal</span><select className={`${select} w-full max-w-full`} value={product?.id || ''} onChange={e => setProductId(e.target.value)} disabled={busy || !products.length}>{!products.length && <option value="">Nenhum produto disponível e elegível</option>}{products.map(p => <option key={p.id} value={p.id}>{p.name} · {p.sku}</option>)}</select></label>
         <label className="min-w-0"><span className="mb-1 block text-xs text-muted">Seu objetivo</span><input className={`${input} w-full`} required maxLength={3000} value={goal} onChange={e => setGoal(e.target.value)} disabled={busy} /></label></div>
-      <button type="submit" className={btnPrimarySm} disabled={busy || !assistant.configured || !product || !goal.trim()}>{busy ? 'Processando…' : 'Preparar plano com IA'}</button>
+      <CampaignStrategyInputs value={planning} onChange={setPlanning} disabled={busy} />
+      <div className="flex flex-wrap gap-2"><button type="button" className={btnSecondarySm} disabled={busy || !product} onClick={() => act(async () => setPreview((await axios.post('/api/ecommerce/marketing/assistant/preview', planInput())).data), 'Comparação preparada por regras. Nenhuma geração de IA ou alteração de campanha foi solicitada.')}>Comparar estratégias sem gerar conteúdo</button><button type="submit" className={btnPrimarySm} disabled={busy || !assistant.configured || !product || !goal.trim()}>{busy ? 'Processando…' : 'Preparar plano com IA'}</button></div>
     </form>}
+    <CampaignStrategyPanel strategy={plan?.strategy} safety={data.mediaSafety} metaSafety={data.mediaSafetyMeta} safetyJobs={(data.jobs || []).filter(j => ['google_safety', 'meta_safety'].includes(j.kind))} isAdmin={isAdmin} busy={busy} onAudit={platform => act(() => axios.post('/api/ecommerce/marketing/safety/' + platform, {}), 'Consulta em fila. Ela lê as proteções existentes e não altera campanhas.')} />
     {plan && <div className="mt-5 border-t border-line pt-4">
       <h4 className="text-sm font-semibold">Estratégia para revisar</h4>
-      <p className="mt-1 text-xs text-muted">{plan.status === 'queued' ? 'A IA está analisando. O plano inicial abaixo usa regras e dados da loja.' : plan.advice?.text ? 'Recomendação da IA disponível, junto do plano inicial.' : 'Plano inicial por regras; orientação da IA ainda indisponível.'} {plan.budget ? 'Parcelas Google e Meta preservadas.' : 'Verba de anúncios ainda não definida.'}</p>
+      <p className="mt-1 text-xs text-muted">{plan.status === 'rules_preview' ? 'Prévia por regras e referências; nenhuma chamada à IA foi cobrada.' : plan.status === 'queued' ? 'A IA está analisando. O plano inicial abaixo usa regras e dados da loja.' : plan.advice?.text ? 'Recomendação da IA disponível, junto do plano inicial.' : 'Plano inicial por regras; orientação da IA ainda indisponível.'} {plan.budget ? 'Parcelas Google e Meta preservadas.' : 'Verba de anúncios ainda não definida.'}</p>
       <dl className="mt-3 divide-y divide-line">{(plan.stages || []).map(row => <div key={row.id} className="grid gap-1 py-3 text-sm md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"><dt className="font-medium">{row.name}</dt><dd className="min-w-0"><p>{row.audience}</p><p className="mt-1 text-xs text-muted">{row.reason}</p></dd></div>)}</dl>
       {plan.advice?.text && <details className="mt-3"><summary className="cursor-pointer py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Ler a recomendação completa da IA</summary><p className="mt-2 max-w-3xl whitespace-pre-wrap break-words text-sm leading-relaxed">{cleanAdvice(plan.advice.text)}</p></details>}
     </div>}

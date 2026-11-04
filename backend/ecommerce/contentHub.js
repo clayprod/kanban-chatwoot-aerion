@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { eligibleProducts, campaignPlan } = require('./marketingDomain');
 const { encrypt, decrypt, encryptionKey } = require('./domain');
+const { buildCampaignStrategy } = require('./campaignStrategy');
 
 function hubOrigin(origin) {
   let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
@@ -39,15 +40,16 @@ function hubProduct(product) {
     image: product.image, url: product.url, version: product.version, availability: product.availability, availabilityDate: product.availabilityDate || null };
 }
 function recommendCampaign(products, input = {}) {
+  const strategy = buildCampaignStrategy(products, input);
   const selected = eligibleProducts(products).filter(p => p.eligible && p.availability !== 'out_of_stock'
-    && (!input.productIds?.length || input.productIds.map(String).includes(p.id)))
+    && strategy.productIds.includes(p.id))
     .sort((a, b) => Number(!['Drones', 'Kits'].includes(a.group)) - Number(!['Drones', 'Kits'].includes(b.group))
       || Number(a.availability !== 'in_stock') - Number(b.availability !== 'in_stock') || a.name.localeCompare(b.name, 'pt-BR'))
     .slice(0, 3);
   if (!selected.length) throw Object.assign(new Error('Selecione produtos elegíveis disponíveis ou em pré-venda com prazo real.'), { status: 409 });
   const budget = input.budget ? campaignPlan(input.budget, selected, []) : null;
   return { id: crypto.randomUUID(), goal: String(input.goal || 'Preparar as primeiras vendas da loja').slice(0, 3000),
-    products: selected.map(p => ({ id: p.id, ...hubProduct(p) })),
+    products: selected.map(p => ({ id: p.id, ...hubProduct(p) })), strategy,
     budget: budget ? { total: budget.total, google: budget.google, meta: budget.meta, period: 'monthly', automaticTransfer: false } : null,
     stages: [
       { id: 'acquisition', name: 'Encontrar novos compradores', audience: 'Prospecção; excluir compradores pagos 180d', readyToSpend: false, approach: 'demonstração', formats: ['image_4_5', 'image_9_16'], reason: 'Sem histórico comprovado, começar com poucos produtos e hipóteses. Confirmar metas de compra, destino, verba e criativos antes de ativar.' },
@@ -122,6 +124,11 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     throw new Error('content_hub_unknown_job');
   }
   function mountAdmin(router) {
+    router.post('/marketing/assistant/preview', async (req, res) => {
+      if (req.body?.productIds && (!Array.isArray(req.body.productIds) || req.body.productIds.length > 8)) return res.status(400).json({ error: 'Selecione até oito produtos para o briefing.' });
+      const products = (await pool.query('SELECT data FROM ecommerce_marketing_products ORDER BY product_id')).rows.map(row => row.data);
+      res.json({ ...recommendCampaign(products, req.body || {}), status: 'rules_preview', rulesBased: true, aiRequested: false });
+    });
     router.put('/marketing/assistant/connection', async (req, res) => {
       const body = req.body || {}, row = await savedConnection();
       if (body.enabled === false && row) {
