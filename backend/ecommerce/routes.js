@@ -191,6 +191,14 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
     report.products.forEach(product => { product.categories = catalog.get(product.id.split(':')[0])?.categories || []; });
     report.couponCatalog = ofKind('coupon');
     report.excludedOrders = excludedOrders;
+    // Última atividade real de cada plataforma de anúncio, em toda a história:
+    // permite dizer "campanha parada desde X" em vez de exibir zeros ambíguos.
+    const { rows: activity } = await pool.query(`SELECT provider, (max(date) FILTER (WHERE COALESCE((data->>'spend')::numeric,0) > 0 OR COALESCE((data->>'impressions')::numeric,0) > 0))::text AS last_day
+      FROM ecommerce_records WHERE provider IN ('google_ads','meta_ads') AND kind='metric' GROUP BY provider`);
+    report.adActivity = Object.fromEntries(['google_ads', 'meta_ads'].map(p => {
+      const day = activity.find(r => r.provider === p)?.last_day;
+      return [p, day ? String(day).slice(0, 10) : null];
+    }));
     report.search = buildSearchReport(records.filter(r => r.provider === 'search_console' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'search_console'));
     report.merchant = buildMerchantReport(records.find(r => r.provider === 'merchant_center' && r.kind === 'merchant_catalog')?.data,
       records.filter(r => r.provider === 'merchant_center' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'merchant_center'));

@@ -29,6 +29,15 @@ test('failed reconciliation exposes an actionable error and retains product info
   expect(screen.getAllByText('DRONE').length).toBeGreaterThan(0);
 });
 
+test('journey marks finished steps and keeps the first pending step as next', () => {
+  const { journeySteps } = require('./MarketingAutomationView');
+  const steps = journeySteps({ products: [{ eligible: true }, { eligible: false }], readiness: [{ integration: 'measurement', status: 'operational' }],
+    audiences: { store: [{ status: 'operational' }] }, contents: [], campaign: null, stagedCampaigns: [] });
+  expect(steps.map(s => s.done)).toEqual([false, true, true, false, false, false]);
+  expect(steps[0].detail).toBe('1 de 2 produtos elegíveis');
+  expect(steps.findIndex(s => !s.done)).toBe(0);
+});
+
 test('server confirmation limitations do not describe the browser tag as blocked', () => {
   render(<MarketingAutomationView data={{ ...data, readiness: [{ integration: 'measurement_ga4_server', status: 'administrator_action', action: 'Configurar segredo privado após validação.' }] }} isAdmin={false} />);
   expect(screen.getByText('GA4 · confirmação adicional pelo servidor')).toBeInTheDocument();

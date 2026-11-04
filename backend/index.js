@@ -24117,7 +24117,7 @@ const registerBackgroundSchedules = () => {
               `nenhum CNAE do perfil existe na base nem tem substituto seguro (${(filtros.cnae || []).join(', ')})`
             );
           }
-          const qs = paramsDaBusca(filtrosLimpos, { pageSize: tamanho });
+          const qs = paramsDaBusca(filtrosLimpos, { pageSize: tamanho, page: contexto.page || 1 });
           if (!qs.get('cnae') && !qs.get('uf') && !qs.get('nome')) {
             // Sem CNAE, UF nem nome a busca seria uma varredura nacional: 504 garantido.
             throw new Error('perfil sem filtro seletivo (CNAE/UF/nome)');

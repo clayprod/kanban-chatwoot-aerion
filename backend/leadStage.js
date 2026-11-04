@@ -195,7 +195,7 @@ const carregarEtapasConhecidas = async (pool, accountId) => {
 const buscarCandidatosStage = async (pool, { accountId, config, limite }) => {
   const { rows } = await pool.query(
     `
-    WITH ult_in AS (
+    WITH ult_msg AS (
       SELECT cv.contact_id, MAX(m.created_at) AS em
         FROM messages m
         JOIN conversations cv ON cv.id = m.conversation_id
@@ -204,6 +204,19 @@ const buscarCandidatosStage = async (pool, { accountId, config, limite }) => {
          AND COALESCE(m."private", false) = false
          AND m.created_at >= NOW() - make_interval(days => $2)
        GROUP BY cv.contact_id
+    ), ult_nota AS (
+      -- Nota do vendedor (visita presencial, ligação): é sinal de etapa tanto quanto uma
+      -- mensagem do cliente. O Ciro (04/11) teve demo presencial, só nota, zero WhatsApp.
+      SELECT contact_id, MAX(created_at) AS em
+        FROM notes
+       WHERE account_id = $1
+         AND COALESCE(btrim(content), '') <> ''
+         AND created_at >= NOW() - make_interval(days => $2)
+       GROUP BY contact_id
+    ), ult_in AS (
+      SELECT COALESCE(m.contact_id, n.contact_id) AS contact_id, GREATEST(m.em, n.em) AS em
+        FROM ult_msg m
+        FULL JOIN ult_nota n ON n.contact_id = m.contact_id
     ), ult_mov AS (
       SELECT contact_id, MAX(changed_at) AS em FROM kanban_stage_history GROUP BY contact_id
     )
@@ -211,7 +224,8 @@ const buscarCandidatosStage = async (pool, { accountId, config, limite }) => {
            c.name,
            c.custom_attributes->>'Funil_Vendas' AS etapa_atual,
            c.additional_attributes->>'company_name' AS empresa,
-           i.em AS respondeu_em
+           i.em AS respondeu_em,
+           mv.em AS ultimo_movimento
       FROM ult_in i
       JOIN contacts c ON c.id = i.contact_id AND c.account_id = $1
       LEFT JOIN ult_mov mv ON mv.contact_id = i.contact_id
@@ -231,6 +245,22 @@ const buscarCandidatosStage = async (pool, { accountId, config, limite }) => {
   return rows;
 };
 
+// Notas do contato (tabela `notes` do Chatwoot), mais antigas primeiro. Entram no
+// histórico como autor "nota": observação direta da equipe, não fala do cliente.
+const carregarNotas = async (pool, { accountId, contactId, limite = 10 }) => {
+  const { rows } = await pool.query(
+    `SELECT content, created_at FROM (
+       SELECT content, created_at FROM notes
+        WHERE account_id = $1 AND contact_id = $2 AND COALESCE(btrim(content), '') <> ''
+        ORDER BY created_at DESC LIMIT $3
+     ) t ORDER BY created_at ASC`,
+    [accountId, contactId, limite]
+  );
+  return (rows || []).map((r) => ({
+    autor: 'nota', texto: String(r.content || '').slice(0, 800), em: r.created_at,
+  }));
+};
+
 const contarAplicadosHoje = async (pool, accountId) => {
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS total
@@ -244,7 +274,7 @@ const contarAplicadosHoje = async (pool, accountId) => {
   return rows[0]?.total || 0;
 };
 
-const montarPromptStage = ({ contato, historico, etapas }) => {
+const montarPromptStage = ({ contato, historico, etapas, notas = [] }) => {
   const system = [
     'Você classifica em que etapa do funil de vendas um lead está, lendo a conversa real dele com a Aerion (distribuidora de drones Autel no Brasil).',
     '',
@@ -254,6 +284,11 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
     '',
     'Como julgar:',
     '- Olhe o que o CLIENTE disse, não o que nós dissemos. Nosso esforço não move etapa.',
+    '- EXCEÇÃO: linhas "nota" são observações da NOSSA equipe sobre contato presencial ou por',
+    '  telefone (visita, demo, reunião, ligação). Elas descrevem fatos reais do relacionamento',
+    '  e valem tanto quanto a fala do cliente: se a nota diz que houve demo, que ele quer',
+    '  comprar ou que pediu proposta, a etapa tem que refletir isso, mesmo sem nenhuma',
+    '  mensagem de WhatsApp. Use a nota MAIS RECENTE como a posição atual.',
     '- Vale a posição ATUAL dele, não a mais antiga. Uma fala recente SUBSTITUI uma',
     '  anterior: se ele disse "não estou procurando" em março e em agosto pediu a tabela,',
     '  ele voltou a ter interesse. Julgue pela ÚLTIMA fala dele, que vem destacada.',
@@ -298,8 +333,10 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
     const n = dias(d);
     return n === null ? 'data desconhecida' : n === 0 ? 'hoje' : n === 1 ? 'ontem' : `há ${n} dias`;
   };
-  const linhas = historico.length
-    ? historico.map((h) => `[${h.autor} — ${quando(h.em)}] ${h.texto}`).join('\n')
+  // Notas e conversa na mesma linha do tempo, cada uma com a sua idade.
+  const todos = [...historico, ...notas].sort((a, b) => new Date(a.em || 0) - new Date(b.em || 0));
+  const linhas = todos.length
+    ? todos.map((h) => `[${h.autor === 'nota' ? 'nota da equipe' : h.autor} — ${quando(h.em)}] ${h.texto}`).join('\n')
     : '(sem histórico textual)';
 
   // A última fala do cliente define a posição atual dele. Sem destacar, o modelo
@@ -323,7 +360,16 @@ const montarPromptStage = ({ contato, historico, etapas }) => {
         `>>> POSIÇÃO ATUAL DO CLIENTE — o que ele falou por último (${quando(historico[idxCliente].em)}):`,
         ...falasFinais.map((f) => `    "${f.texto}"`),
       ].join(String.fromCharCode(10))
-      : '>>> O CLIENTE NUNCA RESPONDEU. Silêncio não é recusa — nunca classifique como Descartado.',
+      : notas.length
+        ? '>>> O CLIENTE NÃO ESCREVEU, mas a equipe registrou notas (contato presencial/telefone). Julgue pelas notas abaixo.'
+        : '>>> O CLIENTE NUNCA RESPONDEU. Silêncio não é recusa — nunca classifique como Descartado.',
+    notas.length
+      ? [
+        '',
+        `>>> NOTAS DA EQUIPE — mais recente (${quando(notas[notas.length - 1].em)}):`,
+        ...notas.slice(-3).map((n) => `    "${n.texto}"`),
+      ].join(String.fromCharCode(10))
+      : null,
     '',
     'Conversa completa (mais antigo primeiro):',
     linhas,
@@ -452,6 +498,7 @@ const runStageClassificationTick = async (pool, {
   accountId,
   chatCompletionJson,
   carregarContextoConversa,
+  carregarNotasFn = carregarNotas,
   historyTable = 'kanban_stage_history',
   notify = null,
   agendarRetorno = null,
@@ -477,27 +524,36 @@ const runStageClassificationTick = async (pool, {
         accountId,
         contactId: cand.contact_id,
       });
-      if (!historico.length) {
+      // Só vale nota posterior ao último movimento de etapa: o que veio antes já foi
+      // julgado (ou a decisão humana de mover o card já a levou em conta).
+      const todasNotas = await carregarNotasFn(pool, { accountId, contactId: cand.contact_id });
+      const corte = cand.ultimo_movimento ? new Date(cand.ultimo_movimento).getTime() : 0;
+      const notas = todasNotas.filter((n) => new Date(n.em).getTime() > corte);
+
+      if (!historico.length && !notas.length) {
         await registrarStage(pool, { ...base, status: 'skipped', skipReason: 'sem histórico textual' });
         r.pulados += 1;
         continue;
       }
 
       // Falas finais do cliente: se são só ruído (bot da empresa, "ok", emoji), não há
-      // o que classificar. Evita mover card por mensagem automática.
+      // o que classificar. Evita mover card por mensagem automática. Nota recente da
+      // equipe é evidência própria e dispensa a fala do cliente.
       const idxUltimo = historico.map((h) => h.autor).lastIndexOf('cliente');
       const falasCliente = [];
       for (let i = idxUltimo; i >= 0 && falasCliente.length < 4; i -= 1) {
         if (historico[i].autor !== 'cliente') break;
         falasCliente.unshift(historico[i]);
       }
-      if (!falasCliente.length || falasCliente.every((f) => ehFalaDeRuido(f.texto))) {
+      if (!notas.length && (!falasCliente.length || falasCliente.every((f) => ehFalaDeRuido(f.texto)))) {
         await registrarStage(pool, { ...base, status: 'skipped', skipReason: 'só mensagem automática ou trivial do cliente' });
         r.pulados += 1;
         continue;
       }
+      // A citação do motivo pode vir da fala do cliente OU da nota da equipe.
+      const evidencias = [...falasCliente, ...notas];
 
-      const { system, user } = montarPromptStage({ contato: cand, historico, etapas });
+      const { system, user } = montarPromptStage({ contato: cand, historico, etapas, notas });
       const ia = await chatCompletionJson({ system, user, maxTokens: 400, temperature: 0.1 });
       if (!ia.ok) {
         await registrarStage(pool, { ...base, status: 'failed', error: ia.error });
@@ -520,8 +576,8 @@ const runStageClassificationTick = async (pool, {
       });
 
       // Sem citação verificável do cliente não há evidência: não move nem sugere.
-      if (sugerida && sugerida !== cand.etapa_atual && !motivoCitaCliente(motivo, falasCliente)) {
-        await registrarStage(pool, { ...comum, status: 'skipped', skipReason: 'motivo não cita fala do cliente' });
+      if (sugerida && sugerida !== cand.etapa_atual && !motivoCitaCliente(motivo, evidencias)) {
+        await registrarStage(pool, { ...comum, status: 'skipped', skipReason: 'motivo não cita fala do cliente nem nota da equipe' });
         r.pulados += 1;
         continue;
       }
@@ -604,6 +660,7 @@ module.exports = {
   STAGE_LOG_TABLE,
   ehAdiamento,
   ehFalaDeRuido,
+  carregarNotas,
   motivoCitaCliente,
   ORDEM_TRABALHO,
   ALVOS_AUTOMATICOS_PADRAO,
