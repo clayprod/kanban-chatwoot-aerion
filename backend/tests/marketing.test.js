@@ -9,6 +9,28 @@ const { createEcommerce } = require('../ecommerce/routes');
 const { createMarketing, enqueueMarketing } = require('../ecommerce/marketing');
 const { advertisingEligible, emailHash, desiredMembers, parseMappings, syncCustomerAudiences } = require('../ecommerce/customerAudiences');
 const { paidGa4Payload } = require('../ecommerce/serverMeasurement');
+const { createContentHub, recommendCampaign } = require('../ecommerce/contentHub');
+
+test('campaign advice uses available products, preserves fixed budgets and never activates or invents historical results', () => {
+  const products = [projectProduct(raw()), projectProduct(raw(2, { availability: 'out_of_stock' }))];
+  const plan = recommendCampaign(products, { budget: { total: 1000, google: 600, meta: 400 } });
+  assert.equal(plan.products.length, 1);assert.equal(plan.products[0].sku, 'SKU-1');
+  assert.equal(plan.budget.automaticTransfer, false);assert.equal(plan.budget.google, 600);
+  assert.equal(plan.activationAllowed, false);assert(plan.stages.every(stage => !stage.readyToSpend));
+  assert.equal(recommendCampaign(products).budget, null);
+  assert.throws(() => recommendCampaign(products, { budget: { total: 1000, google: 600, meta: 600 } }));
+  assert.throws(() => recommendCampaign(products, { productIds: ['2'] }));
+});
+test('Content Hub uses private bearer auth, refuses redirects and never reflects provider failures or secrets', async () => {
+  const secret = 'private-hub-token';
+  const hub = createContentHub({ env: { ECOMMERCE_CONTENT_HUB_TOKEN: secret }, transport: async (url, options) => {
+    assert.equal(new URL(url).origin, 'https://hub.tenryu.com.br');assert.equal(options.redirect, 'error');
+    assert.equal(options.headers.Authorization, 'Bearer ' + secret);
+    return Response.json({ message: secret }, { status: 403 });
+  } });
+  await assert.rejects(hub.capabilities(), error => error.httpStatus === 403 && !error.message.includes(secret));
+  await assert.rejects(createContentHub({ env: {} }).capabilities(), /connection_required/);
+});
 
 const raw = (id = 1, extra = {}) => ({ id, parent_id: id, sku: `SKU-${id}`, name: 'Drone real', description: 'Especificação fornecida pela loja.',
   url: 'https://loja.aerion.com.br/produto/drone/', image: 'https://loja.aerion.com.br/photo.jpg', brand: 'HUBSAN',
@@ -251,9 +273,14 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
     if (deleted && params.product_id) throw Object.assign(new Error('gone'), { httpStatus: 404 });
     return { data: { price_source: 'aerion_consumer_card_v1', parents_count: rows.length ? 1 : 0, products: rows } };
   }, auditProduct: async () => ({ httpStatus: 200, indexable: true, issues: [], observedAt: new Date().toISOString() }) };
-  const service = createEcommerce({ pool, env, providers });
+  let hubSubmitted = false, hubGenerations = 0;
+  const contentHub = { configured: true, brandId: 'aerion',
+    capabilities: async () => ({ capabilities: [] }), advice: async () => ({ text: 'Recomendação para revisão', advisoryOnly: true }),
+    receipt: async () => { if (!hubSubmitted) throw Object.assign(new Error('not found'), { httpStatus: 404 }); return { state: 'done', jobId: 'hub-job', job: { id: 'hub-job', status: 'done', artifacts: [{ url: 'https://hub.example.com/image.png', contentType: 'image/png', bytes: 100 }] } }; },
+    generate: async () => { hubSubmitted = true; hubGenerations++; return { jobId: 'hub-job' }; } };
+  const service = createEcommerce({ pool, env, providers, contentHub });
   await service.ensure();
-  const worker = createMarketing({ pool, env, providers });
+  const worker = createMarketing({ pool, env, providers, contentHub });
   const app = express();
   app.use(express.json({ verify: (req, res, body) => { req.ecommerceRawBody = body; } }));
   app.use((req, res, next) => { req.auth = req.get('x-role') === 'anonymous' ? null : { role: req.get('x-role') || 'admin', page_permissions: { Ecommerce: 'view' } }; next(); });
@@ -304,6 +331,23 @@ test('marketing durable jobs, webhook idempotency, snapshots, approvals and acce
       assert.equal((await request(`/marketing/content/${contentId}/review`, { status: 'approved' }, 'POST')).status, 409);
       const campaign = await request('/marketing/campaign-plan', { total: 100, google: 60, meta: 40 }, 'PUT');
       assert.equal(campaign.status, 200); assert.equal(campaign.data.status, 'PAUSED'); assert.equal(campaign.data.contentIds.length, 0);
+    });
+    await t.test('Hub generation is durable, cannot be double queued and requires selecting a completed asset before approval', async () => {
+      const created = await request('/marketing/content', { productId: '1', kind: 'creative', copy: 'Demonstração fiel do produto para revisão.' }, 'POST');
+      const id = created.data.id, path = '/marketing/content/' + id;
+      const body = { capability: 'text-to-image', aspectRatio: '4:5', maximumCostUsd: 1 };
+      assert.equal((await request(path + '/generate', { ...body, maximumCostUsd: 0 }, 'POST')).status, 400);
+      assert.equal((await request(path + '/generate', body, 'POST')).status, 202);
+      assert.equal((await request(path + '/generate', body, 'POST')).status, 409);
+      assert.equal((await request(path + '/review', { status: 'approved' }, 'POST')).status, 409);
+      await worker.tick(); await worker.tick();
+      assert.equal(hubGenerations, 1);
+      const generated = (await request('/marketing')).data.contents.find(c => c.id === id);
+      assert.equal(generated.data.contentHub.status, 'ready_for_review');
+      assert.equal(generated.status, 'draft');
+      assert.equal((await request(path + '/assets/select', { url: 'https://other.example.com/fake.png' }, 'POST')).status, 409);
+      assert.equal((await request(path + '/assets/select', { url: 'https://hub.example.com/image.png' }, 'POST')).status, 200);
+      assert.equal((await request(path + '/review', { status: 'approved' }, 'POST')).status, 200);
     });
     await t.test('SEO publication requires an explicit approved current proposal and safely acknowledges retries', async () => {
       let published = 0;

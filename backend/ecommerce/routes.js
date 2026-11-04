@@ -67,14 +67,14 @@ function validateConfig(provider, config) {
   }
   return config;
 }
-function createEcommerce({ pool, getUserById, env = process.env, providers = createProviders({ env }) }) {
+function createEcommerce({ pool, getUserById, env = process.env, providers = createProviders({ env }), contentHub }) {
   let ready;
   const ensure = () => {
     if (!ready) ready = createTables(pool).catch(error => { ready = null; throw error; });
     return ready;
   };
   const sync = createSync({ pool, providers, env });
-  const marketing = createMarketing({ pool, providers, env });
+  const marketing = createMarketing({ pool, providers, env, contentHub });
   const seal = value => encrypt(value, encryptionKey(env));
   const unseal = value => decrypt(value, encryptionKey(env));
   const router = express.Router();
