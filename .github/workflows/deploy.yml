@@ -65,7 +65,7 @@ jobs:
 
       - name: Validate Ecommerce frontend
         working-directory: frontend
-        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js SankhyaReportingPanel.test.js MerchantView.test.js MarketingAutomationView.test.js CampaignAssistantView.test.js ChatgptAdsPanel.test.js
+        run: npm test -- --watchAll=false --runInBand EcommerceView.test.js ecommerceChart.test.js SankhyaReportingPanel.test.js MerchantView.test.js MarketingAutomationView.test.js CampaignAssistantView.test.js CampaignWizard.test.js ChatgptAdsPanel.test.js
         env:
           CI: true
 

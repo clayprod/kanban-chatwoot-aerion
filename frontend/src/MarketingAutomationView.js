@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { btnSecondarySm, input, select } from './ui';
-import CampaignAssistantView from './CampaignAssistantView';
+import CampaignAssistantView from './CampaignWizard';
 
 const stateLabel = { operational: 'Operacional', awaiting_external_processing: 'Aguardando processamento externo', existing_requires_rule_review: 'Existente · conferir regras', administrator_action: 'Ação do administrador', pending: 'Na fila', running: 'Em processamento', retry: 'Nova tentativa agendada', done: 'Concluído', draft: 'Aguardando revisão', approved: 'Aprovado', published: 'Publicado', rejected: 'Rejeitado', stale: 'Desatualizado' };
 const issueLabel = { not_published: 'Fora de publicação', missing_sku: 'SKU ausente', duplicate_sku: 'SKU duplicado', missing_real_image: 'Imagem real ausente', missing_url: 'URL ausente', missing_description: 'Descrição ausente', invalid_consumer_price: 'Preço público inválido', missing_brand_or_gtin: 'Marca ou GTIN ausente', unknown_availability: 'Estoque não confirmado', missing_future_availability_date: 'Pré-venda sem data futura', classification_required: 'Classificar categoria' };

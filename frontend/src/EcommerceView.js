@@ -7,7 +7,7 @@ import { prepareSalesChart, CHART_AXES, CHART_DEFAULTS, movingAverage, isSmallSa
 import { mergeStoreDaily, channelTable, funnelSteps } from './storeReach';
 import MerchantView from './MerchantView';
 import MarketingAutomationView from './MarketingAutomationView';
-import CampaignAssistantView from './CampaignAssistantView';
+import CampaignAssistantView from './CampaignWizard';
 import ChatgptAdsPanel from './ChatgptAdsPanel';
 
 export const ECOMMERCE_SECTIONS = [
@@ -19,7 +19,7 @@ export const ECOMMERCE_SECTIONS = [
 ];
 export function readEcommerceSection(search = window.location.search) {
   const section = new URLSearchParams(search).get('ecommerce');
-  return [...ECOMMERCE_SECTIONS.map(s => s.id), 'traffic', 'campaigns', 'seo', 'merchant', 'automation', 'coupons'].includes(section) ? section : null;
+  return [...ECOMMERCE_SECTIONS.map(s => s.id), 'traffic', 'campaigns', 'seo', 'merchant', 'automation', 'coupons', 'chatgpt_ads'].includes(section) ? section : null;
 }
 const SOURCES = { woocommerce: 'WooCommerce', ga4: 'Google Analytics 4', google_ads: 'Google Ads', meta_ads: 'Meta Ads', search_console: 'Google Search Console', merchant_center: 'Google Merchant Center' };
 const STATE = { pending: 'Aguardando configuração', connected: 'Conectado', syncing: 'Sincronizando', error: 'Requer atenção' };
@@ -318,7 +318,7 @@ function CrmAudiencePreview({ refresh }) {
 export default function EcommerceView({ section: requestedSection = 'overview', isAdmin = false, onNavigate }) {
   const [section, setSection] = useState(requestedSection);
   useEffect(() => setSection(requestedSection), [requestedSection]);
-  const parentSection = ['traffic', 'campaigns', 'ads', 'seo', 'merchant', 'automation'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
+  const parentSection = ['traffic', 'campaigns', 'ads', 'seo', 'merchant', 'automation', 'chatgpt_ads'].includes(section) ? 'ads' : section === 'coupons' ? 'sales' : section;
   const [range, setRange] = useState(() => ({ from: previousDay(today(), 29), to: today() }));
   const [draftRange, setDraftRange] = useState(range);
   const [report, setReport] = useState(null);
@@ -385,13 +385,14 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>
-      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
+      {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['chatgpt_ads', 'ChatGPT Ads'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {report && ['overview', 'ads', 'campaigns'].includes(section) && <CampaignStatus report={report} />}
       {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={mergeStoreDaily(report)} context={section === 'traffic' ? 'traffic' : 'sales'} />}
       {report && <>
         {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
         {section === 'automation' && <MarketingAutomationView data={report.marketing} isAdmin={isAdmin} onRefresh={reload} />}
-        {section === 'assistant' && <div className="space-y-5"><p className="max-w-3xl text-sm text-muted">Prepare o plano com a IA, compare estratégias e produza arquivos para revisão. A geração de conteúdo e a ativação de anúncios são decisões separadas.</p><CampaignAssistantView data={report.marketing || {}} isAdmin={isAdmin} onRefresh={reload} /><ChatgptAdsPanel data={report.marketing?.chatgptAds} isAdmin={isAdmin} onRefresh={reload} /></div>}
+        {section === 'chatgpt_ads' && <ChatgptAdsPanel data={report.marketing?.chatgptAds} isAdmin={isAdmin} onRefresh={reload} />}
+        {section === 'assistant' && <CampaignAssistantView data={report.marketing || {}} isAdmin={isAdmin} onRefresh={reload} />}
         {section === 'overview' && <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-line py-5 xl:grid-cols-4">
             {[['Receita de produtos', summary.revenue, money, 'Pagamentos confirmados · descontos e reembolsos discriminados'], ['Pedidos pagos', summary.orders, number, `Ticket médio ${money(summary.ticket)}`], ['Investimento em mídia', summary.spend, money, summary.mediaPartial ? 'Cobertura parcial · fontes conectadas em BRL' : 'Google Ads + Meta · BRL'], ['Aguardando pagamento', summary.unpaidValue, money, `${number(summary.unpaidOrders)} pedidos pendentes ou em espera · inclui frete e impostos`]].map(([label, value, format, note]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-2 text-2xl font-semibold tabular-nums">{format(value)}</dd><p className="mt-1 text-xs text-muted">{note}</p></div>)}

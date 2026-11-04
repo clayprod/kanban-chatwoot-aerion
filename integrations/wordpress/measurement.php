@@ -63,8 +63,11 @@ final class Aerion_Ecommerce_Measurement
             'moove_gdpr_performance_cookies_tab_title' => 'Medição e estatísticas',
             'moove_gdpr_performance_cookies_tab_content' => '<p>Com sua autorização, o Google Analytics mede navegação, carrinhos e compras para melhorar a loja. Você pode desativar esta categoria quando quiser.</p>',
             'moove_gdpr_advanced_cookies_tab_title' => 'Publicidade e remarketing',
-            'moove_gdpr_advanced_cookies_tab_content' => '<p>Com sua autorização, Google Ads e Meta medem o resultado de anúncios e criam públicos com base na navegação e nas compras. Você pode desativar esta categoria quando quiser.</p>',
+            'moove_gdpr_advanced_cookies_tab_content' => '<p>Com sua autorização, Google Ads, Meta e ChatGPT Ads (OpenAI) medem o resultado de anúncios e usam sinais de navegação e compras para publicidade. Você pode desativar esta categoria quando quiser.</p>',
         ], $options);
+        if (isset($options['moove_gdpr_advanced_cookies_tab_content'])) {
+            $options['moove_gdpr_advanced_cookies_tab_content'] = str_replace('Google Ads e Meta medem o resultado de anúncios e criam públicos com base na navegação e nas compras.', 'Google Ads, Meta e ChatGPT Ads (OpenAI) medem o resultado de anúncios e usam sinais de navegação e compras para publicidade.', $options['moove_gdpr_advanced_cookies_tab_content']);
+        }
         return array_replace($options, [
             'moove_gdpr_third_party_cookies_enable' => 1,
             'moove_gdpr_third_party_cookies_enable_first_visit' => 0,

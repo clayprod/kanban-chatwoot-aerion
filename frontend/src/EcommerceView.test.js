@@ -21,8 +21,13 @@ test('campaign assistant has a dedicated navigation entry and a valid deep link'
   expect(readEcommerceSection('?ecommerce=unknown')).toBe(null);
   render(<EcommerceView section="assistant" isAdmin onNavigate={jest.fn()} />);
   expect(await screen.findByRole('button', { name: 'Campanhas com IA' })).toHaveAttribute('aria-current', 'page');
-  expect(await screen.findByRole('region', { name: 'Conexão ChatGPT Ads' })).toBeInTheDocument();
-  expect(screen.getByLabelText('Advertiser API key do ChatGPT Ads')).toHaveAttribute('type', 'password');
+  expect(screen.queryByRole('region', { name: 'Conexão ChatGPT Ads' })).not.toBeInTheDocument();
+});
+test('ChatGPT Ads belongs to Marketing and has its own account deep link', async()=>{
+  expect(readEcommerceSection('?ecommerce=chatgpt_ads')).toBe('chatgpt_ads');
+  render(<EcommerceView section="chatgpt_ads" isAdmin onNavigate={jest.fn()}/>);
+  expect(await screen.findByRole('region',{name:'Conexão ChatGPT Ads'})).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Marketing'})).toHaveAttribute('aria-current','page');
 });
 test('empty sources show setup guidance and unavailable metrics instead of invented results', async () => {
   render(<EcommerceView isAdmin onNavigate={jest.fn()} />);

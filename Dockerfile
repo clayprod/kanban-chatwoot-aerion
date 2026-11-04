@@ -31,6 +31,7 @@ COPY --from=backend-builder /app/backend ./
 # Production WordPress deployments consume this bridge from the CI/GHCR image.
 COPY integrations/wordpress/aerion-ecommerce-reports.php /opt/aerion-integrations/wordpress/aerion-ecommerce-reports.php
 COPY integrations/wordpress/measurement.php /opt/aerion-integrations/wordpress/measurement.php
+COPY integrations/gtm/ /opt/aerion-integrations/gtm/
 COPY integrations/wordpress/marketing.php /opt/aerion-integrations/wordpress/marketing.php
 COPY integrations/wordpress/site/render-commerce.php /opt/aerion-integrations/storefront/render-commerce.php
 

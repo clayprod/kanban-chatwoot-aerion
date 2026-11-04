@@ -22,7 +22,7 @@ function economics(input = {}) {
 }
 function buildCampaignStrategy(products, input = {}) {
   const scope = input.scope || 'product', family = String(input.family || '');
-  if (!['product', 'family', 'sale'].includes(scope)) invalid('Escolha produto, família ou produtos com preço promocional.');
+  if (!['product', 'family', 'sale', 'catalog', 'auto'].includes(scope)) invalid('Escolha produto, família, catálogo, ajuda da IA ou ofertas.');
   const assessed = eligibleProducts(products), available = assessed.filter(p => p.eligible && p.availability !== 'out_of_stock');
   if (scope === 'family' && !['Drones', 'Kits', 'Payloads', 'Acessórios', 'Outros'].includes(family)) invalid('Escolha uma família existente do catálogo.');
   const ids = input.productIds?.map(String) || [];

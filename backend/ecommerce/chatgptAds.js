@@ -1,5 +1,7 @@
-const { encrypt, decrypt, encryptionKey } = require('./domain');
+const { encrypt, decrypt, encryptionKey, saoPauloDay, shiftDay } = require('./domain');
 const crypto = require('node:crypto');
+const { chatgptCatalog, uploadCatalog } = require('./chatgptCatalog');
+const { paidChatgptPayload,sendChatgptConversion }=require('./chatgptMeasurement');
 const API = 'https://api.ads.openai.com/v1/';
 function createChatgptAdsClient(token, transport = global.fetch) {
   async function request(path, method = 'GET', body, idempotencyKey) {
@@ -16,7 +18,7 @@ function createChatgptAdsClient(token, transport = global.fetch) {
   async function list(path) {
     const rows = [], seen = new Set();let after;
     do {
-      const result = await get(path + '?limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''));
+      const result = await get(path + (path.includes('?') ? '&' : '?') + 'limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''));
       if (!Array.isArray(result.data)) throw new Error('chatgpt_ads_invalid_list');
       rows.push(...result.data);after = result.has_more ? result.last_id : null;
       if (result.has_more && (!after || seen.has(after) || seen.size >= 20)) throw new Error('chatgpt_ads_incomplete_pagination');
@@ -95,11 +97,51 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     const old = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', [key])).rows[0]?.data;
     const datasets = {};let incomplete = false;
     for (const [name, path] of Object.entries({ campaigns: 'campaigns', feeds: 'feeds', audiences: 'custom_audiences', events: 'conversions/event_settings' })) {
-      try { const raw = await client.list(path);datasets[name] = { available: true, observedAt: new Date().toISOString(), rows: raw.map(r => ({ id: r.id || r.feed_id, name: r.name || null, status: r.status || null, reviewStatus: r.review_status || null, eventType: r.event_type || null, productCount: r.product_count ?? null, matchedUsers: r.matched_user_count ?? null })) }; }
+      try { const raw = await client.list(path);datasets[name] = { available: true, observedAt: new Date().toISOString(), rows: raw.map(r => ({ id: r.id || r.feed_id, name: r.name || null, status: r.status || null, reviewStatus: r.review_status || null, eventType: r.event_type || null, productCount: r.product_count ?? null, matchedUsers: r.matched_user_count ?? null,matchedUserRange:r.matched_user_count_range||null,countries:r.countries||null })) }; }
       catch (error) { incomplete = true;datasets[name] = { ...(old?.datasets?.[name] || {}), available: false, preserved: Boolean(old?.datasets?.[name]?.rows), error: error.httpStatus ? `platform_http_${error.httpStatus}` : 'resource_unavailable' }; }
     }
+    const to=saoPauloDay(),from=shiftDay(to,-89);
+    try {
+      const query=new URLSearchParams({time_granularity:'daily',aggregation_level:'campaign'});
+      query.append('time_ranges[]',JSON.stringify({type:'date_range',since:from,until:to,timezone:account.timezone||'America/Sao_Paulo'}));
+      for(const field of ['metadata.readable_time','campaign.id','campaign.name','campaign.impressions','campaign.clicks','campaign.spend'])query.append('fields[]',field);
+      const rows=await client.list('ad_account/insights?'+query);
+      datasets.performance={available:true,from,to,timezone:account.timezone,currency:account.currency,observedAt:new Date().toISOString(),rows:rows.map(r=>({date:r.readable_time,campaignId:r.campaign_id,campaign:r.campaign_name,impressions:r.impressions??null,clicks:r.clicks??null,spend:r.spend??null,conversions:null,conversionValue:null}))};
+    }catch(error){incomplete=true;datasets.performance={...(old?.datasets?.performance||{}),available:false,preserved:!!old?.datasets?.performance,error:error.httpStatus?`platform_http_${error.httpStatus}`:'resource_unavailable'};}
     await saveState(db, key, { account, datasets, observedAt: new Date().toISOString(), complete: !incomplete, changesApplied: false });
     if (incomplete) throw Object.assign(new Error('chatgpt_ads_partial_access'), { retrySeconds: 3600 });
+  }
+  async function catalog(db) {
+    const row = await saved(db);if (!row?.enabled) throw new Error('connection_required');
+    const secrets = decrypt(row.secrets, encryptionKey(env)), name = 'chatgpt_ads_setup:' + row.config.account.id;
+    const setup = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1',[name])).rows[0]?.data;
+    if (!setup?.resources?.feed?.id || !secrets.sftp) throw new Error('chatgpt_catalog_setup_required');
+    const products = (await db.query('SELECT data FROM ecommerce_marketing_products ORDER BY product_id')).rows.map(r=>r.data);
+    const file = chatgptCatalog(products);
+    // Empty/incomplete local data never wipes a valid remote catalog.
+    if (!file.count) throw new Error('chatgpt_catalog_no_eligible_products');
+    const client=createChatgptAdsClient(secrets.apiKey,transport);
+    if(!setup.catalogFullRefresh){await client.request(`feeds/${encodeURIComponent(setup.resources.feed.id)}/settings`,'PATCH',{is_full_refresh:true});setup.catalogFullRefresh=true;await saveState(db,name,setup);}
+    if (setup.catalog?.hash !== file.hash || setup.catalog?.status !== 'uploaded') {
+      await uploadCatalog({ credentials:secrets.sftp,content:file.csv,previousHostHash:secrets.sftpHostHash,persistHostHash:async hash=>{
+        secrets.sftpHostHash=hash;const changed=await db.query("UPDATE ecommerce_marketing_connections SET secrets=$1,updated_at=now() WHERE name='chatgpt_ads' AND secrets=$2",[encrypt(secrets,encryptionKey(env)),row.secrets]);if(changed.rowCount!==1)throw new Error('connection_changed');
+      } });
+      setup.catalog={status:'uploaded',hash:file.hash,count:file.count,excluded:file.excluded,uploadedAt:new Date().toISOString(),acceptance:'awaiting_external_processing'};
+      await saveState(db,name,setup);
+    }
+    try { const uploads=await client.list('feeds/uploads');setup.catalog.uploads=uploads.filter(u=>u.feed_id===setup.resources.feed.id).slice(0,5).map(u=>({id:u.upload_id,status:u.status,accepted:u.rows_accepted,rejected:u.rows_rejected,adsEligible:u.rows_ads_eligible,diagnostics:(u.diagnostics||[]).map(d=>({code:d.code,field:d.field,rowsAffected:d.rows_affected}))})); }
+    catch { setup.catalog.diagnosticsAvailable=false; }
+    await saveState(db,name,setup);return setup.catalog;
+  }
+  async function paidPurchase(db,order,context,storeUrl){
+    const row=await saved(db);if(!row?.enabled)return;
+    const setup=(await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1',['chatgpt_ads_setup:'+row.config.account.id])).rows[0]?.data;
+    if(!setup?.resources?.capi?.enabled||!setup.resources.capi.validatedAt)return;
+    const pixel=setup.resources.pixel?.pixelId,destination='chatgpt_ads:'+pixel;
+    if((await db.query('SELECT state FROM ecommerce_marketing_conversions WHERE destination=$1 AND transaction_id=$2',[destination,String(order.id)])).rows[0]?.state==='submitted')return;
+    const event=paidChatgptPayload(order,context,storeUrl);
+    if(event.eligible){const secrets=decrypt(row.secrets,encryptionKey(env));await sendChatgptConversion({pixelId:pixel,apiKey:secrets.conversionsApiKey,body:event.body,transport});}
+    await db.query(`INSERT INTO ecommerce_marketing_conversions(destination,transaction_id,event_id,state,reason,submitted_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $4='submitted' THEN now() ELSE NULL END) ON CONFLICT(destination,transaction_id) DO UPDATE SET state=EXCLUDED.state,reason=EXCLUDED.reason,submitted_at=EXCLUDED.submitted_at,updated_at=now()`,[destination,String(order.id),'aerion_purchase_'+order.id,event.eligible?'submitted':'ineligible',event.reason||null]);
   }
   function mountAdmin(router) {
     router.put('/marketing/chatgpt-ads/connection', async (req, res) => {
@@ -114,7 +156,8 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     });
     router.post('/marketing/chatgpt-ads/sync', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_sync', 'account');res.status(202).json({ queued: true }); });
     router.post('/marketing/chatgpt-ads/setup', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_setup', 'account');res.status(202).json({ queued: true, activationAllowed: false }); });
+    router.post('/marketing/chatgpt-ads/catalog', async (req,res)=>{await enqueue(pool,'chatgpt_ads_catalog','account');res.status(202).json({queued:true});});
   }
-  return { status, sync, setup, mountAdmin };
+  return { status, sync, setup, catalog, paidPurchase, mountAdmin };
 }
 module.exports = { createChatgptAdsClient, publicAccount, createChatgptAds };

@@ -2,6 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createChatgptAds } = require('../ecommerce/chatgptAds');
 const { encrypt, decrypt, encryptionKey } = require('../ecommerce/domain');
+const {chatgptCatalog,uploadCatalog}=require('../ecommerce/chatgptCatalog');
+const {chatgptReport}=require('../ecommerce/chatgptReport');
 function fixture(failPixel = false) {
   const env = { ECOMMERCE_ENCRYPTION_KEY: 'ab'.repeat(32) }, states = new Map(), writes = [];
   const row = { enabled: true, config: { account: { id: 'adacct_test' } }, secrets: encrypt({ apiKey: 'advertiser-secret' }, encryptionKey(env)) };
@@ -39,4 +41,16 @@ test('lost pixel creation response blocks duplicate creation while other resourc
   assert.equal(f.writes.filter(p => p === 'conversions/pixels').length, 1);
   const status = await f.service.status();assert.equal(status.setup.operations.pixel.status, 'ambiguous');
   assert.equal(status.setup.resources.pixel, undefined);assert(status.setup.resources.feed);
+});
+test('catalog uses only the public projection, refuses duplicate SKUs and verifies the SFTP host key before upload',async()=>{
+  const p={id:'1',parentId:'1',sku:'PUBLIC',published:true,name:'Product',description:'Real description',brand:'Real brand',image:'https://shop.test/a.jpg',url:'https://shop.test/p',price:100,regularPrice:120,currency:'BRL',availability:'in_stock',group:'Drones',wholesale_price:12};
+  const file=chatgptCatalog([p]);assert.equal(file.count,1);assert(file.csv.includes('100.00 BRL'));assert(!file.csv.includes('wholesale_price'));assert.equal(chatgptCatalog([p,{...p,id:'2'}]).count,0);
+  let pinned=false,uploaded=false;class Client{async connect(o){assert(o.hostVerifier('verified-hash'));}async put(buffer,path){assert(pinned);assert(Buffer.isBuffer(buffer));assert.equal(path,'catalog.csv');uploaded=true;}async end(){}}
+  await uploadCatalog({credentials:{connection_uri:'sftp://user@sftp-prod3.commerce.openai.com',password:'private'},content:file.csv,Client,persistHostHash:async h=>{assert.equal(h,'verified-hash');pinned=true;}});assert(uploaded);
+  await assert.rejects(uploadCatalog({credentials:{connection_uri:'sftp://user@evil.invalid',password:'private'},content:file.csv,Client}),/connection_invalid/);
+});
+test('ChatGPT reporting recalculates weighted rates and keeps missing coverage and conversions unavailable',()=>{
+  const connection={configured:true,snapshot:{datasets:{performance:{available:true,from:'2026-11-01',to:'2026-11-04',currency:'BRL',rows:[{date:'2026-11-01',spend:10,clicks:2,impressions:10},{date:'2026-11-02',spend:20,clicks:2,impressions:90}]}}}};
+  const r=chatgptReport(connection,{from:'2026-11-01',to:'2026-11-02'});assert.equal(r.spend,30);assert.equal(r.ctr,4);assert.equal(r.cpc,7.5);assert.equal(r.conversions,null);
+  assert.equal(chatgptReport(connection,{from:'2026-10-01',to:'2026-11-02'}).spend,null);
 });

@@ -120,12 +120,14 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       await persistProducts(db, all, full ? null : parent);
       await saveState(db, 'products', { status: 'operational', observedAt: new Date().toISOString(), source: 'WooCommerce · preço público no cartão', fullReconciliation: full });
       for (const p of all.filter(p => p.published)) await enqueueMarketing(db, 'seo', p.id);
+      if ((await db.query("SELECT 1 FROM ecommerce_marketing_connections WHERE name='chatgpt_ads' AND enabled")).rowCount) await enqueueMarketing(db,'chatgpt_ads_catalog','account');
     });
   }
   async function execute(db, job) {
     if (await assistant.execute(db, job)) return;
     if (job.kind === 'chatgpt_ads_sync') { await chatgptAds.sync(db);return; }
     if (job.kind === 'chatgpt_ads_setup') { await chatgptAds.setup(db);return; }
+    if (job.kind === 'chatgpt_ads_catalog') { await chatgptAds.catalog(db);return; }
     if (job.kind === 'meta_safety') { await saveState(db, 'meta_media_safety', await providers.metaMediaSafety(await load(db, 'meta_ads')));return; }
     if (job.kind === 'google_safety') {
       const result = await providers.googleMediaSafety(await load(db, 'google_ads'));
@@ -183,6 +185,11 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       return;
     }
     if (job.kind === 'paid_event') {
+      const excludedChatgpt=(await db.query('SELECT 1 FROM ecommerce_order_exclusions WHERE order_id=$1 AND excluded',[job.resource])).rowCount;
+      if(!excludedChatgpt&&(await db.query("SELECT 1 FROM ecommerce_marketing_connections WHERE name='chatgpt_ads' AND enabled")).rowCount){
+        const store=await load(db,'woocommerce');const {data:paidOrder}=await providers.woo(store,`orders/${job.resource}`);
+        await chatgptAds.paidPurchase(db,paidOrder,(paidOrder.meta_data||[]).find(m=>m.key==='_aerion_measurement_context')?.value,store.url);
+      }
       if (env.ECOMMERCE_GA4_SERVER_PURCHASE_ENABLED !== '1' || env.ECOMMERCE_GA4_SERVER_PURCHASE_VALIDATED !== '1') return;
       const config = await load(db, 'woocommerce');
       const settings = { measurementId: env.ECOMMERCE_GA4_MEASUREMENT_ID, apiSecret: env.ECOMMERCE_GA4_MEASUREMENT_SECRET };
@@ -299,7 +306,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       if (env.ECOMMERCE_CUSTOMER_LISTS) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('customer_audiences','daily') ON CONFLICT DO NOTHING");
       // Successful recurring jobs become due again; retries keep their own backoff.
       await db.query(`UPDATE ecommerce_marketing_jobs SET status='pending',attempts=0 WHERE status='done' AND
-        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','chatgpt_ads_sync','customer_audiences') AND next_run_at<=now()) OR (kind='meta' AND next_run_at<=now()))`);
+        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','chatgpt_ads_sync','customer_audiences') AND next_run_at<=now()) OR (kind IN ('meta','chatgpt_ads_catalog') AND next_run_at<=now()))`);
       for (let i = 0; i < 8; i++) {
         const job = (await db.query(`UPDATE ecommerce_marketing_jobs SET status='running',lease_until=now()+interval '10 minutes'
           WHERE id=(SELECT id FROM ecommerce_marketing_jobs WHERE status IN ('pending','retry') AND next_run_at<=now()
@@ -323,7 +330,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
           await transaction(db, async () => {
             await db.query(`UPDATE ecommerce_marketing_jobs SET status=CASE WHEN revision=$2 THEN 'done' ELSE 'pending' END,
               attempts=0,error=NULL,lease_until=NULL,updated_at=now(),
-              next_run_at=CASE WHEN revision<>$2 THEN now() WHEN kind='meta' THEN now()+interval '1 hour' WHEN kind='seo_weekly' THEN now()+interval '7 days' ELSE now()+interval '1 day' END WHERE id=$1`, [job.id, job.revision]);
+              next_run_at=CASE WHEN revision<>$2 THEN now() WHEN kind IN ('meta','chatgpt_ads_catalog') THEN now()+interval '1 hour' WHEN kind='seo_weekly' THEN now()+interval '7 days' ELSE now()+interval '1 day' END WHERE id=$1`, [job.id, job.revision]);
             await db.query("INSERT INTO ecommerce_marketing_history(job_id,kind,resource,outcome) VALUES($1,$2,$3,'done')", [job.id, job.kind, job.resource]);
           });
         } catch (error) {
@@ -486,12 +493,15 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
     });
     router.post('/marketing/content/:id/review', async (req, res) => {
       if (!/^[a-f0-9-]{36}$/i.test(req.params.id) || !['approved', 'rejected'].includes(req.body?.status)) return res.status(400).json({ error: 'Revisão inválida.' });
+      const content=(await pool.query('SELECT kind,data FROM ecommerce_marketing_content WHERE id=$1',[req.params.id])).rows[0];
+      if(content?.kind==='creative'&&req.body.status==='approved'&&content.data.contentHub?.integration==='hub_library'&& !['logo','typography','colors','layout','product'].every(k=>req.body.brandingReview?.[k]===true))return res.status(400).json({error:'Confira logo, tipografia, cores, diagramação e dados do produto antes de aprovar.'});
       const result = await pool.query(`UPDATE ecommerce_marketing_content c SET status=$2,reviewed_by=$3,reviewed_at=now()
         WHERE id=$1 AND status='draft' AND ($2='rejected' OR (length(trim(c.data->>'copy'))>0 AND EXISTS
           (SELECT 1 FROM ecommerce_marketing_products p WHERE p.product_id=c.product_id AND p.data->>'version'=c.product_version)
           AND (NOT COALESCE(c.data->'contentHub' ? 'requestId',false) OR (c.data->'contentHub'->>'status'='ready_for_review' AND c.data->'contentHub'->'selectedAsset'->>'url' IS NOT NULL)))) RETURNING id,status`,
       [req.params.id, req.body.status, String(req.auth?.uid || req.auth?.sub || 'admin')]);
       if (!result.rowCount) return res.status(409).json({ error: 'Texto vazio, versão desatualizada ou revisão já concluída. Prepare uma nova versão.' });
+      if(content?.kind==='creative'&&req.body.status==='approved'&&content.data.contentHub?.integration==='hub_library')await pool.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{brandingReview}',$2::jsonb) WHERE id=$1`,[req.params.id,JSON.stringify({logo:true,typography:true,colors:true,layout:true,product:true,reviewedAt:new Date().toISOString()})]);
       res.json(result.rows[0]);
     });
     router.post('/marketing/content/:id/publish-seo', async (req, res) => {
