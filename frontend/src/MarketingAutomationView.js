@@ -15,6 +15,40 @@ function DataTable({ caption, columns, rows, empty }) {
     <tbody className="divide-y divide-line">{rows.map((row, i) => <tr key={row.id || i}>{columns.map(([key, , render]) => <td key={key} className="max-w-sm px-4 py-3 align-top break-words">{render ? render(row) : row[key] == null || row[key] === '' ? '—' : row[key]}</td>)}</tr>)}</tbody>
   </table>{!rows.length && <p className="p-4 text-sm text-muted">{empty}</p>}</div>;
 }
+// Roteiro derivado só de dados que a API já devolve: mostra o que está pronto,
+// qual é o próximo passo e por que ele importa. Nada aqui ativa anúncios.
+export function journeySteps(data) {
+  const products = data.products || [], eligible = products.filter(p => p.eligible).length;
+  const measurement = (data.readiness || []).find(r => r.integration === 'measurement');
+  const audiences = data.audiences?.store || [];
+  const approved = (data.contents || []).filter(c => c.status === 'approved' || c.status === 'published').length;
+  const staged = data.stagedCampaigns?.length || 0;
+  return [
+    { id: 'catalog', title: 'Catálogo pronto', done: products.length > 0 && eligible === products.length, detail: products.length ? `${eligible} de ${products.length} produtos elegíveis` : 'Aguardando a leitura da loja',
+      why: 'Anúncios de produto só rodam com preço, imagem real, SKU e estoque corretos.' },
+    { id: 'measurement', title: 'Medição de compras confiável', done: measurement?.status === 'operational', detail: measurement ? (stateLabel[measurement.status] || measurement.status) : 'Ainda não verificada',
+      why: 'Sem compra medida, a plataforma não aprende quem compra e você não vê o retorno real.' },
+    { id: 'audiences', title: 'Públicos preparados', done: audiences.length > 0 && audiences.every(a => a.status === 'operational'), detail: audiences.length ? `${audiences.filter(a => a.status === 'operational').length} de ${audiences.length} públicos sincronizados` : 'Nenhum público ainda',
+      why: 'Remarketing (quem viu produto ou colocou no carrinho) costuma custar menos por venda que público frio.' },
+    { id: 'creative', title: 'Criativos aprovados', done: approved > 0, detail: approved ? `${approved} aprovado(s)` : 'Nenhum criativo aprovado',
+      why: 'Imagem e vídeo do produto são o que mais pesa no resultado de um anúncio.' },
+    { id: 'budget', title: 'Orçamento definido', done: Boolean(data.campaign), detail: data.campaign ? `R$ ${data.campaign.total}/mês` : 'Sem teto mensal',
+      why: 'Um teto fixo evita surpresa. Comece pequeno e aumente só o que der retorno.' },
+    { id: 'staged', title: 'Campanhas criadas (pausadas)', done: staged > 0, detail: staged ? `${staged} estrutura(s) pausada(s)` : 'Nada criado nas plataformas',
+      why: 'Tudo nasce pausado para você revisar antes de gastar.' },
+  ];
+}
+function Journey({ steps }) {
+  const next = steps.findIndex(step => !step.done), doneCount = steps.filter(step => step.done).length;
+  return <section aria-label="Roteiro de campanhas" className="rounded-xl border border-line bg-surf p-4 sm:p-5">
+    <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-base font-semibold">Seu caminho até a primeira campanha</h3><span className="text-xs text-muted">{doneCount} de {steps.length} etapas prontas</span></div>
+    <div className="mt-3 h-1.5 rounded bg-bg2" role="progressbar" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneCount}><div className="h-1.5 rounded bg-primary" style={{ width: `${doneCount / steps.length * 100}%` }} /></div>
+    <ol className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{steps.map((step, i) => <li key={step.id} aria-current={i === next ? 'step' : undefined} className={`rounded-lg border p-3 text-sm ${step.done ? 'border-emerald-500/30 bg-emerald-500/5' : i === next ? 'border-primary bg-primary/10' : 'border-line bg-bg2'}`}>
+      <div className="flex items-center gap-2 font-medium"><span aria-hidden="true">{step.done ? '✓' : i === next ? '→' : '○'}</span>{step.title}{i === next && <span className="ml-auto rounded bg-primary/20 px-1.5 py-0.5 text-xs text-primary">próximo</span>}</div>
+      <p className="mt-1 text-xs">{step.detail}</p><p className="mt-1 text-xs text-muted">{step.why}</p></li>)}</ol>
+    <p className="mt-4 rounded-lg border border-dashed border-line p-3 text-xs text-muted">Em breve aqui: sugestão de público, divisão do investimento por etapa do funil e geração de imagens e vídeos de campanha. Quem decide e aprova é sempre você.</p>
+  </section>;
+}
 export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [failure, setFailure] = useState(false);
   const [filter, setFilter] = useState('all'), [query, setQuery] = useState('');
@@ -36,7 +70,9 @@ export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-semibold">Produtos, conteúdo e prontidão</h3><p className="mt-1 text-xs text-muted">WooCommerce · preço público do consumidor · {date(data.coverage?.products?.observedAt)}</p></div>
       {isAdmin && <div className="flex flex-wrap gap-2"><button type="button" className={btnSecondarySm} disabled={busy || !data.enabled} onClick={() => act('reconcile')}>Conciliar produtos</button><button type="button" className={btnSecondarySm} disabled={busy || !data.enabled} onClick={() => act('meta/sync')}>Consultar catálogo Meta</button></div>}
     </div>
+    <Journey steps={journeySteps(data)} />
     {message && <p role={failure ? 'alert' : 'status'} className={`rounded-lg border p-3 text-sm ${failure ? 'border-red/30' : 'border-line'} bg-surf`}>{message}</p>}
+    <details className="rounded-xl border border-line p-4"><summary className="cursor-pointer text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Catálogo, públicos e SEO · detalhes técnicos</summary><div className="mt-4 space-y-6">
     <div className="flex flex-wrap gap-3"><label className="min-w-0"><span className="mb-1 block text-xs text-muted">Buscar produto ou SKU</span><input className={`${input} max-w-full`} value={query} onChange={e => setQuery(e.target.value)} /></label><label><span className="mb-1 block text-xs text-muted">Elegibilidade</span><select className={select} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">Todos</option><option value="eligible">Elegíveis</option><option value="pending">Com pendências</option></select></label></div>
     <DataTable caption={`Elegibilidade dos produtos · ${products.length}`} rows={products.slice(0, 200)} empty="Aguardando a primeira projeção de produtos. Consulte as ações no diagnóstico abaixo."
       columns={[
@@ -85,6 +121,7 @@ export default function MarketingAutomationView({ data, isAdmin, onRefresh }) {
         ['url', 'Página'], ['impressions', 'Impressões'], ['clicks', 'Cliques'], ['ctr', 'CTR', p => `${p.ctr?.toFixed(2)}%`],
         ['position', 'Posição', p => p.position?.toFixed(1)], ['decline', 'Variação de cliques', p => p.decline == null ? '—' : `${p.decline.toFixed(1)}%`],
       ]} />
+    </div></details>
     {isAdmin && <>
       <form className="space-y-4 border-t border-line pt-5" onSubmit={e => { e.preventDefault(); act('content', content); }}>
         <h3 className="font-semibold">Preparar conteúdo para revisão</h3>

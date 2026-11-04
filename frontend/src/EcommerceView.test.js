@@ -18,7 +18,7 @@ beforeEach(() => {
 test('empty sources show setup guidance and unavailable metrics instead of invented results', async () => {
   render(<EcommerceView isAdmin onNavigate={jest.fn()} />);
   expect(await screen.findByRole('button', { name: 'Configurar conexões' })).toBeInTheDocument();
-  expect(screen.getByText('Conecte o WooCommerce para acompanhar a evolução de vendas.')).toBeInTheDocument();
+  expect(screen.getByText('Conecte Google Ads, Meta, Search Console ou Merchant para ver o alcance da loja.')).toBeInTheDocument();
   expect(screen.getAllByText('—').length).toBeGreaterThan(3);
 });
 test('members can consult reports but connection configuration stays restricted', async () => {
@@ -47,6 +47,7 @@ test('chart series can be hidden, restored and switched to volume without mixing
     ...report, daily: [{ date: '2026-10-21', revenue: 100, spend: 20, orders: 1, sessions: 10 }],
   } }));
   render(<EcommerceView onNavigate={jest.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Vendas e investimento' }));
   const revenue = await screen.findByRole('button', { name: 'Receita de produtos' });
   const spend = screen.getByRole('button', { name: 'Investimento total' });
   expect(revenue).toHaveAttribute('aria-pressed', 'true');

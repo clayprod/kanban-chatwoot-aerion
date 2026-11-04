@@ -28,3 +28,12 @@ test('failed reconciliation exposes an actionable error and retains product info
   expect(await screen.findByRole('alert')).toHaveTextContent('Ative em Conexões');
   expect(screen.getAllByText('DRONE').length).toBeGreaterThan(0);
 });
+
+test('journey marks finished steps and keeps the first pending step as next', () => {
+  const { journeySteps } = require('./MarketingAutomationView');
+  const steps = journeySteps({ products: [{ eligible: true }, { eligible: false }], readiness: [{ integration: 'measurement', status: 'operational' }],
+    audiences: { store: [{ status: 'operational' }] }, contents: [], campaign: null, stagedCampaigns: [] });
+  expect(steps.map(s => s.done)).toEqual([false, true, true, false, false, false]);
+  expect(steps[0].detail).toBe('1 de 2 produtos elegíveis');
+  expect(steps.findIndex(s => !s.done)).toBe(0);
+});
