@@ -94,6 +94,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     if (job.kind === 'hub_advice') {
       const plan = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['assistant_plan:' + job.resource])).rows[0]?.data;
       if (!plan) throw new Error('content_hub_plan_required');
+      if(plan.status==='ready_for_review'&&plan.advice?.brandContextUsed&&plan.advice?.proposal)return true;
       const safety = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('google_media_safety','meta_media_safety')")).rows.map(row => [row.name, row.data]));
       const context = await campaignContext(db);
       const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(hubProduct), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });

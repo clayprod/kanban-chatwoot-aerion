@@ -19,8 +19,9 @@ function createChatgptAdsClient(token, transport = global.fetch) {
     const rows = [], seen = new Set();let after;
     do {
       const result = await get(path + (path.includes('?') ? '&' : '?') + 'limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''));
-      if (!Array.isArray(result.data)) throw new Error('chatgpt_ads_invalid_list');
-      rows.push(...result.data);after = result.has_more ? result.last_id : null;
+      const data=path.split('?')[0]==='feeds/uploads'?result.uploads:result.data;
+      if (!Array.isArray(data)) throw new Error('chatgpt_ads_invalid_list');
+      rows.push(...data);after = result.has_more ? result.last_id : null;
       if (result.has_more && (!after || seen.has(after) || seen.size >= 20)) throw new Error('chatgpt_ads_incomplete_pagination');
       if (after) seen.add(after);
     } while (after);
@@ -39,7 +40,7 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     const snapshot = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_snapshot:' + row.config.account.id])).rows[0]?.data : null;
     const setup = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_setup:' + row.config.account.id])).rows[0]?.data : null;
     return { configured: Boolean(row?.enabled), account: row?.config?.account || null, lastVerifiedAt: row?.last_success_at || null, snapshot: snapshot || null, setup: setup || null,
-      measurement: 'requires_pixel_and_consent_validation', audiences: 'requires_eligible_identifiers_and_account_readiness', activationAllowed: false };
+      measurement: setup?.resources?.capi?.enabled?'paid_server_purchase_enabled_with_consent':'requires_pixel_and_consent_validation', audiences: 'requires_eligible_identifiers_and_account_readiness', activationAllowed: false };
   }
   async function setup(db) {
     const row = await saved(db);if (!row?.enabled) throw new Error('connection_required');
@@ -96,7 +97,7 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     const key = 'chatgpt_ads_snapshot:' + account.id;
     const old = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', [key])).rows[0]?.data;
     const datasets = {};let incomplete = false;
-    for (const [name, path] of Object.entries({ campaigns: 'campaigns', feeds: 'feeds', audiences: 'custom_audiences', events: 'conversions/event_settings' })) {
+    for (const [name, path] of Object.entries({ campaigns: 'campaigns', feeds: 'feeds?include[]=product_count', audiences: 'custom_audiences', events: 'conversions/event_settings' })) {
       try { const raw = await client.list(path);datasets[name] = { available: true, observedAt: new Date().toISOString(), rows: raw.map(r => ({ id: r.id || r.feed_id, name: r.name || null, status: r.status || null, reviewStatus: r.review_status || null, eventType: r.event_type || null, productCount: r.product_count ?? null, matchedUsers: r.matched_user_count ?? null,matchedUserRange:r.matched_user_count_range||null,countries:r.countries||null })) }; }
       catch (error) { incomplete = true;datasets[name] = { ...(old?.datasets?.[name] || {}), available: false, preserved: Boolean(old?.datasets?.[name]?.rows), error: error.httpStatus ? `platform_http_${error.httpStatus}` : 'resource_unavailable' }; }
     }
@@ -135,7 +136,7 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
       setup.catalog={status:'uploaded',hash:file.hash,count:file.count,skus:file.skus,removedMarkedUnavailable:removed.length,excluded:file.excluded,uploadedAt:new Date().toISOString(),acceptance:'awaiting_external_processing',cleanupMode:setup.catalogFullRefresh?'catalog_replacement':'removed_products_out_of_stock_delta'};
       await saveState(db,name,setup);
     }
-    try { const uploads=await client.list('feeds/uploads');setup.catalog.uploads=uploads.filter(u=>u.feed_id===setup.resources.feed.id).slice(0,5).map(u=>({id:u.upload_id,status:u.status,accepted:u.rows_accepted,rejected:u.rows_rejected,adsEligible:u.rows_ads_eligible,diagnostics:(u.diagnostics||[]).map(d=>({code:d.code,field:d.field,rowsAffected:d.rows_affected}))})); }
+    try { const uploads=await client.list('feeds/uploads');setup.catalog.uploads=uploads.filter(u=>u.feed_id===setup.resources.feed.id).slice(0,5).map(u=>({id:u.upload_id,status:u.status,accepted:u.rows_accepted,rejected:u.rows_rejected,adsEligible:u.rows_ads_eligible,diagnostics:(u.diagnostics||[]).map(d=>({code:d.code,field:d.field,rowsAffected:d.rows_affected}))}));setup.catalog.diagnosticsAvailable=true;if(['completed','completed_with_errors'].includes(setup.catalog.uploads[0]?.status))setup.catalog.acceptance=setup.catalog.uploads[0].status; }
     catch { setup.catalog.diagnosticsAvailable=false; }
     await saveState(db,name,setup);return setup.catalog;
   }

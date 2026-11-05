@@ -21,7 +21,8 @@ function chatgptBootstrap(pixel) {
     if (!names[event]) return;
     if (event === 'generate_lead') { eventId = String(eventId || 'aerion_lead_' + Date.now());if (sent[eventId]) return;sent[eventId] = true;w.oaiq('measure', 'lead_created', { type: 'customer_action' }, { event_id: eventId });return; }
     if (!ecommerce || !Array.isArray(ecommerce.items) || !/^[A-Z]{3}$/.test(ecommerce.currency || '') || !isFinite(Number(ecommerce.value)) || Number(ecommerce.value) < 0) return;
-    var contents = ecommerce.items.filter(function (i) { return i.item_id != null && String(i.item_id) && Number(i.quantity) > 0 && Number(i.quantity) % 1 === 0 && isFinite(Number(i.price)) && Number(i.price) >= 0; }).map(function (i) { return { id: String(i.item_id), quantity: Number(i.quantity), amount: Math.round(Number(i.price) * 100), currency: ecommerce.currency, content_type: 'product' }; });
+    function quantity(i){return i.quantity==null&&event!=='purchase'?1:Number(i.quantity);}
+    var contents = ecommerce.items.filter(function (i) { return i.item_id != null && String(i.item_id) && quantity(i) > 0 && quantity(i) % 1 === 0 && isFinite(Number(i.price)) && Number(i.price) >= 0; }).map(function (i) { return { id: String(i.item_id), quantity: quantity(i), amount: Math.round(Number(i.price) * 100), currency: ecommerce.currency, content_type: 'product' }; });
     if (!contents.length || contents.length !== ecommerce.items.length) return;
     if (event === 'purchase') { if (!ecommerce.transaction_id) return;eventId = 'aerion_purchase_' + ecommerce.transaction_id; }
     eventId = String(eventId || 'aerion_' + event + '_' + Date.now());if (sent[eventId]) return;

@@ -3,6 +3,6 @@ ARG INTEGRATION_IMAGE
 ARG WORDPRESS_BASE_IMAGE
 FROM ${INTEGRATION_IMAGE} AS validated_integration
 FROM ${WORDPRESS_BASE_IMAGE}
-RUN echo 'fc59b7f950d16e8e9035fe0c6bcd072d26de97bb3810c46a94e71a2cdc4bf3fa  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c -
+RUN echo '95aee43b59c8510f8f10db1e82861931f1cbc660a7125bf16090bf868db187f4  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c -
 COPY --from=validated_integration /opt/aerion-integrations/wordpress/measurement.php /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php
 RUN php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php

@@ -4,6 +4,7 @@ function paidChatgptPayload(order,context,storeUrl,now=Date.now()){
   if(context?.marketing!==true)return {eligible:false,reason:'marketing_consent_required'};
   const paid=paidGa4Payload(order,context,now);if(!paid.eligible)return paid;
   const purchase=paid.body.events[0].params;
+  if(purchase.currency!=='BRL')return {eligible:false,reason:'unsupported_account_currency'};
   const event={id:paid.eventId,type:'order_created',timestamp_ms:Math.round(paid.body.timestamp_micros/1000),action_source:'web',source_url:new URL('/checkout/',storeUrl).href,
     data:{type:'contents',amount:Math.round(purchase.value*100),currency:purchase.currency,contents:purchase.items.map(i=>({id:i.item_id,name:i.item_name,quantity:i.quantity,amount:Math.round(i.price*100),currency:purchase.currency,content_type:'product'}))}};
   const email=String(order.billing?.email||'').trim().toLowerCase();
