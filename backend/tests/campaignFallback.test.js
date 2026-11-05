@@ -1,0 +1,5 @@
+const{test}=require('node:test'),assert=require('node:assert/strict');const{campaignFallback}=require('../ecommerce/campaignFallback');
+test('credit fallback is explicitly rules based and retains brand requirements, broad catalog scope and approval gates',()=>{
+ const advice=campaignFallback({strategy:{scope:'catalog',productCount:22},products:[{name:'Drone',sku:'REAL',price:100,currency:'BRL',availability:'in_stock',url:'https://shop.test/p',image:'https://shop.test/p.jpg'}]},{sales:{paidOrders:0},period:{from:'2026-10-01',to:'2026-10-28'}},{context:{name:'Aerion',typography:[{family:'Montserrat',role:'heading'}],colors:[{name:'blue',hex:'#0055B8'}]},policyVersion:'hub-policy-v23'});
+ assert.equal(advice.rulesBased,true);assert.equal(advice.providerPending,true);assert.equal(advice.activationAllowed,false);assert(advice.proposal.productSelection.includes('22'));assert(advice.proposal.creativeBriefs.every(b=>b.prompt.includes('Montserrat')&&b.prompt.includes('#0055B8')));assert(advice.proposal.unknowns.some(x=>x.includes('provedor')));
+});

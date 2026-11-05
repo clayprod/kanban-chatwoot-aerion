@@ -379,12 +379,12 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
     </div>
     {loading && !report && <div aria-label="Carregando Ecommerce" role="status" className="space-y-4 motion-safe:animate-pulse"><div className="h-24 rounded-xl bg-surf2" /><div className="h-64 rounded-xl bg-surf2" /><span className="sr-only">Carregando relatórios…</span></div>}
     {section !== 'connections' && <>
-      <form onSubmit={applyRange} className="flex flex-wrap items-end gap-3">
+      {section!=='assistant'&&<form onSubmit={applyRange} className="flex flex-wrap items-end gap-3">
         <label className="space-y-1"><span className="block text-xs text-muted">De</span><input type="date" className={input} value={draftRange.from} onChange={e => setDraftRange(r => ({ ...r, from: e.target.value }))} required /></label>
         <label className="space-y-1"><span className="block text-xs text-muted">Até</span><input type="date" className={input} value={draftRange.to} onChange={e => setDraftRange(r => ({ ...r, to: e.target.value }))} min={draftRange.from} required /></label>
         <button type="submit" className={btnSecondarySm} disabled={loading}>Aplicar período</button>
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
-      </form>
+      </form>}
       {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['chatgpt_ads', 'ChatGPT Ads'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
       {report && ['overview', 'ads', 'campaigns'].includes(section) && <CampaignStatus report={report} />}
       {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={mergeStoreDaily(report)} context={section === 'traffic' ? 'traffic' : 'sales'} />}

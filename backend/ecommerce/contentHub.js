@@ -3,6 +3,7 @@ const { eligibleProducts, campaignPlan } = require('./marketingDomain');
 const { encrypt, decrypt, encryptionKey } = require('./domain');
 const { buildCampaignStrategy, mediaSafetyEvidence } = require('./campaignStrategy');
 const { campaignContext } = require('./campaignContext');
+const {campaignFallback}=require('./campaignFallback');
 
 function hubOrigin(origin) {
   let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
@@ -21,11 +22,11 @@ function createContentHub({ env = process.env, transport = global.fetch } = {}) 
     const base = hubOrigin(origin);
     let response;
     try { response = await transport(new URL('/api/marketing/' + path, base), {
-      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(90000),
+      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(path==='advice'?240000:90000),
       headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     }); } catch { throw new Error('content_hub_unavailable'); }
-    if (!response.ok) throw Object.assign(new Error('content_hub_http_' + response.status), { httpStatus: response.status });
+    if (!response.ok) {let error;try{error=await response.json();}catch{}const credits=response.status===402||/OpenRouter returned HTTP 402|available credits|insufficient.*credits/i.test(error?.message||'');throw Object.assign(new Error(credits?'content_hub_advice_credits_required':'content_hub_http_'+response.status),{httpStatus:credits?402:response.status});}
     let data; try { data = await response.json(); } catch { throw new Error('content_hub_invalid_response'); }
     return data;
   }
@@ -94,13 +95,14 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     if (job.kind === 'hub_advice') {
       const plan = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['assistant_plan:' + job.resource])).rows[0]?.data;
       if (!plan) throw new Error('content_hub_plan_required');
-      if(plan.status==='ready_for_review'&&plan.advice?.brandContextUsed&&plan.advice?.proposal)return true;
+      if(plan.status==='ready_for_review'&&plan.advice?.brandContextUsed&&plan.advice?.proposal&&!plan.advice.rulesBased)return true;
       const safety = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('google_media_safety','meta_media_safety')")).rows.map(row => [row.name, row.data]));
       const context = await campaignContext(db);
-      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(p=>({...hubProduct(p),description:p.description.slice(0,1200)})), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });
+      let advice;try{advice = await hub.advice({ planId:plan.id,goal: plan.goal, products: plan.products.map(p=>({...hubProduct(p),description:p.description.slice(0,1200)})), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });}
+      catch(error){if(error.httpStatus!==402||typeof hub.context!=='function')throw error;advice=campaignFallback(plan,context,await hub.context());}
       const evidenceSummary={period:context.period,sources:context.sources,paidOrders:context.sales.paidOrders,revenue:context.sales.revenue,sessions:context.navigation.sessions,productsAssessed:plan.strategy?.productCount,containsPersonalIdentifiers:false};
       await saveState(db, 'assistant_plan:' + job.resource, { ...plan, advice, evidenceSummary, status: 'ready_for_review' });
-      await saveState(db, 'assistant_latest', { ...plan, advice, evidenceSummary, status: 'ready_for_review' }); return true;
+      await saveState(db, 'assistant_latest', { ...plan, advice, evidenceSummary, status: 'ready_for_review' });if(advice.providerPending)throw Object.assign(Error('content_hub_advice_credits_required'),{httpStatus:402,retrySeconds:3600});return true;
     }
     const found = (await db.query(`SELECT c.*,p.data AS product FROM ecommerce_marketing_content c JOIN ecommerce_marketing_products p ON p.product_id=c.product_id WHERE c.id=$1`, [job.resource])).rows[0];
     if (!found) return true;

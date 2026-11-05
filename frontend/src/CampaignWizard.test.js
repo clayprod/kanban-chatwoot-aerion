@@ -25,3 +25,7 @@ test('branding checks gate creative approval',()=>{
   for(const checkbox of screen.getAllByRole('checkbox'))fireEvent.click(checkbox);
   expect(screen.getByRole('button',{name:'Aprovar esta peça'})).toBeEnabled();expect(axios.post).not.toHaveBeenCalled();
 });
+test('rules fallback is labelled and does not claim the model finished its analysis',()=>{
+ render(<CampaignWizard data={{...base,assistant:{configured:true,latestPlan:{advice:{proposal,rulesBased:true,providerPending:true}}}}} isAdmin/>);
+ fireEvent.click(screen.getByRole('button',{name:'2. Recomendação'}));expect(screen.getByRole('status')).toHaveTextContent('Proposta inicial por regras');expect(screen.getByRole('status')).toHaveTextContent('continua pendente');
+});
