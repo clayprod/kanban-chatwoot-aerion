@@ -23,10 +23,11 @@ export const CHART_SERIES = {
     ['paidImpressions', 'Mídia paga · impressões', '#8b78f5', 'left'], ['searchImpressions', 'Busca orgânica · impressões', '#c084fc', 'left'], ['shopImpressions', 'Shopping gratuito · impressões', '#f472b6', 'left'],
     ['paidClicks', 'Mídia paga · cliques', '#8b78f5', 'left'], ['searchClicks', 'Busca orgânica · cliques', '#c084fc', 'left'], ['shopClicks', 'Shopping gratuito · cliques', '#f472b6', 'left'],
     ['sessions', 'Sessões GA4', '#0d9488', 'left'], ['orders', 'Pedidos pagos', '#e56767', 'left'],
+    ['views', 'Visualizações de páginas · GA4', '#10b981', 'left'],
     ['googleImpressions', 'Google Ads · impressões', '#d97706', 'left'], ['metaImpressions', 'Meta Ads · impressões', '#3b82f6', 'left'], ['chatgptImpressions', 'ChatGPT Ads · impressões', '#14b8a6', 'left'],
     ['googleClicks', 'Google Ads · cliques', '#fbbf24', 'left'], ['metaClicks', 'Meta Ads · cliques', '#60a5fa', 'left'], ['chatgptClicks', 'ChatGPT Ads · cliques', '#2dd4bf', 'left'],
   ],
-  traffic: [['sessions', 'Sessões GA4', '#3b82f6', 'left'], ['purchases', 'Compras GA4', '#0d9488', 'right']],
+  traffic: [['sessions', 'Sessões GA4', '#3b82f6', 'left'], ['views', 'Visualizações de páginas · GA4', '#10b981', 'left'], ['purchases', 'Compras GA4', '#0d9488', 'right']],
 };
 export const CHART_AXES = {
   money: ['Receita e pendentes · R$', 'Investimento · R$'],
@@ -37,7 +38,7 @@ export const CHART_AXES = {
   traffic: ['Sessões GA4', 'Compras GA4'],
   store: ['Contagem', 'Contagem'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'googleSpend', 'metaSpend'], efficiency: ['googleCpc', 'metaCpc'], reach: ['googleImpressions', 'metaImpressions'], cpm: ['googleCpm', 'metaCpm'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'], store: ['googleImpressions', 'metaImpressions', 'searchImpressions', 'shopImpressions'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'googleSpend', 'metaSpend', 'chatgptSpend'], efficiency: ['googleCpc', 'metaCpc', 'chatgptCpc'], reach: ['googleImpressions', 'metaImpressions', 'chatgptImpressions'], cpm: ['googleCpm', 'metaCpm', 'chatgptCpm'], volume: ['orders', 'sessions'], traffic: ['views', 'sessions', 'purchases'], store: ['googleImpressions', 'metaImpressions', 'chatgptImpressions', 'searchImpressions', 'shopImpressions', 'views'] };
 
 export const PAID_CHANNELS=[['google','Google Ads'],['meta','Meta Ads'],['chatgpt','ChatGPT Ads']];
 export function groupChartSeries(selected){
@@ -76,6 +77,7 @@ export function prepareSalesChart(rows, mode, interval, visible) {
   const series = CHART_SERIES[mode], buckets = new Map();
   const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'chatgptSpend', 'clicks', 'googleClicks', 'metaClicks', 'chatgptClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'chatgptImpressions', 'conversionValue', 'paidImpressions', 'paidClicks', 'searchImpressions', 'searchClicks', 'shopImpressions', 'shopClicks'];
   fields.push('googleConversionValue','metaConversionValue','chatgptConversionValue');
+  fields.push('views');
   for (const row of rows) {
     const date = new Date(`${row.date}T12:00:00Z`);
     if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);

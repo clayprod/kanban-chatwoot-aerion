@@ -5,6 +5,14 @@ const { encrypt, decrypt, verifyWebhook, normalizeOrder, dateRange, buildReport 
 const { createProviders, isPublicAddress, storeUrl } = require('../ecommerce/providers');
 const { validateConfig } = require('../ecommerce/routes');
 
+test('GA4 page views reach the daily report separately from advertising impressions',()=>{
+  const range={from:'2026-11-05',to:'2026-11-05',previousFrom:'2026-11-04',previousTo:'2026-11-04'};
+  const metrics=[{provider:'ga4',kind:'total',date:'2026-11-05',views:12,sessions:4},{provider:'ga4',kind:'traffic',date:'2026-11-05',views:12,sessions:4},{provider:'google_ads',date:'2026-11-05',currency:'BRL',spend:5,impressions:100,clicks:2}];
+  const report=buildReport({range,metrics,connections:[{provider:'ga4',last_success_at:'2026-11-05'},{provider:'google_ads',last_success_at:'2026-11-05'}]});
+  assert.equal(report.summary.views,12);assert.equal(report.daily[0].views,12);assert.equal(report.daily[0].sessions,4);assert.equal(report.daily[0].impressions,100);
+  assert.equal(buildReport({range,metrics,connections:[]}).daily[0].views,null);
+});
+
 const order = (overrides = {}) => ({ id: 17, number: '17', status: 'completed', currency: 'BRL',
   date_paid_gmt: '2026-10-21T02:30:00', date_created_gmt: '2026-10-20T23:00:00', date_modified_gmt: '2026-10-21T10:00:00',
   total: '120', shipping_total: '10', total_tax: '10', discount_total: '20',

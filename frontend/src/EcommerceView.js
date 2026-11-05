@@ -3,7 +3,7 @@ import axios from 'axios';
 import { ResponsiveLine } from '@nivo/line';
 import { ArrowPathIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon, ChevronDownIcon, ExclamationTriangleIcon, LinkIcon, Squares2X2Icon, ShoppingBagIcon, MegaphoneIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import { btnPrimary, btnSecondarySm, input, select } from './ui';
-import { prepareSalesChart, CHART_DEFAULTS, CHART_SERIES, PAID_CHANNELS, selectPaidChannels, groupChartSeries, movingAverage, isSmallSample, adStatus } from './ecommerceChart';
+import { prepareSalesChart, CHART_DEFAULTS, CHART_SERIES, PAID_CHANNELS, selectPaidChannels, groupChartSeries, movingAverage, isSmallSample } from './ecommerceChart';
 import { mergeStoreDaily, channelTable, funnelSteps } from './storeReach';
 import MerchantView from './MerchantView';
 import MarketingAutomationView from './MarketingAutomationView';
@@ -80,25 +80,17 @@ function grouped(rows, keys, fields) {
   });
   return [...map.values()];
 }
-function CampaignStatus({ report }) {
-  const names = { google_ads: 'Google Ads', meta_ads: 'Meta Ads' };
-  const today0 = today();
-  const items = ['google_ads', 'meta_ads'].map(p => ({ p, status: adStatus(report.adActivity?.[p] || null, today0, report.connections?.some(c => c.provider === p && c.last_success_at)) }));
-  const tones = { live: 'border-emerald-500/40 bg-emerald-500/10', paused: 'border-amber-500/40 bg-amber-500/10', idle: 'border-line bg-bg2', off: 'border-line bg-bg2' };
-  return <section aria-label="Situação das campanhas" className="grid gap-3 sm:grid-cols-2">{items.map(({ p, status }) => <div key={p} className={`rounded-xl border p-3 text-sm ${tones[status.tone]}`}>
-    <div className="flex items-center justify-between gap-2"><b>{names[p]}</b><span className="text-xs">{status.tone === 'live' ? '● ' : status.tone === 'paused' ? '⏸ ' : '○ '}{status.label}</span></div>
-    <p className="mt-1 text-xs text-muted">{status.tone === 'live' ? `Última entrega em ${dateLabel(status.lastDay)}.` : status.tone === 'paused' ? `Conectado e sincronizando, mas sem impressões desde ${dateLabel(status.lastDay)} (${status.days} dias). Zeros no gráfico significam campanha parada, não falha de integração.` : status.tone === 'idle' ? 'A conta está conectada e nunca registrou impressões ou investimento.' : 'Conecte a conta em Conexões para acompanhar.'}</p></div>)}</section>;
-}
 function SalesChart({ rows, context = 'sales', traffic = [] }) {
   const [visible, setVisible] = useState(CHART_DEFAULTS[context === 'traffic' ? 'traffic' : 'store']);
   const [mode, setMode] = useState(context === 'traffic' ? 'traffic' : 'store');
   const [interval, setInterval] = useState('day');
-  const [channels,setChannels]=useState(['google','meta']);
+  const [channels,setChannels]=useState(['google','meta','chatgpt']);
   const [trafficSource,setTrafficSource]=useState('all');
   const trafficOptions=[...new Set(traffic.filter(r=>r.kind==='traffic').map(r=>JSON.stringify([r.source,r.medium])))];
   const filteredRows=context==='traffic'?(trafficSource==='all'?rows:rows.map(row=>{
     const matches=traffic.filter(r=>r.kind==='traffic'&&r.date===row.date&&JSON.stringify([r.source,r.medium])===trafficSource);
-    return {...row,sessions:row.sessions==null?null:matches.reduce((n,r)=>n+(r.sessions||0),0),purchases:row.purchases==null?null:matches.reduce((n,r)=>n+(r.purchases||0),0)};
+    const viewsMeasured=traffic.some(r=>r.date===row.date&&r.kind==='traffic'&&r.viewsMeasured===true)&&matches.every(r=>r.viewsMeasured===true);
+    return {...row,views:viewsMeasured?matches.reduce((n,r)=>n+(r.views||0),0):null,sessions:row.sessions==null?null:matches.reduce((n,r)=>n+(r.sessions||0),0),purchases:row.purchases==null?null:matches.reduce((n,r)=>n+(r.purchases||0),0)};
   })):selectPaidChannels(rows,channels);
   const { series, available, data, points, selected } = prepareSalesChart(filteredRows, mode, interval, visible);
   function changeMode(next){
@@ -410,7 +402,6 @@ export default function EcommerceView({ section: requestedSection = 'overview', 
         {[7, 30, 90, 365].map(days => <button key={days} type="button" className={btnSecondarySm} onClick={() => { const next = { from: previousDay(today(), days - 1), to: today() }; setDraftRange(next); setRange(next); }}>{days === 365 ? '12 meses' : `${days} dias`}</button>)}
       </form>}
       {['ads', 'sales'].includes(parentSection) && <div className="flex flex-wrap gap-2" aria-label="Detalhamento do relatório">{(parentSection === 'ads' ? [['ads', 'Mídia paga'], ['chatgpt_ads', 'ChatGPT Ads'], ['traffic', 'Tráfego e conversão'], ['campaigns', 'Campanhas e UTMs'], ['seo', 'Busca orgânica e SEO'], ['merchant', 'Produtos no Google'], ['automation', 'Automação e catálogos']] : [['sales', 'Pedidos e produtos'], ['coupons', 'Cupons']]).map(([id, label]) => <button type="button" key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={`${btnSecondarySm} ${section === id ? 'bg-primary/15 text-primary' : ''}`}>{label}</button>)}</div>}
-      {report && ['overview', 'ads', 'campaigns'].includes(section) && <CampaignStatus report={report} />}
       {report && ['overview', 'ads', 'traffic', 'campaigns'].includes(section) && <SalesChart key={section} rows={mergeStoreDaily(report)} traffic={report.traffic} context={section === 'traffic' ? 'traffic' : 'sales'} />}
       {report && <>
         {section === 'merchant' && <MerchantView data={report.merchant} range={report.range} />}
