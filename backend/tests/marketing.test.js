@@ -24,6 +24,10 @@ test('ChatGPT Ads client keeps the account key on the official host, paginates a
   await assert.rejects(createChatgptAdsClient(secret, async () => Response.json({ error: secret }, { status: 403 })).get('ad_account'), error => !error.message.includes(secret) && error.httpStatus === 403);
   await assert.rejects(createChatgptAdsClient(secret, async () => Response.json({ data: [], has_more: true })).list('campaigns'), /incomplete_pagination/);
 });
+test('Hub credit failures become an actionable status without reflecting upstream secrets',async()=>{
+ const secret='private-hub-token',hub=createContentHub({env:{ECOMMERCE_CONTENT_HUB_TOKEN:secret},transport:async()=>Response.json({message:'OpenRouter returned HTTP 402: '+secret},{status:400})});
+ await assert.rejects(hub.advice({}),error=>error.httpStatus===402&&!error.message.includes(secret));
+});
 
 test('AI receives existing protection evidence with unavailable and preserved coverage, never an invented absence', () => {
   assert.equal(mediaSafetyEvidence({}).google.status, 'not_audited');

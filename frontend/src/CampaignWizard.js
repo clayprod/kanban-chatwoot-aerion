@@ -32,6 +32,7 @@ export default function CampaignWizard({ data = {}, isAdmin, onRefresh }) {
       {!assistant.configured&&<p className="text-sm">Conecte o Content Hub em Conexões para receber a recomendação da IA.</p>}
     </form>}
     {step===1&&<div className="max-w-4xl space-y-5">
+      {plan?.advice?.rulesBased&&<p role="status" className="text-sm">Proposta inicial por regras e dados da Aerion. O provedor de IA está com saldo/limite indisponível; a análise do modelo continua pendente.</p>}
       {pending?<p role="status">A IA está analisando o contexto da Aerion. A recomendação aparecerá aqui; você pode sair e voltar.</p>:proposal?<>
         <div><h4 className="text-lg font-semibold">{proposal.summary}</h4><p className="mt-2 max-w-3xl text-sm leading-relaxed">{proposal.reason}</p></div>
         <dl className="divide-y divide-line"><div className="py-3"><dt className="text-xs text-muted">O que anunciar</dt><dd className="mt-1 text-sm">{proposal.productSelection}</dd></div><div className="py-3"><dt className="text-xs text-muted">Para quem</dt><dd className="mt-1 text-sm">{proposal.audience}</dd></div>{proposal.platforms.map((p,i)=><div key={i} className="py-3"><dt className="text-sm font-medium">{provider[p.platform]} · {p.objective}</dt><dd className="mt-1 text-sm text-muted">{p.reason}</dd></div>)}</dl>
