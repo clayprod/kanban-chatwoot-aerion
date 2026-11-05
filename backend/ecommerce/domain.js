@@ -163,6 +163,8 @@ function buildReport({ orders = [], metrics = [], links = [], visits = [], conne
       unpaidValue: available('woocommerce') ? sum(unpaid.filter(o => o.createdDay === date), 'total') : null,
       googleSpend: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'spend') : null,
       metaSpend: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'spend') : null,
+      googleConversionValue: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'conversionValue') : null,
+      metaConversionValue: available('meta_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'meta_ads'), 'conversionValue') : null,
       spend: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'spend') : null,
       clicks: available('google_ads') || available('meta_ads') ? sum(validAds.filter(m => m.date === date), 'clicks') : null,
       googleClicks: available('google_ads') ? sum(validAds.filter(m => m.date === date && m.provider === 'google_ads'), 'clicks') : null,
