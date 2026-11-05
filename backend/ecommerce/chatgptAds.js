@@ -40,7 +40,7 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     const row = await saved(pool);
     const snapshot = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_snapshot:' + row.config.account.id])).rows[0]?.data : null;
     const setup = row?.config?.account?.id ? (await pool.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['chatgpt_ads_setup:' + row.config.account.id])).rows[0]?.data : null;
-    return { configured: Boolean(row?.enabled), account: row?.config?.account || null, lastVerifiedAt: row?.last_success_at || null, snapshot: snapshot || null, setup: setup || null,
+    return { configured: Boolean(row?.enabled), account: snapshot?.account || row?.config?.account || null, lastVerifiedAt: row?.last_success_at || null, snapshot: snapshot || null, setup: setup || null,
       measurement: setup?.resources?.capi?.enabled?'paid_server_purchase_enabled_with_consent':'requires_pixel_and_consent_validation', audiences: 'requires_eligible_identifiers_and_account_readiness', activationAllowed: false };
   }
   async function setup(db) {

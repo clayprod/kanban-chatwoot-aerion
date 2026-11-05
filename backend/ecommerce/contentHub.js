@@ -97,7 +97,7 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
       if(plan.status==='ready_for_review'&&plan.advice?.brandContextUsed&&plan.advice?.proposal)return true;
       const safety = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('google_media_safety','meta_media_safety')")).rows.map(row => [row.name, row.data]));
       const context = await campaignContext(db);
-      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(hubProduct), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });
+      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(p=>({...hubProduct(p),description:p.description.slice(0,1200)})), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });
       const evidenceSummary={period:context.period,sources:context.sources,paidOrders:context.sales.paidOrders,revenue:context.sales.revenue,sessions:context.navigation.sessions,productsAssessed:plan.strategy?.productCount,containsPersonalIdentifiers:false};
       await saveState(db, 'assistant_plan:' + job.resource, { ...plan, advice, evidenceSummary, status: 'ready_for_review' });
       await saveState(db, 'assistant_latest', { ...plan, advice, evidenceSummary, status: 'ready_for_review' }); return true;
