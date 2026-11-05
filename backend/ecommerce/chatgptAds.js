@@ -2,6 +2,7 @@ const { encrypt, decrypt, encryptionKey, saoPauloDay, shiftDay } = require('./do
 const crypto = require('node:crypto');
 const { chatgptCatalog, uploadCatalog } = require('./chatgptCatalog');
 const { paidChatgptPayload,sendChatgptConversion }=require('./chatgptMeasurement');
+const {syncChatgptAudiences}=require('./chatgptAudiences');
 const API = 'https://api.ads.openai.com/v1/';
 function createChatgptAdsClient(token, transport = global.fetch) {
   async function request(path, method = 'GET', body, idempotencyKey) {
@@ -84,7 +85,7 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
       if (found) state.resources[name] = { id: found.id, source, segment, status: found.status, matchedUserRange: found.matched_user_count_range || null };
       else await once(name, 'custom_audiences', { name: title, description: source === 'store' ? 'Somente compras online pagas e elegíveis nos últimos 180 dias. Exclusão/recompra; CRM separado.' : 'Segmento comercial separado da loja. Somente identificadores com elegibilidade demonstrada.' }, r => r.id ? { id: r.id, source, segment, status: r.status, matchedUserRange: r.matched_user_count_range || null } : null);
     }
-    state.audienceMembership = { enabled: false, reason: 'eligibility_and_membership_validation_required' };
+    state.audienceMembership ||= { enabled: false, reason: 'eligibility_and_membership_validation_required' };
     state.campaigns = { status: 'not_created', reason: 'explicit_chatgpt_budget_and_approved_assets_required', automaticBudgetTransfer: false };
     await persist();await sync(db);return state;
   }
@@ -150,6 +151,15 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     if(event.eligible){const secrets=decrypt(row.secrets,encryptionKey(env));await sendChatgptConversion({pixelId:pixel,apiKey:secrets.conversionsApiKey,body:event.body,transport});}
     await db.query(`INSERT INTO ecommerce_marketing_conversions(destination,transaction_id,event_id,state,reason,submitted_at) VALUES($1,$2,$3,$4,$5,CASE WHEN $4='submitted' THEN now() ELSE NULL END) ON CONFLICT(destination,transaction_id) DO UPDATE SET state=EXCLUDED.state,reason=EXCLUDED.reason,submitted_at=EXCLUDED.submitted_at,updated_at=now()`,[destination,String(order.id),'aerion_purchase_'+order.id,event.eligible?'submitted':'ineligible',event.reason||null]);
   }
+  async function audiences(db,providers){
+    const row=await saved(db);if(!row?.enabled)throw Error('connection_required');
+    const name='chatgpt_ads_setup:'+row.config.account.id,setup=(await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1',[name])).rows[0]?.data;
+    if(!setup)throw Error('chatgpt_setup_required');
+    const secrets=decrypt(row.secrets,encryptionKey(env)),client=createChatgptAdsClient(secrets.apiKey,transport);
+    setup.audienceMembership=await syncChatgptAudiences({db,client,setup,accountId:row.config.account.id,providers,env});await saveState(db,name,setup);
+    if(setup.audienceMembership.pending)throw Object.assign(Error('chatgpt_audiences_processing'),{retrySeconds:300});
+    return setup.audienceMembership;
+  }
   function mountAdmin(router) {
     router.put('/marketing/chatgpt-ads/connection', async (req, res) => {
       const old = await saved(pool);
@@ -164,7 +174,8 @@ function createChatgptAds({ pool, env = process.env, enqueue, saveState, transpo
     router.post('/marketing/chatgpt-ads/sync', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_sync', 'account');res.status(202).json({ queued: true }); });
     router.post('/marketing/chatgpt-ads/setup', async (req, res) => { if (!(await saved(pool))?.enabled) return res.status(409).json({ error: 'Conecte a conta ChatGPT Ads primeiro.' });await enqueue(pool, 'chatgpt_ads_setup', 'account');res.status(202).json({ queued: true, activationAllowed: false }); });
     router.post('/marketing/chatgpt-ads/catalog', async (req,res)=>{await enqueue(pool,'chatgpt_ads_catalog','account');res.status(202).json({queued:true});});
+    router.post('/marketing/chatgpt-ads/audiences',async(req,res)=>{await enqueue(pool,'chatgpt_ads_audiences','account');res.status(202).json({queued:true});});
   }
-  return { status, sync, setup, catalog, paidPurchase, mountAdmin };
+  return { status, sync, setup, catalog, paidPurchase, audiences, mountAdmin };
 }
 module.exports = { createChatgptAdsClient, publicAccount, createChatgptAds };

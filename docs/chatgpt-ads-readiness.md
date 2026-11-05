@@ -63,6 +63,14 @@ autorização da conta e a configuração do dashboard são estados independente
 
 ## Validação
 
+Públicos: a rotina diária compara somente identificadores com consentimento
+publicitário registrado e sem bloqueios. A loja é restringida a compradores
+pagos nos últimos 180 dias, excluindo testes; CRM usa seus segmentos próprios.
+O ledger e os pedidos pendentes são criptografados. Remoções precedem inclusões;
+cada operação assíncrona persiste corpo e chave idempotente antes do envio,
+retoma respostas perdidas com a mesma chave e só avança após sucesso confirmado.
+Nenhum cadastro inelegível é enviado para preencher listas ou atingir mínimos.
+
 Atualização de implantação: recursos de Pixel, CAPI, cinco definições de eventos,
 feed BR/SFTP e cinco públicos foram provisionados em 04/11/2026. A conta está em
 revisão; criar recursos não comprova entrega de anúncios, ingestão de catálogo,

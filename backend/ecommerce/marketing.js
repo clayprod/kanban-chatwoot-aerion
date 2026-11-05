@@ -128,6 +128,7 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
     if (job.kind === 'chatgpt_ads_sync') { await chatgptAds.sync(db);return; }
     if (job.kind === 'chatgpt_ads_setup') { await chatgptAds.setup(db);return; }
     if (job.kind === 'chatgpt_ads_catalog') { await chatgptAds.catalog(db);return; }
+    if (job.kind === 'chatgpt_ads_audiences') { await chatgptAds.audiences(db,providers);return; }
     if (job.kind === 'meta_safety') { await saveState(db, 'meta_media_safety', await providers.metaMediaSafety(await load(db, 'meta_ads')));return; }
     if (job.kind === 'google_safety') {
       const result = await providers.googleMediaSafety(await load(db, 'google_ads'));
@@ -306,13 +307,13 @@ function createMarketing({ pool, providers, env = process.env, contentHub }) {
       if (env.ECOMMERCE_CUSTOMER_LISTS) await db.query("INSERT INTO ecommerce_marketing_jobs(kind,resource) VALUES('customer_audiences','daily') ON CONFLICT DO NOTHING");
       // Successful recurring jobs become due again; retries keep their own backoff.
       await db.query(`UPDATE ecommerce_marketing_jobs SET status='pending',attempts=0 WHERE status='done' AND
-        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','chatgpt_ads_sync','customer_audiences') AND next_run_at<=now()) OR (kind IN ('meta','chatgpt_ads_catalog') AND next_run_at<=now()))`);
+        ((kind IN ('reconcile','webhooks','seo','seo_weekly','meta_audiences','meta_safety','google_audiences','google_safety','chatgpt_ads_sync','chatgpt_ads_audiences','customer_audiences') AND next_run_at<=now()) OR (kind IN ('meta','chatgpt_ads_catalog') AND next_run_at<=now()))`);
       for (let i = 0; i < 8; i++) {
         const job = (await db.query(`UPDATE ecommerce_marketing_jobs SET status='running',lease_until=now()+interval '10 minutes'
           WHERE id=(SELECT id FROM ecommerce_marketing_jobs WHERE status IN ('pending','retry') AND next_run_at<=now()
           ORDER BY CASE kind WHEN 'product' THEN 0 WHEN 'paid_event' THEN 0 WHEN 'reconcile' THEN 1 WHEN 'meta' THEN 2 ELSE 3 END,next_run_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`)).rows[0];
         if (!job) break;
-        const sourceLocks = ['customer_audiences','campaign_stage'].includes(job.kind) ? [lockId('woocommerce'), lockId('meta_ads'), lockId('google_ads')]
+        const sourceLocks = job.kind==='chatgpt_ads_audiences'?[lockId('woocommerce'),735107]:['customer_audiences','campaign_stage'].includes(job.kind) ? [lockId('woocommerce'), lockId('meta_ads'), lockId('google_ads')]
           : [job.kind.startsWith('chatgpt_ads_') ? 735107 : lockId(job.kind === 'google_safety' ? 'google_ads' : job.kind.startsWith('meta') ? 'meta_ads' : job.kind.startsWith('google') ? 'ga4' : 'woocommerce')];
         const acquired = [];
         for (const id of sourceLocks) {
