@@ -107,6 +107,9 @@ test('each shared chart can isolate ad platforms and starts with ChatGPT switche
   fireEvent.click(screen.getByRole('checkbox',{name:'Google Ads'}));
   expect(screen.queryByRole('img',{name:/Google Ads · impressões/})).not.toBeInTheDocument();
   expect(screen.getByRole('img',{name:/Meta Ads · impressões/})).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Métrica neste gráfico'),{target:{value:'money'}});
+  expect(screen.getByRole('img',{name:/Investimento por plataforma:.*ChatGPT Ads/})).toBeInTheDocument();
+  expect(screen.queryByRole('img',{name:/Investimento por plataforma:.*Google Ads/})).not.toBeInTheDocument();
 });
 
 test('GA4 chart filters acquisition independently from advertising account attribution',async()=>{
