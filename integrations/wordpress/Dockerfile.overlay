@@ -1,19 +1,8 @@
-# Assemble only from the verified production base and the main CI/GHCR image.
-# No PHP, theme, uploads or database files are read from a developer checkout.
+# Preserve every file from the verified current production image.
 ARG INTEGRATION_IMAGE
 ARG WORDPRESS_BASE_IMAGE
 FROM ${INTEGRATION_IMAGE} AS validated_integration
 FROM ${WORDPRESS_BASE_IMAGE}
-
-# These hashes identify the 1.2.0 bridge and storefront audited in production.
-# Fail rather than replace another agent's newer integration unexpectedly.
-RUN echo 'a868284dc8ef559afbb096705e0f47657c7b5dff3eba1831a955eb94141d20bd  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/aerion-ecommerce-reports.php' | sha256sum -c - \
- && echo '77838c64042a3e520e42c63a7693ea722928d63255df084d0d682777bda13357  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c - \
- && echo '4527b4ca403c8dcf91bff8b4f7fa7cfbfca8435ae20b63bf6374320ed6290013  /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php' | sha256sum -c -
-
-COPY --from=validated_integration /opt/aerion-integrations/wordpress/ /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/
-COPY --from=validated_integration /opt/aerion-integrations/storefront/render-commerce.php /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php
-RUN php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/aerion-ecommerce-reports.php \
- && php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php \
- && php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/marketing.php \
- && php -l /opt/aerion/wp-content/plugins/aerion-blocks/includes/render-commerce.php
+RUN echo '95aee43b59c8510f8f10db1e82861931f1cbc660a7125bf16090bf868db187f4  /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php' | sha256sum -c -
+COPY --from=validated_integration /opt/aerion-integrations/wordpress/measurement.php /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php
+RUN php -l /opt/aerion/wp-content/plugins/aerion-ecommerce-reports/measurement.php

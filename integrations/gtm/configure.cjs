@@ -43,7 +43,8 @@ async function main() {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const save = (name, object) => { fs.writeFileSync(path.join(directory, name), JSON.stringify(object, null, 2), { mode: 0o600 }); fs.chmodSync(path.join(directory, name), 0o600); };
   const read = name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
-  const account = JSON.parse(fs.readFileSync(value('--credentials'), 'utf8'));
+  const credentialPath=value('--credentials');
+  const account = JSON.parse(fs.readFileSync(credentialPath==='/dev/stdin'?0:credentialPath, 'utf8'));
   const access = await token(account, prepare || publish ? ['readonly', 'edit.containers', 'edit.containerversions', 'publish'] : ['readonly']);
   let last = 0;
   const request = async (endpoint, method = 'GET', body) => {
@@ -76,14 +77,15 @@ async function main() {
   if (fs.existsSync(path.join(directory, 'prepared.json'))) throw new Error('A version is already prepared. Review or publish it before preparing another.');
   const backup = `live-before-${live.containerVersionId}.json`;
   if (!fs.existsSync(path.join(directory, backup))) save(backup, live);
-  const plan = buildPlan(live);
+  const chatgptPixel = args.includes('--chatgpt-pixel') ? value('--chatgpt-pixel') : null;
+  const plan = chatgptPixel ? require('./chatgpt.cjs').buildChatgptPlan(live, chatgptPixel) : buildPlan(live);
   let workspace;
   if (fs.existsSync(path.join(directory, 'workspace.json'))) {
     const previous = read('workspace.json');
     if (previous.container !== CONTAINER || previous.baseVersion !== live.containerVersionId || !previous.workspace.startsWith(`${CONTAINER}/workspaces/`)) throw new Error('Previous workspace differs from the current live version.');
     workspace = await request(previous.workspace);
   } else {
-    workspace = await request(`${CONTAINER}/workspaces`, 'POST', { name: WORKSPACE, description: 'Ecommerce pago, SKU, consentimento e deduplicação. Sem alterações de campanhas, orçamento ou conversões de leads.' });
+    workspace = await request(`${CONTAINER}/workspaces`, 'POST', { name: chatgptPixel ? 'Aerion ChatGPT Ads · consentimento' : WORKSPACE, description: 'Ecommerce pago, SKU, consentimento e deduplicação. Sem alterações de campanhas, orçamento ou conversões de leads.' });
   }
   save('workspace.json', { container: CONTAINER, workspace: workspace.path, baseVersion: live.containerVersionId });
   const upsert = async (kind, spec) => {
@@ -99,7 +101,7 @@ async function main() {
   for (const tag of plan.tags) await upsert('tags', tag);
   const status = await request(`${workspace.path}/status`);
   if (status.mergeConflict?.length) throw new Error('GTM workspace has merge conflicts.');
-  const created = await request(`${workspace.path}:create_version`, 'POST', { name: 'Aerion Ecommerce · compras pagas e consentimento', notes: 'GA4 ecommerce estruturado; Meta Purchase com event_id, SKU e consentimento. Mantém ações de leads Google Ads existentes.' });
+  const created = await request(`${workspace.path}:create_version`, 'POST', { name: chatgptPixel ? 'Aerion ChatGPT Ads · consentimento e compras pagas' : 'Aerion Ecommerce · compras pagas e consentimento', notes: chatgptPixel ? 'Adiciona somente medição ChatGPT Ads com consentimento, SKU, centavos e ID estável de compra. Preserva tags Google/Meta e campanhas.' : 'GA4 ecommerce estruturado; Meta Purchase com event_id, SKU e consentimento. Mantém ações de leads Google Ads existentes.' });
   if (created.compilerError || created.syncStatus?.mergeConflict?.length || !created.containerVersion?.path) throw new Error('GTM did not compile a clean version.');
   save('prepared-version.json', created.containerVersion);
   const state = { container: CONTAINER, publicId: PUBLIC_ID, baseVersion: live.containerVersionId,

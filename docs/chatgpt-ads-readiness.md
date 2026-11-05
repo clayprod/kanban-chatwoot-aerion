@@ -1,6 +1,7 @@
 # Campanhas com IA e ChatGPT Ads
 
-Entrada: **Ecommerce → Campanhas com IA**, ou `/?ecommerce=assistant`.
+Conta de anúncios: **Ecommerce → Marketing → ChatGPT Ads**, ou `/?ecommerce=chatgpt_ads`.
+Planejamento: **Ecommerce → Campanhas com IA**, ou `/?ecommerce=assistant`.
 A área reúne planejamento por produto/família/oferta, comparação de estratégias,
 evidências das proteções existentes de Google/Meta e geração/revisão de ativos pelo
 Content Hub. É um assistente guiado; não é uma conversa livre nem um operador que
@@ -61,6 +62,39 @@ autorização da conta e a configuração do dashboard são estados independente
 - https://developers.openai.com/ads/api-reference/conversion-setup
 
 ## Validação
+
+Públicos: a rotina diária compara somente identificadores com consentimento
+publicitário registrado e sem bloqueios. A loja é restringida a compradores
+pagos nos últimos 180 dias, excluindo testes; CRM usa seus segmentos próprios.
+O ledger e os pedidos pendentes são criptografados. Remoções precedem inclusões;
+cada operação assíncrona persiste corpo e chave idempotente antes do envio,
+retoma respostas perdidas com a mesma chave e só avança após sucesso confirmado.
+Nenhum cadastro inelegível é enviado para preencher listas ou atingir mínimos.
+
+Atualização de implantação: recursos de Pixel, CAPI, cinco definições de eventos,
+feed BR/SFTP e cinco públicos foram provisionados em 04/11/2026. A conta está em
+revisão; criar recursos não comprova entrega de anúncios, ingestão de catálogo,
+recebimento de compras ou elegibilidade de públicos. A sincronização de catálogo
+usa somente preços públicos, uma conexão SFTP e chave do host fixada após o
+primeiro handshake no destino autenticado pela API. O feed próprio usa refresh
+completo; projeção vazia nunca apaga o último catálogo válido.
+
+O fluxo de IA agora é guiado: objetivo (inclusive ajuda para decidir e catálogo
+geral), recomendação contextual, briefing exportável e seleção do acervo Aerion,
+revisão de branding e aprovação. Não solicita geração de mídia. O Hub consulta
+`get_brand_context` e sua política de produção antes da orientação. O contexto
+do CRM usa 28 dias completos de calendário com cobertura explícita, pagamentos
+WooCommerce, métricas por origem, produtos e públicos agregados, sem cadastros
+pessoais. O acervo inclui recebidos, gerados e montados. Selecionar fixa o arquivo
+contra retenção, mas não o aprova. Aprovação registra conferência humana de logo,
+tipografia, cores, composição e dados do produto.
+
+Pixel: consentimento negado antes de inicialização, SDK carregado apenas após
+aceite, revogação propagada, IDs de compra estáveis e valores em centavos. CAPI
+permanece desabilitada até validação explícita, usa o mesmo ID do navegador e só
+aceita pedido pago com contexto de consentimento válido; testes de produção
+usam `validate_only` e nunca registram compras fictícias. O painel mantém
+conversões atribuídas indisponíveis até a respectiva importação ser homologada.
 
 Testes cobrem destino fixo e paginação, sanitização de erros, autorização de
 administrador, persistência criptografada entre instâncias, substituição inválida,

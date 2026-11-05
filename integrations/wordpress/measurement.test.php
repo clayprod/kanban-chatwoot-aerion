@@ -26,6 +26,7 @@ check($options['gtm-code'] === 'GTM-EXISTING', 'Preserve existing container.');
 check($options['integrate-woocommerce-remarketing-usesku'] === true, 'Product IDs must match SKU feed.');
 check($options['integrate-woocommerce-customer-data'] === false && $options['integrate-woocommerce-order-data'] === false, 'Do not publish customer PII.');
 $consent = Aerion_Ecommerce_Measurement::consent_options([]);
+check(str_contains($consent['moove_gdpr_advanced_cookies_tab_content'], 'ChatGPT Ads (OpenAI)'), 'Advertising consent discloses the added destination.');
 check($consent['moove_gdpr_third_party_cookies_enable'] === 1 && $consent['moove_gdpr_advanced_cookies_enable'] === 1, 'Visitors need separate statistics and advertising choices.');
 check($consent['moove_gdpr_third_party_cookies_enable_first_visit'] === 0 && $consent['moove_gdpr_advanced_cookies_enable_first_visit'] === 0, 'Optional tracking stays off until the visitor opts in.');
 check(Aerion_Ecommerce_Measurement::consent_pre_options(false) === false, 'Do not short circuit WordPress when Moove did not supply settings.');

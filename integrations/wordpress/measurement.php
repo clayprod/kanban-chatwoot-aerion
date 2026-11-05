@@ -49,11 +49,18 @@ final class Aerion_Ecommerce_Measurement
             || !preg_match('/^\d+\.\d+$/', (string) ($context['clientId'] ?? ''))) { return; }
         $cookie = (string) ($_COOKIE['_ga'] ?? '');
         if (!preg_match('/^GA\d+\.\d+\.(\d+\.\d+)$/', $cookie, $matches) || !hash_equals($matches[1], (string) $context['clientId'])) { return; }
-        $order->update_meta_data('_aerion_measurement_context', [
+        $saved = [
             'clientId' => $matches[1], 'statistics' => true,
             'marketing' => ($context['marketing'] ?? false) === true,
             'source' => 'wp_consent_api_classic_checkout', 'recordedAt' => gmdate(DATE_ATOM), 'revoked' => false,
-        ]);
+        ];
+        if ($saved['marketing']) {
+            foreach (['oppref' => '__oppref', 'obref' => '__obref'] as $field => $cookie_name) {
+                $value = (string) ($_COOKIE[$cookie_name] ?? '');
+                if ($value !== '' && strlen($value) <= 512 && !preg_match('/[\r\n]/', $value)) { $saved[$field] = $value; }
+            }
+        }
+        $order->update_meta_data('_aerion_measurement_context', $saved);
     }
 
     public static function consent_options(mixed $options): array
@@ -63,8 +70,11 @@ final class Aerion_Ecommerce_Measurement
             'moove_gdpr_performance_cookies_tab_title' => 'Medição e estatísticas',
             'moove_gdpr_performance_cookies_tab_content' => '<p>Com sua autorização, o Google Analytics mede navegação, carrinhos e compras para melhorar a loja. Você pode desativar esta categoria quando quiser.</p>',
             'moove_gdpr_advanced_cookies_tab_title' => 'Publicidade e remarketing',
-            'moove_gdpr_advanced_cookies_tab_content' => '<p>Com sua autorização, Google Ads e Meta medem o resultado de anúncios e criam públicos com base na navegação e nas compras. Você pode desativar esta categoria quando quiser.</p>',
+            'moove_gdpr_advanced_cookies_tab_content' => '<p>Com sua autorização, Google Ads, Meta e ChatGPT Ads (OpenAI) medem o resultado de anúncios e usam sinais de navegação e compras para publicidade. Você pode desativar esta categoria quando quiser.</p>',
         ], $options);
+        if (isset($options['moove_gdpr_advanced_cookies_tab_content'])) {
+            $options['moove_gdpr_advanced_cookies_tab_content'] = str_replace('Google Ads e Meta medem o resultado de anúncios e criam públicos com base na navegação e nas compras.', 'Google Ads, Meta e ChatGPT Ads (OpenAI) medem o resultado de anúncios e usam sinais de navegação e compras para publicidade.', $options['moove_gdpr_advanced_cookies_tab_content']);
+        }
         return array_replace($options, [
             'moove_gdpr_third_party_cookies_enable' => 1,
             'moove_gdpr_third_party_cookies_enable_first_visit' => 0,

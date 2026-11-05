@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { eligibleProducts, campaignPlan } = require('./marketingDomain');
 const { encrypt, decrypt, encryptionKey } = require('./domain');
 const { buildCampaignStrategy, mediaSafetyEvidence } = require('./campaignStrategy');
+const { campaignContext } = require('./campaignContext');
 
 function hubOrigin(origin) {
   let base;try { base = new URL(origin); } catch { throw new Error('content_hub_connection_required'); }
@@ -33,6 +34,9 @@ function createContentHub({ env = process.env, transport = global.fetch } = {}) 
     advice: input => call('advice', { ...input, brandId }),
     generate: input => call('generations', { ...input, brandId }),
     receipt: id => { if (!/^[a-f0-9-]{36}$/i.test(id)) throw new Error('content_hub_invalid_request'); return call('requests/' + id); },
+    library: query => call('library/' + encodeURIComponent(brandId) + '?' + new URLSearchParams(query)),
+    context: () => call('context/' + encodeURIComponent(brandId)),
+    selectAsset: input => call('library/' + encodeURIComponent(brandId) + '/select', input),
   };
 }
 function hubProduct(product) {
@@ -45,7 +49,7 @@ function recommendCampaign(products, input = {}) {
     && strategy.productIds.includes(p.id))
     .sort((a, b) => Number(!['Drones', 'Kits'].includes(a.group)) - Number(!['Drones', 'Kits'].includes(b.group))
       || Number(a.availability !== 'in_stock') - Number(b.availability !== 'in_stock') || a.name.localeCompare(b.name, 'pt-BR'))
-    .slice(0, 3);
+    .slice(0, 8);
   if (!selected.length) throw Object.assign(new Error('Selecione produtos elegíveis disponíveis ou em pré-venda com prazo real.'), { status: 409 });
   const budget = input.budget ? campaignPlan(input.budget, selected, []) : null;
   return { id: crypto.randomUUID(), goal: String(input.goal || 'Preparar as primeiras vendas da loja').slice(0, 3000),
@@ -90,10 +94,13 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     if (job.kind === 'hub_advice') {
       const plan = (await db.query('SELECT data FROM ecommerce_marketing_state WHERE name=$1', ['assistant_plan:' + job.resource])).rows[0]?.data;
       if (!plan) throw new Error('content_hub_plan_required');
+      if(plan.status==='ready_for_review'&&plan.advice?.brandContextUsed&&plan.advice?.proposal)return true;
       const safety = Object.fromEntries((await db.query("SELECT name,data FROM ecommerce_marketing_state WHERE name IN ('google_media_safety','meta_media_safety')")).rows.map(row => [row.name, row.data]));
-      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(hubProduct), proposedPlan: plan, evidence: { salesHistory: 'not_supplied', audienceDelivery: 'not_verified', mediaSafety: mediaSafetyEvidence(safety) } });
-      await saveState(db, 'assistant_plan:' + job.resource, { ...plan, advice, status: 'ready_for_review' });
-      await saveState(db, 'assistant_latest', { ...plan, advice, status: 'ready_for_review' }); return true;
+      const context = await campaignContext(db);
+      const advice = await hub.advice({ goal: plan.goal, products: plan.products.map(p=>({...hubProduct(p),description:p.description.slice(0,1200)})), proposedPlan: plan, evidence: { ...context, mediaSafety: mediaSafetyEvidence(safety) } });
+      const evidenceSummary={period:context.period,sources:context.sources,paidOrders:context.sales.paidOrders,revenue:context.sales.revenue,sessions:context.navigation.sessions,productsAssessed:plan.strategy?.productCount,containsPersonalIdentifiers:false};
+      await saveState(db, 'assistant_plan:' + job.resource, { ...plan, advice, evidenceSummary, status: 'ready_for_review' });
+      await saveState(db, 'assistant_latest', { ...plan, advice, evidenceSummary, status: 'ready_for_review' }); return true;
     }
     const found = (await db.query(`SELECT c.*,p.data AS product FROM ecommerce_marketing_content c JOIN ecommerce_marketing_products p ON p.product_id=c.product_id WHERE c.id=$1`, [job.resource])).rows[0];
     if (!found) return true;
@@ -125,6 +132,19 @@ function createCampaignAssistant({ pool, env = process.env, enqueue, saveState, 
     throw new Error('content_hub_unknown_job');
   }
   function mountAdmin(router) {
+    router.get('/marketing/assistant/library', async(req,res)=>{const hub=await getHub();const offset=Math.max(0,Math.min(100000,Number(req.query.offset)||0));res.json(await hub.library({search:String(req.query.search||'').slice(0,200),type:['image','video'].includes(req.query.type)?req.query.type:'all',offset:String(offset),limit:'24'}));});
+    router.get('/marketing/assistant/brand',async(req,res)=>res.json(await(await getHub()).context()));
+    router.post('/marketing/content/:id/assets/library',async(req,res)=>{
+      if(!/^[a-f0-9-]{36}$/i.test(req.params.id))return res.status(400).json({error:'Conteúdo inválido.'});
+      const hub=await getHub(), result=await hub.selectAsset({filename:String(req.body?.filename||'').slice(0,300),dir:req.body?.dir});
+      const asset=result.asset;
+      if(!asset||!/^https:\/\//.test(asset.url)||! /^(image|video)\//.test(asset.contentType))return res.status(409).json({error:'Selecione um arquivo existente no acervo da marca Aerion.'});
+      const found=(await pool.query(`SELECT c.*,p.data AS product FROM ecommerce_marketing_content c JOIN ecommerce_marketing_products p ON p.product_id=c.product_id WHERE c.id=$1 AND c.status='draft' AND c.kind='creative'`,[req.params.id])).rows[0];
+      if(!found||found.product_version!==found.product.version)return res.status(409).json({error:'Prepare um briefing para a versão atual do produto.'});
+      const settings={status:'ready_for_review',integration:'hub_library',brandId:hub.brandId,productVersion:found.product_version,assets:[asset],selectedAsset:asset,selectedAt:new Date().toISOString(),brandingReviewRequired:true};
+      await pool.query(`UPDATE ecommerce_marketing_content SET data=jsonb_set(data,'{contentHub}',$2::jsonb) WHERE id=$1 AND status='draft'`,[found.id,JSON.stringify(settings)]);
+      res.json({selected:true,approvalRequired:true});
+    });
     router.post('/marketing/assistant/preview', async (req, res) => {
       if (req.body?.productIds && (!Array.isArray(req.body.productIds) || req.body.productIds.length > 8)) return res.status(400).json({ error: 'Selecione até oito produtos para o briefing.' });
       const products = (await pool.query('SELECT data FROM ecommerce_marketing_products ORDER BY product_id')).rows.map(row => row.data);
