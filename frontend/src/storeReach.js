@@ -23,7 +23,7 @@ export function channelTable(report) {
     ctr: imp ? clk / imp * 100 : null, sessions: rows ? sum(rows, 'sessions') : null, purchases: rows ? sum(rows, 'purchases') : null, note,
     sessionsPerClick: rows && clk ? sum(rows, 'sessions') / clk : null, buyRate: rows && sum(rows, 'sessions') ? sum(rows, 'purchases') / sum(rows, 'sessions') * 100 : null });
   return [
-    row('paid', 'Mídia paga (Google Ads + Meta)', media?.impressions, media?.clicks, paidT, 'Sessões GA4 com mídia cpc/paga'),
+    row('paid', report.marketing?.chatgptAds?.configured?'Mídia paga (Google Ads + Meta + ChatGPT Ads)':'Mídia paga (Google Ads + Meta)', media?.impressions, media?.clicks, paidT, 'Sessões GA4 com mídia cpc/paga'),
     row('search', 'Busca orgânica (Search Console)', search?.impressions, search?.clicks, orgT, 'Sessões GA4 com mídia organic (inclui Shopping gratuito)'),
     row('shop', 'Shopping gratuito (Merchant)', shop?.impressions, shop?.clicks, null, 'O GA4 não separa Shopping gratuito da busca orgânica'),
   ];
