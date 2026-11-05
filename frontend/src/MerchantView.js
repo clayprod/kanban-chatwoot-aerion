@@ -44,7 +44,7 @@ export default function MerchantView({ data, range }) {
     for (let date = range.from; date <= range.to; date = new Date(Date.parse(`${date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)) {
       if (!data.historyFrom || date >= data.historyFrom) dates.push(date);
     }
-    return keys.map(key => ({ id: methods[key] || key, color: key === 'ADS' ? '#ffb24d' : '#38d6e6', data: dates.map(date => {
+    return keys.map(key => ({ id: methods[key] || key, color: key === 'ADS' ? '#d97706' : '#f472b6', data: dates.map(date => {
       const row = data.daily?.find(item => item.date === date && item.method === key);
       return { x: date, y: metric === 'ctr' ? (row?.impressions ? row.clicks / row.impressions * 100 : null) : row?.[metric] || 0 };
     }) }));

@@ -20,8 +20,8 @@ export const CHART_SERIES = {
   ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
   store: [
-    ['paidImpressions', 'Mídia paga · impressões', '#8b78f5', 'left'], ['searchImpressions', 'Busca orgânica · impressões', '#3b82f6', 'left'], ['shopImpressions', 'Shopping gratuito · impressões', '#d97706', 'left'],
-    ['paidClicks', 'Mídia paga · cliques', '#8b78f5', 'left'], ['searchClicks', 'Busca orgânica · cliques', '#3b82f6', 'left'], ['shopClicks', 'Shopping gratuito · cliques', '#d97706', 'left'],
+    ['paidImpressions', 'Mídia paga · impressões', '#8b78f5', 'left'], ['searchImpressions', 'Busca orgânica · impressões', '#c084fc', 'left'], ['shopImpressions', 'Shopping gratuito · impressões', '#f472b6', 'left'],
+    ['paidClicks', 'Mídia paga · cliques', '#8b78f5', 'left'], ['searchClicks', 'Busca orgânica · cliques', '#c084fc', 'left'], ['shopClicks', 'Shopping gratuito · cliques', '#f472b6', 'left'],
     ['sessions', 'Sessões GA4', '#0d9488', 'left'], ['orders', 'Pedidos pagos', '#e56767', 'left'],
     ['googleImpressions', 'Google Ads · impressões', '#d97706', 'left'], ['metaImpressions', 'Meta Ads · impressões', '#3b82f6', 'left'], ['chatgptImpressions', 'ChatGPT Ads · impressões', '#14b8a6', 'left'],
     ['googleClicks', 'Google Ads · cliques', '#fbbf24', 'left'], ['metaClicks', 'Meta Ads · cliques', '#60a5fa', 'left'], ['chatgptClicks', 'ChatGPT Ads · cliques', '#2dd4bf', 'left'],
