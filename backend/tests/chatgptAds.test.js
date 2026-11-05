@@ -4,6 +4,19 @@ const { createChatgptAds } = require('../ecommerce/chatgptAds');
 const { encrypt, decrypt, encryptionKey } = require('../ecommerce/domain');
 const {chatgptCatalog,uploadCatalog}=require('../ecommerce/chatgptCatalog');
 const {chatgptReport}=require('../ecommerce/chatgptReport');
+const {includeChatgptMedia}=require('../ecommerce/chatgptReport');
+test('unified media includes ChatGPT spend and weighted rates without inventing attributed conversions',()=>{
+  const report={summary:{revenue:400,mediaPartial:false},platforms:[{provider:'google_ads',available:true,currency:'BRL',spend:100,clicks:10,impressions:1000,conversions:2,conversionValue:400}],ads:[],daily:[{date:'2026-11-05',spend:100,clicks:10,impressions:1000}]};
+  includeChatgptMedia(report,{configured:true,performance:{available:true,currency:'BRL',spend:300,clicks:90,impressions:9000,rows:[{date:'2026-11-05',spend:300,clicks:90,impressions:9000}]}});
+  assert.equal(report.summary.spend,400);assert.equal(report.summary.media.cpc,4);assert.equal(report.summary.media.ctr,1);assert.equal(report.summary.media.cpm,40);assert.equal(report.summary.revenuePerAdSpend,1);
+  assert.equal(report.summary.media.roas,null);assert.equal(report.summary.media.conversions,null);assert.equal(report.platforms[0].conversions,2);assert.equal(report.daily[0].spend,400);assert.equal(report.ads[0].provider,'chatgpt_ads');assert.equal(report.ads[0].conversions,null);
+});
+test('unavailable or foreign-currency ChatGPT data does not become zero or contaminate BRL totals',()=>{
+  for(const performance of [{available:false,currency:'BRL',spend:null,clicks:null,impressions:null,rows:[]},{available:true,currency:'USD',spend:500,clicks:10,impressions:50,rows:[]}]){
+    const report={summary:{revenue:200},platforms:[{provider:'meta_ads',available:true,currency:'BRL',spend:50,clicks:5,impressions:100}],ads:[],daily:[{date:'2026-11-05',spend:50}]};
+    includeChatgptMedia(report,{configured:true,performance});assert.equal(report.summary.spend,50);assert.equal(report.summary.mediaPartial,true);assert.equal(report.platforms[1].available,false);assert.equal(report.platforms[1].spend,null);assert.equal(report.daily[0].chatgptSpend,null);assert.equal(report.daily[0].spend,50);
+  }
+});
 function fixture(failPixel = false) {
   const env = { ECOMMERCE_ENCRYPTION_KEY: 'ab'.repeat(32) }, states = new Map(), writes = [];
   const row = { enabled: true, config: { account: { id: 'adacct_test' } }, secrets: encrypt({ apiKey: 'advertiser-secret' }, encryptionKey(env)) };

@@ -1,4 +1,24 @@
-import { prepareSalesChart } from './ecommerceChart';
+import { prepareSalesChart, selectPaidChannels, CHART_DEFAULTS, groupChartSeries } from './ecommerceChart';
+test('source lines share a metric group while rates and store revenue stay separate',()=>{
+  const groups=groupChartSeries([['googleSpend','Google Ads','#a','left'],['metaSpend','Meta Ads','#b','left'],['chatgptSpend','ChatGPT Ads','#c','left'],['revenue','Receita da loja','#d','left'],['chatgptCtr','CTR ChatGPT','#e','left']]);
+  expect(groups).toHaveLength(3);expect(groups[0].entries).toHaveLength(3);expect(groups[0].label).toBe('Investimento por plataforma');expect(groups[2].label).toBe('CTR por plataforma');
+});
+
+test('selecting ad sources changes chart totals without attributing store sales or hiding unknowns',()=>{
+  const rows=[{date:'2026-11-02',revenue:900,orders:2,googleSpend:10,googleClicks:2,googleImpressions:100,googleConversionValue:100,metaSpend:30,metaClicks:3,metaImpressions:300,metaConversionValue:200,chatgptSpend:60,chatgptClicks:5,chatgptImpressions:600}];
+  const google=selectPaidChannels(rows,['google']);
+  expect(google[0]).toMatchObject({spend:10,clicks:2,impressions:100,revenue:900,orders:2,metaSpend:null,chatgptSpend:null,conversionValue:100});
+  const both=selectPaidChannels(rows,['google','chatgpt']);
+  expect(both[0].spend).toBe(70);expect(both[0].conversionValue).toBeNull();
+  expect(prepareSalesChart(both,'efficiency','week',['cpc','chatgptCpc']).points[0].cpc).toBe(10);
+  expect(selectPaidChannels(rows,[])[0].spend).toBeNull();
+  expect(Object.values(CHART_DEFAULTS).flat().some(key=>key.startsWith('chatgpt'))).toBe(false);
+});
+
+test('ChatGPT rates use its own grouped spend, clicks and impressions',()=>{
+  const chart=prepareSalesChart([{date:'2026-11-02',chatgptSpend:10,chatgptClicks:1,chatgptImpressions:100},{date:'2026-11-03',chatgptSpend:90,chatgptClicks:9,chatgptImpressions:900}],'cpm','week',['chatgptCpm']);
+  expect(chart.points[0].chatgptCpm).toBe(100);expect(chart.points[0].chatgptCpc).toBe(10);expect(chart.points[0].chatgptCtr).toBe(1);
+});
 
 test('small spend stays visible beside large revenue and keeps its original value', () => {
   const chart = prepareSalesChart([{ date: '2026-10-01', revenue: 10000, spend: 10 }], 'money', 'day', ['revenue', 'spend']);

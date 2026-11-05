@@ -6,7 +6,7 @@ const { createTables, PUBLIC_FIELDS, SECRET_FIELDS, lockId, publicConnection, co
 const { buildMerchantReport } = require('./merchant');
 const { buildSearchReport } = require('./searchConsole');
 const { crmAudiencePreview } = require('./audiences');
-const { chatgptReport } = require('./chatgptReport');
+const { chatgptReport, includeChatgptMedia } = require('./chatgptReport');
 const { createMarketing, enqueueMarketing } = require('./marketing');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -205,6 +205,7 @@ function createEcommerce({ pool, getUserById, env = process.env, providers = cre
       records.filter(r => r.provider === 'merchant_center' && r.kind === 'metric').map(r => r.data), range, connections.find(c => c.provider === 'merchant_center'));
     report.marketing = await marketing.report();
     report.marketing.chatgptAds.performance=chatgptReport(report.marketing.chatgptAds,range);
+    includeChatgptMedia(report,report.marketing.chatgptAds);
     report.marketing.observedSpend = { from: range.from, to: range.to, days: Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86400000) + 1,
       google: report.platforms.find(p => p.provider === 'google_ads' && p.available)?.spend ?? null,
       meta: report.platforms.find(p => p.provider === 'meta_ads' && p.available)?.spend ?? null };

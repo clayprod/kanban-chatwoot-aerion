@@ -1,24 +1,30 @@
 export const CHART_SERIES = {
   money: [
     ['revenue', 'Receita de produtos', '#0d9488', 'left'], ['spend', 'Investimento total', '#8b78f5', 'right'],
-    ['metaSpend', 'Meta Ads', '#3b82f6', 'right'], ['googleSpend', 'Google Ads', '#d97706', 'right'], ['unpaidValue', 'Aguardando pagamento', '#e56767', 'left'],
+    ['metaSpend', 'Meta Ads', '#3b82f6', 'right'], ['googleSpend', 'Google Ads', '#d97706', 'right'], ['chatgptSpend', 'ChatGPT Ads', '#14b8a6', 'right'], ['unpaidValue', 'Aguardando pagamento', '#e56767', 'left'],
   ],
   efficiency: [
     ['cpc', 'CPC total', '#8b78f5', 'left'], ['metaCpc', 'CPC Meta', '#3b82f6', 'left'], ['googleCpc', 'CPC Google', '#d97706', 'left'], ['roas', 'ROAS atribuído', '#0d9488', 'right'],
+    ['chatgptCpc', 'CPC ChatGPT', '#14b8a6', 'left'],
+    ['googleRoas', 'ROAS Google', '#fbbf24', 'right'], ['metaRoas', 'ROAS Meta', '#60a5fa', 'right'],
   ],
   reach: [
     ['impressions', 'Impressões totais', '#8b78f5', 'left'], ['metaImpressions', 'Impressões Meta', '#3b82f6', 'left'], ['googleImpressions', 'Impressões Google', '#d97706', 'left'],
     ['ctr', 'CTR total', '#0d9488', 'right'], ['metaCtr', 'CTR Meta', '#60a5fa', 'right'], ['googleCtr', 'CTR Google', '#fbbf24', 'right'],
+    ['chatgptImpressions', 'Impressões ChatGPT', '#14b8a6', 'left'], ['chatgptCtr', 'CTR ChatGPT', '#2dd4bf', 'right'],
   ],
   cpm: [
     ['cpm', 'CPM total', '#8b78f5', 'left'], ['metaCpm', 'CPM Meta', '#3b82f6', 'left'], ['googleCpm', 'CPM Google', '#d97706', 'left'],
     ['impressions', 'Impressões totais', '#0d9488', 'right'], ['metaImpressions', 'Impressões Meta', '#60a5fa', 'right'], ['googleImpressions', 'Impressões Google', '#fbbf24', 'right'],
+    ['chatgptCpm', 'CPM ChatGPT', '#14b8a6', 'left'], ['chatgptImpressions', 'Impressões ChatGPT', '#2dd4bf', 'right'],
   ],
   volume: [['orders', 'Pedidos pagos', '#0d9488', 'left'], ['sessions', 'Sessões GA4', '#3b82f6', 'right']],
   store: [
     ['paidImpressions', 'Mídia paga · impressões', '#8b78f5', 'left'], ['searchImpressions', 'Busca orgânica · impressões', '#3b82f6', 'left'], ['shopImpressions', 'Shopping gratuito · impressões', '#d97706', 'left'],
     ['paidClicks', 'Mídia paga · cliques', '#8b78f5', 'left'], ['searchClicks', 'Busca orgânica · cliques', '#3b82f6', 'left'], ['shopClicks', 'Shopping gratuito · cliques', '#d97706', 'left'],
     ['sessions', 'Sessões GA4', '#0d9488', 'left'], ['orders', 'Pedidos pagos', '#e56767', 'left'],
+    ['googleImpressions', 'Google Ads · impressões', '#d97706', 'left'], ['metaImpressions', 'Meta Ads · impressões', '#3b82f6', 'left'], ['chatgptImpressions', 'ChatGPT Ads · impressões', '#14b8a6', 'left'],
+    ['googleClicks', 'Google Ads · cliques', '#fbbf24', 'left'], ['metaClicks', 'Meta Ads · cliques', '#60a5fa', 'left'], ['chatgptClicks', 'ChatGPT Ads · cliques', '#2dd4bf', 'left'],
   ],
   traffic: [['sessions', 'Sessões GA4', '#3b82f6', 'left'], ['purchases', 'Compras GA4', '#0d9488', 'right']],
 };
@@ -31,7 +37,33 @@ export const CHART_AXES = {
   traffic: ['Sessões GA4', 'Compras GA4'],
   store: ['Contagem', 'Contagem'],
 };
-export const CHART_DEFAULTS = { money: ['revenue', 'spend'], efficiency: ['cpc', 'roas'], reach: ['impressions', 'ctr'], cpm: ['cpm', 'impressions'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'], store: ['paidImpressions', 'searchImpressions', 'shopImpressions', 'sessions'] };
+export const CHART_DEFAULTS = { money: ['revenue', 'googleSpend', 'metaSpend'], efficiency: ['googleCpc', 'metaCpc'], reach: ['googleImpressions', 'metaImpressions'], cpm: ['googleCpm', 'metaCpm'], volume: ['orders', 'sessions'], traffic: ['sessions', 'purchases'], store: ['googleImpressions', 'metaImpressions', 'searchImpressions', 'shopImpressions'] };
+
+export const PAID_CHANNELS=[['google','Google Ads'],['meta','Meta Ads'],['chatgpt','ChatGPT Ads']];
+export function groupChartSeries(selected){
+  const groups=new Map();
+  for(const entry of selected){
+    const key=entry[0],metric=/impressions$/i.test(key)?'Impressões por origem':/clicks$/i.test(key)?'Cliques por origem':/spend$/i.test(key)?'Investimento por plataforma':/cpc$/i.test(key)?'CPC por plataforma':/ctr$/i.test(key)?'CTR por plataforma':/cpm$/i.test(key)?'CPM por plataforma':/roas$/i.test(key)?'ROAS por plataforma':entry[1];
+    if(!groups.has(metric))groups.set(metric,[]);groups.get(metric).push(entry);
+  }
+  return [...groups].map(([label,entries])=>({label,entries}));
+}
+export function selectPaidChannels(rows, channels){
+  return rows.map(row=>{
+    const selected={...row};
+    for(const suffix of ['Spend','Clicks','Impressions']){
+      const values=channels.map(prefix=>row[prefix+suffix]).filter(v=>v!=null);
+      const key=suffix[0].toLowerCase()+suffix.slice(1);
+      selected[key]=values.length?values.reduce((sum,v)=>sum+v,0):null;
+      for(const [prefix]of PAID_CHANNELS)if(!channels.includes(prefix))selected[prefix+suffix]=null;
+    }
+    selected.paidImpressions=selected.impressions;selected.paidClicks=selected.clicks;
+    // Store revenue and GA4 sessions are not attributed to the selected ad accounts.
+    const attributed=channels.map(prefix=>row[prefix+'ConversionValue']);
+    selected.conversionValue=attributed.length&&attributed.every(v=>v!=null)?attributed.reduce((sum,v)=>sum+v,0):null;
+    return selected;
+  });
+}
 
 function axisMaximum(values) {
   const max = values.reduce((n, value) => Math.max(n, value || 0), 0);
@@ -42,7 +74,8 @@ function axisMaximum(values) {
 }
 export function prepareSalesChart(rows, mode, interval, visible) {
   const series = CHART_SERIES[mode], buckets = new Map();
-  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'clicks', 'googleClicks', 'metaClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'conversionValue', 'paidImpressions', 'paidClicks', 'searchImpressions', 'searchClicks', 'shopImpressions', 'shopClicks'];
+  const fields = ['revenue', 'unpaidValue', 'orders', 'sessions', 'purchases', 'spend', 'googleSpend', 'metaSpend', 'chatgptSpend', 'clicks', 'googleClicks', 'metaClicks', 'chatgptClicks', 'impressions', 'googleImpressions', 'metaImpressions', 'chatgptImpressions', 'conversionValue', 'paidImpressions', 'paidClicks', 'searchImpressions', 'searchClicks', 'shopImpressions', 'shopClicks'];
+  fields.push('googleConversionValue','metaConversionValue','chatgptConversionValue');
   for (const row of rows) {
     const date = new Date(`${row.date}T12:00:00Z`);
     if (interval === 'week') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
@@ -55,13 +88,15 @@ export function prepareSalesChart(rows, mode, interval, visible) {
     point.cpc = point.clicks > 0 && point.spend != null ? point.spend / point.clicks : null;
     point.metaCpc = point.metaClicks > 0 && point.metaSpend != null ? point.metaSpend / point.metaClicks : null;
     point.googleCpc = point.googleClicks > 0 && point.googleSpend != null ? point.googleSpend / point.googleClicks : null;
+    point.chatgptCpc = point.chatgptClicks > 0 && point.chatgptSpend != null ? point.chatgptSpend / point.chatgptClicks : null;
     point.roas = point.spend > 0 && point.conversionValue != null ? point.conversionValue / point.spend : null;
-    for (const prefix of ['', 'meta', 'google']) {
+    for (const prefix of ['', 'meta', 'google', 'chatgpt']) {
       const impressions = point[prefix ? `${prefix}Impressions` : 'impressions'];
       const clicks = point[prefix ? `${prefix}Clicks` : 'clicks'];
       const spend = point[prefix ? `${prefix}Spend` : 'spend'];
       point[prefix ? `${prefix}Cpm` : 'cpm'] = impressions > 0 && spend != null ? 1000 * spend / impressions : null;
       point[prefix ? `${prefix}Ctr` : 'ctr'] = impressions > 0 && clicks != null ? 100 * clicks / impressions : null;
+      if(prefix)point[prefix+'Roas']=spend>0&&point[prefix+'ConversionValue']!=null?point[prefix+'ConversionValue']/spend:null;
     }
   }
   const available = series.filter(([id]) => points.some(point => point[id] != null));

@@ -29,6 +29,17 @@ test('ChatGPT Ads belongs to Marketing and has its own account deep link', async
   expect(await screen.findByRole('region',{name:'Conexão ChatGPT Ads'})).toBeInTheDocument();
   expect(screen.getByRole('button',{name:'Marketing'})).toHaveAttribute('aria-current','page');
 });
+
+test('Marketing shows the ChatGPT account readiness alongside other platforms and opens its details', async()=>{
+  const connected={configured:true,account:{name:'Aerion Technologies',reviewStatus:'approved'},snapshot:{datasets:{feeds:{available:true,rows:[{productCount:22}]},audiences:{available:true,rows:[]},campaigns:{available:true,rows:[]}}},setup:{catalog:{count:30},browser:{status:'validated'},resources:{capi:{enabled:true}},audienceMembership:{lists:[]}}};
+  axios.get.mockImplementation(url=>Promise.resolve({data:url.endsWith('/status')?{connections:[],encryptionReady:true}:{...report,platforms:[{provider:'chatgpt_ads',available:true,spend:0,clicks:0}],marketing:{chatgptAds:connected}}}));
+  render(<EcommerceView section="ads" isAdmin onNavigate={jest.fn()}/>);
+  expect(await screen.findByRole('region',{name:'Estado do ChatGPT Ads'})).toHaveTextContent('Aprovada');
+  expect(screen.getByText('22 produtos elegíveis · 30 enviados')).toBeInTheDocument();
+  expect(screen.getByRole('option',{name:'ChatGPT Ads'})).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'Ver conta e configuração'}));
+  expect(await screen.findByRole('region',{name:'Conexão ChatGPT Ads'})).toBeInTheDocument();
+});
 test('empty sources show setup guidance and unavailable metrics instead of invented results', async () => {
   render(<EcommerceView isAdmin onNavigate={jest.fn()} />);
   expect(await screen.findByRole('button', { name: 'Configurar conexões' })).toBeInTheDocument();
@@ -58,12 +69,12 @@ test('Merchant appears in connections with a saved Google identity and in Market
 
 test('chart series can be hidden, restored and switched to volume without mixing currency', async () => {
   axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? { connections: [], encryptionReady: true } : {
-    ...report, daily: [{ date: '2026-10-21', revenue: 100, spend: 20, orders: 1, sessions: 10 }],
+    ...report, daily: [{ date: '2026-10-21', revenue: 100, spend: 20, googleSpend:20, orders: 1, sessions: 10 }],
   } }));
   render(<EcommerceView onNavigate={jest.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Vendas e investimento' }));
   const revenue = await screen.findByRole('button', { name: 'Receita de produtos' });
-  const spend = screen.getByRole('button', { name: 'Investimento total' });
+  const spend = screen.getByRole('button', { name: 'Google Ads' });
   expect(revenue).toHaveAttribute('aria-pressed', 'true');
   fireEvent.click(revenue); fireEvent.click(spend);
   expect(screen.getByText('Selecione uma linha acima para exibir o gráfico.')).toBeInTheDocument();
@@ -86,6 +97,27 @@ test('marketing keeps traffic and campaigns inside the same main section', async
   expect(screen.getByRole('button', { name: 'Compras GA4' })).toBeInTheDocument();
 });
 
+test('each shared chart can isolate ad platforms and starts with ChatGPT switched off',async()=>{
+  axios.get.mockImplementation(url=>Promise.resolve({data:url.endsWith('/status')?{connections:[],encryptionReady:true}:{...report,daily:[{date:'2026-10-21',googleSpend:10,googleImpressions:100,metaSpend:20,metaImpressions:200,chatgptSpend:30,chatgptImpressions:300}]}}));
+  render(<EcommerceView section="ads" onNavigate={jest.fn()}/>);
+  const chatgpt=await screen.findByRole('checkbox',{name:'ChatGPT Ads'});
+  expect(chatgpt).not.toBeChecked();expect(screen.queryByRole('img',{name:/ChatGPT Ads · impressões/})).not.toBeInTheDocument();
+  fireEvent.click(chatgpt);
+  expect(screen.getByRole('img',{name:/ChatGPT Ads · impressões/})).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox',{name:'Google Ads'}));
+  expect(screen.queryByRole('img',{name:/Google Ads · impressões/})).not.toBeInTheDocument();
+  expect(screen.getByRole('img',{name:/Meta Ads · impressões/})).toBeInTheDocument();
+});
+
+test('GA4 chart filters acquisition independently from advertising account attribution',async()=>{
+  axios.get.mockImplementation(url=>Promise.resolve({data:url.endsWith('/status')?{connections:[],encryptionReady:true}:{...report,daily:[{date:'2026-10-21',sessions:12,purchases:1}],traffic:[{date:'2026-10-21',kind:'traffic',source:'google',medium:'cpc',sessions:5,purchases:1},{date:'2026-10-21',kind:'traffic',source:'facebook',medium:'paid_social',sessions:7,purchases:0}]}}));
+  render(<EcommerceView section="traffic" onNavigate={jest.fn()}/>);
+  const selector=await screen.findByLabelText('Origem / mídia neste gráfico · GA4');
+  fireEvent.change(selector,{target:{value:JSON.stringify(['google','cpc'])}});
+  expect(selector).toHaveValue(JSON.stringify(['google','cpc']));
+  expect(screen.queryByRole('checkbox',{name:'ChatGPT Ads'})).not.toBeInTheDocument();
+});
+
 test('marketing prioritizes charts and exposes CPM, impressions and CTR controls', async () => {
   axios.get.mockImplementation(url => Promise.resolve({ data: url.endsWith('/status') ? {
     connections: [{provider:'ga4',status:'error',enabled:true}], encryptionReady:true,
@@ -99,10 +131,10 @@ test('marketing prioritizes charts and exposes CPM, impressions and CTR controls
     expect(chart.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
   fireEvent.click(screen.getByRole('button',{name:'CPM e impressões'}));
-  expect(screen.getByRole('button',{name:'CPM total'})).toHaveAttribute('aria-pressed','true');
-  expect(screen.getByRole('button',{name:'Impressões totais'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByRole('button',{name:'CPM Google'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByRole('button',{name:'CPM Meta'})).toHaveAttribute('aria-pressed','true');
   fireEvent.click(screen.getByRole('button',{name:'Impressões e CTR'}));
-  expect(screen.getByRole('button',{name:'CTR total'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByRole('button',{name:'Impressões Google'})).toHaveAttribute('aria-pressed','true');
 });
 
 test('Search Console stays in Marketing and shows organic totals separately from sales', async () => {
