@@ -4,6 +4,12 @@ test('source lines share a metric group while rates and store revenue stay separ
   expect(groups).toHaveLength(3);expect(groups[0].entries).toHaveLength(3);expect(groups[0].label).toBe('Investimento por plataforma');expect(groups[2].label).toBe('CTR por plataforma');
 });
 
+test('GA4 page views are enabled by default and have their own metric group',()=>{
+  expect(CHART_DEFAULTS.store).toContain('views');expect(CHART_DEFAULTS.traffic).toContain('views');
+  const chart=prepareSalesChart([{date:'2026-11-05',views:12,googleImpressions:100}],'store','day',['views','googleImpressions']);
+  expect(chart.points[0].views).toBe(12);expect(groupChartSeries(chart.selected)).toHaveLength(2);
+});
+
 test('selecting ad sources changes chart totals without attributing store sales or hiding unknowns',()=>{
   const rows=[{date:'2026-11-02',revenue:900,orders:2,googleSpend:10,googleClicks:2,googleImpressions:100,googleConversionValue:100,metaSpend:30,metaClicks:3,metaImpressions:300,metaConversionValue:200,chatgptSpend:60,chatgptClicks:5,chatgptImpressions:600}];
   const google=selectPaidChannels(rows,['google']);
@@ -12,7 +18,7 @@ test('selecting ad sources changes chart totals without attributing store sales 
   expect(both[0].spend).toBe(70);expect(both[0].conversionValue).toBeNull();
   expect(prepareSalesChart(both,'efficiency','week',['cpc','chatgptCpc']).points[0].cpc).toBe(10);
   expect(selectPaidChannels(rows,[])[0].spend).toBeNull();
-  expect(Object.values(CHART_DEFAULTS).flat().some(key=>key.startsWith('chatgpt'))).toBe(false);
+  for(const mode of ['money','efficiency','reach','cpm','store'])expect(CHART_DEFAULTS[mode].some(key=>key.startsWith('chatgpt'))).toBe(true);
 });
 
 test('ChatGPT rates use its own grouped spend, clicks and impressions',()=>{

@@ -97,11 +97,14 @@ test('marketing keeps traffic and campaigns inside the same main section', async
   expect(screen.getByRole('button', { name: 'Compras GA4' })).toBeInTheDocument();
 });
 
-test('each shared chart can isolate ad platforms and starts with ChatGPT switched off',async()=>{
+test('each shared chart starts with all ad platforms enabled and can isolate them',async()=>{
   axios.get.mockImplementation(url=>Promise.resolve({data:url.endsWith('/status')?{connections:[],encryptionReady:true}:{...report,daily:[{date:'2026-10-21',googleSpend:10,googleImpressions:100,metaSpend:20,metaImpressions:200,chatgptSpend:30,chatgptImpressions:300}]}}));
   render(<EcommerceView section="ads" onNavigate={jest.fn()}/>);
   const chatgpt=await screen.findByRole('checkbox',{name:'ChatGPT Ads'});
-  expect(chatgpt).not.toBeChecked();expect(screen.queryByRole('img',{name:/ChatGPT Ads · impressões/})).not.toBeInTheDocument();
+  expect(chatgpt).toBeChecked();expect(screen.getByRole('checkbox',{name:'Google Ads'})).toBeChecked();expect(screen.getByRole('checkbox',{name:'Meta Ads'})).toBeChecked();
+  expect(screen.getByRole('img',{name:/ChatGPT Ads · impressões/})).toBeInTheDocument();
+  fireEvent.click(chatgpt);
+  expect(screen.queryByRole('img',{name:/ChatGPT Ads · impressões/})).not.toBeInTheDocument();
   fireEvent.click(chatgpt);
   expect(screen.getByRole('img',{name:/ChatGPT Ads · impressões/})).toBeInTheDocument();
   fireEvent.click(screen.getByRole('checkbox',{name:'Google Ads'}));

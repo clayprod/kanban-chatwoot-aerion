@@ -139,7 +139,7 @@ function createProviders({ transport = request, env = process.env } = {}) {
     kind, date: `${row.date.slice(0, 4)}-${row.date.slice(4, 6)}-${row.date.slice(6, 8)}`,
     source: row.sessionSource || '', medium: row.sessionMedium || '', campaign: row.sessionCampaignName || '',
     content: row.sessionManualAdContent || '', landing: row.landingPagePlusQueryString || '',
-    sessions: row.sessions || 0, views: row.screenPageViews || 0, purchases: row.ecommercePurchases || 0,
+    sessions: row.sessions || 0, views: row.screenPageViews || 0, viewsMeasured: row.screenPageViews != null, purchases: row.ecommercePurchases || 0,
     activeUsers: row.activeUsers ?? null,
     // Active users are intentionally not summed across days or traffic dimensions.
     revenue: row.purchaseRevenue || 0, ...info,
@@ -650,8 +650,8 @@ function createProviders({ transport = request, env = process.env } = {}) {
       }
       if (provider === 'ga4') {
         const total = await gaReport(config, from, to, ['date'], ['sessions', 'activeUsers', 'screenPageViews', 'ecommercePurchases']);
-        const traffic = await gaReport(config, from, to, ['date', 'sessionSource', 'sessionMedium', 'sessionCampaignName', 'sessionManualAdContent'], ['sessions', 'ecommercePurchases']);
-        const landings = await gaReport(config, from, to, ['date', 'landingPagePlusQueryString'], ['sessions', 'ecommercePurchases']);
+        const traffic = await gaReport(config, from, to, ['date', 'sessionSource', 'sessionMedium', 'sessionCampaignName', 'sessionManualAdContent'], ['sessions', 'screenPageViews', 'ecommercePurchases']);
+        const landings = await gaReport(config, from, to, ['date', 'landingPagePlusQueryString'], ['sessions', 'screenPageViews', 'ecommercePurchases']);
         const funnel = await gaReport(config, from, to, ['date', 'eventName'], ['eventCount']);
         const metadata = { timezone: total.metadata.timeZone || '', thresholded: Boolean(traffic.metadata.subjectToThresholding),
           otherRow: Boolean(traffic.metadata.dataLossFromOtherRow) };
