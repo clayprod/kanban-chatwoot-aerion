@@ -161,7 +161,7 @@ function OrganicSearchChart({ search, range }) {
     {!search?.available || !points.some(p => p.y != null) ? <p className="py-10 text-sm text-muted">Ainda não há medições disponíveis nesta janela.</p> : <div className="mt-4 h-64" role="img" aria-label={`${labels[metric]} por dia, preservando lacunas de cobertura`}><ResponsiveLine
       data={[{ id: labels[metric], data: points }]} margin={{ top: 12, right: 15, bottom: 40, left: 55 }} xScale={{ type: 'point' }} yScale={{ type: 'linear', min: 0, max: 'auto' }}
       axisBottom={{ tickSize: 0, tickPadding: 12, tickValues: points.filter((_, i) => i % Math.max(1, Math.ceil(points.length / 5)) === 0).map(p => p.x), format: d => dateLabel(d).slice(0, 5) }}
-      axisLeft={{ tickSize: 0, tickPadding: 8 }} colors={['#4f8ef7']} enableGridX={false} enablePoints={points.length <= 45} pointSize={4} animate={false} enableSlices="x"
+      axisLeft={{ tickSize: 0, tickPadding: 8 }} colors={['#c084fc']} enableGridX={false} enablePoints={points.length <= 45} pointSize={4} animate={false} enableSlices="x"
       theme={{ text: { fill: '#94a3b8', fontSize: 11 }, grid: { line: { stroke: '#334155', strokeOpacity: 0.3 } } }}
       sliceTooltip={({ slice }) => <div className="rounded-lg border border-line bg-surf p-3 text-xs text-ink">{dateLabel(slice.points[0]?.data.x)} · {labels[metric]}: {number(slice.points[0]?.data.y)}{metric === 'ctr' ? '%' : ''}</div>}
     /></div>}
