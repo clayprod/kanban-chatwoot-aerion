@@ -80,6 +80,8 @@ test('toda retomada exige saudação, mesmo antes dos 45 dias, sem consertar uma
   assert.match(validarMensagem('Vocês comentaram que precisariam conhecer o produto. O que seria importante avaliar?',0.99,CONFIG_BASE),/sem saudação/);
   const ruim='Você tinha comentado que precisaria conhecer o produto para ter confiança. Chegou a avançar com isso por aí?';
   assert.ok(validarMensagem(ruim,0.99,CONFIG_BASE));assert.ok(validarMensagem('Oi! '+ruim,0.99,CONFIG_BASE));
+  assert.ok(validarMensagem('Oi, tudo bem? Queria saber o que você gostaria de avaliar numa demonstração do produto. Podemos facilitar isso para você. O que você tem em mente?',0.99,CONFIG_BASE));
+  assert.match(validarMensagem('Oi, tudo bem? O que gostaria de avaliar numa demonstração? Em qual cidade vocês estão?',0.99,CONFIG_BASE),/mais de uma pergunta/);
 });
 
 test('avaliação do produto pertence à oferta da Aerion, não a uma tarefa pendente do cliente',()=>{
