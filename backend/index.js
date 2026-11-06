@@ -276,6 +276,7 @@ app.post('/api/internal/research-egress/:action', async (req, res) => {
     const actual = String(req.headers.authorization || '').replace(/^Bearer /, '');
     const { timingSafeEqual } = require('node:crypto');
     if (!expected || Buffer.byteLength(actual) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(actual), Buffer.from(expected))) return res.status(401).json({ error: 'Unauthorized' });
+    if(req.params.action==='instagram-session')return res.json(await require('./instagramSession').handleSession(cofre,req.body||{}));
     if (!researchBroker || !['acquire', 'release'].includes(req.params.action)) return res.status(404).json({ error: 'Unavailable' });
     res.json(await researchBroker[req.params.action](req.body || {}));
   } catch { res.status(503).json({ available: false, error: 'Controle de saída indisponível' }); }

@@ -12,6 +12,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const egress = require('./egressClient');
 const { readPublicDocument } = require('./publicDocument');
+const instagram = require('./instagram');
 
 const PORT = Number(process.env.PORT || 3100);
 const PACING_MS = Number(process.env.PACING_MS || 3000);
@@ -174,6 +175,10 @@ const buscar = async (query) => {
 };
 
 const inspect = async (address, fallbackOnly = false, directOnly = false) => {
+  if(!fallbackOnly&&instagram.ownHost(new URL(address).hostname)){
+    const authenticated=await instagram.inspect(address,obterBrowser);
+    if(authenticated)return authenticated;
+  }
   const lease = fallbackOnly ? {available:false} : await egress.acquire(address);
   if (lease.defer) return { url: address, access: 'blocked', title: '', content: '', links: [] };
   const fallback = !lease.available && !directOnly ? await proximoProxy() : null;
@@ -194,6 +199,7 @@ const inspect = async (address, fallbackOnly = false, directOnly = false) => {
       await page.setContent(doc.html, {waitUntil:'domcontentloaded', timeout:10000});
       const result = await page.evaluate(base => ({
         title: document.title.slice(0,200),
+        business_name: document.querySelector('meta[property="og:site_name"]')?.content?.slice(0,200) || null,
         content: (document.body?.innerText || '').slice(0,30000),
         links: [...document.querySelectorAll('a[href]')].slice(0,150).flatMap(a => {
           try { return [{href:new URL(a.getAttribute('href'),base).href,label:(a.textContent || '').trim().slice(0,120)}]; }
@@ -237,11 +243,19 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     return enviar(200, { ok: true, proxies: proxies.length, emQuarentena: [...quarentena.values()].filter((t) => t > Date.now()).length });
   }
-  if (req.method !== 'POST' || !['/search','/inspect'].includes(req.url)) return enviar(404, { error: 'not found' });
+  if (req.method !== 'POST' || !['/search','/inspect','/instagram/auth'].includes(req.url)) return enviar(404, { error: 'not found' });
   let corpo = '';
   for await (const c of req) { corpo += c; if(corpo.length>4096)return enviar(413,{error:'corpo excessivo'}); }
   try {
-    const { query, url } = JSON.parse(corpo || '{}');
+    const payload=JSON.parse(corpo||'{}');
+    const { query, url } = payload;
+    if(req.url==='/instagram/auth'){
+      const token=process.env.EGRESS_CONTROL_TOKEN;
+      const actual=String(req.headers.authorization||'').replace(/^Bearer /,'');
+      if(!token||Buffer.byteLength(actual)!==Buffer.byteLength(token)||!require('crypto').timingSafeEqual(Buffer.from(actual),Buffer.from(token)))return enviar(401,{error:'Unauthorized'});
+      try{return enviar(200,await enfileirar(()=>instagram.authenticate(payload,obterBrowser)));}
+      catch{return enviar(503,{status:'authentication_unavailable'});}
+    }
     if (req.url === '/inspect') {
       if (typeof url!=='string' || url.length>2000) return enviar(400,{error:'URL inválida'});
       return enviar(200,await enfileirar(()=>inspect(url)));

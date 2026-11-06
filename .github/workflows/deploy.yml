@@ -142,7 +142,7 @@ jobs:
 
       - name: Validate research evidence, private egress and shared prospecting budget
         working-directory: backend
-        run: node --test tests/contactInvestigation.test.js tests/publicDocument.test.js tests/prospectingBudget.integration.test.js tests/researchEgress.test.js tests/buscaWeb.test.js
+        run: node --test tests/contactInvestigation.test.js tests/publicDocument.test.js tests/prospectingBudget.integration.test.js tests/researchEgress.test.js tests/buscaWeb.test.js tests/instagramSession.test.js tests/prospectingProfile.test.js tests/icp.test.js
         env:
           QUALITY_TEST_DATABASE_URL: postgresql://postgres:technical-ci@127.0.0.1:5432/technical_test
 

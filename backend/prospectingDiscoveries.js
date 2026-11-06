@@ -49,6 +49,13 @@ module.exports.upgradeResearch = async (pool, accountId) => {
   const db = await pool.connect();
   try {
     await db.query('BEGIN');
+    const profileMarker=await db.query(`INSERT INTO ai_settings(chave,valor,updated_by) VALUES($1,'1','migration:research-v3') ON CONFLICT DO NOTHING RETURNING chave`,[`research_profile_v3:${accountId}`]);
+    if(profileMarker.rows.length){
+      await db.query(`UPDATE prospeccao_log SET status='pendente',phone_evidence=(CASE WHEN jsonb_typeof(phone_evidence)='object' THEN phone_evidence ELSE '{}'::jsonb END)||jsonb_build_object('previous_reason',motivo),motivo='Perfil ainda não identificado; aguardando investigação com fontes da empresa.',proxima_tentativa=NOW()
+        WHERE account_id=$1 AND status='descartado' AND motivo='fora dos ICPs da Aerion — não dá para saber a dor dessa empresa'`,[accountId]);
+      await db.query(`UPDATE prospeccao_log SET proxima_tentativa=NOW() WHERE account_id=$1 AND status='descartado' AND created_at>NOW()-INTERVAL '30 days'
+        AND motivo~*'(na web:.*filtros|titularidade)' AND motivo!~*'(SPE/SCP|opt.out|bloqueado|não contatar)'`,[accountId]);
+    }
     const marker = await db.query(`INSERT INTO ai_settings(chave,valor,updated_by) VALUES($1,'1','migration:research-v2') ON CONFLICT DO NOTHING RETURNING chave`, [`research_v2:${accountId}`]);
     if (marker.rows.length) {
       await db.query(`UPDATE prospeccao_log SET proxima_tentativa=NOW() WHERE account_id=$1 AND status='descartado'

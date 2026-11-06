@@ -242,6 +242,7 @@ const TERMOS_ICP = [
     'mapeament', 'volumetria', 'movimentacao de terra', 'ortomosaico', 'nuvem de pontos',
     'pulveriza', 'agricultura de precisao']],
   [ENERGIA, ['energia', 'eletrica', 'eletrico', 'transmissao', 'subestacao', 'solar',
+    'energetic',
     'fotovoltaic', 'eolic', 'concessionaria', 'inspecao', 'manutencao industrial',
     'termografia', 'termica', 'mineracao', 'minerio', 'petroleo', 'oleoduto', 'gasoduto',
     'usina', 'linha de transmissao', 'rede de distribuicao', 'ponto quente',

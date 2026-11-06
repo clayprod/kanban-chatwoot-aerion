@@ -54,7 +54,7 @@ async function investigate({ empresa, seeds, inspect, tokens, isAggregator, maxP
     let page;
     try { page = await inspect(job.url, { timeoutMs: Math.min(20000, deadline - now()) }); }
     catch { failures.push({ url: job.url, reason: 'fonte indisponível' }); deferred.push(job); continue; }
-    if (!page || page.access === 'login_required' || page.access === 'blocked') {
+    if (!page || ['login_required','blocked','unavailable'].includes(page.access)) {
       failures.push({ url: job.url, reason: page?.access === 'login_required' ? 'fonte exige login' : 'fonte bloqueada' }); deferred.push(job); continue;
     }
     if (isAggregator(page.url || job.url)) continue;
@@ -71,7 +71,7 @@ async function investigate({ empresa, seeds, inspect, tokens, isAggregator, maxP
       const u = new URL(link.href), own = new URL(node.url);
       const allowed = u.hostname === own.hostname || relevant(link.href) || HUBS.some(d => hostIs(u.hostname, d));
       // Only business/contact links, not every post, policy, map or menu item.
-      if (allowed && (u.hostname !== own.hostname || /contat|sobre|about|empresa|contact/i.test(`${u.pathname} ${link.label}`))) {
+      if (allowed && (u.hostname !== own.hostname || /contat|sobre|about|empresa|contact|servic|solu|engenhar|atuacao|quem/i.test(`${u.pathname} ${link.label}`))) {
         queue.push({ url: link.href, depth: job.depth + 1, chain });
       }
     }
@@ -103,15 +103,17 @@ async function investigate({ empresa, seeds, inspect, tokens, isAggregator, maxP
     if (!brand || !industry) continue;
     const identityVerified = !conflict && (exactLegal || city);
     const first = connected[0];
+    const metadataName=connected.find(p=>p.business_name&&meaningful.some(t=>alias(p.business_name).includes(alias(t))))?.business_name;
+    const titleName=String(first.title||'').replace(/^(contatos?|in[ií]cio|home|sobre|nossa empresa)\s*[-|:]\s*/i,'').split(/\s*\(@|\s*•\s*Instagram/i)[0];
     for (const link of result.contactLinks) {
       contacts.push({ numero: link.numero, origem: result.node.url, fonte: 'investigacao',
         identidadeComprovada: identityVerified, titularidadeComprovada: true,
         sinais: ['contato publicado em canal da empresa', 'canais vinculados por links reais', identityVerified ? 'nome, atividade e localização compatíveis' : 'identidade distinta ou CNPJ original não comprovado'],
         chain: [...result.chain, ...connected.filter(p => !result.chain.some(n => n.url === p.url)).map(p => ({ url: p.url, title: p.title }))],
         instagram: connected.find(p => hostIs(new URL(p.url).hostname, 'instagram.com'))?.url || null,
-        empresaEncontrada: { razao_social: String(meaningful.some(t=>alias(first.title).includes(alias(t))) ? first.title : channelId(root)).split('|')[0].trim().slice(0, 255), cnpj: null,
+        empresaEncontrada: { razao_social: String(metadataName || (meaningful.some(t=>alias(titleName).includes(alias(t))) ? titleName : channelId(root))).split('|')[0].trim().slice(0, 255), cnpj: null,
           cnae_descricao: text.slice(0, 3000), municipio_nome: '', uf: '', source_url: root },
-        contato: link.label, evidencias: text.slice(0, 6000) });
+        contato: link.label, evidencias: text.slice(0, 12000), fontesPerfil:connected.map(p=>({url:p.url,title:p.title,text:p.content?.slice(0,16000)})).slice(0,6) });
     }
   }
   if(saveProgress)await saveProgress({pages:pages.slice(-40),queue:[...queue,...deferred].slice(0,100)});

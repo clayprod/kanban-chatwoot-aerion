@@ -62,7 +62,7 @@ const createProspeccaoTable = async (pool) => {
       telefone TEXT,
       perfil TEXT,
       status TEXT NOT NULL
-        CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou')),
+        CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou', 'pendente')),
       motivo TEXT,
       perfil_whatsapp TEXT,
       confirmou_empresa BOOLEAN,
@@ -98,7 +98,7 @@ const createProspeccaoTable = async (pool) => {
   `);
   await pool.query(`
     ALTER TABLE ${PROSPECCAO_LOG_TABLE} ADD CONSTRAINT ${PROSPECCAO_LOG_TABLE}_status_check
-      CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou'))
+      CHECK (status IN ('abordado', 'enfileirado', 'dry_run', 'descartado', 'falhou', 'pendente'))
   `);
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prospeccao_cnpj
@@ -307,6 +307,7 @@ const montarPromptAbordagem = ({
 // nunca volta. A espera cresce a cada nova tentativa (x1, x2, x3, x4), para não martelar
 // a mesma empresa. Contato já na base (opt-out incluído) nunca chega aqui: filtrarNovos o corta.
 const politicaNovaTentativa = ({ status, motivo }) => {
+  if (status === 'pendente') return { modo:'dias', dias:1 };
   if (status !== 'descartado' && status !== 'falhou') return { modo: 'nulo', dias: 0 };
   if (status === 'falhou') return { modo: 'dias', dias: 3 };
   const m = String(motivo || '');
@@ -339,7 +340,7 @@ const registrarProspeccao = async (pool, d) => {
        tentativas = t.tentativas + 1,
        proxima_tentativa = ${proximaTentativaSql('t.tentativas + 1')}
      -- Só reabre linha que era descarte/falha. Abordado/enfileirado nunca é sobrescrito.
-     WHERE t.status IN ('descartado', 'falhou')`,
+     WHERE t.status IN ('descartado', 'falhou', 'pendente')`,
     [
       d.accountId, soDigitos(d.cnpj) || null, d.razaoSocial ?? null, d.telefone ?? null,
       d.perfil ?? null, d.status, d.motivo ?? null, d.perfilWhatsapp ?? null,
@@ -553,7 +554,7 @@ const runProspeccaoTick = async (pool, {
           nomePerfil, empresa.razao_social, empresa.nome_fantasia
         );
 
-        const contexto = contextoComercial
+        let contexto = contextoComercial
           ? await contextoComercial({ empresa, perfil: perfil.titulo })
           : { blocoIcp: '', blocoCatalogo: '' };
 
@@ -562,13 +563,21 @@ const runProspeccaoTick = async (pool, {
         // foi uma produtora de arroz, e a IA escreveu uma abordagem convincente sobre
         // monitorar lavoura e pasto — assunto que a Aerion nao vende. Quando nao se
         // sabe a dor do perfil, o modelo inventa uma. Melhor nao falar.
-        if (contextoComercial && (!contexto.icp || contexto.icp === 'desconhecido')) {
+        if(contextoComercial&&(!contexto.icp||contexto.icp==='desconhecido')){
+          if(!achadoWeb&&buscarContatoWeb){
+            achadoWeb=await buscarContatoWeb(empresa);
+            if(salvarDescobertas&&achadoWeb?.descobertas?.length)await salvarDescobertas(empresa,achadoWeb.descobertas);
+          }
+          contexto=await require('./prospectingProfile').resolveProspectingProfile({empresa,contexto,achadoWeb,chatCompletionJson});
+          if(contexto.profileEvidence)base.phoneEvidence.profile_evidence=contexto.profileEvidence;
+        }
+        if (contextoComercial && ((!contexto.icp || contexto.icp === 'desconhecido')||contexto.outsideProfile)) {
           await registrarProspeccao(pool, {
-            ...base, status: 'descartado',
-            motivo: 'fora dos ICPs da Aerion — não dá para saber a dor dessa empresa',
+            ...base, status: contexto.outsideProfile?'descartado':'pendente',
+            motivo: contexto.outsideProfile?'Atividade confirmada fora dos ICPs da Aerion; evidência disponível nos detalhes.':'Perfil ainda não identificado; aguardando investigação com fontes da empresa.',
             perfilWhatsapp: nomePerfil, confirmouEmpresa: confirmou,
           });
-          r.descartados += 1;
+          if(contexto.outsideProfile)r.descartados+=1;else r.pendentes=(r.pendentes||0)+1;
           continue;
         }
         const prompt = montarPromptAbordagem({

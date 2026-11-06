@@ -35,3 +35,9 @@ test('integra cadeia de evidências à busca existente sem depender da IA para i
  const r=await buscarContatoWeb(empresa,{buscarPaginas:async()=>({paginas:[{url:profile}]}),inspecionarPagina:async u=>pages[u]});
  assert.equal(r.numero,'5547998765432');assert.equal(r.decidido,'cadeia de evidências');
 });
+test('Francis Energia encontra Francis Soluções em cidade diferente sem atribuir CNPJ errado',async()=>{
+ const url='https://www.francissolucoes.com.br/contatos';
+ const r=await investigate({empresa:{cnpj:'59317672000178',razao_social:'FRANCIS ENERGIA LTDA',municipio_nome:'Outra cidade',uf:'MG'},seeds:[{url}],tokens:termosSignificativos,isAggregator:ehAgregador,
+ inspect:async()=>({url,title:'Contatos - Francis Soluções',business_name:'Francis Soluções',content:'Francis Soluções: empresa de engenharia e serviços elétricos em Divinópolis, Minas Gerais.',links:[{href:'https://wa.me/5537998765432',label:'WhatsApp'}]})});
+ assert.equal(r.contacts.length,1);assert.equal(r.contacts[0].identidadeComprovada,false);assert.equal(r.contacts[0].empresaEncontrada.razao_social,'Francis Soluções');assert.equal(r.contacts[0].empresaEncontrada.cnpj,null);
+});

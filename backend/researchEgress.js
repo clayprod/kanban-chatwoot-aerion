@@ -86,7 +86,8 @@ function createBroker({ pool, readSecret, probe = tcpHealth }) {
     const configured = parseNodes(await readSecret('RESEARCH_EGRESS_NODES')).map(n => n.id);
     const health = (await pool.query('SELECT node_id,checked_at,retry_at,last_error FROM research_egress_health')).rows;
     const pending = (await pool.query("SELECT valor FROM ai_settings WHERE chave='research_egress_setup_blocker'")).rows[0]?.valor || null;
-    return { configured, nodes: health.filter(n => configured.includes(n.node_id)), pending_action:pending, download_mbps: 5, fallback: 'fluxo existente' };
+    const instagram=await require('./instagramSession').handleSession({ler:readSecret},{operation:'status'});
+    return { configured, nodes: health.filter(n => configured.includes(n.node_id)), instagram, pending_action:pending, download_mbps: 5, fallback: 'fluxo existente' };
   }
   return { acquire, release, status };
 }

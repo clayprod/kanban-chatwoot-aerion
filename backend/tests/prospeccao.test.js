@@ -324,7 +324,7 @@ test('CNAE repetido nao vai duplicado para a busca', () => {
   assert.equal(qs.get('cnae'), '0111301');
 });
 
-test('empresa fora dos ICPs nao e abordada', async () => {
+test('perfil desconhecido fica pendente, sem abordagem nem descarte por falta de dados', async () => {
   // Medido em 24/10 em dry run: perfil de agronegocio (vertical descontinuada) trouxe
   // uma produtora de arroz, e a IA escreveu abordagem sobre monitorar lavoura e pasto.
   // Sem ICP nao se sabe a dor, e o modelo inventa uma.
@@ -356,9 +356,9 @@ test('empresa fora dos ICPs nao e abordada', async () => {
     contextoComercial: async () => ({ icp: 'desconhecido', blocoIcp: '', blocoCatalogo: '' }),
   });
   assert.equal(chamouIa, false, 'nem gasta token escrevendo para quem nao e ICP');
-  assert.equal(r.descartados, 1);
-  assert.match(registros[0].motivo, /fora dos ICPs/);
-  assert.equal(registros[0].status, 'descartado');
+  assert.equal(r.pendentes, 1);
+  assert.match(registros[0].motivo, /Perfil ainda não identificado/);
+  assert.equal(registros[0].status, 'pendente');
 });
 
 test('o teto diario conta mensagem ENTREGUE, nao tentativa', async () => {
@@ -462,7 +462,7 @@ test('o registro reabre descarte/falha (espera crescente) mas nunca sobrescreve 
   assert.match(sql, /DO UPDATE SET/);
   assert.match(sql, /tentativas = t\.tentativas \+ 1/);
   assert.match(sql, /LEAST\(t\.tentativas \+ 1, 4\)/, 'espera cresce até 4x');
-  assert.match(sql, /WHERE t\.status IN \('descartado', 'falhou'\)/);
+  assert.match(sql, /WHERE t\.status IN \('descartado', 'falhou', 'pendente'\)/);
   assert.deepEqual(params.slice(14,16), ['dias', 30]);
 });
 

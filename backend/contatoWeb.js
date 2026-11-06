@@ -91,6 +91,7 @@ const GENERICAS = new Set([
   'tecnologia', 'engenharia', 'solucoes', 'consultoria', 'participacoes', 'holding',
   'construtora', 'construcoes', 'projetos', 'assessoria', 'representacoes', 'spe',
   'ambiental', 'mineracao', 'topografia', 'incorporadora', 'eng', 'com', 'ind',
+  'energia', 'energetica', 'eletrica', 'eletricas', 'eletricos', 'eletrico',
 ]);
 
 const termosSignificativos = (nome) => semAcento(nome)

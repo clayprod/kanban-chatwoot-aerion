@@ -49,6 +49,7 @@ const STATUS = {
   abordado: { cor: 'text-status-success', rotulo: 'enviado', ruido: false },
   falhou: { cor: 'text-status-danger', rotulo: 'falhou', ruido: false },
   descartado: { cor: 'text-muted2', rotulo: 'descartado', ruido: false },
+  pendente: { cor: 'text-status-warning', rotulo: 'investigação pendente', ruido: false },
   escalated: { cor: 'text-status-warning', rotulo: 'encaminhado ao atendimento', ruido: false },
   skipped:   { cor: 'text-muted2',         rotulo: 'pulado',   ruido: true },
 };
@@ -258,6 +259,7 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
         <summary className="cursor-pointer">Conectividade da pesquisa</summary>
         <p className="mt-2">{dados.conectividade.configured.length ? `Dispositivos: ${dados.conectividade.configured.join(', ')}.` : 'Saída pessoal aguardando configuração.'} Fallback: provedores e proxies existentes.</p>
         {dados.conectividade.pending_action && <p className="mt-1 text-status-warning">{dados.conectividade.pending_action}</p>}
+        {dados.conectividade.instagram && <p className="mt-1">Instagram · {dados.conectividade.instagram.username}: {dados.conectividade.instagram.status==='connected'?'sessão conectada':dados.conectividade.instagram.status==='verification_required'?'confirmação necessária':'login necessário'}</p>}
         {dados.conectividade.nodes.map(n => <p key={n.node_id}>{n.node_id}: {n.last_error || 'Disponível na última consulta'} · {fmtDataHora(n.checked_at)}</p>)}
       </details>}
 
@@ -493,6 +495,9 @@ export default function AutomationView() {
                 </p>)}
                 {it.phone_evidence?.instagram && <a href={it.phone_evidence.instagram} target="_blank" rel="noreferrer" className="inline-flex text-[12px] text-primary underline">Abrir para seguir</a>}
                 {it.phone_evidence?.legal_identity_verified === false && <p className="text-[12px] text-muted">Empresa descoberta separadamente. CNPJ original não associado.</p>}
+                {it.phone_evidence?.profile_evidence && <p className="text-[12px] text-muted">
+                  Atividade: {it.phone_evidence.profile_evidence.quote} · <a className="text-primary underline" href={it.phone_evidence.profile_evidence.url} target="_blank" rel="noreferrer">Ver fonte</a>
+                </p>}
               </>
             )}
           />

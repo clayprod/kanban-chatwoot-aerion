@@ -16,4 +16,4 @@ function playwrightProxy(lease) {
   const p=new URL(lease.proxy);
   return {id:lease.node,server:`${p.protocol}//${p.host}`,username:decodeURIComponent(p.username),password:decodeURIComponent(p.password),personal:true};
 }
-module.exports={acquire,release,playwrightProxy};
+module.exports={acquire,release,playwrightProxy,call};
