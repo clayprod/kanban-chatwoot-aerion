@@ -114,10 +114,15 @@ const buscarUma = async (query, proxy) => {
         ? route.abort() : route.continue()
     ));
     const page = await ctx.newPage();
-    await page.goto(
+    const response = await page.goto(
       `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=pt-BR&gl=br&num=8`,
       { waitUntil: 'domcontentloaded', timeout: 20000 }
     );
+    if ([403,429].includes(response?.status())) {
+      const error = new Error('fonte temporariamente bloqueada');
+      error.codigo = 'captcha';
+      throw error;
+    }
     if (/\/sorry\/|consent\.google/.test(page.url())) {
       const aceitar = page.locator('button:has-text("Aceitar tudo"), button:has-text("Accept all")').first();
       if (/consent/.test(page.url()) && await aceitar.count()) {

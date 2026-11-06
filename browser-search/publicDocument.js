@@ -47,7 +47,7 @@ function readOnce(url, record, proxy, timeoutMs) {
     const p = new URL(proxy);
     // CONNECT to the validated address (not a second DNS lookup at the proxy).
     tunnel = http.request({ hostname: p.hostname, port: p.port, method: 'CONNECT', path: `${net.isIPv6(record.address) ? `[${record.address}]` : record.address}:${url.port || (url.protocol==='https:'?443:80)}`,
-      headers: { 'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(p.username)}:${decodeURIComponent(p.password)}`).toString('base64')}` }, timeout: timeoutMs });
+      headers: { 'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(p.username)}:${decodeURIComponent(p.password)}`).toString('base64')}` }, timeout: Math.min(3000,timeoutMs) });
     tunnel.once('connect', (response, socket, head) => {
       if(response.statusCode!==200) { socket.destroy(); reject(new Error('Proxy indisponível')); return; }
       if(head.length)socket.unshift(head);
