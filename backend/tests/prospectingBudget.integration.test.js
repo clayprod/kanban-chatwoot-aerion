@@ -22,7 +22,7 @@ test('PostgreSQL reserva vagas e revalida teto reduzido antes da entrega',{skip:
   await assert.rejects(()=>queue(30),/Limite diário/);
   budget=await readBudget(pool,2);assert.equal(budget.enviados,0);assert.equal(budget.reservados,2);assert.equal(budget.saldo,0);
   await pool.query("UPDATE ai_settings SET valor='1' WHERE chave='prospeccao_max_por_dia'");
-  await pool.query('CREATE TABLE conversations(id BIGINT,account_id INTEGER,inbox_id BIGINT); CREATE TABLE messages(conversation_id BIGINT,message_type INTEGER,created_at TIMESTAMPTZ)');
+  await pool.query('CREATE TABLE conversations(id BIGINT,account_id INTEGER,inbox_id BIGINT); CREATE TABLE messages(account_id INTEGER,conversation_id BIGINT,message_type INTEGER,created_at TIMESTAMPTZ)');
   let deliveries=0;
   await despacharTick(pool,{accountId:2,enviar:async()=>{deliveries++;},maxPorTick:5});
   assert.equal(deliveries,1);budget=await readBudget(pool,2);assert.equal(budget.enviados,1);assert.equal(budget.reservados,1);

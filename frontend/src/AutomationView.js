@@ -257,6 +257,7 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
       {dados?.conectividade && <details className="text-[12px] text-muted">
         <summary className="cursor-pointer">Conectividade da pesquisa</summary>
         <p className="mt-2">{dados.conectividade.configured.length ? `Dispositivos: ${dados.conectividade.configured.join(', ')}.` : 'Saída pessoal aguardando configuração.'} Fallback: provedores e proxies existentes.</p>
+        {dados.conectividade.pending_action && <p className="mt-1 text-status-warning">{dados.conectividade.pending_action}</p>}
         {dados.conectividade.nodes.map(n => <p key={n.node_id}>{n.node_id}: {n.last_error || 'Disponível na última consulta'} · {fmtDataHora(n.checked_at)}</p>)}
       </details>}
 
