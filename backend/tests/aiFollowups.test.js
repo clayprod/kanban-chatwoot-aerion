@@ -7,6 +7,7 @@ const {
   SITUACOES_SEM_MENSAGEM,
   ESPERA_POR_SITUACAO,
   validarMensagem,
+  validarContextoRetomada,
   dentroDaJanela,
   montarPrompt,
   buscarCandidatos,
@@ -66,6 +67,37 @@ const HISTORICO = [
   { content: 'Bom dia, tenho interesse', message_type: 0, created_at: '2026-09-14T12:00:00.000Z' },
   { content: 'Oi! Te mandei o material', message_type: 1, created_at: '2026-09-15T12:00:00.000Z' },
 ];
+
+const HISTORICO_AVALIACAO = [
+  {autor:'nós',texto:'Vocês têm abertura para trabalhar outras marcas além da DJI?',em:'2026-09-28T19:28:00Z'},
+  {autor:'cliente',texto:'Tenho abertura sim. Mas antes precisaria conhecer o produto! Só faria sentido se fosse um produto que nos gere confiança!',em:'2026-09-28T21:21:00Z'},
+  {autor:'nós',texto:'Com certeza! Nós podemos agendar demonstrações! Onde vocês ficam localizados?',em:'2026-09-28T21:23:00Z'},
+  {autor:'nós',texto:'Boa tarde!',em:'2026-09-29T18:11:00Z'},
+];
+
+test('toda retomada exige saudação, mesmo antes dos 45 dias, sem consertar uma cobrança com um Oi',()=>{
+  for(const saudacao of ['Oi!','Olá!','Bom dia!','Boa tarde!','Boa noite!'])assert.equal(validarMensagem(saudacao+' O que seria importante avaliar numa demonstração?',0.95,CONFIG_BASE),null);
+  assert.match(validarMensagem('Vocês comentaram que precisariam conhecer o produto. O que seria importante avaliar?',0.99,CONFIG_BASE),/sem saudação/);
+  const ruim='Você tinha comentado que precisaria conhecer o produto para ter confiança. Chegou a avançar com isso por aí?';
+  assert.ok(validarMensagem(ruim,0.99,CONFIG_BASE));assert.ok(validarMensagem('Oi! '+ruim,0.99,CONFIG_BASE));
+});
+
+test('avaliação do produto pertence à oferta da Aerion, não a uma tarefa pendente do cliente',()=>{
+  const prompt=montarPrompt({contato:CANDIDATO,historico:HISTORICO_AVALIACAO,followupsAnteriores:0,diasSilencio:38,agora:new Date('2026-11-06T14:30:00Z')});
+  assert.match(prompt.system,/TODA retomada começa/);assert.match(prompt.user,/AVALIAÇÃO DO PRODUTO/);assert.match(prompt.user,/A Aerion deve facilitar/);
+  assert.ok(!prompt.user.includes('Chegou a avancar com isso por ai?'));
+  assert.match(validarContextoRetomada('Oi! Já conseguiu conhecer o produto?',HISTORICO_AVALIACAO),/transfere ao cliente/);
+  const boa='Oi, tudo bem? Vocês comentaram que gostariam de conhecer melhor os equipamentos antes de pensar numa parceria. Podemos retomar a ideia da demonstração: o que seria importante vocês avaliarem para se sentirem seguros em trabalhar com a Autel?';
+  assert.equal(validarMensagem(boa,0.95,CONFIG_BASE),null);assert.equal(validarContextoRetomada(boa,HISTORICO_AVALIACAO),null);
+  assert.equal(validarContextoRetomada('Oi! Conseguiu avaliar o material?', [{autor:'cliente',texto:'Vou avaliar o material que recebi.'}]),null);
+});
+
+test('a fila não recebe uma retomada que devolve ao cliente a tarefa de conhecer nosso produto',async()=>{
+  const pool=fakePool({candidatos:[{...CANDIDATO,ultima_em:'2026-09-29T18:11:00Z'}],historico:HISTORICO_AVALIACAO.map(h=>({content:h.texto,message_type:h.autor==='cliente'?0:1,created_at:h.em}))});
+  let entregas=0;
+  const result=await runAiFollowupTick(pool,{accountId:2,config:CONFIG_BASE,now:new Date('2026-11-06T14:30:00Z'),chatCompletionJson:async()=>({ok:true,data:{situacao:'duvida_aberta',acao:'escrever',mensagem:'Oi! Já conseguiu conhecer o produto?',confianca:0.99}}),enfileirarEnvio:async()=>{entregas+=1;},fetchImpl:async()=>{throw Error('Não deve chamar Chatwoot');}});
+  assert.equal(entregas,0);assert.equal(result.pulados,1);assert.match(pool.gravados.at(-1).skipReason,/transfere ao cliente/);
+});
 
 test('a janela comercial respeita horário e dia útil', () => {
   // Quarta-feira, 14h em São Paulo.
@@ -328,7 +360,7 @@ test('pergunta calibrada passa; pergunta fechada de interesse nao', () => {
     null
   );
   assert.equal(
-    validarMensagem('Quando voces costumam revisar investimento em equipamento?', 0.9, CONFIG_BASE),
+    validarMensagem('Olá! Quando voces costumam revisar investimento em equipamento?', 0.9, CONFIG_BASE),
     null
   );
 });
@@ -368,9 +400,9 @@ test('o foco leva a RAJADA do cliente, nao so a ultima linha', () => {
   const foco = user.split('Histórico completo')[0];
   assert.match(foco, /não estou a frente da parte das ETPs/);
   assert.match(foco, /Cap Sá Fortes GSD-CO/);
-  // E tem que dizer que o que veio depois foi insistência nossa, não fato novo.
+  // O que enviamos depois não comprova avanço nem muda a intenção do cliente.
   assert.match(foco, /nós mandamos 2 mensagem\(ns\)/);
-  assert.match(foco, /insistência nossa/);
+  assert.match(foco, /não é prova de avanço ou mudança de intenção do cliente/);
 });
 
 test('nunca passa de "tentativa N de N"', () => {
