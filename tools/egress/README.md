@@ -4,9 +4,13 @@ O controle reside no Kanban e atende Kanban/browser-search e Hub. Não altera a 
 
 ## Instalação Windows
 
-Executar `Install-PersonalEgress.ps1` como administrador em cada dispositivo. O instalador verifica o pacote oficial 3proxy 1.0.2 por SHA256, restringe a escuta ao IP Tailscale, permite somente a VPS `100.97.22.81`, exige autenticação, bloqueia destinos privados e limita a banda a 5 Mbps. Não altera suspensão, cookies ou perfis pessoais.
+Executar `Install-PersonalEgress.ps1` como administrador no dispositivo escolhido. Somente o Jasque ou somente o CLAYTON-PC já atende; o segundo é opcional. O instalador verifica o pacote oficial 3proxy 1.0.2 por SHA256, restringe a escuta ao IP Tailscale, permite somente a VPS `100.97.22.81`, exige autenticação, bloqueia destinos privados e limita a banda a 5 Mbps. Não altera suspensão, cookies ou perfis pessoais.
 
 Notebook: `-TailnetAddress 100.117.55.18 -DeviceName Jasque`. Desktop: `-TailnetAddress 100.80.200.77 -DeviceName CLAYTON-PC`. Informar `-RegistrationPath` em diretório existente fora do Git. O registro é cifrado pelo Windows/DPAPI para o usuário que executou o instalador. Não enviar senhas no chat.
+
+Para reutilizar o ZIP já baixado, informar `-ArchivePath` com o caminho do arquivo. O mesmo SHA256 é conferido antes de extrair. O instalador não altera o Defender nem suas exclusões; um executável removido por ele impede a instalação.
+
+O serviço usa início automático atrasado, dependência do serviço Tailscale e recuperação automática. O wrapper `Install-Notebook.ps1` também habilita o modo unattended do Tailscale, para manter a conexão mesmo sem sessão aberta do usuário. Não é necessário ligar o desktop nem habilitar exit node. A execução continua dependendo de o notebook estar ligado, acordado e com internet.
 
 Não sobrescrever instalações existentes. Para desativar, parar o serviço `3proxy`; os consumidores voltam ao fluxo anterior. Para remover, usar `3proxy.exe --remove` elevado e remover a regra de firewall nomeada `Aerion research via Tailscale`.
 

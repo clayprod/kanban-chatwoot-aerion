@@ -3,7 +3,9 @@
 param(
   [Parameter(Mandatory)][ValidateSet('100.117.55.18','100.80.200.77')][string]$TailnetAddress,
   [Parameter(Mandatory)][ValidateSet('Jasque','CLAYTON-PC')][string]$DeviceName,
-  [Parameter(Mandatory)][string]$RegistrationPath
+  [Parameter(Mandatory)][string]$RegistrationPath,
+  [string]$ArchivePath,
+  [switch]$Unattended
 )
 $ErrorActionPreference = 'Stop'
 $installDir = Join-Path $env:ProgramData 'Aerion\ResearchEgress'
@@ -18,7 +20,12 @@ New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 & icacls.exe $installDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Não foi possível proteger o diretório.' }
 $archive = Join-Path $installDir '3proxy-1.0.2-x64.zip'
-Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/3proxy/3proxy/releases/download/1.0.2/3proxy-1.0.2-x64.zip' -OutFile $archive
+if ($ArchivePath) {
+  $sourceArchive = (Resolve-Path -LiteralPath $ArchivePath).Path
+  if ($sourceArchive -ne $archive) { Copy-Item -LiteralPath $sourceArchive -Destination $archive -Force }
+} else {
+  Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/3proxy/3proxy/releases/download/1.0.2/3proxy-1.0.2-x64.zip' -OutFile $archive
+}
 $expected = 'a09526d714d5f928b7a94493035923de733fa026ef57d78c137e1925593f705a'
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'SHA256 do pacote oficial não confere.' }
 Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $installDir 'package') -Force
@@ -46,8 +53,17 @@ proxy -4 -p3128 -i$TailnetAddress
 New-NetFirewallRule -DisplayName 'Aerion research via Tailscale' -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $TailnetAddress -LocalPort 3128 -RemoteAddress '100.97.22.81' -Program $binaryPath | Out-Null
 & $binaryPath $configPath --install
 if ($LASTEXITCODE -ne 0) { throw 'Instalação do serviço falhou.' }
+Set-Service -Name '3proxy' -StartupType Automatic
+& sc.exe config 3proxy start= delayed-auto depend= Tailscale | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Não foi possível configurar a inicialização automática.' }
 # Service restart handles boot ordering when the Tailscale interface is not ready.
 & sc.exe failure 3proxy reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+if ($Unattended) {
+  & 'C:\Program Files\Tailscale\tailscale.exe' set --unattended=true
+  if ($LASTEXITCODE -ne 0) { throw 'Não foi possível habilitar Tailscale sem sessão de usuário.' }
+}
+$proxyService = Get-Service -Name '3proxy'
+if ($proxyService.Status -ne 'Running') { Start-Service -Name '3proxy' }
 $registration = @{id=$DeviceName;proxy="http://aerion-egress:$password@${TailnetAddress}:3128"} | ConvertTo-Json -Compress
 $protected = ConvertTo-SecureString $registration -AsPlainText -Force | ConvertFrom-SecureString
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($RegistrationPath), $protected)
