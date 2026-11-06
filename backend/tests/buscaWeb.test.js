@@ -126,7 +126,7 @@ test('cota mensal cheia pula o Places e cai no Tavily', async () => {
   const pool = fakePool({ usado: 900 });
   const { busca, chamadas } = montar({
     pool,
-    tavily: async () => [{ url: 'https://x.com', title: 'Sertec', content: 'Sertec (62) 3333-4444' }],
+    tavily: async () => [{ url: 'https://sertec.com.br', title: 'Sertec', content: 'Sertec (62) 3333-4444' }],
   });
   const r = await busca.buscarPaginas({ alvo: ALVO });
   assert.equal(r.provedor, 'tavily');
@@ -166,15 +166,25 @@ test('falha de provedor não grava cache negativo; resposta vazia grava', async 
   assert.equal(vazio.pool.estado.cache.size, 1);
 });
 
-test('Tavily usa no máximo 2 consultas e para na que trouxe telefone', async () => {
+test('Tavily para quando uma fonte da empresa traz telefone', async () => {
   const consultas = [];
   const { busca } = montar({
     segredos: { TAVILY_API_KEY: 't' },
-    tavily: async ({ query }) => { consultas.push(query); return [{ url: 'u', content: 'tel 62 3333-4444' }]; },
+    tavily: async ({ query }) => { consultas.push(query); return [{ url: 'https://sertec.com.br', content: 'tel 62 3333-4444' }]; },
     config: { ordem: ['tavily'] },
   });
   await busca.buscarPaginas({ alvo: ALVO });
   assert.equal(consultas.length, 1);
+});
+
+test('telefone de agregador não impede pesquisa de Instagram e razão social',async()=>{
+ const seen=[];
+ const pool=fakePool();
+ const busca=criarBuscaWeb({pool,lerSegredo:async()=> 'fixture',consultas:require('../contatoWeb').CONSULTAS,
+  buscarNoTavily:async({query})=>{seen.push(query);return [{url:'https://cnpj.biz/12345678000199',content:'Sertec (62) 3333-4444'}];},
+  config:{...carregarConfigBusca({}),ordem:['tavily']},log:{warn(){}}});
+ const r=await busca.buscarPaginas({alvo:ALVO});
+ assert.equal(seen.length,3);assert.ok(seen.some(q=>q.includes('site:instagram.com')));assert.equal(r.paginas.length,3);
 });
 
 test('temTelefone só aceita texto com número', () => {

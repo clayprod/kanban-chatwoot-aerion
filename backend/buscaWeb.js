@@ -106,6 +106,19 @@ const erroDeProvedor = (mensagem, codigo, status) => {
 const temTelefone = (paginas) =>
   paginas.some((p) => /\d{4}[\s.-]?\d{4}/.test(`${p.title || ''} ${p.content || ''} ${p.raw_content || ''}`));
 
+// A registry's telephone must not stop discovery before Instagram/bio links.
+const fonteComContato = (paginas, alvo) => {
+  const { termosSignificativos, ehAgregador } = require('./contatoWeb');
+  const { alias, channelId, fold } = require('./contactInvestigation');
+  const tokens = termosSignificativos(alvo.nome);
+  if (!tokens.length || tokens.every(t=>alias(alvo.municipio).includes(alias(t)))) return false;
+  return paginas.some(p => {
+    if (!temTelefone([p]) || ehAgregador(p.url)) return false;
+    if (p.googlePlace) return tokens.every(t=>alias(p.googlePlace.nome).includes(alias(t))) && (!alvo.municipio || fold(p.googlePlace.endereco).includes(fold(alvo.municipio)));
+    return tokens.every(t=>alias(channelId(p.url)).includes(alias(t)));
+  });
+};
+
 const buscarNoPlaces = async ({ alvo, apiKey, fetchImpl, timeoutMs }) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -176,7 +189,7 @@ const criarBuscaWeb = ({
   const bloqueado = (provedor) => (bloqueadoAte.get(provedor) || 0) > agora().getTime();
   const HORA = 3600 * 1000;
 
-  const lerCache = async (cnpj) => {
+  const lerCache = async (cnpj, alvo) => {
     if (!cnpj) return null;
     const { rows } = await pool.query(
       `SELECT provedor, paginas, created_at FROM busca_web_cache WHERE cnpj = $1`, [cnpj]
@@ -185,6 +198,7 @@ const criarBuscaWeb = ({
     if (!r) return null;
     const dias = (agora().getTime() - new Date(r.created_at).getTime()) / 86400000;
     const vazio = !r.paginas?.length;
+    if (!vazio && !['investigar', 'nenhum'].includes(r.provedor) && !fonteComContato(r.paginas, alvo)) return null;
     if (dias > (vazio ? config.cacheVazioDias : config.cacheDias)) return null;
     return r;
   };
@@ -217,7 +231,7 @@ const criarBuscaWeb = ({
           query: c.monta(alvo), apiKey: chave, fetchImpl, timeoutMs: config.timeoutMs,
         });
         paginas.push(...achados.map((r) => ({ ...r, fonte })));
-        if (temTelefone(achados)) break;
+        if (fonteComContato(achados, alvo)) break;
       }
       return paginas;
     },
@@ -230,7 +244,7 @@ const criarBuscaWeb = ({
   const buscarPaginas = async ({ alvo }) => {
     const cnpj = alvo.cnpj || '';
     try {
-      const cache = await lerCache(cnpj);
+      const cache = await lerCache(cnpj, alvo);
       if (cache) return { paginas: cache.paginas, falhas: [], provedor: cache.provedor, doCache: true };
     } catch (error) {
       log.warn?.('[busca-web] cache indisponível:', error.message);
@@ -250,7 +264,7 @@ const criarBuscaWeb = ({
         const paginas = await executar({ alvo });
         encontradas.push(...paginas);
         algumRespondeu = true;
-        if (temTelefone(paginas)) {
+        if (fonteComContato(paginas, alvo)) {
           await gravarCache(cnpj, nome, encontradas).catch(() => {});
           return { paginas: encontradas, falhas, provedor: nome, doCache: false };
         }
