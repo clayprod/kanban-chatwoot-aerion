@@ -268,6 +268,18 @@ const issueAuthCookie = (res, claims) => {
   res.cookie(AUTH_COOKIE_NAME, token, authCookieOptions);
 };
 
+// Service-to-service control plane has its own bearer credential, never a user cookie.
+let researchBroker;
+app.post('/api/internal/research-egress/:action', async (req, res) => {
+  try {
+    const expected = await cofre.ler('RESEARCH_EGRESS_TOKEN');
+    const actual = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    const { timingSafeEqual } = require('node:crypto');
+    if (!expected || Buffer.byteLength(actual) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(actual), Buffer.from(expected))) return res.status(401).json({ error: 'Unauthorized' });
+    if (!researchBroker || !['acquire', 'release'].includes(req.params.action)) return res.status(404).json({ error: 'Unavailable' });
+    res.json(await researchBroker[req.params.action](req.body || {}));
+  } catch { res.status(503).json({ available: false, error: 'Controle de saída indisponível' }); }
+});
 app.use('/api', (req, res, next) => {
   if (AUTH_PUBLIC_PATHS.has(req.path)) {
     return next();
@@ -861,6 +873,7 @@ const mapaInstancias = criarMapaDeInstancias({ pool });
 // mas nesta stack ela nao sobrevive a deploy: em 26/10 os tokens das instancias e a
 // chave do Tavily sumiram e 6 prospeccoes ficaram presas na fila.
 const cofre = criarCofre({ pool });
+researchBroker = require('./researchEgress').createBroker({pool, readSecret: key => cofre.ler(key)});
 const tokenDaInstanciaNoCofre = (instancia) => cofre.ler(
   `EVOLUTION_TOKEN_${SLUG_DA_INSTANCIA(instancia)}`
 );
@@ -23577,9 +23590,11 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
       config: {
         enabled: resolverFlag(settings, 'prospeccao_enabled', configEnv.enabled),
         dry_run: resolverFlag(settings, 'prospeccao_dry_run', configEnv.dryRun),
-        max_por_dia: configEnv.maxPorDia,
+        max_por_dia: require('./prospectingBudget').resolveDailyLimit(settings, configEnv.maxPorDia),
       },
       hoje: Object.fromEntries(agregado.rows.map(r => [r.status, r.total])),
+      orcamento: await require('./prospectingBudget').readBudget(pool, CHATWOOT_ACCOUNT_ID, configEnv.maxPorDia),
+      conectividade: await researchBroker.status(),
       decisoes: decisoes.rows,
       runtime: (await pool.query('SELECT started_at,finished_at,summary,error FROM prospecting_runtime WHERE account_id=$1',[CHATWOOT_ACCOUNT_ID])).rows[0] || null,
     });
@@ -23594,15 +23609,21 @@ app.get('/api/prospeccao', requireAdmin, async (req, res) => {
 app.post('/api/ai-settings', requireAdmin, async (req, res) => {
   const permitidas = ['followup_enabled', 'followup_dry_run', 'stage_enabled', 'stage_dry_run',
     'prospeccao_enabled', 'prospeccao_dry_run', 'responder_enabled', 'responder_dry_run',
-    'segment_enabled', 'segment_dry_run'];
+    'segment_enabled', 'segment_dry_run', 'prospeccao_max_por_dia'];
   const body = req.body || {};
   const alvos = Object.keys(body).filter((k) => permitidas.includes(k));
   if (!alvos.length) {
     return res.status(400).json({ error: `Informe ao menos uma de: ${permitidas.join(', ')}.` });
   }
+  if (alvos.includes('prospeccao_max_por_dia') && !require('./prospectingBudget').validDailyLimit(body.prospeccao_max_por_dia)) {
+    return res.status(400).json({ error: 'Limite diário deve ser um inteiro entre 1 e 100.' });
+  }
+  if (alvos.some(k => k !== 'prospeccao_max_por_dia' && typeof body[k] !== 'boolean')) {
+    return res.status(400).json({ error: 'Os interruptores devem receber verdadeiro ou falso.' });
+  }
   try {
     for (const chave of alvos) {
-      await gravarSetting(pool, chave, body[chave] ? '1' : '0', req.auth?.sub || null);
+      await gravarSetting(pool, chave, chave === 'prospeccao_max_por_dia' ? String(Number(body[chave])) : body[chave] ? '1' : '0', req.auth?.sub || null);
     }
     const settings = await carregarSettings(pool, { agora: Date.now() + 10 ** 6 });
     res.json({ ok: true, settings: Object.fromEntries(settings) });
@@ -24057,6 +24078,7 @@ const registerBackgroundSchedules = () => {
       ...configEnv,
       enabled: resolverFlag(settings, 'prospeccao_enabled', configEnv.enabled),
       dryRun: resolverFlag(settings, 'prospeccao_dry_run', configEnv.dryRun),
+      maxPorDia: require('./prospectingBudget').resolveDailyLimit(settings, configEnv.maxPorDia),
     };
     if (!config.enabled) return;
     const cfgJanela = carregarConfigAiFollowup();
@@ -24064,11 +24086,13 @@ const registerBackgroundSchedules = () => {
     prospeccaoRodando = true;
     try {
       await require('./prospectingRuntime').startProspectingRun(pool,CHATWOOT_ACCOUNT_ID);
-      const resultado = await runProspeccaoTick(pool, {
+      const resultado = await require('./prospectingBudget').withAccountLock(pool, `run:${CHATWOOT_ACCOUNT_ID}`, () => runProspeccaoTick(pool, {
         accountId: CHATWOOT_ACCOUNT_ID,
         chatCompletionJson,
         config,
         validarMensagem,
+        carregarDescobertas: () => require('./prospectingDiscoveries').loadDiscoveries(pool, CHATWOOT_ACCOUNT_ID),
+        salvarDescobertas: (empresa, found) => require('./prospectingDiscoveries').saveDiscoveries(pool, CHATWOOT_ACCOUNT_ID, empresa, found),
         // A chave da verificacao tambem sai do cofre: a instancia e da Aerion e o
         // token dela nao vive mais em env.
         verificarNumerosWhatsapp: (numeros) => verificarNumerosWhatsapp(numeros, {
@@ -24080,6 +24104,9 @@ const registerBackgroundSchedules = () => {
         buscarContatoWeb: (empresa) => buscarContatoWeb(empresa, {
           apiKey: chaveTavily,
           buscarPaginas: buscaWeb.buscarPaginas,
+          inspecionarPagina: buscaWeb.inspecionarPagina,
+          carregarInvestigacao: buscaWeb.carregarInvestigacao,
+          salvarInvestigacao: buscaWeb.salvarInvestigacao,
           confirmarCadastro:true,
           decidirComIa: ({ system, user }) => chatCompletionJson({
             system, user, maxTokens: 400, temperature: 0.2,
@@ -24130,6 +24157,7 @@ const registerBackgroundSchedules = () => {
           return dados.results || dados.rows || [];
         },
         importarLead: async (empresa) => {
+          if (empresa._discovery_id) return require('./prospectingDiscoveries').importDiscovery(pool, CHATWOOT_ACCOUNT_ID, empresa);
           const { rows } = await pool.query(
             `SELECT id FROM contacts
               WHERE account_id = $1
@@ -24168,7 +24196,7 @@ const registerBackgroundSchedules = () => {
           contactId, telefone,
           origem: 'prospeccao', texto, dedupeKey,meta:{phone_evidence:phoneEvidence},
         }),
-      });
+      }));
       await require('./prospectingRuntime').finishProspectingRun(pool,CHATWOOT_ACCOUNT_ID,resultado);
       console.log('[prospeccao] tick:', resultado);
     } catch (error) {
@@ -24684,8 +24712,10 @@ const initializeDataLayer = async () => {
   await criarTabelasBuscaWeb(pool);
   await createSegmentLogTable(pool);
   await createAiSettingsTable(pool);
+  await require('./researchEgress').createResearchEgress(pool);
   await createOutboundQueueTable(pool);
   await createProspeccaoTable(pool);
+  await require('./prospectingDiscoveries').upgradeResearch(pool, CHATWOOT_ACCOUNT_ID);
   await require('./prospectingRuntime').createProspectingRuntime(pool);
   await createResponderTable(pool);
   await createCallTranscriptsTable(pool);

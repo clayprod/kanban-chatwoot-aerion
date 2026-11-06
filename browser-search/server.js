@@ -10,6 +10,8 @@
 
 const http = require('node:http');
 const { chromium } = require('playwright');
+const egress = require('./egressClient');
+const { readPublicDocument } = require('./publicDocument');
 
 const PORT = Number(process.env.PORT || 3100);
 const PACING_MS = Number(process.env.PACING_MS || 3000);
@@ -136,23 +138,74 @@ const buscarUma = async (query, proxy) => {
 const buscar = async (query) => {
   const falhas = [];
   for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
-    const proxy = await proximoProxy();
+    const lease = i === 0 ? await egress.acquire('https://www.google.com') : null;
+    if (lease?.defer) throw Object.assign(new Error('Pesquisa adiada: domínio em pausa'), {status:503});
+    const proxy = egress.playwrightProxy(lease) || await proximoProxy();
+    let outcome = 'transport';
     try {
       const d = await buscarUma(query, proxy);
       const paginas = [];
       if (d.painel) paginas.push({ url: d.url, title: 'Painel do Google', content: d.painel, fonte: 'google-painel' });
       paginas.push(...d.resultados.map((r) => ({ ...r, fonte: 'google' })));
-      return { paginas, proxy: proxy?.id || 'direto' };
+      outcome = 'ok';
+      return { paginas, proxy: proxy?.personal ? 'dispositivo pessoal' : proxy?.id || 'direto' };
     } catch (error) {
+      if (error.codigo === 'captcha') {
+        outcome = 'blocked';
+        // A challenge pauses this origin; do not hop IPs to defeat it.
+        if (proxy?.personal) throw Object.assign(new Error('Pesquisa adiada: verificação exigida pela fonte'), {status:503});
+      }
       falhas.push(`${proxy?.id || 'direto'}: ${error.message}`);
       // Captcha/transporte: este proxy descansa 30 min (captcha) ou 2 h (transporte).
       if (proxy) quarentena.set(proxy.id, Date.now() + (error.codigo === 'captcha' ? 30 : 120) * 60 * 1000);
       else break; // IP direto bloqueado: repetir só piora.
+    } finally {
+      await egress.release(lease, outcome);
     }
   }
   const e = new Error(`google indisponível: ${falhas.join('; ')}`);
   e.status = 503;
   throw e;
+};
+
+const inspect = async (address, fallbackOnly = false) => {
+  const lease = fallbackOnly ? {available:false} : await egress.acquire(address);
+  if (lease.defer) return { url: address, access: 'blocked', title: '', content: '', links: [] };
+  const fallback = !lease.available ? await proximoProxy() : null;
+  const legacyUrl = fallback ? `http://${encodeURIComponent(fallback.username)}:${encodeURIComponent(fallback.password)}@${new URL(fallback.server).host}` : null;
+  let outcome = 'transport';
+  try {
+    const doc = await readPublicDocument(address, { proxy: lease.available ? lease.proxy : legacyUrl });
+    if ([401,403,429].includes(doc.status)) {
+      outcome = doc.status===401 ? 'login_required' : 'blocked';
+      return { url: doc.url, access: outcome, title: '', content: '', links: [] };
+    }
+    if (doc.status < 200 || doc.status >= 300) throw new Error('Fonte indisponível');
+    const ctx = await (await obterBrowser(false)).newContext({ javaScriptEnabled: false, serviceWorkers: 'block' });
+    try {
+      // Parse HTML locally; never execute scripts or load third-party subresources.
+      await ctx.route('**/*', route => route.abort());
+      const page = await ctx.newPage();
+      await page.setContent(doc.html, {waitUntil:'domcontentloaded', timeout:10000});
+      const result = await page.evaluate(base => ({
+        title: document.title.slice(0,200),
+        content: (document.body?.innerText || '').slice(0,30000),
+        links: [...document.querySelectorAll('a[href]')].slice(0,150).flatMap(a => {
+          try { return [{href:new URL(a.getAttribute('href'),base).href,label:(a.textContent || '').trim().slice(0,120)}]; }
+          catch { return []; }
+        }),
+      }), doc.url);
+      outcome = /accounts\/login|challenge\//i.test(doc.url) || (!result.links.length && /log in|entrar|login required/i.test(result.content)) ? 'login_required' : 'ok';
+      return { ...result, url: doc.url, access: outcome === 'ok' ? 'public' : outcome };
+    } finally { await ctx.close(); }
+  } catch (error) {
+    if (lease.available && outcome === 'transport') {
+      await egress.release(lease,'transport');
+      lease.id=null;
+      return inspect(address,true);
+    }
+    throw error;
+  } finally { await egress.release(lease,outcome); }
 };
 
 // Fila serial com pacing: nunca duas buscas ao mesmo tempo, nunca em rajada.
@@ -175,11 +228,15 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     return enviar(200, { ok: true, proxies: proxies.length, emQuarentena: [...quarentena.values()].filter((t) => t > Date.now()).length });
   }
-  if (req.method !== 'POST' || req.url !== '/search') return enviar(404, { error: 'not found' });
+  if (req.method !== 'POST' || !['/search','/inspect'].includes(req.url)) return enviar(404, { error: 'not found' });
   let corpo = '';
-  for await (const c of req) corpo += c;
+  for await (const c of req) { corpo += c; if(corpo.length>4096)return enviar(413,{error:'corpo excessivo'}); }
   try {
-    const { query } = JSON.parse(corpo || '{}');
+    const { query, url } = JSON.parse(corpo || '{}');
+    if (req.url === '/inspect') {
+      if (typeof url!=='string' || url.length>2000) return enviar(400,{error:'URL inválida'});
+      return enviar(200,await enfileirar(()=>inspect(url)));
+    }
     if (!query || String(query).length > 300) return enviar(400, { error: 'query inválida' });
     return enviar(200, await enfileirar(() => buscar(String(query))));
   } catch (error) {

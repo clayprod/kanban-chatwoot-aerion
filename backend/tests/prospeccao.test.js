@@ -33,6 +33,7 @@ const fakePool = ({ jaNaBase = [], jaTentados = [], hoje = 0 } = {}) => {
   return {
     gravados,
     async query(sql, params) {
+      if (sql.includes("status='pending'")) return {rows:[{total:0}]};
       if (sql.includes('INSERT INTO prospeccao_log')) {
         gravados.push({ status: params[5], motivo: params[6], confirmou: params[8], msg: params[10] });
         return { rows: [] };
@@ -58,7 +59,7 @@ const deps = (over = {}) => ({
     data: { mensagem: 'Oi! Como está o volume de voo de vocês?', confianca: 0.8 },
   }),
   importarLead: async () => 999,
-  enfileirarEnvio: async () => {},
+  enfileirarEnvio: async () => 1,
   config: CFG,
   ...over,
 });
@@ -276,7 +277,7 @@ test('aborda, importa o lead e enfileira por telefone', async () => {
   const importados = [];
   const r = await runProspeccaoTick(pool, deps({
     importarLead: async (e) => { importados.push(e.cnpj); return 999; },
-    enfileirarEnvio: async (e) => { enfileirados.push(e); },
+    enfileirarEnvio: async (e) => { enfileirados.push(e); return 1; },
   }));
   assert.equal(r.abordados, 1);
   assert.deepEqual(importados, ['11222333000181']);
@@ -366,6 +367,7 @@ test('o teto diario conta mensagem ENTREGUE, nao tentativa', async () => {
   let sqlVisto = '';
   const pool = {
     async query(sql) {
+      if (sql.includes("status='pending'")) return {rows:[{total:0}]};
       if (sql.includes('AS total')) { sqlVisto = sql; return { rows: [{ total: 10 }] }; }
       return { rows: [] };
     },
@@ -461,7 +463,7 @@ test('o registro reabre descarte/falha (espera crescente) mas nunca sobrescreve 
   assert.match(sql, /tentativas = t\.tentativas \+ 1/);
   assert.match(sql, /LEAST\(t\.tentativas \+ 1, 4\)/, 'espera cresce até 4x');
   assert.match(sql, /WHERE t\.status IN \('descartado', 'falhou'\)/);
-  assert.deepEqual(params.slice(-2), ['dias', 30]);
+  assert.deepEqual(params.slice(14,16), ['dias', 30]);
 });
 
 test('o ciclo INSISTE: página 1 já toda tentada, vai para a página 2 e completa a cota', async () => {

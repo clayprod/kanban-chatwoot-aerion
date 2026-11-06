@@ -18,7 +18,7 @@ const prospectingDecisionSql=`SELECT p.id,p.cnpj,p.razao_social,p.telefone,p.per
  p.created_at,q.enviado_em AS sent_at,p.razao_social AS contact_name,p.phone_evidence,p.proxima_tentativa,p.tentativas
  FROM prospeccao_log p LEFT JOIN LATERAL(
  SELECT status,last_error,enviado_em FROM outbound_queue q WHERE q.account_id=p.account_id
- AND q.origem='prospeccao' AND q.dedupe_key='prospeccao:'||p.cnpj AND q.texto=p.mensagem
+ AND q.origem='prospeccao' AND (q.id=p.outbound_queue_id OR (p.outbound_queue_id IS NULL AND q.dedupe_key='prospeccao:'||p.cnpj)) AND q.texto=p.mensagem
  AND q.created_at BETWEEN p.created_at-INTERVAL '5 minutes' AND p.created_at+INTERVAL '1 minute'
  ORDER BY q.id DESC LIMIT 1)q ON TRUE WHERE p.account_id=$1`;
 module.exports={createProspectingRuntime,startProspectingRun,finishProspectingRun,prospectingDecisionSql};

@@ -153,6 +153,35 @@ function Item({ it, children }) {
   );
 }
 
+function LimiteDiario({ valor, onReload }) {
+  const [rascunho, setRascunho] = useState(String(valor ?? ''));
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState('');
+  useEffect(() => { setRascunho(String(valor ?? '')); }, [valor]);
+  const valido = /^\d+$/.test(rascunho) && Number(rascunho) >= 1 && Number(rascunho) <= 100;
+  const salvar = async event => {
+    event.preventDefault();
+    if (!valido || salvando) return;
+    setSalvando(true); setErro('');
+    try {
+      await axios.post('/api/ai-settings', { prospeccao_max_por_dia: Number(rascunho) });
+      await onReload();
+    } catch { setErro('Não foi possível salvar. Tente novamente.'); }
+    finally { setSalvando(false); }
+  };
+  return <form onSubmit={salvar} className="flex flex-wrap items-center gap-2">
+    <label className="flex items-center gap-2 text-[12px] text-muted">
+      Limite diário
+      <input type="number" min="1" max="100" step="1" required value={rascunho}
+        disabled={salvando || valor == null} onChange={e => setRascunho(e.target.value)}
+        aria-label="Limite diário de contatos da prospecção" aria-invalid={!valido && rascunho !== ''}
+        className={`${input} w-20 py-1 text-[12px]`} />
+    </label>
+    <button type="submit" className={btnGhostXs} disabled={!valido || salvando || Number(rascunho) === valor}>{salvando ? 'Salvando…' : 'Salvar'}</button>
+    {erro && <span role="alert" className="basis-full text-[12px] text-status-danger">{erro}</span>}
+  </form>;
+}
+
 function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onToggle, salvando }) {
   const [verRuido, setVerRuido] = useState(false);
   const [limite, setLimite] = useState(PAGINA);
@@ -190,7 +219,8 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
           </span>
         ))}
         {!Object.keys(dados?.hoje || {}).length && <span className={subtle}>nada hoje</span>}
-        <span className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center gap-1">
+          {chaves?.enabled === 'prospeccao_enabled' && <LimiteDiario valor={dados?.config?.max_por_dia} onReload={onReload} />}
           {chaves && (
             <>
               <Switch
@@ -218,8 +248,17 @@ function Painel({ dados, carregando, onReload, busca, linhas, vazio, chaves, onT
           <button type="button" onClick={onReload} className={`${iconBtn} h-7 w-7`} title="Atualizar">
             <ArrowPathIcon className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`} />
           </button>
-        </span>
+        </div>
       </div>
+      {dados?.orcamento && <p className="text-[12px] text-muted" role="status">
+        {dados.orcamento.enviados} enviados · {dados.orcamento.reservados} na fila · {dados.orcamento.saldo} disponíveis de {dados.orcamento.limite}/dia
+        {dados.orcamento.simulados > 0 && ` · ${dados.orcamento.simulados} simulados`}
+      </p>}
+      {dados?.conectividade && <details className="text-[12px] text-muted">
+        <summary className="cursor-pointer">Conectividade da pesquisa</summary>
+        <p className="mt-2">{dados.conectividade.configured.length ? `Dispositivos: ${dados.conectividade.configured.join(', ')}.` : 'Saída pessoal aguardando configuração.'} Fallback: provedores e proxies existentes.</p>
+        {dados.conectividade.nodes.map(n => <p key={n.node_id}>{n.node_id}: {n.last_error || 'Disponível na última consulta'} · {fmtDataHora(n.checked_at)}</p>)}
+      </details>}
 
       <ul className="space-y-1.5">
         {!visiveis.length && !carregando && (
@@ -448,6 +487,11 @@ export default function AutomationView() {
                   <p className="text-[11px] text-muted2">{it.error || it.motivo}</p>
                 )}
                 {it.perfil && <p className="text-[10px] text-muted2">perfil: {it.perfil}</p>}
+                {it.phone_evidence?.chain?.map((p, i) => <p key={i} className="break-words text-[12px] text-muted">
+                  <a href={p.url} target="_blank" rel="noreferrer" className="text-primary underline">{p.title || p.url}</a>
+                </p>)}
+                {it.phone_evidence?.instagram && <a href={it.phone_evidence.instagram} target="_blank" rel="noreferrer" className="inline-flex text-[12px] text-primary underline">Abrir para seguir</a>}
+                {it.phone_evidence?.legal_identity_verified === false && <p className="text-[12px] text-muted">Empresa descoberta separadamente. CNPJ original não associado.</p>}
               </>
             )}
           />

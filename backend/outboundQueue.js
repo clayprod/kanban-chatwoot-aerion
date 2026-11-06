@@ -64,7 +64,7 @@ const createOutboundQueueTable = async (pool) => {
 
 // Enfileirar é a única porta de entrada. Devolve o id, ou null se já havia item
 // pendente com a mesma dedupe_key.
-const enfileirar = async (pool, {
+const inserirNaFila = async (pool, {
   accountId, contactId = null, conversationId = null, inboxId = null,
   origem, texto, telefone = null, agendadoPara = null, dedupeKey = null, meta = null,
 }) => {
@@ -84,6 +84,18 @@ const enfileirar = async (pool, {
     ]
   );
   return rows[0]?.id ?? null;
+};
+
+const enfileirar = async (pool, item) => {
+  if (item.origem !== 'prospeccao') return inserirNaFila(pool, item);
+  const { withAccountLock, readBudget } = require('./prospectingBudget');
+  const result = await withAccountLock(pool, item.accountId, async db => {
+    const budget = await readBudget(db, item.accountId);
+    if (budget.saldo <= 0) throw new Error('Limite diário de prospecção reservado ou atingido.');
+    return inserirNaFila(db, item);
+  });
+  if (result?.skipped) throw new Error('Orçamento de prospecção ocupado; tentar no próximo ciclo.');
+  return result;
 };
 
 // Carga real de cada número nas últimas 24h: campanha, humano e IA na mesma régua.
@@ -122,7 +134,7 @@ const bloqueioDoNumero = (carga, limites, agora = Date.now()) => {
 
 // Um tick despacha NO MÁXIMO uma mensagem por número, mesmo que a fila esteja cheia.
 // É o que impede a rajada: o espaçamento emerge do intervalo entre ticks + o gap.
-const despacharTick = async (pool, {
+const executarDespacho = async (pool, {
   accountId,
   enviar,
   dentroDaJanela,
@@ -163,6 +175,15 @@ const despacharTick = async (pool, {
     }
 
     try {
+      // Settings are read again at delivery, including queued messages from yesterday.
+      if (item.origem === 'prospeccao') {
+        const budget = await require('./prospectingBudget').readBudget(pool, accountId);
+        if (budget.enviados + budget.simulados >= budget.limite) {
+          r.bloqueados += 1;
+          r.motivos['teto diário de prospecção'] = (r.motivos['teto diário de prospecção'] || 0) + 1;
+          continue;
+        }
+      }
       await enviar(item);
       await pool.query(
         `UPDATE ${OUTBOUND_QUEUE_TABLE}
@@ -192,6 +213,12 @@ const despacharTick = async (pool, {
     }
   }
   return r;
+};
+
+// A single dispatcher per account also protects the number pacing across replicas.
+const despacharTick = async (pool, options = {}) => {
+  const { withAccountLock } = require('./prospectingBudget');
+  return withAccountLock(pool, options.accountId, db => executarDespacho(db, options), { dispatch: true });
 };
 
 module.exports = {

@@ -21,6 +21,9 @@ const createAiSettingsTable = async (pool) => {
       updated_by TEXT
     )
   `);
+  // Seed once, preserving any value subsequently chosen by the administrator.
+  await pool.query(`INSERT INTO ${AI_SETTINGS_TABLE} (chave, valor, updated_by)
+    VALUES ('prospeccao_max_por_dia', '20', 'migration:prospecting-v2') ON CONFLICT DO NOTHING`);
 };
 
 // Cache curto: os workers consultam a cada tick e não faz sentido ir ao banco

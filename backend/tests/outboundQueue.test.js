@@ -17,7 +17,11 @@ const fakePool = ({ fila = [], carga = [] } = {}) => {
   const updates = [];
   return {
     updates,
+    async connect() { return { query: this.query.bind(this), release() {} }; },
     async query(sql, params) {
+      if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
+      if (sql.includes('pg_advisory_unlock')) return { rows: [] };
+      if (sql.includes('AS reservados')) return { rows: [{limite:'20',enviados:0,reservados:0,simulados:0}] };
       if (sql.includes('FROM outbound_queue') && sql.includes("status = 'pending'")) {
         return { rows: fila };
       }

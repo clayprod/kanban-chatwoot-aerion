@@ -46,6 +46,8 @@ const carregarConfigBusca = (env = process.env) => ({
 });
 
 const criarTabelasBuscaWeb = async (pool) => {
+  await pool.query(`CREATE TABLE IF NOT EXISTS research_investigations (
+    company_key TEXT PRIMARY KEY, state JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS busca_web_uso (
       provedor TEXT NOT NULL,
@@ -208,7 +210,7 @@ const criarBuscaWeb = ({
       if (!chave) throw erroDeProvedor('TAVILY_API_KEY não configurada', 'indisponivel');
       // No máximo 2 consultas por lead (antes eram 4) e só a 2ª se a 1ª não trouxe telefone.
       const paginas = [];
-      for (const fonte of ['site', 'razao']) {
+      for (const fonte of ['site', 'instagram', 'razao']) {
         const c = consultas.find((x) => x.fonte === fonte);
         if (!c) continue;
         const achados = await buscarNoTavily({
@@ -236,6 +238,7 @@ const criarBuscaWeb = ({
 
     const falhas = [];
     let algumRespondeu = false;
+    const encontradas = [];
     for (const nome of config.ordem) {
       const executar = provedores[nome];
       if (!executar) continue;
@@ -245,10 +248,11 @@ const criarBuscaWeb = ({
       }
       try {
         const paginas = await executar({ alvo });
+        encontradas.push(...paginas);
         algumRespondeu = true;
         if (temTelefone(paginas)) {
-          await gravarCache(cnpj, nome, paginas).catch(() => {});
-          return { paginas, falhas, provedor: nome, doCache: false };
+          await gravarCache(cnpj, nome, encontradas).catch(() => {});
+          return { paginas: encontradas, falhas, provedor: nome, doCache: false };
         }
         falhas.push(`${nome}: sem telefone`);
       } catch (error) {
@@ -261,11 +265,28 @@ const criarBuscaWeb = ({
       }
     }
     // Só cacheia "nada" se alguém de fato respondeu; falha de provedor não vira negativa.
-    if (algumRespondeu) await gravarCache(cnpj, 'nenhum', []).catch(() => {});
-    return { paginas: [], falhas, provedor: null, doCache: false, transitorio: !algumRespondeu };
+    if (algumRespondeu) await gravarCache(cnpj, 'investigar', encontradas).catch(() => {});
+    return { paginas: encontradas, falhas, provedor: null, doCache: false, transitorio: !algumRespondeu };
   };
 
-  return { buscarPaginas, provedores, bloqueado, bloquear };
+  const inspecionarPagina = async (url, { timeoutMs = config.timeoutMs } = {}) => {
+    const response = await fetchImpl(`${config.headlessUrl}/inspect`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }), signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`Inspeção indisponível (HTTP ${response.status})`);
+    return response.json();
+  };
+  const carregarInvestigacao = async key => {
+    if(!key)return null;
+    const row=(await pool.query("SELECT state FROM research_investigations WHERE company_key=$1 AND updated_at>NOW()-INTERVAL '7 days'",[key])).rows[0];
+    return row?.state || null;
+  };
+  const salvarInvestigacao = async (key,state) => {
+    if(!key)return;
+    await pool.query(`INSERT INTO research_investigations(company_key,state) VALUES($1,$2) ON CONFLICT(company_key) DO UPDATE SET state=$2,updated_at=NOW()`,[key,JSON.stringify(state)]);
+  };
+  return { buscarPaginas, inspecionarPagina, carregarInvestigacao, salvarInvestigacao, provedores, bloqueado, bloquear };
 };
 
 module.exports = {

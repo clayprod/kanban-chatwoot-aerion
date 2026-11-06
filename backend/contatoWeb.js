@@ -202,7 +202,7 @@ const pontuarPagina = ({ texto, url, empresa }) => {
   try { parsed = new URL(url); } catch { return {pontos:0,sinais:['URL inválida'],dominioDaEmpresa:false,identidadeComprovada:false}; }
   const rede = REDES.find(r=>parsed.hostname===r||parsed.hostname.endsWith('.'+r));
   // A search query or article slug mentioning the company does not own the host.
-  const identificador = rede ? parsed.pathname.split('/').filter(Boolean)[0] || '' : parsed.hostname;
+  const identificador = rede ? require('./contactInvestigation').channelId(url) : parsed.hostname;
   const dominio = semAcento(identificador).replace(/[^a-z0-9]/g, '');
   const curto = nomeCurto(razaoSocial, nomeFantasia);
 
@@ -355,6 +355,9 @@ const buscarContatoWeb = async (empresa, {
   limiarDuvida = LIMIAR_DUVIDA,
   confirmarCadastro = false,
   buscarPaginas = null,
+  inspecionarPagina = null,
+  carregarInvestigacao = null,
+  salvarInvestigacao = null,
 } = {}) => {
   const razaoSocial = empresa?.razao_social || '';
   const nomeFantasia = empresa?.nome_fantasia || '';
@@ -413,6 +416,18 @@ const buscarContatoWeb = async (empresa, {
       // Provedor fora do ar não é "empresa sem telefone": quem chama não pode queimar o CNPJ.
       transitorio,
     };
+  }
+
+  let investigation = null;
+  if (inspecionarPagina) {
+    investigation = await require('./contactInvestigation').investigate({
+      empresa, seeds: paginas, inspect: inspecionarPagina,
+      tokens: termosSignificativos, isAggregator: ehAgregador,
+      progress: carregarInvestigacao ? await carregarInvestigacao(alvo.cnpj) : null,
+      saveProgress: salvarInvestigacao ? state => salvarInvestigacao(alvo.cnpj,state) : null,
+    });
+    const found = investigation.contacts.find(c => c.identidadeComprovada && ufCompativel(c.numero.slice(2, 4), empresa.uf));
+    if (found) return { ...found, decidido: 'cadeia de evidências', rejeitados: [], investigacao: investigation.failures };
   }
 
   const rejeitados = [];
@@ -493,7 +508,9 @@ const buscarContatoWeb = async (empresa, {
   }
 
   if (!candidatos.length) {
-    return { numero: null, motivo: 'nenhum candidato sobreviveu aos filtros', rejeitados };
+    return { numero: null, motivo: investigation?.failures.length ? 'investigação incompleta: fonte indisponível ou exige login' : 'nenhum candidato sobreviveu aos filtros', rejeitados,
+      descobertas: (investigation?.contacts || []).filter(c => !c.identidadeComprovada).slice(0, 2),
+      investigacao: investigation?.failures || [], transitorio: investigation?.incomplete === true };
   }
   candidatos.sort((a, b) => b.pontos - a.pontos);
 
