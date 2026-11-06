@@ -35,6 +35,7 @@ const VICIOS_DE_TEMPLATE = [
   /\b(?:parece|imagino)\s+que\b/i,
   /\b(?:chegou|conseguiu)\s+(?:a\s+)?avan[çc]ar\s+com\s+isso\b/i,
   /\b(?:j[áa]\s+)?(?:resolveu|solucionou)\s+isso\s+(?:por\s+)?a[íi]\b/i,
+  /\bo\s+que\s+(?:voc[eê](?:s)?\s+)?t[eê]m\s+em\s+mente\b/i,
 ];
 
 const SAUDACAO_RETOMADA = /^(?:oi|ol[áa]|opa|bom\s+dia|boa\s+tarde|boa\s+noite|e\s+a[íi])(?=[\s!,.?:;—–-]|$)/iu;
@@ -540,6 +541,9 @@ const montarPrompt = ({
     '  social completa com LTDA/ME/EIRELI.',
     '- No máximo 4 frases curtas, incluindo a saudação. Não transforme a retomada em um texto de propaganda.',
     '- Além da saudação, faça no máximo UMA pergunta de conteúdo, preferencialmente aberta e fácil de responder.',
+    '  Não faça duas solicitações com palavras diferentes, mesmo se uma delas estiver escrita sem interrogação.',
+    '- Estrutura da retomada: saudação → o ponto concreto que o cliente trouxe → próximo passo útil → pergunta aberta ligada a esse ponto.',
+    '  Não abra uma conversa do zero com "Queria saber" ou "O que você tem em mente?". Nós já temos um histórico.',
     '- Leia QUEM está oferecendo, QUEM precisa avaliar e QUEM deve facilitar o próximo passo.',
     '  Quando nós oferecemos produto/parceria, o cliente não tem obrigação de resolver nossa venda.',
     '  "Preciso conhecer o produto para ter confiança" é um CRITÉRIO DE AVALIAÇÃO, não uma tarefa dele.',
@@ -691,7 +695,14 @@ const montarPrompt = ({
       ].join(String.fromCharCode(10))
       : null,
     contextoDeAvaliacaoProduto(historico)
-      ? '>>> AVALIAÇÃO DO PRODUTO: o cliente quer conhecer/avaliar antes de confiar. A Aerion deve facilitar essa avaliação. Abra com saudação, recupere esse critério sem cobrança e pergunte o que ele gostaria de avaliar numa demonstração ou aplicação. Não pergunte se ele resolveu, avançou ou conheceu por conta própria. Não prometa demonstração agendada nem material enviado.'
+      ? [
+        '>>> AVALIAÇÃO DO PRODUTO: o cliente quer conhecer/avaliar antes de confiar. A Aerion deve facilitar essa avaliação.',
+        'Recupere explicitamente o motivo da conversa: ele quer conhecer o equipamento antes de pensar numa parceria. Não escreva uma sondagem genérica de projeto.',
+        'Referência de tom e raciocínio para ESTE contexto: "Oi, tudo bem? Vocês comentaram que gostariam de conhecer melhor os equipamentos antes de pensar numa parceria. Podemos retomar a ideia da demonstração: o que seria importante vocês avaliarem para se sentirem seguros em trabalhar com a Autel?"',
+        'Essa referência é de uma revenda avaliando Autel. Não introduza parceria, marca ou modelo se não corresponderem à conversa; para cliente final, use a aplicação dele.',
+        'Adapte ao histórico; não copie dados que não se apliquem. Use uma única pergunta de conteúdo. Não acrescente outra como "O que você tem em mente?".',
+        'Não pergunte se ele resolveu, avançou ou conheceu por conta própria. Não prometa demonstração agendada nem material enviado.',
+      ].join('\n')
       : null,
     '',
     'Histórico completo (mais antigo primeiro):',
@@ -734,6 +745,9 @@ const validarMensagem = (texto, confianca, config) => {
     return `confiança ${Number(confianca).toFixed(2)} abaixo do mínimo ${config.minConfianca}`;
   }
   if (!SAUDACAO_RETOMADA.test(limpo)) return 'retomada sem saudação inicial';
+  const simples=limpo.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const perguntaDeSaudacao=/^(?:oi|ola|opa|bom\s+dia|boa\s+tarde|boa\s+noite)[^?!.\n]{0,60}\b(?:tudo\s+(?:bem|certo)|como\s+(?:vai|voce\s+esta))(?:\s+por\s+ai)?\s*\?/.test(simples);
+  if ((limpo.match(/\?/g)||[]).length-(perguntaDeSaudacao?1:0)>1) return 'retomada com mais de uma pergunta de conteúdo';
   return null;
 };
 
