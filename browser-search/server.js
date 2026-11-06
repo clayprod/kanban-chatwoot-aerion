@@ -168,10 +168,10 @@ const buscar = async (query) => {
   throw e;
 };
 
-const inspect = async (address, fallbackOnly = false) => {
+const inspect = async (address, fallbackOnly = false, directOnly = false) => {
   const lease = fallbackOnly ? {available:false} : await egress.acquire(address);
   if (lease.defer) return { url: address, access: 'blocked', title: '', content: '', links: [] };
-  const fallback = !lease.available ? await proximoProxy() : null;
+  const fallback = !lease.available && !directOnly ? await proximoProxy() : null;
   const legacyUrl = fallback ? `http://${encodeURIComponent(fallback.username)}:${encodeURIComponent(fallback.password)}@${new URL(fallback.server).host}` : null;
   let outcome = 'transport';
   try {
@@ -203,6 +203,10 @@ const inspect = async (address, fallbackOnly = false) => {
       await egress.release(lease,'transport');
       lease.id=null;
       return inspect(address,true);
+    }
+    if (fallback && outcome === 'transport') {
+      quarentena.set(fallback.id,Date.now()+120*60*1000);
+      return inspect(address,true,true);
     }
     throw error;
   } finally { await egress.release(lease,outcome); }
