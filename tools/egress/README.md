@@ -10,6 +10,8 @@ Notebook: `-TailnetAddress 100.117.55.18 -DeviceName Jasque`. Desktop: `-Tailnet
 
 Para reutilizar o ZIP já baixado, informar `-ArchivePath` com o caminho do arquivo. O mesmo SHA256 é conferido antes de extrair. O instalador não altera o Defender nem suas exclusões; um executável removido por ele impede a instalação.
 
+Se o administrador já restaurou o executável, `-RestoredBinaryPath` aceita esse arquivo mediante conferência do SHA256 do payload oficial. `-Resume` reaproveita a configuração protegida após uma tentativa interrompida, sem gerar outra senha. O wrapper do notebook usa essa retomada automaticamente e não substitui serviços de outra instalação.
+
 O serviço usa início automático atrasado, dependência do serviço Tailscale e recuperação automática. O wrapper `Install-Notebook.ps1` também habilita o modo unattended do Tailscale, para manter a conexão mesmo sem sessão aberta do usuário. Não é necessário ligar o desktop nem habilitar exit node. A execução continua dependendo de o notebook estar ligado, acordado e com internet.
 
 Não sobrescrever instalações existentes. Para desativar, parar o serviço `3proxy`; os consumidores voltam ao fluxo anterior. Para remover, usar `3proxy.exe --remove` elevado e remover a regra de firewall nomeada `Aerion research via Tailscale`.
