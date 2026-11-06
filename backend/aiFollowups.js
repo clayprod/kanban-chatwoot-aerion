@@ -33,7 +33,33 @@ const VICIOS_DE_TEMPLATE = [
   /\bem\s+pauta\b/i,
   /desde\s+a\s+(?:nossa\s+|[uú]ltima\s+)?conversa/i,
   /\b(?:parece|imagino)\s+que\b/i,
+  /\b(?:chegou|conseguiu)\s+(?:a\s+)?avan[çc]ar\s+com\s+isso\b/i,
+  /\b(?:j[áa]\s+)?(?:resolveu|solucionou)\s+isso\s+(?:por\s+)?a[íi]\b/i,
 ];
+
+const SAUDACAO_RETOMADA = /^(?:oi|ol[áa]|opa|bom\s+dia|boa\s+tarde|boa\s+noite|e\s+a[íi])(?=[\s!,.?:;—–-]|$)/iu;
+
+// Pedido de conhecer/validar um produto é um critério de compra. Não vira uma
+// tarefa do cliente só porque oferecemos uma demonstração e ele ficou em silêncio.
+const contextoDeAvaliacaoProduto = (historico = []) => {
+  const ultima = historico.map(h => h.autor).lastIndexOf('cliente');
+  if (ultima < 0) return false;
+  const falas = [];
+  for (let i=ultima;i>=0&&historico[i].autor==='cliente';i-=1) falas.unshift(historico[i].texto||'');
+  const texto=falas.join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  return /\b(?:conhecer|avaliar|testar|demonstracao|demonstrar)\b/.test(texto)
+    && /\b(?:produto|produtos|equipamento|equipamentos|drone|drones|confianca|seguranca)\b/.test(texto);
+};
+
+const validarContextoRetomada = (texto, historico = []) => {
+  if (!contextoDeAvaliacaoProduto(historico)) return null;
+  const limpo=String(texto||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if (/\b(?:conseguiu|conseguiram|chegou\s+a|chegaram\s+a|ja)\s+(?:\w+\s+){0,3}(?:conhecer|avaliar|testar|agendar|resolver|avancar)\b/.test(limpo)
+    || /\bja\s+(?:conheceu|conheceram|avaliou|avaliaram|testou|testaram|agendou|agendaram|resolveu|resolveram|avancou|avancaram)\b/.test(limpo)) {
+    return 'retomada transfere ao cliente a avaliação/demonstração que cabe à Aerion facilitar';
+  }
+  return null;
+};
 // A IA não negocia: preço, prazo e desconto são do vendedor.
 const TERMOS_PROIBIDOS = [
   /R\$\s*\d/i,
@@ -122,9 +148,11 @@ const lista = (nome, padrao) => {
 const ESTRATEGIA_SEQUENCIA = [
   'Primeira tentativa: retome o assunto EXATO de onde parou, citando o que ELE pediu ou '
     + 'perguntou (fato que esta no historico), curto e sem pressao. NAO presuma que o '
-    + 'interesse continua nem diga o que ele "deve estar precisando": voce nao sabe. Feche '
-    + 'com UMA pergunta simples, com saida confortavel ("Ainda faz sentido retomar isso?", '
-    + '"Chegou a avancar com isso por ai?").',
+    + 'interesse continua nem diga o que ele "deve estar precisando": voce nao sabe. Abra '
+    + 'com saudacao e ofereca um proximo passo que NOS podemos facilitar. Feche com UMA '
+    + 'pergunta aberta e concreta, com saida confortavel, ligada ao criterio de compra dele. '
+    + 'Se ele precisa conhecer o produto para confiar, cabe a NOS oferecer demonstracao '
+    + 'ou evidencia real; nunca cobre se ele avancou ou resolveu isso sozinho.',
   'Segunda tentativa: mude o angulo e TRAGA VALOR concreto: um ponto do produto que casa '
     + 'com o que a pessoa falou (use so o que estiver no catalogo informado), ou uma duvida '
     + 'tecnica que costuma aparecer no segmento dela. Nao presuma a prioridade dela: '
@@ -500,6 +528,9 @@ const montarPrompt = ({
     'Soe como alguém que já conversou com essa pessoa e está retomando o assunto, não como',
     'e-mail corporativo nem atendimento. Claro e respeitoso, mas solto.',
     'Regras que não se quebram:',
+    '- TODA retomada começa com uma SAUDAÇÃO curta e cordial, independentemente dos dias de silêncio.',
+    '  Use "Oi, tudo bem?" ou "Olá!"; bom dia/boa tarde apenas quando adequado ao horário.',
+    '  Não pule a saudação para economizar palavras e não recomece um discurso de apresentação.',
     '- Evite fórmulas de circunstância. Nada de "Espero que esteja tudo bem", "Gostaria de',
     '  saber se", "Estou à disposição", "Fico no aguardo", "Venho por meio desta". Vá direto',
     '  ao ponto com naturalidade.',
@@ -507,15 +538,26 @@ const montarPrompt = ({
     '  Na maioria das vezes nem mencione: "por aí", "aí no seu time", "nos seus projetos"',
     '  soam melhor. Se precisar citar, use a forma curta que te passei e jamais a razão',
     '  social completa com LTDA/ME/EIRELI.',
-    '- No máximo 3 frases curtas.',
-    '- Faça no máximo UMA pergunta, sempre fácil de responder.',
+    '- No máximo 4 frases curtas, incluindo a saudação. Não transforme a retomada em um texto de propaganda.',
+    '- Além da saudação, faça no máximo UMA pergunta de conteúdo, preferencialmente aberta e fácil de responder.',
+    '- Leia QUEM está oferecendo, QUEM precisa avaliar e QUEM deve facilitar o próximo passo.',
+    '  Quando nós oferecemos produto/parceria, o cliente não tem obrigação de resolver nossa venda.',
+    '  "Preciso conhecer o produto para ter confiança" é um CRITÉRIO DE AVALIAÇÃO, não uma tarefa dele.',
+    '  Nesse caso, ofereça facilitar uma demonstração ou conhecer uma aplicação e pergunte o que ele precisa avaliar.',
+    '  Nunca cobre "chegou a avançar com isso por aí?", "já resolveu isso?" ou se ele já conheceu o produto sozinho.',
+    '  Construa confiança com fatos específicos do catálogo/contexto, quando relevantes, sem inventar provas.',
+    '  Não afirme que enviou, separou material, realizou demonstração ou tem agenda/local disponível sem evidência.',
+    '- A mensagem deve abrir espaço para uma conversa comercial útil e continuidade pela equipe.',
+    '  Não anuncie um repasse interno nem finja identidade pessoal, experiência ou ação humana que não ocorreu.',
     '- Nunca cite preço, desconto, prazo de entrega ou condição comercial.',
     '- Nunca invente fato, número, reunião ou combinado que não esteja no histórico.',
-    '- A SITUAÇÃO SE JULGA PELA ÚLTIMA COISA QUE O CLIENTE DISSE, que vem destacada.',
-    '  Mensagens NOSSAS enviadas depois dela, sem resposta, NÃO mudam a situação: são',
-    '  insistência nossa, não fato novo. Se ele disse "fale com fulano" e depois mandamos',
+    '- A SITUAÇÃO SE JULGA PELA ÚLTIMA COISA QUE O CLIENTE DISSE, que vem destacada, à luz da troca completa.',
+    '  Mensagens NOSSAS enviadas depois dela, sem resposta, NÃO provam avanço nem mudança de intenção do cliente.',
+    '  Se ele disse "fale com fulano" e depois mandamos',
     '  três mensagens no vazio, a situação continua handoff — nunca vira silêncio.',
     '  Handoff, recusa definitiva e "já comprei" valem para sempre.',
+    '  Nossas falas posteriores mostram o que oferecemos, respondemos e perguntamos; leia-as para entender a pendência.',
+    '  Oferecer uma demonstração não significa que ela ocorreu nem transfere ao cliente o dever de provar o produto.',
     '- CADA linha do histórico vem com quanto tempo faz. Respeite isso: evento, feira,',
     '  promoção ou prazo citado numa mensagem antiga JÁ PASSOU. Nunca convide alguém para',
     '  algo que já aconteceu nem fale no futuro de data que ficou para trás. Na dúvida sobre',
@@ -545,9 +587,8 @@ const montarPrompt = ({
     '  NUNCA sobre o que ele sente, precisa ou prioriza HOJE ("imagino que a necessidade',
     '  continua", "parece que o gimbal ainda está em pauta"): você não sabe, e afirmar o',
     '  que não sabe soa robô e chute. Se quer saber, pergunte.',
-    '- BUSCAR O "NÃO": pergunta onde o "não" é confortável devolve controle para o cliente',
-    '  e costuma destravar resposta. "Seria absurdo olharmos isso de novo agora?" funciona',
-    '  melhor que "você tem interesse?".',
+    '- Dê espaço para o cliente escolher o próximo passo sem pressão. Prefira pergunta aberta',
+    '  sobre aplicação, critérios de avaliação ou dúvidas concretas; não use uma técnica como frase pronta.',
     '- CUSTO DA INÇÃO: quando couber, ancore no que fica caro ficando como está — sem drama',
     '  e sem inventar número.',
     '',
@@ -633,7 +674,7 @@ const montarPrompt = ({
       ].join(String.fromCharCode(10))
       : '>>> O CLIENTE NUNCA RESPONDEU nesta conversa.',
     nossasDepois > 0
-      ? `>>> Depois disso nós mandamos ${nossasDepois} mensagem(ns) e ele não respondeu. Isso é insistência nossa, não fato novo.`
+      ? `>>> Depois disso nós mandamos ${nossasDepois} mensagem(ns) e ele não respondeu. Leia o que oferecemos/respondemos: não é prova de avanço ou mudança de intenção do cliente.`
       : null,
     '',
     (Number(diasSilencio) >= 45)
@@ -644,10 +685,13 @@ const montarPrompt = ({
         '       não agradeça "pelo e-mail", "pelo contato" nem "pelo retorno" — ninguém nos escreveu agora.',
         '    2) Situe no tempo e no assunto REAL do histórico ("faz uns meses que falamos sobre o gimbal").',
         '    3) Só então, se couber, UMA linha de valor concreto (só do catálogo informado, sem inventar novidade).',
-        '    4) Termine com pergunta simples e com saída confortável ("ainda faz sentido retomar ou o assunto esfriou?").',
+        '    4) Termine com pergunta aberta e concreta sobre o próximo passo, respeitando a responsabilidade de cada lado.',
         '    Nunca presuma que o interesse continua ("imagino que o planejamento esteja andando").',
         '    Nunca use pergunta vaga de consultoria ("o que mudou desde a última conversa").',
       ].join(String.fromCharCode(10))
+      : null,
+    contextoDeAvaliacaoProduto(historico)
+      ? '>>> AVALIAÇÃO DO PRODUTO: o cliente quer conhecer/avaliar antes de confiar. A Aerion deve facilitar essa avaliação. Abra com saudação, recupere esse critério sem cobrança e pergunte o que ele gostaria de avaliar numa demonstração ou aplicação. Não pergunte se ele resolveu, avançou ou conheceu por conta própria. Não prometa demonstração agendada nem material enviado.'
       : null,
     '',
     'Histórico completo (mais antigo primeiro):',
@@ -689,6 +733,7 @@ const validarMensagem = (texto, confianca, config) => {
   if (Number(confianca) < config.minConfianca) {
     return `confiança ${Number(confianca).toFixed(2)} abaixo do mínimo ${config.minConfianca}`;
   }
+  if (!SAUDACAO_RETOMADA.test(limpo)) return 'retomada sem saudação inicial';
   return null;
 };
 
@@ -875,7 +920,7 @@ const runAiFollowupTick = async (pool, {
         continue;
       }
 
-      const problema = validarMensagem(texto, confianca, config);
+      const problema = validarMensagem(texto, confianca, config) || validarContextoRetomada(texto, historico);
       if (problema) {
         await registrarDecisao(pool, {
           ...base,
@@ -989,6 +1034,8 @@ module.exports = {
   contarEnviadosHoje,
   montarPrompt,
   validarMensagem,
+  validarContextoRetomada,
+  contextoDeAvaliacaoProduto,
   enviarPeloChatwoot,
   registrarDecisao,
   runAiFollowupTick,
