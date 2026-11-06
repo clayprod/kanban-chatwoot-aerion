@@ -76,8 +76,9 @@ if (!(Get-NetFirewallRule -DisplayName 'Aerion research via Tailscale' -ErrorAct
   New-NetFirewallRule -DisplayName 'Aerion research via Tailscale' -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $TailnetAddress -LocalPort 3128 -RemoteAddress '100.97.22.81' -Program $binaryPath | Out-Null
 }
 if (!$existingService) {
-& $binaryPath $configPath --install
-if ($LASTEXITCODE -ne 0) { throw 'Instalação do serviço falhou.' }
+  # Match the upstream service ImagePath without the interactive --install dialog.
+  $serviceCommand = '"{0}" "{1}" --service' -f $binaryPath, $configPath
+  New-Service -Name '3proxy' -DisplayName 'Aerion Research Proxy' -BinaryPathName $serviceCommand -StartupType Automatic -DependsOn 'Tailscale' | Out-Null
 }
 Set-Service -Name '3proxy' -StartupType Automatic
 & sc.exe config 3proxy start= delayed-auto depend= Tailscale | Out-Null
